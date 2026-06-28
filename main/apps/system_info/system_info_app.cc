@@ -28,7 +28,7 @@ constexpr lv_coord_t kHeaderHeight = 40;
 constexpr lv_coord_t kBodyTop = 44;
 constexpr lv_coord_t kBodyHeight = 192;
 constexpr lv_coord_t kCardWidth = 300;
-constexpr lv_coord_t kCardHeight = 50;
+constexpr lv_coord_t kCardHeight = 56;
 
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
@@ -221,24 +221,24 @@ SystemInfoApp::InfoLabels SystemInfoApp::CreateInfoCard(lv_obj_t* parent,
     lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(card, 8, 0);
-    lv_obj_set_style_pad_all(card, 8, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* icon_label = CreateText(card, icon, PhoneIconFont(), rodakos_theme_primary());
-    lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, 8, 0);
 
     auto* title_label = CreateText(card, title, &phone_font_12, rodakos_theme_text_secondary());
-    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 30, 1);
+    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 38, 6);
 
     auto* value_label = CreateText(card, "--", &phone_font_14, rodakos_theme_text_primary());
-    lv_obj_set_width(value_label, 245);
+    lv_obj_set_width(value_label, 248);
     lv_label_set_long_mode(value_label, LV_LABEL_LONG_DOT);
-    lv_obj_align(value_label, LV_ALIGN_TOP_LEFT, 30, 17);
+    lv_obj_align(value_label, LV_ALIGN_TOP_LEFT, 38, 21);
 
     auto* detail_label = CreateText(card, "", &phone_font_12, rodakos_theme_text_tertiary());
-    lv_obj_set_width(detail_label, 245);
+    lv_obj_set_width(detail_label, 248);
     lv_label_set_long_mode(detail_label, LV_LABEL_LONG_DOT);
-    lv_obj_align(detail_label, LV_ALIGN_TOP_LEFT, 30, 34);
+    lv_obj_align(detail_label, LV_ALIGN_TOP_LEFT, 38, 38);
 
     return InfoLabels{.value = value_label, .detail = detail_label};
 }
