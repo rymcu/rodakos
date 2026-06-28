@@ -4,14 +4,22 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/time_service.h"
+#include "phone_ui/phone_components.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_layout.h"
 #include "phone_ui/rodakos_theme.h"
 #include "rodakos_adapters/backlight_adapter.h"
 #include "settings.h"
+#include "usb_msc_mode.h"
 
+#include <esp_system.h>
 #include <esp_log.h>
+#include <algorithm>
+#include <array>
 #include <cstdio>
+#include <string>
 
 namespace {
 constexpr const char* TAG = "SettingsApp";
@@ -19,10 +27,82 @@ constexpr const char* kDisplayNamespace = "display";
 constexpr const char* kBrightnessKey = "brightness";
 constexpr const char* kThemeKey = "theme";
 constexpr const char* kLanguageKey = "language";
+constexpr uint32_t kTimeSyncTimeoutPolls = 20;
+
+struct ThemeOption {
+    const char* id;
+    const char* label;
+    const char* button_label;
+    rodakos_theme_preset_t preset;
+    bool phone_ui_light;
+    uint32_t swatch;
+    uint32_t label_color;
+};
+
+constexpr std::array<ThemeOption, 4> kThemeOptions = {{
+    {"light", "Light", "L", RODAKOS_THEME_LIGHT, true, 0xF7F7F7, 0x111111},
+    {"dark", "Dark", "D", RODAKOS_THEME_DARK, false, 0x111111, 0xFFFFFF},
+    {"blue", "Blue", "B", RODAKOS_THEME_BLUE, false, 0x1976D2, 0xFFFFFF},
+    {"green", "Green", "G", RODAKOS_THEME_GREEN, false, 0x388E3C, 0xFFFFFF},
+}};
+
+void DeferReturnHome(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) {
+        lv_indev_reset(nullptr, nullptr);
+        context->navigation().ReturnHome();
+    }
+}
+
+void DeferReloadSettings(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) {
+        lv_indev_reset(nullptr, nullptr);
+        context->navigation().Launch("settings");
+    }
+}
+
+void RestartTimerCallback(lv_timer_t* timer) {
+    lv_timer_delete(timer);
+    esp_restart();
+}
+
+std::string TrimServerName(const char* text) {
+    if (text == nullptr) {
+        return "";
+    }
+    std::string value(text);
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    value = value.substr(first, last - first + 1);
+    if (value.size() > 63) {
+        value.resize(63);
+    }
+    return value;
+}
 
 void UpdateBrightnessLabel(lv_obj_t* label, int value) {
     if (label != nullptr) {
         lv_label_set_text_fmt(label, "%d%%", value);
+    }
+}
+
+int ThemeIndexFromId(const std::string& theme) {
+    for (size_t i = 0; i < kThemeOptions.size(); ++i) {
+        if (theme == kThemeOptions[i].id) {
+            return static_cast<int>(i);
+        }
+    }
+    return 0;
+}
+
+void ApplyThemeToRuntime(PhoneUi* ui, const ThemeOption& option) {
+    rodakos_theme_init_from_name(option.id);
+    if (ui != nullptr) {
+        ui->SetThemeName(option.phone_ui_light ? "light" : "dark");
     }
 }
 
@@ -46,7 +126,7 @@ lv_obj_t* CreateSettingLabel(lv_obj_t* parent, const char* text, bool secondary 
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label,
         secondary ? rodakos_theme_text_secondary() : rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, &phone_font_14, 0);
     return label;
 }
 
@@ -87,36 +167,36 @@ lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t i
     lv_obj_set_width(ssid_label, 200);
     lv_label_set_long_mode(ssid_label, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(ssid_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(ssid_label, &phone_font_14, 0);
     lv_obj_align(ssid_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // 信号强度条（右上角）
+    // 信号强度图标（右上角，使用 Font Awesome 信号图标）
     const char* signal_icon;
     lv_color_t signal_color;
     if (ap.rssi >= -50) {
-        signal_icon = "▂▄▆█";  // 强信号
+        signal_icon = FONT_AWESOME_SIGNAL_STRONG;  // 强信号
         signal_color = rodakos_theme_success();
     } else if (ap.rssi >= -70) {
-        signal_icon = "▂▄▆";    // 中等信号
+        signal_icon = FONT_AWESOME_SIGNAL_GOOD;     // 中等信号
         signal_color = rodakos_theme_primary();
     } else if (ap.rssi >= -80) {
-        signal_icon = "▂▄";      // 弱信号
+        signal_icon = FONT_AWESOME_SIGNAL_FAIR;     // 弱信号
         signal_color = rodakos_theme_warning();
     } else {
-        signal_icon = "▂";        // 很弱
+        signal_icon = FONT_AWESOME_SIGNAL_WEAK;     // 很弱
         signal_color = rodakos_theme_error();
     }
 
     auto* signal_label = lv_label_create(item);
     lv_label_set_text(signal_label, signal_icon);
     lv_obj_set_style_text_color(signal_label, signal_color, 0);
-    lv_obj_set_style_text_font(signal_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(signal_label, PhoneIconFont(), 0);
     lv_obj_align(signal_label, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     // 底部信息：加密状态 + 信号强度数值
     char info_text[48];
     if (ap.is_secured) {
-        snprintf(info_text, sizeof(info_text), "\xF0\x9F\x94\x92 Secured • %d dBm", ap.rssi);  // 🔒 emoji
+        snprintf(info_text, sizeof(info_text), FONT_AWESOME_LOCK " Secured • %d dBm", ap.rssi);  // 加密图标
     } else {
         snprintf(info_text, sizeof(info_text), "Open • %d dBm", ap.rssi);
     }
@@ -124,7 +204,7 @@ lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t i
     auto* info_label = lv_label_create(item);
     lv_label_set_text(info_label, info_text);
     lv_obj_set_style_text_color(info_label, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(info_label, &phone_font_12, 0);
     lv_obj_align(info_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     return item;
@@ -149,11 +229,7 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
     Settings display_settings(kDisplayNamespace, false);
     const std::string theme = display_settings.GetString(kThemeKey, "dark");
 
-    rodakos_theme_preset_t preset = RODAKOS_THEME_DARK;
-    if (theme == "light") preset = RODAKOS_THEME_LIGHT;
-    else if (theme == "blue") preset = RODAKOS_THEME_BLUE;
-    else if (theme == "green") preset = RODAKOS_THEME_GREEN;
-    rodakos_theme_init(preset);
+    rodakos_theme_init_from_name(theme.c_str());
 
     // 初始化布局系统
     rodakos_layout_init(nullptr);
@@ -168,35 +244,26 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
     auto* title_label = lv_label_create(header);
     lv_label_set_text(title_label, "Settings");
     lv_obj_set_style_text_color(title_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(title_label, &phone_font_18, 0);
     lv_obj_center(title_label);
 
-    // 返回按钮
-    auto* back_btn = lv_btn_create(header);
-    lv_obj_remove_style_all(back_btn);
-    lv_obj_set_size(back_btn, 40, 24);
+    auto* back_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_ARROW_LEFT);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, rodakos_layout_padding_medium(), 0);
-    lv_obj_set_style_bg_opa(back_btn, LV_OPA_TRANSP, 0);
-
-    auto* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "<");
-    lv_obj_set_style_text_color(back_label, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_18, 0);
-    lv_obj_center(back_label);
-
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        if (self->current_page_ == SettingsPage::kWiFiList) {
-            // WiFi 页面返回主设置页面
-            self->ShowPage(SettingsPage::kMain);
-        } else {
-            // 主页面返回 Home
-            self->context_->navigation().ReturnHome();
-        }
+        self->NavigateBack();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* home_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_HOUSE);
+    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, -rodakos_layout_padding_medium(), 0);
+    lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->NavigateHome();
     }, LV_EVENT_CLICKED, this);
 
     // 创建主设置页面
     main_body_ = body;
+    header_title_label_ = title_label;
     CreateMainPage();
 
     ESP_LOGI(TAG, "Settings app created");
@@ -207,6 +274,20 @@ void SettingsApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            CloseUsbDiskDialog();
+            if (usb_disk_restart_timer_ != nullptr) {
+                lv_timer_delete(usb_disk_restart_timer_);
+                usb_disk_restart_timer_ = nullptr;
+            }
+            if (usb_disk_hint_page_ != nullptr && lv_obj_is_valid(usb_disk_hint_page_)) {
+                lv_obj_delete(usb_disk_hint_page_);
+            }
+            usb_disk_hint_page_ = nullptr;
+            CloseNtpServerDialog();
+            if (time_sync_timer_ != nullptr) {
+                lv_timer_delete(time_sync_timer_);
+                time_sync_timer_ = nullptr;
+            }
             if (root_ != nullptr && lv_obj_is_valid(root_)) {
                 lv_obj_delete(root_);
             }
@@ -216,10 +297,23 @@ void SettingsApp::OnDestroy() {
     main_body_ = nullptr;
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
+    datetime_body_ = nullptr;
     brightness_label_ = nullptr;
     brightness_slider_ = nullptr;
-    theme_dropdown_ = nullptr;
+    std::fill(std::begin(theme_buttons_), std::end(theme_buttons_), nullptr);
     language_switch_ = nullptr;
+    usb_disk_dialog_ = nullptr;
+    usb_disk_hint_page_ = nullptr;
+    usb_disk_restart_timer_ = nullptr;
+    header_title_label_ = nullptr;
+    timezone_dropdown_ = nullptr;
+    ntp_dropdown_ = nullptr;
+    ntp_dialog_ = nullptr;
+    ntp_textarea_ = nullptr;
+    time_sync_status_label_ = nullptr;
+    time_sync_timer_ = nullptr;
+    time_sync_in_progress_ = false;
+    time_sync_poll_count_ = 0;
     wifi_status_label_ = nullptr;
     wifi_list_container_ = nullptr;
     detail_ssid_label_ = nullptr;
@@ -249,12 +343,18 @@ void SettingsApp::ShowPage(SettingsPage page) {
     if (wifi_detail_body_ != nullptr) {
         lv_obj_add_flag(wifi_detail_body_, LV_OBJ_FLAG_HIDDEN);
     }
+    if (datetime_body_ != nullptr) {
+        lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
+    }
 
     // 显示目标页面
     switch (page) {
         case SettingsPage::kMain:
             if (main_body_ != nullptr) {
                 lv_obj_clear_flag(main_body_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "Settings");
             }
             break;
 
@@ -263,6 +363,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
                 CreateWiFiListPage();
             }
             lv_obj_clear_flag(wifi_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "WiFi");
+            }
             StartWiFiScan();  // 自动扫描
             break;
 
@@ -271,7 +374,20 @@ void SettingsApp::ShowPage(SettingsPage page) {
                 CreateWiFiDetailPage();
             }
             lv_obj_clear_flag(wifi_detail_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "WiFi Details");
+            }
             UpdateWiFiDetailPage();  // 刷新数据
+            break;
+
+        case SettingsPage::kDateTime:
+            if (datetime_body_ == nullptr) {
+                CreateDateTimePage();
+            }
+            lv_obj_clear_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "Date & Time");
+            }
             break;
     }
 }
@@ -281,6 +397,11 @@ void SettingsApp::CreateMainPage() {
     const int brightness = display_settings.GetInt(kBrightnessKey, 75);
     const std::string theme = display_settings.GetString(kThemeKey, "dark");
     const std::string language = display_settings.GetString(kLanguageKey, "en");
+    const int selected_theme = ThemeIndexFromId(theme);
+
+    lv_obj_add_flag(main_body_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(main_body_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(main_body_, LV_SCROLLBAR_MODE_AUTO);
 
     // ===== 亮度设置卡片 =====
     auto* brightness_card = lv_obj_create(main_body_);
@@ -335,40 +456,57 @@ void SettingsApp::CreateMainPage() {
     // ===== 主题设置卡片 =====
     auto* theme_card = CreateSettingCard(main_body_, 84);
     auto* theme_title = CreateSettingLabel(theme_card, "Theme");
-    lv_obj_align(theme_title, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    theme_dropdown_ = lv_dropdown_create(theme_card);
-    lv_dropdown_set_options(theme_dropdown_, "Dark\nLight\nBlue\nGreen");
-    lv_obj_set_width(theme_dropdown_, 100);
-    lv_obj_align(theme_dropdown_, LV_ALIGN_RIGHT_MID, 0, 0);
+    auto* theme_row = lv_obj_create(theme_card);
+    lv_obj_remove_style_all(theme_row);
+    lv_obj_set_size(theme_row, 188, 30);
+    lv_obj_align(theme_row, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_flex_flow(theme_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(theme_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(theme_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    if (theme == "light") lv_dropdown_set_selected(theme_dropdown_, 1);
-    else if (theme == "blue") lv_dropdown_set_selected(theme_dropdown_, 2);
-    else if (theme == "green") lv_dropdown_set_selected(theme_dropdown_, 3);
-    else lv_dropdown_set_selected(theme_dropdown_, 0);
+    for (size_t i = 0; i < kThemeOptions.size(); ++i) {
+        auto* btn = lv_btn_create(theme_row);
+        theme_buttons_[i] = btn;
+        lv_obj_set_user_data(btn, const_cast<ThemeOption*>(&kThemeOptions[i]));
+        lv_obj_set_size(btn, 42, 28);
+        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(kThemeOptions[i].swatch), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(btn, i == static_cast<size_t>(selected_theme) ? 2 : 1, 0);
+        lv_obj_set_style_border_color(btn,
+                                      i == static_cast<size_t>(selected_theme)
+                                          ? rodakos_theme_primary()
+                                          : rodakos_theme_border(),
+                                      0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
 
-    lv_obj_set_style_bg_color(theme_dropdown_, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(theme_dropdown_, rodakos_theme_text_primary(), 0);
+        auto* label = lv_label_create(btn);
+        lv_label_set_text(label, kThemeOptions[i].button_label);
+        lv_obj_set_style_text_color(label, lv_color_hex(kThemeOptions[i].label_color), 0);
+        lv_obj_set_style_text_font(label, &phone_font_12, 0);
+        lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_center(label);
 
-    lv_obj_add_event_cb(theme_dropdown_, [](lv_event_t* e) {
+        lv_obj_add_event_cb(btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        auto* dd = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        const uint16_t selected = lv_dropdown_get_selected(dd);
-
-        const char* theme_names[] = {"dark", "light", "blue", "green"};
-        const rodakos_theme_preset_t presets[] = {
-            RODAKOS_THEME_DARK, RODAKOS_THEME_LIGHT,
-            RODAKOS_THEME_BLUE, RODAKOS_THEME_GREEN
-        };
-
-        if (selected < 4) {
+        auto* btn = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
+        auto* option = static_cast<const ThemeOption*>(lv_obj_get_user_data(btn));
+        if (option != nullptr) {
             Settings settings(kDisplayNamespace, true);
-            settings.SetString(kThemeKey, theme_names[selected]);
-            rodakos_theme_init(presets[selected]);
-            self->ui_->ShowToastUnlocked("Theme changed, reloading...");
-            self->context_->navigation().Launch("settings");
+            settings.SetString(kThemeKey, option->id);
+            ApplyThemeToRuntime(self->ui_, *option);
+            self->ui_->ShowToastUnlocked("Theme changed");
+            if (auto* indev = lv_indev_active(); indev != nullptr) {
+                lv_indev_wait_release(indev);
+            }
+            ESP_LOGI(TAG, "Theme changed to %s, reloading settings", option->id);
+            lv_async_call(DeferReloadSettings, self->context_);
         }
-    }, LV_EVENT_VALUE_CHANGED, this);
+        }, LV_EVENT_CLICKED, this);
+    }
 
     // ===== 语言设置卡片 =====
     auto* language_card = CreateSettingCard(main_body_, 142);
@@ -403,13 +541,354 @@ void SettingsApp::CreateMainPage() {
     auto* wifi_arrow = lv_label_create(wifi_card);
     lv_label_set_text(wifi_arrow, ">");
     lv_obj_set_style_text_color(wifi_arrow, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(wifi_arrow, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(wifi_arrow, &phone_font_18, 0);
     lv_obj_align(wifi_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_add_event_cb(wifi_card, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->ShowPage(SettingsPage::kWiFiList);
     }, LV_EVENT_CLICKED, this);
+
+    // ===== 日期与时间入口 =====
+    auto* datetime_card = CreateSettingCard(main_body_, 258);
+    lv_obj_add_flag(datetime_card, LV_OBJ_FLAG_CLICKABLE);
+
+    auto* datetime_icon = lv_label_create(datetime_card);
+    lv_label_set_text(datetime_icon, FONT_AWESOME_CLOCK);
+    lv_obj_set_style_text_color(datetime_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(datetime_icon, PhoneIconFont(), 0);
+    lv_obj_align(datetime_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* datetime_title = CreateSettingLabel(datetime_card, "Date & Time");
+    lv_obj_align(datetime_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* datetime_arrow = lv_label_create(datetime_card);
+    lv_label_set_text(datetime_arrow, ">");
+    lv_obj_set_style_text_color(datetime_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(datetime_arrow, &phone_font_18, 0);
+    lv_obj_align(datetime_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(datetime_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kDateTime);
+    }, LV_EVENT_CLICKED, this);
+
+    // ===== USB 磁盘模式入口 =====
+    auto* usb_card = CreateSettingCard(main_body_, 316);
+    lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
+
+    auto* usb_icon = lv_label_create(usb_card);
+    lv_label_set_text(usb_icon, FONT_AWESOME_SD_CARD);
+    lv_obj_set_style_text_color(usb_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(usb_icon, PhoneIconFont(), 0);
+    lv_obj_align(usb_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* usb_title = CreateSettingLabel(usb_card, "USB Disk Mode");
+    lv_obj_align(usb_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* usb_arrow = lv_label_create(usb_card);
+    lv_label_set_text(usb_arrow, ">");
+    lv_obj_set_style_text_color(usb_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(usb_arrow, &phone_font_18, 0);
+    lv_obj_align(usb_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(usb_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowUsbDiskDialog();
+    }, LV_EVENT_CLICKED, this);
+}
+
+void SettingsApp::ShowUsbDiskDialog() {
+    if (usb_disk_dialog_ != nullptr) {
+        return;
+    }
+
+    usb_disk_dialog_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(usb_disk_dialog_);
+    lv_obj_set_size(usb_disk_dialog_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(usb_disk_dialog_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(usb_disk_dialog_, LV_OPA_70, 0);
+    lv_obj_clear_flag(usb_disk_dialog_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* dialog_box = lv_obj_create(usb_disk_dialog_);
+    lv_obj_remove_style_all(dialog_box);
+    lv_obj_set_size(dialog_box, 286, 154);
+    lv_obj_center(dialog_box);
+    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dialog_box, 10, 0);
+    lv_obj_set_style_pad_all(dialog_box, 14, 0);
+    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = CreateSettingLabel(dialog_box, "USB Disk Mode");
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+    auto* message = CreateSettingLabel(
+        dialog_box,
+        "Reboot and share SD card with PC.\nSafely eject before reset.",
+        true);
+    lv_obj_set_width(message, 250);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 36);
+
+    auto* cancel_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(cancel_btn, 108, 34);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cancel_btn, 6, 0);
+    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
+
+    auto* cancel_label = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_label, "Cancel");
+    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
+    lv_obj_center(cancel_label);
+    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->CloseUsbDiskDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* enter_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(enter_btn, 108, 34);
+    lv_obj_align(enter_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(enter_btn, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(enter_btn, 6, 0);
+    lv_obj_set_style_shadow_width(enter_btn, 0, 0);
+
+    auto* enter_label = lv_label_create(enter_btn);
+    lv_label_set_text(enter_label, "Enter");
+    lv_obj_set_style_text_color(enter_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(enter_label, &phone_font_12, 0);
+    lv_obj_center(enter_label);
+    lv_obj_add_event_cb(enter_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->EnterUsbDiskMode();
+    }, LV_EVENT_CLICKED, this);
+}
+
+void SettingsApp::CloseUsbDiskDialog() {
+    if (usb_disk_dialog_ != nullptr && lv_obj_is_valid(usb_disk_dialog_)) {
+        lv_obj_delete(usb_disk_dialog_);
+    }
+    usb_disk_dialog_ = nullptr;
+}
+
+void SettingsApp::EnterUsbDiskMode() {
+    if (!RequestUsbMscModeOnNextBoot()) {
+        ui_->ShowToastUnlocked("USB disk request failed");
+        return;
+    }
+
+    CloseUsbDiskDialog();
+    ShowUsbDiskEnablePage();
+}
+
+void SettingsApp::ShowUsbDiskEnablePage() {
+    if (usb_disk_hint_page_ != nullptr) {
+        return;
+    }
+
+    usb_disk_hint_page_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(usb_disk_hint_page_);
+    lv_obj_set_size(usb_disk_hint_page_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(usb_disk_hint_page_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(usb_disk_hint_page_, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(usb_disk_hint_page_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = lv_label_create(usb_disk_hint_page_);
+    lv_label_set_text(title, "USB Disk Mode");
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_set_style_text_color(title, rodakos_theme_text_primary(), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
+
+    auto* icon = lv_label_create(usb_disk_hint_page_);
+    lv_label_set_text(icon, FONT_AWESOME_SD_CARD);
+    lv_obj_set_style_text_font(icon, PhoneIconFontLarge(), 0);
+    lv_obj_set_style_text_color(icon, rodakos_theme_primary(), 0);
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 52);
+
+    auto* message = lv_label_create(usb_disk_hint_page_);
+    lv_label_set_text(message,
+                      "Enabling USB disk...\n\n"
+                      "The SD card will appear on your PC.\n"
+                      "Touch is disabled in this mode.\n\n"
+                      "To return:\n"
+                      "1. Safely eject on the PC\n"
+                      "2. Press reset or power cycle");
+    lv_obj_set_width(message, 286);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(message, &phone_font_12, 0);
+    lv_obj_set_style_text_color(message, rodakos_theme_text_secondary(), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 92);
+
+    auto* footer = lv_label_create(usb_disk_hint_page_);
+    lv_label_set_text(footer, "Rebooting now...");
+    lv_obj_set_style_text_font(footer, &phone_font_12, 0);
+    lv_obj_set_style_text_color(footer, rodakos_theme_primary(), 0);
+    lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    lv_obj_move_foreground(usb_disk_hint_page_);
+    lv_refr_now(nullptr);
+
+    if (usb_disk_restart_timer_ != nullptr) {
+        lv_timer_delete(usb_disk_restart_timer_);
+    }
+    usb_disk_restart_timer_ = lv_timer_create(RestartTimerCallback, 1200, nullptr);
+    lv_timer_set_repeat_count(usb_disk_restart_timer_, 1);
+}
+
+void SettingsApp::NavigateBack() {
+    if (current_page_ == SettingsPage::kWiFiDetail) {
+        ShowPage(SettingsPage::kWiFiList);
+        return;
+    }
+    if (current_page_ == SettingsPage::kWiFiList ||
+        current_page_ == SettingsPage::kDateTime) {
+        ShowPage(SettingsPage::kMain);
+        return;
+    }
+    NavigateHome();
+}
+
+void SettingsApp::NavigateHome() {
+    if (auto* indev = lv_indev_active(); indev != nullptr) {
+        lv_indev_wait_release(indev);
+    }
+    ESP_LOGI(TAG, "Header home button returning home");
+    lv_async_call(DeferReturnHome, context_);
+}
+
+void SettingsApp::CreateDateTimePage() {
+    datetime_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
+    lv_obj_remove_style_all(datetime_body_);
+    lv_obj_set_size(datetime_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
+    lv_obj_set_pos(datetime_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
+    lv_obj_set_style_bg_opa(datetime_body_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(datetime_body_, 0, 0);
+    lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
+
+    auto* tz_card = CreateSettingCard(datetime_body_, 4, 64);
+    lv_obj_set_style_pad_all(tz_card, 8, 0);
+    auto* tz_icon = lv_label_create(tz_card);
+    lv_label_set_text(tz_icon, FONT_AWESOME_GLOBE);
+    lv_obj_set_style_text_color(tz_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(tz_icon, PhoneIconFont(), 0);
+    lv_obj_align(tz_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* tz_title = CreateSettingLabel(tz_card, "Time zone", true);
+    lv_obj_set_style_text_font(tz_title, &phone_font_12, 0);
+    lv_obj_set_width(tz_title, 236);
+    lv_label_set_long_mode(tz_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(tz_title, LV_ALIGN_TOP_LEFT, 32, -1);
+
+    timezone_dropdown_ = lv_dropdown_create(tz_card);
+    lv_dropdown_set_options(timezone_dropdown_,
+                            "Shanghai (UTC+8)\nUTC\nTokyo (UTC+9)\nLos Angeles\nNew York\nLondon\nBerlin");
+    lv_dropdown_set_selected(
+        timezone_dropdown_,
+        static_cast<uint16_t>(TimeServiceFindTimeZoneIndex(TimeServiceLoadTimeZone())));
+    lv_obj_set_size(timezone_dropdown_, 236, 28);
+    lv_obj_align(timezone_dropdown_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
+    lv_obj_set_style_bg_color(timezone_dropdown_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_text_color(timezone_dropdown_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(timezone_dropdown_, &phone_font_12, 0);
+    lv_obj_set_style_border_width(timezone_dropdown_, 0, 0);
+    lv_obj_set_style_radius(timezone_dropdown_, 6, 0);
+    lv_obj_add_event_cb(timezone_dropdown_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        auto* dropdown = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        self->SaveTimeZone(lv_dropdown_get_selected(dropdown));
+    }, LV_EVENT_VALUE_CHANGED, this);
+
+    auto* server_card = CreateSettingCard(datetime_body_, 72, 64);
+    lv_obj_set_style_pad_all(server_card, 8, 0);
+    auto* server_icon = lv_label_create(server_card);
+    lv_label_set_text(server_icon, FONT_AWESOME_CLOUD);
+    lv_obj_set_style_text_color(server_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(server_icon, PhoneIconFont(), 0);
+    lv_obj_align(server_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* server_title = CreateSettingLabel(server_card, "Time server", true);
+    lv_obj_set_style_text_font(server_title, &phone_font_12, 0);
+    lv_obj_set_width(server_title, 236);
+    lv_label_set_long_mode(server_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(server_title, LV_ALIGN_TOP_LEFT, 32, -1);
+
+    ntp_dropdown_ = lv_dropdown_create(server_card);
+    lv_dropdown_set_options(ntp_dropdown_,
+                            "pool.ntp.org\n0.pool.ntp.org\n1.pool.ntp.org\nntp.aliyun.com\nTencent CN\nApple\nGoogle\nCustom");
+    lv_dropdown_set_selected(
+        ntp_dropdown_,
+        static_cast<uint16_t>(TimeServiceFindNtpServerIndex(TimeServiceLoadNtpServer())));
+    lv_obj_set_size(ntp_dropdown_, 166, 28);
+    lv_obj_align(ntp_dropdown_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
+    lv_obj_set_style_bg_color(ntp_dropdown_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_text_color(ntp_dropdown_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(ntp_dropdown_, &phone_font_12, 0);
+    lv_obj_set_style_border_width(ntp_dropdown_, 0, 0);
+    lv_obj_set_style_radius(ntp_dropdown_, 6, 0);
+    lv_obj_add_event_cb(ntp_dropdown_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        auto* dropdown = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        const size_t index = lv_dropdown_get_selected(dropdown);
+        size_t count = 0;
+        const auto* servers = TimeServiceNtpServers(&count);
+        if (index >= count) {
+            return;
+        }
+        if (servers[index].server[0] == '\0') {
+            self->ShowNtpServerDialog();
+            return;
+        }
+        self->SaveNtpServer(servers[index].server);
+    }, LV_EVENT_VALUE_CHANGED, this);
+
+    auto* edit_btn = lv_btn_create(server_card);
+    lv_obj_remove_style_all(edit_btn);
+    lv_obj_set_size(edit_btn, 36, 28);
+    lv_obj_align(edit_btn, LV_ALIGN_BOTTOM_RIGHT, -42, 0);
+    lv_obj_set_style_bg_color(edit_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_bg_opa(edit_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(edit_btn, 6, 0);
+    lv_obj_clear_flag(edit_btn, LV_OBJ_FLAG_SCROLLABLE);
+    auto* edit_icon = lv_label_create(edit_btn);
+    lv_label_set_text(edit_icon, FONT_AWESOME_PEN_TO_SQUARE);
+    lv_obj_set_style_text_color(edit_icon, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(edit_icon, PhoneIconFont(), 0);
+    lv_obj_center(edit_icon);
+    lv_obj_add_event_cb(edit_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowNtpServerDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* sync_btn = lv_btn_create(server_card);
+    lv_obj_remove_style_all(sync_btn);
+    lv_obj_set_size(sync_btn, 36, 28);
+    lv_obj_align(sync_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(sync_btn, rodakos_theme_primary(), 0);
+    lv_obj_set_style_bg_opa(sync_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(sync_btn, 6, 0);
+    lv_obj_clear_flag(sync_btn, LV_OBJ_FLAG_SCROLLABLE);
+    auto* sync_icon = lv_label_create(sync_btn);
+    lv_label_set_text(sync_icon, FONT_AWESOME_ARROWS_ROTATE);
+    lv_obj_set_style_text_color(sync_icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(sync_icon, PhoneIconFont(), 0);
+    lv_obj_center(sync_icon);
+    lv_obj_add_event_cb(sync_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->StartTimeSync();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* status_card = CreateSettingCard(datetime_body_, 144, 40);
+    lv_obj_set_style_pad_all(status_card, 8, 0);
+    time_sync_status_label_ = CreateSettingLabel(status_card, "Sync status: idle", true);
+    lv_obj_set_style_text_font(time_sync_status_label_, &phone_font_12, 0);
+    lv_obj_set_width(time_sync_status_label_, 264);
+    lv_label_set_long_mode(time_sync_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(time_sync_status_label_, LV_ALIGN_LEFT_MID, 0, 0);
 }
 
 void SettingsApp::CreateWiFiListPage() {
@@ -434,8 +913,8 @@ void SettingsApp::CreateWiFiListPage() {
 
     // 状态图标
     auto* status_icon = lv_label_create(info_container);
-    lv_label_set_text(status_icon, "📶");
-    lv_obj_set_style_text_font(status_icon, &lv_font_montserrat_18, 0);
+    lv_label_set_text(status_icon, FONT_AWESOME_WIFI);
+    lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
     lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
     // 状态文字
@@ -444,7 +923,7 @@ void SettingsApp::CreateWiFiListPage() {
     lv_obj_set_width(wifi_status_label_, 220);
     lv_label_set_long_mode(wifi_status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_color(wifi_status_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(wifi_status_label_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(wifi_status_label_, &phone_font_12, 0);
     lv_obj_align(wifi_status_label_, LV_ALIGN_LEFT_MID, 35, 0);
 
     // 扫描按钮（右侧）
@@ -457,7 +936,7 @@ void SettingsApp::CreateWiFiListPage() {
     auto* scan_label = lv_label_create(scan_btn);
     lv_label_set_text(scan_label, "Scan");
     lv_obj_set_style_text_color(scan_label, rodakos_theme_bg_primary(), 0);
-    lv_obj_set_style_text_font(scan_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(scan_label, &phone_font_12, 0);
     lv_obj_center(scan_label);
 
     lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
@@ -478,8 +957,220 @@ void SettingsApp::CreateWiFiListPage() {
     auto* hint_label = lv_label_create(wifi_body_);
     lv_label_set_text(hint_label, "Tap network to connect");
     lv_obj_set_style_text_color(hint_label, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hint_label, &phone_font_12, 0);
     lv_obj_align(hint_label, LV_ALIGN_BOTTOM_MID, 0, -5);
+}
+
+void SettingsApp::SaveTimeZone(size_t index) {
+    size_t count = 0;
+    const auto* zones = TimeServiceTimeZones(&count);
+    if (index >= count) {
+        return;
+    }
+
+    TimeServiceSaveTimeZone(zones[index].tz);
+    TimeServiceApplyTimeZone(zones[index].tz);
+    ui_->ShowToastUnlocked("Time zone saved");
+    ESP_LOGI(TAG, "Time zone changed: %s (%s)", zones[index].label, zones[index].tz);
+}
+
+void SettingsApp::SaveNtpServer(const std::string& server) {
+    if (server.empty()) {
+        ui_->ShowToastUnlocked("Server name is empty");
+        return;
+    }
+
+    TimeServiceSaveNtpServer(server);
+    if (ntp_dropdown_ != nullptr) {
+        lv_dropdown_set_selected(
+            ntp_dropdown_,
+            static_cast<uint16_t>(TimeServiceFindNtpServerIndex(server)));
+    }
+    ui_->ShowToastUnlocked("NTP server saved");
+    ESP_LOGI(TAG, "NTP server changed: %s", server.c_str());
+}
+
+void SettingsApp::StartTimeSync() {
+    auto* wifi = context_->services().wifi();
+    if (wifi == nullptr || wifi->GetStatus() != WiFiStatus::kConnected) {
+        if (time_sync_status_label_ != nullptr) {
+            lv_label_set_text(time_sync_status_label_, "Sync status: WiFi not connected");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
+        }
+        ui_->ShowToastUnlocked("Connect WiFi first");
+        return;
+    }
+
+    if (time_sync_timer_ != nullptr) {
+        lv_timer_delete(time_sync_timer_);
+        time_sync_timer_ = nullptr;
+    }
+
+    if (!TimeServiceStartSavedSync()) {
+        if (time_sync_status_label_ != nullptr) {
+            lv_label_set_text(time_sync_status_label_, "Sync status: failed");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
+        }
+        return;
+    }
+
+    time_sync_in_progress_ = true;
+    time_sync_poll_count_ = 0;
+    if (time_sync_status_label_ != nullptr) {
+        lv_label_set_text(time_sync_status_label_, "Sync status: syncing...");
+        lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_primary(), 0);
+    }
+    time_sync_timer_ = lv_timer_create([](lv_timer_t* timer) {
+        auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
+        if (self != nullptr) {
+            self->UpdateTimeSyncStatus();
+        }
+    }, 1000, this);
+    ui_->ShowToastUnlocked("Time sync started");
+}
+
+void SettingsApp::UpdateTimeSyncStatus() {
+    if (!time_sync_in_progress_) {
+        return;
+    }
+
+    time_sync_poll_count_++;
+    const TimeSyncStatus status = TimeServiceGetSyncStatus();
+    if (status == TimeSyncStatus::kCompleted) {
+        time_sync_in_progress_ = false;
+        if (time_sync_timer_ != nullptr) {
+            lv_timer_delete(time_sync_timer_);
+            time_sync_timer_ = nullptr;
+        }
+        if (time_sync_status_label_ != nullptr) {
+            lv_label_set_text(time_sync_status_label_, "Sync status: synced");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_success(), 0);
+        }
+        ui_->ShowToastUnlocked("Time synced");
+        return;
+    }
+
+    if (time_sync_poll_count_ >= kTimeSyncTimeoutPolls) {
+        time_sync_in_progress_ = false;
+        if (time_sync_timer_ != nullptr) {
+            lv_timer_delete(time_sync_timer_);
+            time_sync_timer_ = nullptr;
+        }
+        if (time_sync_status_label_ != nullptr) {
+            lv_label_set_text(time_sync_status_label_, "Sync status: timeout");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
+        }
+        ui_->ShowToastUnlocked("Sync timeout");
+        return;
+    }
+
+    if (time_sync_status_label_ != nullptr) {
+        lv_label_set_text_fmt(time_sync_status_label_, "Sync status: syncing... %lus",
+                              static_cast<unsigned long>(time_sync_poll_count_));
+    }
+}
+
+void SettingsApp::ShowNtpServerDialog() {
+    if (ntp_dialog_ != nullptr) {
+        return;
+    }
+    if (ntp_dropdown_ != nullptr) {
+        lv_dropdown_set_selected(
+            ntp_dropdown_,
+            static_cast<uint16_t>(TimeServiceFindNtpServerIndex(TimeServiceLoadNtpServer())));
+    }
+
+    ntp_dialog_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(ntp_dialog_);
+    lv_obj_set_size(ntp_dialog_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(ntp_dialog_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(ntp_dialog_, LV_OPA_70, 0);
+    lv_obj_clear_flag(ntp_dialog_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* dialog_box = lv_obj_create(ntp_dialog_);
+    lv_obj_remove_style_all(dialog_box);
+    lv_obj_set_size(dialog_box, 288, 112);
+    lv_obj_align(dialog_box, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dialog_box, 10, 0);
+    lv_obj_set_style_pad_all(dialog_box, 14, 0);
+    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = CreateSettingLabel(dialog_box, "NTP Server");
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+    ntp_textarea_ = lv_textarea_create(dialog_box);
+    lv_obj_set_size(ntp_textarea_, 252, 32);
+    lv_obj_align(ntp_textarea_, LV_ALIGN_TOP_MID, 0, 28);
+    lv_textarea_set_one_line(ntp_textarea_, true);
+    lv_textarea_set_max_length(ntp_textarea_, 63);
+    lv_textarea_set_text(ntp_textarea_, TimeServiceLoadNtpServer().c_str());
+    lv_textarea_set_placeholder_text(ntp_textarea_, "pool.ntp.org");
+    lv_obj_set_style_bg_color(ntp_textarea_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_text_color(ntp_textarea_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_border_color(ntp_textarea_, rodakos_theme_primary(), LV_STATE_FOCUSED);
+
+    auto* cancel_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(cancel_btn, 108, 28);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cancel_btn, 6, 0);
+    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
+
+    auto* cancel_label = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_label, "Cancel");
+    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
+    lv_obj_center(cancel_label);
+    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->CloseNtpServerDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* save_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(save_btn, 108, 28);
+    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(save_btn, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(save_btn, 6, 0);
+    lv_obj_set_style_shadow_width(save_btn, 0, 0);
+
+    auto* save_label = lv_label_create(save_btn);
+    lv_label_set_text(save_label, "Save");
+    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
+    lv_obj_center(save_label);
+    lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        const std::string server = TrimServerName(lv_textarea_get_text(self->ntp_textarea_));
+        self->SaveNtpServer(server);
+        self->CloseNtpServerDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    soft_keyboard_.Show(ntp_textarea_, [this]() {
+        const std::string server = TrimServerName(lv_textarea_get_text(ntp_textarea_));
+        SaveNtpServer(server);
+        CloseNtpServerDialogAsync();
+    });
+}
+
+void SettingsApp::CloseNtpServerDialog() {
+    soft_keyboard_.Hide();
+    if (ntp_dialog_ != nullptr && lv_obj_is_valid(ntp_dialog_)) {
+        lv_obj_delete(ntp_dialog_);
+    }
+    ntp_dialog_ = nullptr;
+    ntp_textarea_ = nullptr;
+}
+
+void SettingsApp::CloseNtpServerDialogAsync() {
+    lv_async_call([](void* user_data) {
+        auto* self = static_cast<SettingsApp*>(user_data);
+        if (self != nullptr) {
+            self->CloseNtpServerDialog();
+        }
+    }, this);
 }
 
 void SettingsApp::StartWiFiScan() {
@@ -601,14 +1292,14 @@ void SettingsApp::ShowPasswordDialog(const std::string& ssid) {
     auto* title_label = lv_label_create(dialog_box);
     lv_label_set_text(title_label, "Enter Password");
     lv_obj_set_style_text_color(title_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(title_label, &phone_font_18, 0);
     lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 0);
 
     // SSID 标签
     auto* ssid_label = lv_label_create(dialog_box);
     lv_label_set_text(ssid_label, ssid.c_str());
     lv_obj_set_style_text_color(ssid_label, rodakos_theme_text_secondary(), 0);
-    lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(ssid_label, &phone_font_12, 0);
     lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 26);
 
     // 密码输入框
@@ -690,51 +1381,19 @@ void SettingsApp::ShowPasswordDialog(const std::string& ssid) {
 }
 
 void SettingsApp::CreateWiFiDetailPage() {
-    wifi_detail_body_ = lv_obj_create(root_);
+    wifi_detail_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
     lv_obj_remove_style_all(wifi_detail_body_);
-    lv_obj_set_size(wifi_detail_body_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(wifi_detail_body_, rodakos_theme_bg_primary(), 0);
-    lv_obj_set_style_bg_opa(wifi_detail_body_, LV_OPA_COVER, 0);
+    lv_obj_set_size(wifi_detail_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
+    lv_obj_set_pos(wifi_detail_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
+    lv_obj_set_style_bg_opa(wifi_detail_body_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(wifi_detail_body_, 0, 0);
-
-    // 标题栏
-    auto* title_bar = lv_obj_create(wifi_detail_body_);
-    lv_obj_remove_style_all(title_bar);
-    lv_obj_set_size(title_bar, LV_PCT(100), 44);
-    lv_obj_set_style_bg_color(title_bar, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(title_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(title_bar, 12, 0);
-    lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
-
-    // 返回按钮
-    auto* back_btn = lv_btn_create(title_bar);
-    lv_obj_set_size(back_btn, 60, 32);
-    lv_obj_set_style_bg_color(back_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(back_btn, 6, 0);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-
-    auto* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_color(back_label, rodakos_theme_text_primary(), 0);
-    lv_obj_center(back_label);
-
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->ShowPage(SettingsPage::kWiFiList);
-    }, LV_EVENT_CLICKED, this);
-
-    // 标题
-    auto* title_label = lv_label_create(title_bar);
-    lv_label_set_text(title_label, "WiFi Details");
-    lv_obj_set_style_text_color(title_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(title_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(wifi_detail_body_, LV_OBJ_FLAG_HIDDEN);
 
     // 内容区域
     auto* content = lv_obj_create(wifi_detail_body_);
     lv_obj_remove_style_all(content);
-    lv_obj_set_size(content, 300, 196);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_set_size(content, 300, 148);
+    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 8);
     lv_obj_set_style_pad_all(content, 16, 0);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -744,7 +1403,7 @@ void SettingsApp::CreateWiFiDetailPage() {
     detail_ssid_label_ = lv_label_create(content);
     lv_label_set_text(detail_ssid_label_, "SSID: ");
     lv_obj_set_style_text_color(detail_ssid_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(detail_ssid_label_, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(detail_ssid_label_, &phone_font_14, 0);
 
     // 状态
     detail_status_label_ = lv_label_create(content);
@@ -929,7 +1588,7 @@ void RegisterSettingsApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "settings",
         .title = "Settings",
-        .icon = "S",
+        .icon = FONT_AWESOME_GEAR,
         .category = PhoneAppCategory::kSystem,
         .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kNone,

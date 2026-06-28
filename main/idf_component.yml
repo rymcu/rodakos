@@ -3,11 +3,21 @@ dependencies:
   lvgl/lvgl: ~9.3.0
   esp_lvgl_port: ~2.6.0
 
+  # 字体（普惠体中文 + Font Awesome 图标 + emoji），解决"豆腐块"显示问题
+  # 参考 xiaozhi-esp32 的字体方案
+  78/xiaozhi-fonts: ~1.6.0
+
   # Touch driver
   espressif/esp_lcd_touch_gt911: ~1.0.0
 
+  # USB Mass Storage device mode
+  espressif/esp_tinyusb: ~2.1.1
+
+  # JPEG decode for SD card photo rendering
+  espressif/esp_new_jpeg: ^0.6.1
+
   idf:
-    version: '>=5.4.0'
+    version: ">=5.4.0"
 
 # Brookesia HAL 组件已迁移到本地 components/ 目录
 # ESP-IDF 会自动发现并构建它们

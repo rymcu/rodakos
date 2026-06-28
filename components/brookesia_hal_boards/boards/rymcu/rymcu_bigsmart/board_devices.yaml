@@ -84,6 +84,7 @@ devices:
     type: fs_fat
     sub_type: sdmmc
     version: default
+    init_skip: true
     config:
       vfs_config:
         format_if_mount_failed: false
@@ -105,7 +106,7 @@ devices:
     config:
       max_pins: 8                      # Maximum number of GPIO pins supported
       output_io_mask: [0, 1, 2]        # List of pins configured as output
-      output_io_level_mask: [1, 1, 1]  # List of pins with initial output level
+      output_io_level_mask: [1, 1, 0]  # Match BigSmart PCA9557 default: LCD/PA enabled, DVP held low
       input_io_mask: NULL
     peripherals:
       - name: i2c_master
@@ -156,6 +157,7 @@ devices:
     config:
       io_i2c_config:
         lcd_cmd_bits: 16
+        scl_speed_hz: 400000
       touch_config:
         x_max: 240
         y_max: 320

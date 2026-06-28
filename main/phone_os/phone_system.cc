@@ -27,6 +27,7 @@ bool PhoneSystem::Start() {
 }
 
 bool PhoneSystem::LaunchApp(std::string_view app_id) {
+    ESP_LOGI(TAG, "Launch requested: %.*s", static_cast<int>(app_id.size()), app_id.data());
     const auto* descriptor = registry_.FindById(app_id);
     if (descriptor == nullptr) {
         ESP_LOGE(TAG, "Unknown app: %.*s", static_cast<int>(app_id.size()), app_id.data());
@@ -36,5 +37,6 @@ bool PhoneSystem::LaunchApp(std::string_view app_id) {
 }
 
 bool PhoneSystem::ReturnHome() {
+    ESP_LOGI(TAG, "Return home requested");
     return LaunchApp(kHomeAppId);
 }

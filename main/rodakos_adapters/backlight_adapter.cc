@@ -44,6 +44,8 @@ void BacklightAdapter::SetBrightness(uint8_t brightness, bool permanent) {
     }
     brightness_ = brightness;
 
+    ESP_LOGI(TAG, "Setting brightness to %d%% (permanent=%d)", brightness_, permanent);
+
     if (permanent) {
         Settings settings("display", true);
         settings.SetInt("brightness", brightness_);
@@ -56,6 +58,8 @@ void BacklightAdapter::SetBrightness(uint8_t brightness, bool permanent) {
         uint32_t max_duty = (1 << 13) - 1;  // 8191 for 13-bit
         uint32_t duty = (brightness_ * max_duty) / 100;
 
+        ESP_LOGI(TAG, "LEDC duty: %lu / %lu", duty, max_duty);
+
         esp_err_t ret = ledc_set_duty(handle->speed_mode, handle->channel, duty);
         if (ret == ESP_OK) {
             ret = ledc_update_duty(handle->speed_mode, handle->channel);
@@ -63,7 +67,11 @@ void BacklightAdapter::SetBrightness(uint8_t brightness, bool permanent) {
 
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to set brightness: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Brightness set successfully");
         }
+    } else {
+        ESP_LOGW(TAG, "LEDC handle is null, cannot set brightness");
     }
 }
 
@@ -73,5 +81,6 @@ void BacklightAdapter::RestoreBrightness() {
     if (brightness < 5) {
         brightness = 75;
     }
+    ESP_LOGI(TAG, "Restoring brightness to %d%%", brightness);
     SetBrightness(static_cast<uint8_t>(brightness), false);
 }
