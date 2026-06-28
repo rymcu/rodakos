@@ -27,6 +27,7 @@ set(SOURCES
     "apps/photos/photos_app.cc"
     "apps/clock/clock_app.cc"
     "apps/file_manager/file_manager_app.cc"
+    "apps/system_info/system_info_app.cc"
 )
 
 idf_component_register(
@@ -40,6 +41,10 @@ idf_component_register(
         esp_netif
         lwip
         esp_board_manager
+        esp_app_format
+        esp_timer
+        heap
+        spi_flash
         fatfs
         sdmmc
         esp_tinyusb
