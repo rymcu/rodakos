@@ -139,24 +139,32 @@ ledc_update_duty(handle->speed_mode, handle->channel);
 auto* fs = rodakos::CreateFileService();
 if (fs->Init()) {
     // File operations
-    fs->WriteFile("/test.txt", data, size);
-    fs->ReadFile("/test.txt", buffer, max_size);
+    std::vector<uint8_t> data = {'o', 'k'};
+    fs->WriteFile("/test.txt", data);
+
+    std::vector<uint8_t> buffer;
+    fs->ReadFile("/test.txt", buffer);
     fs->DeleteFile("/test.txt");
 
     // Directory operations
     fs->CreateDirectory("/DCIM");
+    std::vector<rodakos::FileEntry> file_list;
     fs->ListDirectory("/DCIM", file_list);
 
     // Status
     bool mounted = fs->IsMounted();
-    size_t total = fs->GetTotalSpace();
-    size_t free = fs->GetFreeSpace();
+    rodakos::FileService::Capacity capacity;
+    if (fs->GetCapacity(capacity)) {
+        uint64_t total = capacity.total_bytes;
+        uint64_t free = capacity.free_bytes;
+    }
 }
 ```
 
-**SD Card Pin Configuration** (from `board_peripherals.yaml`):
-- CMD: GPIO38, CLK: GPIO39, D0-D3: GPIO40/41/36/37
-- Power: GPIO4 (active high), CD: GPIO21 (optional)
+**SD Card Configuration**:
+- Normal RodakOS storage uses the Board Manager `fs_sdcard` device and FileService mounts the handle returned by `esp_board_manager_get_device_handle()`.
+- USB Disk Mode is an early-boot, one-shot path in `main/usb_msc_mode.cc`; it exposes the SD card over TinyUSB MSC before normal services/UI start.
+- USB Disk Mode uses SDMMC 1-bit pins: CLK GPIO47, CMD GPIO48, D0 GPIO21.
 
 ### ImageLibrary - Photo Loading
 

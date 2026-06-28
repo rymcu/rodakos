@@ -24,14 +24,19 @@ public:
  */
 class LvglAllocatedImage : public LvglImage {
 public:
+    using FreeFunc = void (*)(void*);
+
     LvglAllocatedImage(void* data, size_t size);
-    LvglAllocatedImage(void* data, size_t size, int width, int height, int stride, lv_color_format_t format);
+    LvglAllocatedImage(void* data, size_t size, FreeFunc free_func);
+    LvglAllocatedImage(void* data, size_t size, int width, int height, int stride, lv_color_format_t format,
+                       FreeFunc free_func = nullptr);
     ~LvglAllocatedImage() override;
 
     const lv_image_dsc_t* GetImageDescriptor() const override { return &image_dsc_; }
 
 private:
     lv_image_dsc_t image_dsc_;
+    FreeFunc free_func_ = nullptr;
 };
 
 /**

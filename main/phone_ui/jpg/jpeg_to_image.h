@@ -1,3 +1,5 @@
+#pragma once
+
 #include "sdkconfig.h"
 #ifndef CONFIG_IDF_TARGET_ESP32
 

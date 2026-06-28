@@ -126,7 +126,7 @@ lcd_touch:
         mirror_y: false
 ```
 
-**我们的配置**（已修正）：
+**当前 RodakOS 配置**：
 ```yaml
 lcd_touch:
   chip: gt911
@@ -134,8 +134,8 @@ lcd_touch:
   sub_type: i2c
   config:
     touch_config:
-      x_max: 320  # 已修正为实际分辨率
-      y_max: 240  # 已修正为实际分辨率
+      x_max: 240
+      y_max: 320
       int_gpio_num: -1
       flags:
         swap_xy: true
@@ -146,8 +146,8 @@ lcd_touch:
 ## LCD 显示配置（已修复）
 
 **关键参数**：
-- `invert_color: false` - 正确的颜色显示
-- `swap_bytes: true` - 正确的 RGB565 字节序
+- `invert_color: true` - RYMCU BigSmart 当前已验证的正确颜色输出
+- `rgb_ele_order: "LCD_RGB_ELEMENT_ORDER_RGB"` - LCD 面板 RGB 元素顺序
 - `mirror_x: true`
 - `mirror_y: false`
 - `swap_xy: true`

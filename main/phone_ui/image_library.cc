@@ -1,6 +1,7 @@
 #include "image_library.h"
 #include "rodakos_adapters/file_service.h"
 
+#include <esp_jpeg_common.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <algorithm>
@@ -168,7 +169,11 @@ void ScanDirectory(FileService* fs, const std::string& dir, int depth, int max_d
 }  // namespace
 
 // LvglAllocatedImage implementation
-LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size) {
+LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size)
+    : LvglAllocatedImage(data, size, nullptr) {}
+
+LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, FreeFunc free_func)
+    : free_func_(free_func) {
     std::memset(&image_dsc_, 0, sizeof(image_dsc_));
     image_dsc_.data = static_cast<const uint8_t*>(data);
     image_dsc_.data_size = size;
@@ -180,7 +185,8 @@ LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size) {
 }
 
 LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, int width, int height,
-                                       int stride, lv_color_format_t format) {
+                                       int stride, lv_color_format_t format, FreeFunc free_func)
+    : free_func_(free_func) {
     std::memset(&image_dsc_, 0, sizeof(image_dsc_));
     image_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
     image_dsc_.header.cf = format;
@@ -194,7 +200,12 @@ LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, int width, int h
 
 LvglAllocatedImage::~LvglAllocatedImage() {
     if (image_dsc_.data != nullptr) {
-        heap_caps_free(const_cast<uint8_t*>(image_dsc_.data));
+        void* data = const_cast<uint8_t*>(image_dsc_.data);
+        if (free_func_ != nullptr) {
+            free_func_(data);
+        } else {
+            heap_caps_free(data);
+        }
     }
 }
 
@@ -295,7 +306,7 @@ std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
         if (ret != ESP_OK || decoded == nullptr || decoded_len == 0 ||
             decoded_width == 0 || decoded_height == 0 || decoded_stride == 0) {
             if (decoded != nullptr) {
-                heap_caps_free(decoded);
+                jpeg_free_align(decoded);
             }
             ESP_LOGW(TAG, "Failed to decode JPEG: %s (%s)", path.c_str(), esp_err_to_name(ret));
             return nullptr;
@@ -310,9 +321,9 @@ std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
         try {
             return std::make_shared<LvglAllocatedImage>(
                 decoded, decoded_len, static_cast<int>(decoded_width), static_cast<int>(decoded_height),
-                static_cast<int>(decoded_stride), LV_COLOR_FORMAT_RGB888);
+                static_cast<int>(decoded_stride), LV_COLOR_FORMAT_RGB888, jpeg_free_align);
         } catch (...) {
-            heap_caps_free(decoded);
+            jpeg_free_align(decoded);
             ESP_LOGW(TAG, "Failed to create decoded JPEG image: %s", path.c_str());
             return nullptr;
         }
