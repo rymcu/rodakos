@@ -47,6 +47,7 @@ private:
     InfoLabels uptime_;
     InfoLabels firmware_;
     InfoLabels chip_;
+    InfoLabels heap_detail_;
 
     bool storage_checked_ = false;
     bool storage_mounted_ = false;

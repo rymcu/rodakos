@@ -20,7 +20,6 @@
 
 #include <cstdio>
 #include <memory>
-#include <string>
 
 namespace {
 constexpr const char* TAG = "SystemInfoApp";
@@ -53,23 +52,27 @@ lv_obj_t* CreateText(lv_obj_t* parent, const char* text, const lv_font_t* font, 
     return label;
 }
 
-std::string FormatBytes(uint64_t bytes) {
-    char buffer[32] = {};
+void FormatBytes(uint64_t bytes, char* buffer, size_t buffer_size) {
+    if (buffer == nullptr || buffer_size == 0) {
+        return;
+    }
     if (bytes < 1024) {
-        std::snprintf(buffer, sizeof(buffer), "%u B", static_cast<unsigned>(bytes));
+        std::snprintf(buffer, buffer_size, "%u B", static_cast<unsigned>(bytes));
     } else if (bytes < 1024ULL * 1024ULL) {
-        std::snprintf(buffer, sizeof(buffer), "%.1f KB", static_cast<double>(bytes) / 1024.0);
+        std::snprintf(buffer, buffer_size, "%.1f KB", static_cast<double>(bytes) / 1024.0);
     } else if (bytes < 1024ULL * 1024ULL * 1024ULL) {
-        std::snprintf(buffer, sizeof(buffer), "%.1f MB",
+        std::snprintf(buffer, buffer_size, "%.1f MB",
                       static_cast<double>(bytes) / (1024.0 * 1024.0));
     } else {
-        std::snprintf(buffer, sizeof(buffer), "%.1f GB",
+        std::snprintf(buffer, buffer_size, "%.1f GB",
                       static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
     }
-    return buffer;
 }
 
-std::string FormatDuration(uint64_t seconds) {
+void FormatDuration(uint64_t seconds, char* buffer, size_t buffer_size) {
+    if (buffer == nullptr || buffer_size == 0) {
+        return;
+    }
     const uint64_t days = seconds / 86400;
     seconds %= 86400;
     const uint64_t hours = seconds / 3600;
@@ -77,20 +80,18 @@ std::string FormatDuration(uint64_t seconds) {
     const uint64_t minutes = seconds / 60;
     seconds %= 60;
 
-    char buffer[40] = {};
     if (days > 0) {
-        std::snprintf(buffer, sizeof(buffer), "%ud %02u:%02u:%02u",
+        std::snprintf(buffer, buffer_size, "%ud %02u:%02u:%02u",
                       static_cast<unsigned>(days),
                       static_cast<unsigned>(hours),
                       static_cast<unsigned>(minutes),
                       static_cast<unsigned>(seconds));
     } else {
-        std::snprintf(buffer, sizeof(buffer), "%02u:%02u:%02u",
+        std::snprintf(buffer, buffer_size, "%02u:%02u:%02u",
                       static_cast<unsigned>(hours),
                       static_cast<unsigned>(minutes),
                       static_cast<unsigned>(seconds));
     }
-    return buffer;
 }
 
 const char* WiFiStatusText(WiFiStatus status) {
@@ -155,6 +156,7 @@ void SystemInfoApp::OnDestroy() {
     uptime_ = {};
     firmware_ = {};
     chip_ = {};
+    heap_detail_ = {};
     context_ = nullptr;
     ui_ = nullptr;
     file_service_ = nullptr;
@@ -205,11 +207,12 @@ void SystemInfoApp::CreateUi() {
     lv_obj_set_scrollbar_mode(body_, LV_SCROLLBAR_MODE_AUTO);
 
     wifi_ = CreateInfoCard(body_, FONT_AWESOME_WIFI, "WiFi");
-    memory_ = CreateInfoCard(body_, FONT_AWESOME_MICROCHIP_AI, "Memory");
+    memory_ = CreateInfoCard(body_, FONT_AWESOME_MICROCHIP_AI, "Heap free/total");
     storage_ = CreateInfoCard(body_, FONT_AWESOME_SD_CARD, "Storage");
     uptime_ = CreateInfoCard(body_, FONT_AWESOME_ARROWS_ROTATE, "Uptime");
     firmware_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Firmware");
     chip_ = CreateInfoCard(body_, FONT_AWESOME_SIGNAL, "Hardware");
+    heap_detail_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Largest block");
 }
 
 SystemInfoApp::InfoLabels SystemInfoApp::CreateInfoCard(lv_obj_t* parent,
@@ -255,8 +258,8 @@ void SystemInfoApp::Refresh() {
     } else {
         const WiFiStatus status = wifi->GetStatus();
         if (status == WiFiStatus::kConnected) {
-            const std::string ssid = wifi->GetConnectedSSID();
-            const std::string ip = wifi->GetIPAddress();
+            const auto ssid = wifi->GetConnectedSSID();
+            const auto ip = wifi->GetIPAddress();
             lv_label_set_text(wifi_.value, ssid.empty() ? "Connected" : ssid.c_str());
             lv_label_set_text_fmt(wifi_.detail, "IP %s", ip.empty() ? "waiting" : ip.c_str());
         } else {
@@ -269,17 +272,46 @@ void SystemInfoApp::Refresh() {
     const size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    const std::string internal_text = FormatBytes(internal_free) + " / " + FormatBytes(internal_total);
-    const std::string psram_text = "PSRAM " + FormatBytes(psram_free) + " / " + FormatBytes(psram_total);
-    lv_label_set_text(memory_.value, internal_text.c_str());
-    lv_label_set_text(memory_.detail, psram_text.c_str());
+    const size_t internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    char internal_free_text[24] = {};
+    char internal_total_text[24] = {};
+    char psram_free_text[24] = {};
+    char psram_total_text[24] = {};
+    char internal_largest_text[24] = {};
+    char psram_largest_text[24] = {};
+    char value_text[80] = {};
+    char detail_text[96] = {};
+    FormatBytes(internal_free, internal_free_text, sizeof(internal_free_text));
+    FormatBytes(internal_total, internal_total_text, sizeof(internal_total_text));
+    FormatBytes(psram_free, psram_free_text, sizeof(psram_free_text));
+    FormatBytes(psram_total, psram_total_text, sizeof(psram_total_text));
+    FormatBytes(internal_largest, internal_largest_text, sizeof(internal_largest_text));
+    FormatBytes(psram_largest, psram_largest_text, sizeof(psram_largest_text));
+
+    std::snprintf(value_text, sizeof(value_text), "SRAM %s/%s",
+                  internal_free_text, internal_total_text);
+    std::snprintf(detail_text, sizeof(detail_text), "PSRAM %s/%s",
+                  psram_free_text, psram_total_text);
+    lv_label_set_text(memory_.value, value_text);
+    lv_label_set_text(memory_.detail, detail_text);
+
+    std::snprintf(value_text, sizeof(value_text), "SRAM block %s", internal_largest_text);
+    std::snprintf(detail_text, sizeof(detail_text), "PSRAM block %s; chip 8 MB", psram_largest_text);
+    lv_label_set_text(heap_detail_.value, value_text);
+    lv_label_set_text(heap_detail_.detail, detail_text);
 
     ProbeStorage(false);
     if (storage_mounted_) {
-        const std::string free_text = FormatBytes(storage_capacity_.free_bytes) + " free";
-        const std::string total_text = "Total " + FormatBytes(storage_capacity_.total_bytes);
-        lv_label_set_text(storage_.value, free_text.c_str());
-        lv_label_set_text(storage_.detail, total_text.c_str());
+        char storage_free_text[24] = {};
+        char storage_total_text[24] = {};
+        FormatBytes(storage_capacity_.free_bytes, storage_free_text, sizeof(storage_free_text));
+        FormatBytes(storage_capacity_.total_bytes, storage_total_text, sizeof(storage_total_text));
+        std::snprintf(value_text, sizeof(value_text), "%s free", storage_free_text);
+        std::snprintf(detail_text, sizeof(detail_text), "Total %s", storage_total_text);
+        lv_label_set_text(storage_.value, value_text);
+        lv_label_set_text(storage_.detail, detail_text);
     } else if (storage_checked_) {
         lv_label_set_text(storage_.value, "SD card not mounted");
         lv_label_set_text(storage_.detail, "Storage service idle");
@@ -289,8 +321,8 @@ void SystemInfoApp::Refresh() {
     }
 
     const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time() / 1000000LL);
-    const std::string uptime_text = FormatDuration(uptime_seconds);
-    lv_label_set_text(uptime_.value, uptime_text.c_str());
+    FormatDuration(uptime_seconds, value_text, sizeof(value_text));
+    lv_label_set_text(uptime_.value, value_text);
     lv_label_set_text(uptime_.detail, "Since last boot");
 
     const esp_app_desc_t* app = esp_app_get_description();
@@ -303,10 +335,12 @@ void SystemInfoApp::Refresh() {
     esp_chip_info(&chip_info);
     uint32_t flash_size = 0;
     esp_flash_get_size(nullptr, &flash_size);
+    char flash_size_text[24] = {};
+    FormatBytes(flash_size, flash_size_text, sizeof(flash_size_text));
     lv_label_set_text_fmt(chip_.value, "ESP32-S3 rev %u", static_cast<unsigned>(chip_info.revision));
     lv_label_set_text_fmt(chip_.detail, "%u cores, %s flash, IDF %s",
                           static_cast<unsigned>(chip_info.cores),
-                          FormatBytes(flash_size).c_str(),
+                          flash_size_text,
                           esp_get_idf_version());
 }
 
