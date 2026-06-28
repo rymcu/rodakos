@@ -1,0 +1,82 @@
+# RodakOS - esp-brookesia HAL 自动化构建脚本
+#
+# 参考: Espressif esp-brookesia HAL (https://github.com/espressif/esp-brookesia)
+# 功能: 生成板级配置、修正路径、清理、配置并构建
+#
+# 检查是否已在 ESP-IDF 环境中
+if (-not $env:IDF_PATH) {
+    Write-Host "❌ 未检测到 ESP-IDF 环境" -ForegroundColor Red
+    Write-Host "请先激活 ESP-IDF 环境，例如：" -ForegroundColor Yellow
+    Write-Host "  - 运行 ESP-IDF PowerShell 快捷方式" -ForegroundColor White
+    Write-Host "  - 或执行 export.ps1 (通常在 esp-idf 目录下)" -ForegroundColor White
+    exit 1
+}
+
+$ErrorActionPreference = "Stop"
+
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "RodakOS 自动化构建脚本" -ForegroundColor Cyan
+Write-Host "基于 esp-brookesia HAL" -ForegroundColor Gray
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+# 1. 检查必要文件
+Write-Host "[1/5] 检查必要文件..." -ForegroundColor Yellow
+if (-not (Test-Path "partitions_16m.csv")) {
+    Write-Host "  ❌ 缺少 partitions_16m.csv" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ✅ partitions_16m.csv 存在" -ForegroundColor Green
+
+# 2. 生成板级配置
+Write-Host "[2/5] 生成板级配置..." -ForegroundColor Yellow
+idf.py bmgr -b rymcu_bigsmart
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ❌ 板级配置生成失败" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ✅ 板级配置生成完成" -ForegroundColor Green
+
+# 3. 修正生成代码路径
+Write-Host "[3/5] 修正生成代码路径..." -ForegroundColor Yellow
+$genDir = "components/gen_bmgr_codes"
+
+# 修正 idf_component.yml
+(Get-Content "$genDir/idf_component.yml") `
+    -replace 'D:\\workspace\\rodakos\\managed_components\\espressif__brookesia_hal_boards', '../../components/brookesia_hal_boards' `
+    | Set-Content "$genDir/idf_component.yml"
+
+# 修正 CMakeLists.txt
+(Get-Content "$genDir/CMakeLists.txt") `
+    -replace '../../managed_components/espressif__brookesia_hal_boards', '../../components/brookesia_hal_boards' `
+    -replace 'D:/workspace/rodakos/managed_components/espressif__brookesia_hal_boards', '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards' `
+    | Set-Content "$genDir/CMakeLists.txt"
+
+Write-Host "  ✅ 路径修正完成" -ForegroundColor Green
+
+# 4. 清理并重新配置
+Write-Host "[4/5] 清理并重新配置..." -ForegroundColor Yellow
+if (Test-Path "build") {
+    Remove-Item -Recurse -Force build
+}
+idf.py reconfigure > $null 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ❌ 重新配置失败" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ✅ 重新配置完成" -ForegroundColor Green
+
+# 5. 构建项目
+Write-Host "[5/5] 构建项目..." -ForegroundColor Yellow
+idf.py build
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ❌ 构建失败" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ✅ 构建成功！" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "构建完成！可以烧录了：" -ForegroundColor Cyan
+Write-Host "  idf.py -p COM3 flash monitor" -ForegroundColor White
+Write-Host "========================================" -ForegroundColor Cyan

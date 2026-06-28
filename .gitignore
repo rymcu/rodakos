@@ -1,0 +1,8 @@
+build/
+managed_components/
+sdkconfig.old
+*.pyc
+__pycache__/
+
+# Board Manager 生成的代码
+components/gen_bmgr_codes/

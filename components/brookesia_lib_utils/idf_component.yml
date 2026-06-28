@@ -1,0 +1,18 @@
+dependencies:
+  espressif/cmake_utilities:
+    require: public
+    version: 0.*
+  espressif/esp-boost:
+    require: public
+    version: 0.6.*
+  idf: '>=5.5'
+description: ESP-Brookesia core utility library which provides `task scheduler`, `thread
+  configuration`, `performance profilers`, `logging system`, `state machine`, `plugin
+  system`, and various `helper utilities`.
+issues: https://github.com/espressif/esp-brookesia/issues
+repository: git://github.com/espressif/esp-brookesia.git
+repository_info:
+  commit_sha: 02d1db90d4cdb232850c50c3b179fefccfaba420
+  path: utils/brookesia_lib_utils
+url: https://github.com/espressif/esp-brookesia/tree/master/utils/brookesia_lib_utils
+version: 0.7.9
