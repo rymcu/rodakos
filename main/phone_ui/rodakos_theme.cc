@@ -1,5 +1,6 @@
 #include "phone_ui/rodakos_theme.h"
 #include <esp_log.h>
+#include <cstring>
 
 static const char* TAG = "Theme";
 
@@ -162,6 +163,25 @@ void rodakos_theme_init(rodakos_theme_preset_t preset) {
             ESP_LOGW(TAG, "Unknown theme preset, using dark");
             break;
     }
+}
+
+rodakos_theme_preset_t rodakos_theme_init_from_name(const char* theme_id) {
+    rodakos_theme_preset_t preset = RODAKOS_THEME_DARK;
+    if (theme_id != nullptr) {
+        if (strcmp(theme_id, "light") == 0) {
+            preset = RODAKOS_THEME_LIGHT;
+        } else if (strcmp(theme_id, "blue") == 0) {
+            preset = RODAKOS_THEME_BLUE;
+        } else if (strcmp(theme_id, "green") == 0) {
+            preset = RODAKOS_THEME_GREEN;
+        }
+    }
+    rodakos_theme_init(preset);
+    return preset;
+}
+
+bool rodakos_theme_is_light_name(const char* theme_id) {
+    return theme_id != nullptr && strcmp(theme_id, "light") == 0;
 }
 
 void rodakos_theme_set_custom(const rodakos_theme_t* theme) {

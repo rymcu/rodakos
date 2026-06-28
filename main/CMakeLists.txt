@@ -1,26 +1,47 @@
 set(SOURCES
     "main.cc"
     "settings.cc"
+    "usb_msc_mode.cc"
     "rodakos_adapters/backlight_adapter.cc"
     "rodakos_adapters/wifi_adapter.cc"
     "rodakos_adapters/wifi_config.cc"
+    "rodakos_adapters/file_service.cc"
     "phone_os/phone_app_registry.cc"
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"
     "phone_os/phone_system.cc"
+    "phone_os/time_service.cc"
     "phone_ui/phone_ui.cc"
+    "phone_ui/phone_fonts.cc"
     "phone_ui/phone_theme.cc"
     "phone_ui/phone_screen.cc"
     "phone_ui/phone_components.cc"
     "phone_ui/rodakos_layout.cc"
     "phone_ui/rodakos_theme.cc"
     "phone_ui/soft_keyboard.cc"
+    "phone_ui/image_library.cc"
+    "phone_ui/jpg/jpeg_to_image.c"
     "apps/built_in_apps.cc"
     "apps/home/home_app.cc"
     "apps/settings/settings_app.cc"
+    "apps/photos/photos_app.cc"
+    "apps/clock/clock_app.cc"
+    "apps/file_manager/file_manager_app.cc"
 )
 
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS "." "rodakos_adapters" "phone_os" "phone_ui" "apps"
+    REQUIRES
+        lvgl
+        esp_lvgl_port
+        nvs_flash
+        esp_wifi
+        esp_netif
+        lwip
+        esp_board_manager
+        fatfs
+        sdmmc
+        esp_tinyusb
+        esp_new_jpeg
 )

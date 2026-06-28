@@ -1,5 +1,8 @@
 #include "phone_ui/phone_components.h"
 
+#include "phone_ui/phone_fonts.h"
+#include "phone_ui/rodakos_theme.h"
+
 lv_obj_t* PhoneCreateIconButton(PhoneUi& ui, lv_obj_t* parent, const char* icon, lv_coord_t size, bool subtle) {
     const auto& theme = ui.theme();
     auto* button = lv_btn_create(parent);
@@ -32,6 +35,25 @@ lv_obj_t* PhoneCreateCard(PhoneUi& ui, lv_obj_t* parent, lv_coord_t width, lv_co
     lv_obj_set_style_pad_all(card, 10, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     return card;
+}
+
+lv_obj_t* RodakosCreateHeaderIconButton(lv_obj_t* parent, const char* icon) {
+    auto* button = lv_btn_create(parent);
+    lv_obj_remove_style_all(button);
+    lv_obj_set_size(button, 40, 26);
+    lv_obj_set_style_radius(button, 6, 0);
+    lv_obj_set_style_bg_color(button, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(button, rodakos_theme_primary(), LV_STATE_PRESSED);
+    lv_obj_set_style_translate_y(button, 1, LV_STATE_PRESSED);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* label = lv_label_create(button);
+    lv_label_set_text(label, icon != nullptr ? icon : "");
+    lv_obj_set_style_text_color(label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(label, PhoneIconFont(), 0);
+    lv_obj_center(label);
+    return button;
 }
 
 lv_obj_t* PhoneCreateLabel(PhoneUi& ui, lv_obj_t* parent, const char* text, bool secondary) {

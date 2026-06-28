@@ -3,7 +3,9 @@
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
+#include "phone_os/time_service.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_layout.h"
 #include "phone_ui/rodakos_theme.h"
 #include "settings.h"
@@ -48,6 +50,8 @@ struct DeferredLaunchPayload {
 void RunDeferredLaunch(void* data) {
     auto* payload = static_cast<DeferredLaunchPayload*>(data);
     if (payload != nullptr && payload->context != nullptr) {
+        lv_indev_reset(nullptr, nullptr);
+        ESP_LOGI(TAG, "Launching app from Home: %s", payload->app_id.c_str());
         payload->context->navigation().Launch(payload->app_id);
     }
     delete payload;
@@ -56,6 +60,10 @@ void RunDeferredLaunch(void* data) {
 void AppButtonEvent(lv_event_t* e) {
     auto* payload = static_cast<AppButtonPayload*>(lv_event_get_user_data(e));
     if (payload != nullptr && payload->context != nullptr) {
+        if (auto* indev = lv_indev_active(); indev != nullptr) {
+            lv_indev_wait_release(indev);
+        }
+        ESP_LOGI(TAG, "Home app button clicked: %s", payload->app_id.c_str());
         lv_async_call(RunDeferredLaunch, new DeferredLaunchPayload{
             .context = payload->context,
             .app_id = payload->app_id,
@@ -85,8 +93,12 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
 
-    PhoneUiLock lock(*ui_);
+    ESP_LOGI(TAG, "HomeApp::OnCreate starting");
+
+    // Use longer timeout during WiFi initialization
+    PhoneUiLock lock(*ui_, 5000);  // 5 seconds timeout
     if (!lock.locked()) {
+        ESP_LOGE(TAG, "Failed to acquire UI lock");
         return false;
     }
 
@@ -94,15 +106,14 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
     Settings display_settings("display", false);
     const std::string theme_name = display_settings.GetString("theme", "dark");
 
-    rodakos_theme_preset_t preset = RODAKOS_THEME_DARK;
-    if (theme_name == "light") preset = RODAKOS_THEME_LIGHT;
-    else if (theme_name == "blue") preset = RODAKOS_THEME_BLUE;
-    else if (theme_name == "green") preset = RODAKOS_THEME_GREEN;
+    rodakos_theme_init_from_name(theme_name.c_str());
+    ESP_LOGI(TAG, "Theme initialized: %s", theme_name.c_str());
 
-    rodakos_theme_init(preset);
+    TimeServiceApplySavedTimeZone();
 
     // 初始化布局系统（使用默认 320x240 配置）
     rodakos_layout_init(nullptr);
+    ESP_LOGI(TAG, "Layout system initialized");
 
     // 创建布局容器（自动分区）
     lv_obj_t* header = nullptr;
@@ -110,26 +121,32 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
     lv_obj_t* footer = nullptr;
     root_ = rodakos_layout_create(ui_->screen(), &header, &body, &footer);
 
+    if (root_ == nullptr || header == nullptr || body == nullptr || footer == nullptr) {
+        ESP_LOGE(TAG, "Failed to create layout containers");
+        return false;
+    }
+    ESP_LOGI(TAG, "Layout containers created");
+
     // ===== HEADER 区域 =====
     // Clock (居中)
     clock_label_ = lv_label_create(header);
     lv_label_set_text(clock_label_, "00:00");
     lv_obj_set_style_text_color(clock_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(clock_label_, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(clock_label_, &phone_font_18, 0);
     lv_obj_center(clock_label_);
 
     // Battery (右对齐)
     battery_label_ = lv_label_create(header);
     lv_label_set_text(battery_label_, "100%");
     lv_obj_set_style_text_color(battery_label_, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(battery_label_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
     lv_obj_align(battery_label_, LV_ALIGN_RIGHT_MID, -rodakos_layout_padding_medium(), 0);
 
     // WiFi (左对齐)
     wifi_label_ = lv_label_create(header);
     lv_label_set_text(wifi_label_, "WiFi");
     lv_obj_set_style_text_color(wifi_label_, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(wifi_label_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(wifi_label_, &phone_font_12, 0);
     lv_obj_align(wifi_label_, LV_ALIGN_LEFT_MID, rodakos_layout_padding_medium(), 0);
 
     // ===== BODY 区域 =====
@@ -138,8 +155,15 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
                                         kCellWidth, kCellHeight,
                                         kGapX, kGapY);
 
+    if (grid_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create grid container");
+        return false;
+    }
+    ESP_LOGI(TAG, "Grid container created");
+
     // 创建应用图标
     const auto apps = context.registry().ListHomeApps();
+    ESP_LOGI(TAG, "Found %zu apps to display", apps.size());
     for (size_t i = 0; i < apps.size() && i < kMaxApps; ++i) {
         const PhoneAppDescriptor& app = *apps[i];
 
@@ -176,7 +200,7 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
         auto* icon_label = lv_label_create(icon_bg);
         lv_label_set_text(icon_label, app.icon.c_str());
         lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
-        lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(icon_label, PhoneIconFontLarge(), 0);
         lv_obj_center(icon_label);
 
         // 应用名称
@@ -186,7 +210,7 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
         lv_label_set_long_mode(name_label, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(name_label, rodakos_theme_text_secondary(), 0);  // 使用主题次级文字色
-        lv_obj_set_style_text_font(name_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(name_label, &phone_font_12, 0);
         lv_obj_align(name_label, LV_ALIGN_BOTTOM_MID, 0, 0);
     }
 
@@ -268,7 +292,7 @@ void RegisterHomeApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "home",
         .title = "Home",
-        .icon = "H",
+        .icon = FONT_AWESOME_HOUSE,
         .category = PhoneAppCategory::kSystem,
         .launch_mode = PhoneAppLaunchMode::kHome,
         .capabilities = PhoneCapability::kNone,

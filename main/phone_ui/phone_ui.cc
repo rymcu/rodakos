@@ -1,5 +1,7 @@
 #include "phone_ui/phone_ui.h"
 
+#include "phone_ui/phone_fonts.h"
+
 #include <esp_lvgl_port.h>
 
 PhoneUi::PhoneUi(int width, int height)
@@ -39,6 +41,7 @@ void PhoneUi::ShowToastUnlocked(const char* message, int duration_ms) {
         lv_obj_set_style_bg_opa(toast_, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(toast_, theme_.text_primary, 0);
         lv_obj_set_style_text_align(toast_, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(toast_, &phone_font_14, 0);
         lv_obj_set_style_pad_all(toast_, 10, 0);
         lv_obj_align(toast_, LV_ALIGN_BOTTOM_MID, 0, -14);
     }

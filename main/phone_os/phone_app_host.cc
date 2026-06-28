@@ -9,6 +9,7 @@ constexpr const char* TAG = "PhoneAppHost";
 }
 
 bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext& context) {
+    ESP_LOGI(TAG, "Launching app: %s", descriptor.id.c_str());
     CloseCurrent();
     if (!descriptor.create) {
         ESP_LOGE(TAG, "App %s has no factory", descriptor.id.c_str());
@@ -30,6 +31,7 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
 
     current_app_id_ = descriptor.id;
     current_->OnShow();
+    ESP_LOGI(TAG, "App launched: %s", current_app_id_.c_str());
     return true;
 }
 
@@ -38,6 +40,7 @@ void PhoneAppHost::CloseCurrent() {
         current_app_id_.clear();
         return;
     }
+    ESP_LOGI(TAG, "Closing app: %s", current_app_id_.c_str());
     current_->OnHide();
     current_->OnDestroy();
     current_.reset();

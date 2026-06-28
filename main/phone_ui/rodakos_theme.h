@@ -62,6 +62,19 @@ typedef enum {
 void rodakos_theme_init(rodakos_theme_preset_t preset);
 
 /**
+ * 根据持久化的主题 id 应用主题。
+ *
+ * @param theme_id 主题 id：dark/light/blue/green
+ * @return 实际应用的预设主题
+ */
+rodakos_theme_preset_t rodakos_theme_init_from_name(const char* theme_id);
+
+/**
+ * 判断指定主题是否应使用 PhoneUi 的浅色组件主题。
+ */
+bool rodakos_theme_is_light_name(const char* theme_id);
+
+/**
  * 设置自定义主题
  *
  * @param theme 自定义主题配置

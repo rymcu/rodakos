@@ -1,6 +1,7 @@
 #include "phone_ui/phone_screen.h"
 
 #include "phone_ui/phone_components.h"
+#include "phone_ui/phone_fonts.h"
 
 #include <utility>
 
@@ -59,7 +60,7 @@ PhoneScreen::PhoneScreen(PhoneUi& ui, Options options) : ui_(ui), back_callback_
     lv_label_set_text(title, options.title.c_str());
     lv_obj_set_width(title, ui_.width() - title_x - 12);
     lv_obj_set_style_text_color(title, theme.text_primary, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, title_x, 10);
 
     if (!options.subtitle.empty()) {
@@ -67,7 +68,7 @@ PhoneScreen::PhoneScreen(PhoneUi& ui, Options options) : ui_(ui), back_callback_
         lv_label_set_text(subtitle, options.subtitle.c_str());
         lv_obj_set_width(subtitle, ui_.width() - title_x - 12);
         lv_obj_set_style_text_color(subtitle, theme.text_secondary, 0);
-        lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(subtitle, &phone_font_12, 0);
         lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, title_x, 32);
     }
 

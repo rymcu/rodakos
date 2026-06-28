@@ -16,6 +16,7 @@ enum class SettingsPage {
     kMain,        // 主设置页面
     kWiFiList,    // WiFi 列表页面
     kWiFiDetail,  // WiFi 详情页面
+    kDateTime,    // 日期与时间页面
 };
 
 class SettingsApp final : public PhoneApp {
@@ -34,6 +35,16 @@ private:
     void CreateMainPage();
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
+    void CreateDateTimePage();
+    void ShowUsbDiskDialog();
+    void CloseUsbDiskDialog();
+    void EnterUsbDiskMode();
+    void ShowUsbDiskEnablePage();
+    void ShowNtpServerDialog();
+    void CloseNtpServerDialog();
+    void CloseNtpServerDialogAsync();
+    void NavigateBack();
+    void NavigateHome();
 
     // WiFi 相关
     void StartWiFiScan();
@@ -43,6 +54,10 @@ private:
     void ConnectToNetwork(const std::string& ssid, const std::string& password);
     void OnConnectResult(WiFiStatus status, const std::string& ssid);
     void UpdateWiFiDetailPage();
+    void SaveTimeZone(size_t index);
+    void SaveNtpServer(const std::string& server);
+    void StartTimeSync();
+    void UpdateTimeSyncStatus();
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
@@ -53,8 +68,23 @@ private:
     lv_obj_t* main_body_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
     lv_obj_t* brightness_slider_ = nullptr;
-    lv_obj_t* theme_dropdown_ = nullptr;
+    lv_obj_t* theme_buttons_[4] = {};
     lv_obj_t* language_switch_ = nullptr;
+    lv_obj_t* usb_disk_dialog_ = nullptr;
+    lv_obj_t* usb_disk_hint_page_ = nullptr;
+    lv_timer_t* usb_disk_restart_timer_ = nullptr;
+    lv_obj_t* header_title_label_ = nullptr;
+
+    // 日期与时间页面控件
+    lv_obj_t* datetime_body_ = nullptr;
+    lv_obj_t* timezone_dropdown_ = nullptr;
+    lv_obj_t* ntp_dropdown_ = nullptr;
+    lv_obj_t* ntp_dialog_ = nullptr;
+    lv_obj_t* ntp_textarea_ = nullptr;
+    lv_obj_t* time_sync_status_label_ = nullptr;
+    lv_timer_t* time_sync_timer_ = nullptr;
+    bool time_sync_in_progress_ = false;
+    uint32_t time_sync_poll_count_ = 0;
 
     // WiFi 页面控件
     lv_obj_t* wifi_body_ = nullptr;
