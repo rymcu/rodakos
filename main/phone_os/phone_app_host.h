@@ -15,6 +15,12 @@ public:
     const std::string& current_app_id() const { return current_app_id_; }
 
 private:
+    void CloseCurrent(bool allow_background);
+
     std::unique_ptr<PhoneApp> current_;
+    std::unique_ptr<PhoneApp> background_;
     std::string current_app_id_;
+    std::string background_app_id_;
+    PhoneCapability current_capabilities_ = PhoneCapability::kNone;
+    PhoneCapability background_capabilities_ = PhoneCapability::kNone;
 };

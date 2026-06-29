@@ -130,32 +130,13 @@ void ClockApp::CreateUi() {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* title_bar = lv_obj_create(root_);
-    lv_obj_remove_style_all(title_bar);
-    lv_obj_set_size(title_bar, LV_PCT(100), 40);
-    lv_obj_set_style_bg_color(title_bar, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(title_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(title_bar, 10, 0);
-    lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(title_bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* back_btn = RodakosCreateHeaderIconButton(title_bar, FONT_AWESOME_ARROW_LEFT);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    CreateAppHeader(root_, "Clock", [](lv_event_t* e) {
         auto* self = static_cast<ClockApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* title_label = CreateTextLabel(title_bar, "Clock", &phone_font_18,
-                                        rodakos_theme_text_primary());
-    lv_obj_center(title_label);
-
-    auto* home_btn = RodakosCreateHeaderIconButton(title_bar, FONT_AWESOME_HOUSE);
-    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+    }, [](lv_event_t* e) {
         auto* self = static_cast<ClockApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
+    }, this);
 
     auto* face = lv_obj_create(root_);
     lv_obj_remove_style_all(face);

@@ -9,7 +9,6 @@
 #include "phone_ui/phone_components.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/phone_fonts.h"
-#include "phone_ui/rodakos_layout.h"
 #include "phone_ui/rodakos_theme.h"
 #include "rodakos_adapters/backlight_adapter.h"
 #include "settings.h"
@@ -131,6 +130,15 @@ lv_obj_t* CreateSettingLabel(lv_obj_t* parent, const char* text, bool secondary 
     return label;
 }
 
+lv_obj_t* CreateSettingIcon(lv_obj_t* parent, const char* icon) {
+    auto* label = lv_label_create(parent);
+    lv_label_set_text(label, icon);
+    lv_obj_set_style_text_color(label, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(label, PhoneIconFont(), 0);
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
+    return label;
+}
+
 // 创建网络列表项
 lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t index,
                              bool is_connected, bool is_saved) {
@@ -232,39 +240,31 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
 
     rodakos_theme_init_from_name(theme.c_str());
 
-    // 初始化布局系统
-    rodakos_layout_init(nullptr);
-
     // 创建根容器
-    lv_obj_t* header = nullptr;
-    lv_obj_t* body = nullptr;
-    lv_obj_t* footer = nullptr;
-    root_ = rodakos_layout_create(ui_->screen(), &header, &body, &footer);
+    root_ = lv_obj_create(ui_->screen());
+    lv_obj_remove_style_all(root_);
+    lv_obj_set_size(root_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(root_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(root_, 0, 0);
+    lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ===== HEADER 区域（固定） =====
-    auto* title_label = lv_label_create(header);
-    lv_label_set_text(title_label, "Settings");
-    lv_obj_set_style_text_color(title_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(title_label, &phone_font_18, 0);
-    lv_obj_center(title_label);
-
-    auto* back_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_ARROW_LEFT);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, rodakos_layout_padding_medium(), 0);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    CreateAppHeader(root_, "Settings", [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->NavigateBack();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* home_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_HOUSE);
-    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, -rodakos_layout_padding_medium(), 0);
-    lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+    }, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
+    }, this, &header_title_label_);
+
+    main_body_ = lv_obj_create(root_);
+    lv_obj_remove_style_all(main_body_);
+    lv_obj_set_size(main_body_, LV_PCT(100), 200);
+    lv_obj_set_pos(main_body_, 0, kRodakosAppHeaderHeight);
+    lv_obj_set_style_bg_opa(main_body_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(main_body_, 0, 0);
 
     // 创建主设置页面
-    main_body_ = body;
-    header_title_label_ = title_label;
     CreateMainPage();
 
     ESP_LOGI(TAG, "Settings app created");
@@ -435,16 +435,18 @@ void SettingsApp::CreateMainPage() {
     lv_obj_set_style_pad_all(brightness_card, 12, 0);
     lv_obj_clear_flag(brightness_card, LV_OBJ_FLAG_SCROLLABLE);
 
+    CreateSettingIcon(brightness_card, FONT_AWESOME_BRIGHTNESS);
+
     auto* brightness_title = CreateSettingLabel(brightness_card, "Brightness");
-    lv_obj_align(brightness_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(brightness_title, LV_ALIGN_TOP_LEFT, 28, 0);
 
     brightness_label_ = CreateSettingLabel(brightness_card, "", true);
     lv_obj_align(brightness_label_, LV_ALIGN_TOP_RIGHT, 0, 0);
     UpdateBrightnessLabel(brightness_label_, brightness);
 
     brightness_slider_ = lv_slider_create(brightness_card);
-    lv_obj_set_size(brightness_slider_, 270, 8);
-    lv_obj_align(brightness_slider_, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_size(brightness_slider_, 242, 8);
+    lv_obj_align(brightness_slider_, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
     lv_slider_set_range(brightness_slider_, 5, 100);
     lv_slider_set_value(brightness_slider_, brightness, LV_ANIM_OFF);
 
@@ -476,8 +478,10 @@ void SettingsApp::CreateMainPage() {
 
     // ===== 主题设置卡片 =====
     auto* theme_card = CreateSettingCard(main_body_, 84);
+    CreateSettingIcon(theme_card, FONT_AWESOME_MOON);
+
     auto* theme_title = CreateSettingLabel(theme_card, "Theme");
-    lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 28, 0);
 
     auto* theme_row = lv_obj_create(theme_card);
     lv_obj_remove_style_all(theme_row);
@@ -531,8 +535,10 @@ void SettingsApp::CreateMainPage() {
 
     // ===== 语言设置卡片 =====
     auto* language_card = CreateSettingCard(main_body_, 142);
+    CreateSettingIcon(language_card, FONT_AWESOME_GLOBE);
+
     auto* language_title = CreateSettingLabel(language_card, "Chinese language");
-    lv_obj_align(language_title, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(language_title, LV_ALIGN_LEFT_MID, 28, 0);
 
     language_switch_ = lv_switch_create(language_card);
     lv_obj_align(language_switch_, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -540,7 +546,10 @@ void SettingsApp::CreateMainPage() {
         lv_obj_add_state(language_switch_, LV_STATE_CHECKED);
     }
 
-    lv_obj_set_style_bg_color(language_switch_, rodakos_theme_success(), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    const lv_style_selector_t checked_indicator =
+        static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |
+        static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(language_switch_, rodakos_theme_success(), checked_indicator);
     lv_obj_set_style_bg_color(language_switch_, rodakos_theme_bg_tertiary(), LV_PART_INDICATOR);
 
     lv_obj_add_event_cb(language_switch_, [](lv_event_t* e) {
@@ -555,9 +564,10 @@ void SettingsApp::CreateMainPage() {
     // ===== WiFi 设置入口 =====
     auto* wifi_card = CreateSettingCard(main_body_, 200);
     lv_obj_add_flag(wifi_card, LV_OBJ_FLAG_CLICKABLE);
+    CreateSettingIcon(wifi_card, FONT_AWESOME_WIFI);
 
     auto* wifi_title = CreateSettingLabel(wifi_card, "WiFi Settings");
-    lv_obj_align(wifi_title, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(wifi_title, LV_ALIGN_LEFT_MID, 28, 0);
 
     auto* wifi_arrow = lv_label_create(wifi_card);
     lv_label_set_text(wifi_arrow, ">");
@@ -574,11 +584,7 @@ void SettingsApp::CreateMainPage() {
     auto* datetime_card = CreateSettingCard(main_body_, 258);
     lv_obj_add_flag(datetime_card, LV_OBJ_FLAG_CLICKABLE);
 
-    auto* datetime_icon = lv_label_create(datetime_card);
-    lv_label_set_text(datetime_icon, FONT_AWESOME_CLOCK);
-    lv_obj_set_style_text_color(datetime_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(datetime_icon, PhoneIconFont(), 0);
-    lv_obj_align(datetime_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    CreateSettingIcon(datetime_card, FONT_AWESOME_CLOCK);
 
     auto* datetime_title = CreateSettingLabel(datetime_card, "Date & Time");
     lv_obj_align(datetime_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -598,11 +604,7 @@ void SettingsApp::CreateMainPage() {
     auto* upload_card = CreateSettingCard(main_body_, 316);
     lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
 
-    auto* upload_icon = lv_label_create(upload_card);
-    lv_label_set_text(upload_icon, FONT_AWESOME_CLOUD);
-    lv_obj_set_style_text_color(upload_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(upload_icon, PhoneIconFont(), 0);
-    lv_obj_align(upload_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    CreateSettingIcon(upload_card, FONT_AWESOME_CLOUD);
 
     auto* upload_title = CreateSettingLabel(upload_card, "Web Files");
     lv_obj_align(upload_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -622,11 +624,7 @@ void SettingsApp::CreateMainPage() {
     auto* usb_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
-    auto* usb_icon = lv_label_create(usb_card);
-    lv_label_set_text(usb_icon, FONT_AWESOME_SD_CARD);
-    lv_obj_set_style_text_color(usb_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(usb_icon, PhoneIconFont(), 0);
-    lv_obj_align(usb_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    CreateSettingIcon(usb_card, FONT_AWESOME_SD_CARD);
 
     auto* usb_title = CreateSettingLabel(usb_card, "USB Disk Mode");
     lv_obj_align(usb_title, LV_ALIGN_LEFT_MID, 28, 0);

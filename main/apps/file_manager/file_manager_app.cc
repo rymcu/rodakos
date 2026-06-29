@@ -20,9 +20,8 @@
 
 namespace {
 constexpr const char* TAG = "FileManagerApp";
-constexpr lv_coord_t kHeaderHeight = 40;
 constexpr lv_coord_t kPathBarHeight = 32;
-constexpr lv_coord_t kListTop = kHeaderHeight + kPathBarHeight;
+constexpr lv_coord_t kListTop = kRodakosAppHeaderHeight + kPathBarHeight;
 constexpr lv_coord_t kListHeight = 240 - kListTop;
 constexpr lv_coord_t kPreviewAreaWidth = 292;
 constexpr lv_coord_t kPreviewAreaHeight = 158;
@@ -179,31 +178,13 @@ void FileManagerApp::CreateUi() {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* header = lv_obj_create(root_);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_size(header, LV_PCT(100), kHeaderHeight);
-    lv_obj_set_style_bg_color(header, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(header, 10, 0);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* back_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_ARROW_LEFT);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    CreateAppHeader(root_, "Files", [](lv_event_t* e) {
         auto* self = static_cast<FileManagerApp*>(lv_event_get_user_data(e));
         self->NavigateBack();
-    }, LV_EVENT_CLICKED, this);
-
-    title_label_ = CreateText(header, "Files", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_center(title_label_);
-
-    auto* home_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_HOUSE);
-    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+    }, [](lv_event_t* e) {
         auto* self = static_cast<FileManagerApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
+    }, this, &title_label_);
 
     auto* path_bar = lv_obj_create(root_);
     lv_obj_remove_style_all(path_bar);

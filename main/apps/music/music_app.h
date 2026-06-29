@@ -22,8 +22,8 @@ public:
 
     const char* id() const override { return "music"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnShow() override;
+    void OnHide() override;
     void OnDestroy() override;
     void OnTick() override {}
     void RefreshState();
@@ -44,6 +44,7 @@ private:
     void CreateUi();
     void ScanTracks();
     void ScanDirectory(const std::string& path, int depth);
+    void UpdateTrackCountLabel();
     void RebuildTrackList();
     void ShowTrackPicker();
     void HideTrackPicker();
@@ -54,7 +55,11 @@ private:
     const char* PlaybackModeIconText() const;
     bool PlaybackModeShowsBadge() const;
     const char* PlaybackModeToastText() const;
+    void LoadPlaybackState();
+    void SavePlaybackState();
     size_t PickRandomTrackIndex() const;
+    void SyncCurrentIndexFromPath(const std::string& path);
+    bool PlayFromCompletedState();
     bool HandlePlaybackCompleted();
     void PlayTrack(size_t index);
     void PlayPrevious();
@@ -89,6 +94,7 @@ private:
     int current_index_ = -1;
     PlaybackMode playback_mode_ = PlaybackMode::kSequential;
     bool completion_handled_ = false;
+    bool queue_paused_ = false;
 };
 
 void RegisterMusicApp(PhoneAppRegistry& registry);
