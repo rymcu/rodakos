@@ -4,6 +4,7 @@ class BacklightAdapter;
 class WiFiAdapter;
 
 namespace rodakos {
+class AudioService;
 class FileService;
 class WebFileSystemService;
 }
@@ -19,6 +20,9 @@ public:
     void SetFileService(rodakos::FileService* file_service) { file_service_ = file_service; }
     rodakos::FileService* file_service() { return file_service_; }
 
+    void SetAudio(rodakos::AudioService* audio) { audio_ = audio; }
+    rodakos::AudioService* audio() { return audio_; }
+
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
 
@@ -26,5 +30,6 @@ private:
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
     rodakos::FileService* file_service_ = nullptr;
+    rodakos::AudioService* audio_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
 };

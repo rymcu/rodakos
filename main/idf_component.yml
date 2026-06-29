@@ -16,6 +16,9 @@ dependencies:
   # JPEG decode for SD card photo rendering
   espressif/esp_new_jpeg: ^0.6.1
 
+  # Audio codec playback through Board Manager audio_dac
+  espressif/esp_codec_dev: ~1.5
+
   idf:
     version: ">=5.4.0"
 

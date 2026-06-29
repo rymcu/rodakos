@@ -40,3 +40,16 @@ CONFIG_TINYUSB_MSC_BUFSIZE=8192
 
 # Clock SNTP fallback servers
 CONFIG_LWIP_SNTP_MAX_SERVERS=4
+
+# RYMCU BigSmart uses ES8311 for speaker output and ES7210 for microphone input.
+# Keep unused codec drivers out of the firmware image.
+CONFIG_CODEC_ES8311_SUPPORT=y
+CONFIG_CODEC_ES7210_SUPPORT=y
+# CONFIG_CODEC_ES7243_SUPPORT is not set
+# CONFIG_CODEC_ES7243E_SUPPORT is not set
+# CONFIG_CODEC_ES8156_SUPPORT is not set
+# CONFIG_CODEC_AW88298_SUPPORT is not set
+# CONFIG_CODEC_ES8389_SUPPORT is not set
+# CONFIG_CODEC_ES8374_SUPPORT is not set
+# CONFIG_CODEC_ES8388_SUPPORT is not set
+# CONFIG_CODEC_TAS5805M_SUPPORT is not set
