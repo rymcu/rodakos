@@ -411,7 +411,7 @@ void AudioService::PlaybackTask() {
     } else if (stopped) {
         SetState(AudioPlaybackStatus::kStopped, "Stopped");
     } else {
-        SetState(AudioPlaybackStatus::kError, "Playback failed");
+        SetGenericPlaybackErrorIfNeeded();
     }
 
     ESP_LOGI(TAG, "Playback ended: %s", path.c_str());
@@ -667,7 +667,9 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
 
         const long offset_now = ftell(fp);
         if (offset_now >= 0) {
-            const size_t consumed = static_cast<size_t>(offset_now) - static_cast<size_t>(bytes_left);
+            const size_t file_offset = static_cast<size_t>(offset_now);
+            const size_t buffered = bytes_left > 0 ? static_cast<size_t>(bytes_left) : 0;
+            const size_t consumed = file_offset > buffered ? file_offset - buffered : 0;
             UpdateProgress(std::min(consumed, file_size), file_size);
         }
     }
@@ -679,6 +681,11 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     heap_caps_free(pcm_buffer);
     heap_caps_free(read_buffer);
     MP3FreeDecoder(decoder);
+
+    if (!failed && !stopped && !codec_ready) {
+        SetState(AudioPlaybackStatus::kError, "No MP3 frames");
+        failed = true;
+    }
 
     if (!failed && !stopped) {
         UpdateProgress(file_size, file_size);
@@ -704,6 +711,18 @@ void AudioService::SetState(AudioPlaybackStatus status, const char* message) {
         state_.status = status;
         if (message != nullptr) {
             state_.message = message;
+        }
+        state_.volume = volume_;
+        xSemaphoreGive(mutex_);
+    }
+}
+
+void AudioService::SetGenericPlaybackErrorIfNeeded() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (state_.status != AudioPlaybackStatus::kError || state_.message.empty()) {
+            state_.status = AudioPlaybackStatus::kError;
+            state_.message = "Playback failed";
         }
         state_.volume = volume_;
         xSemaphoreGive(mutex_);

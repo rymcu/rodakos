@@ -131,16 +131,22 @@ bool MusicApp::OnCreate(PhoneAppContext& context) {
 }
 
 void MusicApp::OnShow() {
-    if (root_ != nullptr && lv_obj_is_valid(root_)) {
-        lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(root_);
-        RefreshState();
+    if (ui_ != nullptr) {
+        PhoneUiLock lock(*ui_);
+        if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
+            lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(root_);
+            RefreshState();
+        }
     }
 }
 
 void MusicApp::OnHide() {
-    if (root_ != nullptr && lv_obj_is_valid(root_)) {
-        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    if (ui_ != nullptr) {
+        PhoneUiLock lock(*ui_);
+        if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
+            lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -443,7 +449,7 @@ void MusicApp::ScanTracks() {
     if (file_service_->ListDirectory("/", root_entries)) {
         ESP_LOGI(TAG, "Music scan root has %zu entries", root_entries.size());
         for (const auto& entry : root_entries) {
-            ESP_LOGI(TAG, "Root entry: %s dir=%d size=%zu path=%s",
+            ESP_LOGD(TAG, "Root entry: %s dir=%d size=%zu path=%s",
                      entry.name.c_str(), entry.is_directory ? 1 : 0, entry.size, entry.path.c_str());
             if (entry.is_directory && NormalizePathKey(entry.name) == "music") {
                 const std::string scan_path = "/" + entry.name;
@@ -506,7 +512,7 @@ void MusicApp::ScanDirectory(const std::string& path, int depth) {
         track.path = entry.path;
         track.size = entry.size;
         tracks_.push_back(track);
-        ESP_LOGI(TAG, "Found audio track: %s (%zu bytes)", track.path.c_str(), track.size);
+        ESP_LOGD(TAG, "Found audio track: %s (%zu bytes)", track.path.c_str(), track.size);
     }
 }
 

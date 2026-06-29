@@ -65,6 +65,7 @@ private:
     bool PlayMp3File(FILE* fp, const std::string& path, bool& stopped);
     bool ShouldStopOrPause(bool& should_pause);
     void SetState(AudioPlaybackStatus status, const char* message = nullptr);
+    void SetGenericPlaybackErrorIfNeeded();
     void UpdateProgress(size_t bytes_played, size_t data_bytes);
     void MarkPlaybackTaskStarting();
     void StorePlaybackTaskHandle(TaskHandle_t task);
