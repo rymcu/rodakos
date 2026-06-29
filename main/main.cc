@@ -9,6 +9,8 @@
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
 #include "phone_os/time_service.h"
+#include "phone_os/voice_assistant_service.h"
+#include "phone_os/voice_assistant_transport.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
@@ -314,7 +316,10 @@ extern "C" void app_main(void) {
     static rodakos::AudioService audio_service(audio_output_service);
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
-    ESP_LOGI(TAG, "Audio services ready - focus and playback open codec on demand");
+    static rodakos::NoopVoiceAssistantTransport voice_assistant_transport;
+    static rodakos::VoiceAssistantService voice_assistant_service(
+        audio_focus_service, voice_assistant_transport);
+    ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
 
     static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
@@ -327,6 +332,7 @@ extern "C" void app_main(void) {
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
     services.SetAudioFocus(&audio_focus_service);
+    services.SetVoiceAssistant(&voice_assistant_service);
     services.SetWebFiles(&web_files_service);
 
     static PhoneSystem system(ui, services);
