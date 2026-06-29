@@ -70,13 +70,21 @@ bool MusicPlayerService::Init() {
         ESP_LOGW(TAG, "Audio service unavailable");
     }
     ScanLibrary(true);
-    monitor_stop_requested_ = false;
-    monitor_task_active_ = true;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        monitor_stop_requested_ = false;
+        monitor_task_active_ = true;
+        xSemaphoreGive(mutex_);
+    }
     const BaseType_t task_ret = xTaskCreate(
         MonitorTaskEntry, "music_player", kMonitorTaskStackWords, this, 4, &monitor_task_);
     if (task_ret != pdPASS) {
-        monitor_task_active_ = false;
-        monitor_task_ = nullptr;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            monitor_task_active_ = false;
+            monitor_task_ = nullptr;
+            xSemaphoreGive(mutex_);
+        }
         ESP_LOGW(TAG, "Failed to create monitor task");
     }
     initialized_ = true;
@@ -86,10 +94,24 @@ bool MusicPlayerService::Init() {
 
 void MusicPlayerService::Deinit() {
     Stop();
-    if (monitor_task_active_) {
+    bool monitor_active = false;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        monitor_active = monitor_task_active_;
         monitor_stop_requested_ = true;
-        for (int waited = 0; monitor_task_active_ && waited < 1500; waited += 50) {
+        xSemaphoreGive(mutex_);
+    }
+    if (monitor_active) {
+        for (int waited = 0; waited < 1500; waited += 50) {
             vTaskDelay(pdMS_TO_TICKS(50));
+            if (mutex_ != nullptr) {
+                xSemaphoreTake(mutex_, portMAX_DELAY);
+                monitor_active = monitor_task_active_;
+                xSemaphoreGive(mutex_);
+            }
+            if (!monitor_active) {
+                break;
+            }
         }
     }
     initialized_ = false;
@@ -245,22 +267,45 @@ MusicPlaybackMode MusicPlayerService::TogglePlaybackMode() {
 }
 
 bool MusicPlayerService::PlayTrack(size_t index) {
-    MusicTrack track;
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (index >= tracks_.size()) {
-            xSemaphoreGive(mutex_);
-            return false;
-        }
-        current_index_ = static_cast<int>(index);
-        completion_handled_ = false;
-        queue_paused_ = false;
-        track = tracks_[index];
-        xSemaphoreGive(mutex_);
+    if (mutex_ == nullptr) {
+        return false;
     }
 
-    SavePlaybackState();
+    MusicTrack track;
+    int mode_value = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (playback_starting_ || index >= tracks_.size()) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    playback_starting_ = true;
+    current_index_ = static_cast<int>(index);
+    completion_handled_ = false;
+    queue_paused_ = false;
+    track = tracks_[index];
+    switch (playback_mode_) {
+        case MusicPlaybackMode::kShuffle:
+            mode_value = 1;
+            break;
+        case MusicPlaybackMode::kRepeatOne:
+            mode_value = 2;
+            break;
+        case MusicPlaybackMode::kSequential:
+        default:
+            mode_value = 0;
+            break;
+    }
+    xSemaphoreGive(mutex_);
+
+    Settings settings(kMusicNamespace, true);
+    settings.SetInt(kModeKey, mode_value);
+    settings.SetInt(kTrackIndexKey, static_cast<int>(index));
+    settings.SetString(kTrackPathKey, track.path);
+
     const bool ok = audio_.PlayFile(track.path, track.title);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    playback_starting_ = false;
+    xSemaphoreGive(mutex_);
     if (!ok) {
         ESP_LOGW(TAG, "Cannot play track: %s", track.path.c_str());
     }
@@ -409,12 +454,25 @@ void MusicPlayerService::MonitorTaskEntry(void* arg) {
 }
 
 void MusicPlayerService::MonitorTask() {
-    while (!monitor_stop_requested_) {
+    while (true) {
+        bool stop_requested = false;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            stop_requested = monitor_stop_requested_;
+            xSemaphoreGive(mutex_);
+        }
+        if (stop_requested) {
+            break;
+        }
         Refresh();
         vTaskDelay(pdMS_TO_TICKS(200));
     }
-    monitor_task_active_ = false;
-    monitor_task_ = nullptr;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        monitor_task_active_ = false;
+        monitor_task_ = nullptr;
+        xSemaphoreGive(mutex_);
+    }
     vTaskDelete(nullptr);
 }
 

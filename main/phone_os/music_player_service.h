@@ -85,6 +85,7 @@ private:
     bool initialized_ = false;
     bool monitor_stop_requested_ = false;
     bool monitor_task_active_ = false;
+    bool playback_starting_ = false;
     std::vector<MusicTrack> tracks_;
     int current_index_ = -1;
     MusicPlaybackMode playback_mode_ = MusicPlaybackMode::kSequential;

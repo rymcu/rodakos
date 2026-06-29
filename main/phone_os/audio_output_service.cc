@@ -66,11 +66,19 @@ bool AudioOutputService::Open(uint32_t sample_rate, uint16_t channels, uint16_t 
     }
     Close();
 
+    int volume = 60;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
     auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
     if (handle == nullptr || handle->codec_dev == nullptr) {
+        if (mutex_ != nullptr) {
+            xSemaphoreGive(mutex_);
+        }
         ESP_LOGE(TAG, "Audio DAC unavailable");
         return false;
     }
+    volume = volume_;
 
     esp_codec_dev_sample_info_t sample_info = {};
     sample_info.bits_per_sample = static_cast<uint8_t>(bits_per_sample);
@@ -80,33 +88,35 @@ bool AudioOutputService::Open(uint32_t sample_rate, uint16_t channels, uint16_t 
     sample_info.mclk_multiple = (sample_rate % 11025U) == 0 ? 384 : 256;
     const int ret = esp_codec_dev_open(handle->codec_dev, &sample_info);
     if (ret != ESP_CODEC_DEV_OK) {
+        if (mutex_ != nullptr) {
+            xSemaphoreGive(mutex_);
+        }
         ESP_LOGE(TAG, "Failed to open codec: %d", ret);
         return false;
     }
 
+    codec_open_ = true;
+    const int vol_ret = esp_codec_dev_set_out_vol(handle->codec_dev, volume);
     if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        codec_open_ = true;
         xSemaphoreGive(mutex_);
     }
-
-    SetVolume(volume_);
+    if (vol_ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(TAG, "Failed to set volume to %d", volume);
+    }
     return true;
 }
 
 void AudioOutputService::Close() {
-    if (!IsOpen() || dac_handle_ == nullptr) {
-        return;
-    }
-
-    auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-    if (handle != nullptr && handle->codec_dev != nullptr) {
-        esp_codec_dev_close(handle->codec_dev);
-    }
-
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        codec_open_ = false;
+    }
+    auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
+    if (codec_open_ && handle != nullptr && handle->codec_dev != nullptr) {
+        esp_codec_dev_close(handle->codec_dev);
+    }
+    codec_open_ = false;
+
+    if (mutex_ != nullptr) {
         xSemaphoreGive(mutex_);
     }
 }
@@ -116,12 +126,21 @@ bool AudioOutputService::Write(const void* data, int bytes) {
         return false;
     }
 
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
     auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-    if (handle == nullptr || handle->codec_dev == nullptr) {
+    if (!codec_open_ || handle == nullptr || handle->codec_dev == nullptr) {
+        if (mutex_ != nullptr) {
+            xSemaphoreGive(mutex_);
+        }
         return false;
     }
 
     const int ret = esp_codec_dev_write(handle->codec_dev, const_cast<void*>(data), bytes);
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
+    }
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Codec write failed: %d", ret);
         return false;
@@ -133,21 +152,24 @@ bool AudioOutputService::SetVolume(int volume) {
     const int clamped = std::clamp(volume, 0, 100);
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        volume_ = clamped;
-        xSemaphoreGive(mutex_);
-    } else {
-        volume_ = clamped;
     }
+    volume_ = clamped;
 
-    if (initialized_ && dac_handle_ != nullptr) {
+    if (codec_open_ && dac_handle_ != nullptr) {
         auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
         if (handle != nullptr && handle->codec_dev != nullptr) {
             const int ret = esp_codec_dev_set_out_vol(handle->codec_dev, clamped);
             if (ret != ESP_CODEC_DEV_OK) {
+                if (mutex_ != nullptr) {
+                    xSemaphoreGive(mutex_);
+                }
                 ESP_LOGW(TAG, "Failed to set volume to %d", clamped);
                 return false;
             }
         }
+    }
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
     }
     return true;
 }
