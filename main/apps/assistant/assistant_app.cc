@@ -263,9 +263,10 @@ void AssistantApp::RefreshState() {
                                 state.focus_active ? rodakos_theme_primary()
                                                     : rodakos_theme_text_tertiary(),
                                 0);
-    lv_label_set_text_fmt(cloud_detail_label_, "%s - %s",
+    lv_label_set_text_fmt(cloud_detail_label_, "%s/%s - %s",
                           state.transport_name.empty() ? "offline" : state.transport_name.c_str(),
-                          state.transport_active ? "active" : "idle");
+                          state.recorder_name.empty() ? "offline" : state.recorder_name.c_str(),
+                          state.transport_active && state.recorder_active ? "active" : "idle");
 }
 
 void AssistantApp::StartInteraction() {

@@ -17,6 +17,7 @@ set(SOURCES
     "phone_os/time_service.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_assistant_transport.cc"
+    "phone_os/voice_recorder_service.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/phone_fonts.cc"
