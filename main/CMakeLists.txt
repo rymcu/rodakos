@@ -10,7 +10,9 @@ set(SOURCES
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"
     "phone_os/phone_system.cc"
+    "phone_os/audio_service.cc"
     "phone_os/time_service.cc"
+    "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/phone_fonts.cc"
     "phone_ui/phone_theme.cc"
@@ -27,6 +29,8 @@ set(SOURCES
     "apps/photos/photos_app.cc"
     "apps/clock/clock_app.cc"
     "apps/file_manager/file_manager_app.cc"
+    "apps/music/music_app.cc"
+    "apps/system_info/system_info_app.cc"
 )
 
 idf_component_register(
@@ -37,9 +41,15 @@ idf_component_register(
         esp_lvgl_port
         nvs_flash
         esp_wifi
+        esp_http_server
         esp_netif
         lwip
         esp_board_manager
+        espressif__esp_codec_dev
+        esp_app_format
+        esp_timer
+        heap
+        spi_flash
         fatfs
         sdmmc
         esp_tinyusb

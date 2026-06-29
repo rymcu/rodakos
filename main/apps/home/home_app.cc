@@ -3,11 +3,13 @@
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
+#include "phone_os/phone_services.h"
 #include "phone_os/time_service.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_layout.h"
 #include "phone_ui/rodakos_theme.h"
+#include "rodakos_adapters/wifi_adapter.h"
 #include "settings.h"
 
 #include <esp_log.h>
@@ -127,27 +129,41 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
     }
     ESP_LOGI(TAG, "Layout containers created");
 
-    // ===== HEADER 区域 =====
-    // Clock (居中)
+    // ===== HEADER 区域：手机状态栏 =====
+    lv_obj_set_style_pad_left(header, 14, 0);
+    lv_obj_set_style_pad_right(header, 12, 0);
+
     clock_label_ = lv_label_create(header);
     lv_label_set_text(clock_label_, "00:00");
     lv_obj_set_style_text_color(clock_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(clock_label_, &phone_font_18, 0);
-    lv_obj_center(clock_label_);
+    lv_obj_set_style_text_font(clock_label_, &phone_font_14, 0);
+    lv_obj_align(clock_label_, LV_ALIGN_LEFT_MID, 0, 0);
 
-    // Battery (右对齐)
-    battery_label_ = lv_label_create(header);
+    status_cluster_ = lv_obj_create(header);
+    lv_obj_remove_style_all(status_cluster_);
+    lv_obj_set_size(status_cluster_, 112, 22);
+    lv_obj_align(status_cluster_, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_layout(status_cluster_, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(status_cluster_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(status_cluster_, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(status_cluster_, 6, 0);
+    lv_obj_clear_flag(status_cluster_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(status_cluster_, LV_OBJ_FLAG_SCROLLABLE);
+
+    wifi_label_ = lv_label_create(status_cluster_);
+    lv_label_set_text(wifi_label_, FONT_AWESOME_WIFI_SLASH);
+    lv_obj_set_style_text_color(wifi_label_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(wifi_label_, PhoneIconFont(), 0);
+
+    auto* battery_icon = lv_label_create(status_cluster_);
+    lv_label_set_text(battery_icon, FONT_AWESOME_BATTERY_FULL);
+    lv_obj_set_style_text_color(battery_icon, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(battery_icon, PhoneIconFont(), 0);
+
+    battery_label_ = lv_label_create(status_cluster_);
     lv_label_set_text(battery_label_, "100%");
-    lv_obj_set_style_text_color(battery_label_, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
-    lv_obj_align(battery_label_, LV_ALIGN_RIGHT_MID, -rodakos_layout_padding_medium(), 0);
-
-    // WiFi (左对齐)
-    wifi_label_ = lv_label_create(header);
-    lv_label_set_text(wifi_label_, "WiFi");
-    lv_obj_set_style_text_color(wifi_label_, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(wifi_label_, &phone_font_12, 0);
-    lv_obj_align(wifi_label_, LV_ALIGN_LEFT_MID, rodakos_layout_padding_medium(), 0);
 
     // ===== BODY 区域 =====
     // 创建网格容器（自动居中）
@@ -263,6 +279,7 @@ void HomeApp::OnDestroy() {
     root_ = nullptr;
     grid_ = nullptr;
     clock_label_ = nullptr;
+    status_cluster_ = nullptr;
     battery_label_ = nullptr;
     wifi_label_ = nullptr;
     context_ = nullptr;
@@ -286,6 +303,14 @@ void HomeApp::UpdateClock() {
     }
 
     lv_label_set_text(clock_label_, time_text);
+
+    if (wifi_label_ != nullptr && context_ != nullptr) {
+        auto* wifi = context_->services().wifi();
+        const bool connected = wifi != nullptr && wifi->GetStatus() == WiFiStatus::kConnected;
+        lv_label_set_text(wifi_label_, connected ? FONT_AWESOME_WIFI : FONT_AWESOME_WIFI_SLASH);
+        lv_obj_set_style_text_color(wifi_label_,
+                                    connected ? rodakos_theme_text_primary() : rodakos_theme_text_tertiary(), 0);
+    }
 }
 
 void RegisterHomeApp(PhoneAppRegistry& registry) {

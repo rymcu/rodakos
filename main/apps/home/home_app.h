@@ -26,6 +26,7 @@ private:
     lv_obj_t* root_ = nullptr;
     lv_obj_t* grid_ = nullptr;
     lv_obj_t* clock_label_ = nullptr;
+    lv_obj_t* status_cluster_ = nullptr;
     lv_obj_t* battery_label_ = nullptr;
     lv_obj_t* wifi_label_ = nullptr;
     lv_timer_t* clock_timer_ = nullptr;
