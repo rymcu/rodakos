@@ -15,6 +15,7 @@ set(SOURCES
     "phone_os/audio_service.cc"
     "phone_os/music_player_service.cc"
     "phone_os/time_service.cc"
+    "phone_os/voice_assistant_service.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/phone_fonts.cc"
@@ -33,6 +34,7 @@ set(SOURCES
     "apps/clock/clock_app.cc"
     "apps/file_manager/file_manager_app.cc"
     "apps/music/music_app.cc"
+    "apps/assistant/assistant_app.cc"
     "apps/system_info/system_info_app.cc"
 )
 
