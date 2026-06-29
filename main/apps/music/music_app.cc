@@ -1,6 +1,6 @@
 #include "apps/music/music_app.h"
 
-#include "phone_os/audio_service.h"
+#include "phone_os/music_player_service.h"
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
@@ -9,24 +9,15 @@
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
-#include "rodakos_adapters/file_service.h"
-#include "settings.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <inttypes.h>
-#include <esp_random.h>
 #include <string>
 
 #include <esp_log.h>
 
 namespace {
 constexpr const char* TAG = "MusicApp";
-constexpr const char* kMusicNamespace = "music";
-constexpr const char* kModeKey = "mode";
-constexpr const char* kTrackPathKey = "track";
-constexpr const char* kTrackIndexKey = "idx";
 
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
@@ -92,15 +83,6 @@ std::string FormatTrackSize(size_t bytes) {
     return text;
 }
 
-std::string NormalizePathKey(const std::string& path) {
-    std::string key;
-    key.reserve(path.size());
-    for (char ch : path) {
-        key.push_back(ch == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    return key;
-}
-
 }  // namespace
 
 MusicApp::~MusicApp() {
@@ -110,11 +92,11 @@ MusicApp::~MusicApp() {
 bool MusicApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
-    file_service_ = context.services().file_service();
-    audio_service_ = context.services().audio();
+    music_player_ = context.services().music_player();
 
-    ScanTracks();
-    LoadPlaybackState();
+    if (music_player_ != nullptr) {
+        music_player_->Init();
+    }
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -126,7 +108,8 @@ bool MusicApp::OnCreate(PhoneAppContext& context) {
     RefreshState();
     refresh_timer_ = lv_timer_create(RefreshTimerCallback, 500, this);
 
-    ESP_LOGI(TAG, "Music app created with %zu tracks", tracks_.size());
+    ESP_LOGI(TAG, "Music app created with %zu tracks",
+             music_player_ != nullptr ? music_player_->track_count() : 0);
     return true;
 }
 
@@ -179,15 +162,9 @@ void MusicApp::OnDestroy() {
     track_count_label_ = nullptr;
     track_picker_ = nullptr;
     track_list_ = nullptr;
-    tracks_.clear();
-    current_index_ = -1;
-    playback_mode_ = PlaybackMode::kSequential;
-    completion_handled_ = false;
-    queue_paused_ = false;
     context_ = nullptr;
     ui_ = nullptr;
-    file_service_ = nullptr;
-    audio_service_ = nullptr;
+    music_player_ = nullptr;
 }
 
 void MusicApp::CreateUi() {
@@ -370,7 +347,7 @@ void MusicApp::CreateUi() {
     lv_obj_set_size(volume_slider_, 166, 8);
     lv_obj_align(volume_slider_, LV_ALIGN_LEFT_MID, 42, 0);
     lv_slider_set_range(volume_slider_, 0, 100);
-    lv_slider_set_value(volume_slider_, audio_service_ != nullptr ? audio_service_->volume() : 60, LV_ANIM_OFF);
+    lv_slider_set_value(volume_slider_, music_player_ != nullptr ? music_player_->volume() : 60, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(volume_slider_, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
     lv_obj_set_style_bg_color(volume_slider_, rodakos_theme_primary(), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(volume_slider_, rodakos_theme_primary(), LV_PART_KNOB);
@@ -378,8 +355,8 @@ void MusicApp::CreateUi() {
         auto* self = static_cast<MusicApp*>(lv_event_get_user_data(e));
         auto* slider = static_cast<lv_obj_t*>(lv_event_get_target(e));
         const int value = lv_slider_get_value(slider);
-        if (self->audio_service_ != nullptr) {
-            self->audio_service_->SetVolume(value);
+        if (self->music_player_ != nullptr) {
+            self->music_player_->SetVolume(value);
         }
         if (self->volume_value_label_ != nullptr) {
             lv_label_set_text_fmt(self->volume_value_label_, "%d%%", value);
@@ -433,86 +410,10 @@ void MusicApp::CreateUi() {
     lv_obj_set_style_pad_row(track_list_, 6, 0);
 }
 
-void MusicApp::ScanTracks() {
-    tracks_.clear();
-    if (file_service_ == nullptr) {
-        ESP_LOGW(TAG, "No file service available");
-        return;
-    }
-    if (!file_service_->IsMounted() && !file_service_->Init()) {
-        ESP_LOGW(TAG, "SD card is not mounted");
-        return;
-    }
-    ESP_LOGI(TAG, "SD card mounted at %s", file_service_->GetMountPoint());
-
-    std::vector<rodakos::FileEntry> root_entries;
-    if (file_service_->ListDirectory("/", root_entries)) {
-        ESP_LOGI(TAG, "Music scan root has %zu entries", root_entries.size());
-        for (const auto& entry : root_entries) {
-            ESP_LOGD(TAG, "Root entry: %s dir=%d size=%zu path=%s",
-                     entry.name.c_str(), entry.is_directory ? 1 : 0, entry.size, entry.path.c_str());
-            if (entry.is_directory && NormalizePathKey(entry.name) == "music") {
-                const std::string scan_path = "/" + entry.name;
-                ESP_LOGI(TAG, "Scanning music directory: %s", scan_path.c_str());
-                ScanDirectory(scan_path, 3);
-            }
-        }
-    } else {
-        ESP_LOGW(TAG, "Failed to list SD card root");
-    }
-
-    if (tracks_.empty()) {
-        ESP_LOGI(TAG, "No tracks in /music; scanning SD root fallback");
-        ScanDirectory("/", 3);
-    }
-
-    std::sort(tracks_.begin(), tracks_.end(), [](const Track& a, const Track& b) {
-        return NormalizePathKey(a.path) < NormalizePathKey(b.path);
-    });
-    const auto unique_end = std::unique(tracks_.begin(), tracks_.end(), [](const Track& a, const Track& b) {
-        return NormalizePathKey(a.path) == NormalizePathKey(b.path);
-    });
-    tracks_.erase(unique_end, tracks_.end());
-
-    std::sort(tracks_.begin(), tracks_.end(), [](const Track& a, const Track& b) {
-        return a.title < b.title;
-    });
-
-    ESP_LOGI(TAG, "Music scan found %zu tracks", tracks_.size());
-}
-
 void MusicApp::UpdateTrackCountLabel() {
     if (track_count_label_ != nullptr) {
-        lv_label_set_text_fmt(track_count_label_, "%zu songs", tracks_.size());
-    }
-}
-
-void MusicApp::ScanDirectory(const std::string& path, int depth) {
-    if (depth < 0 || file_service_ == nullptr) {
-        return;
-    }
-
-    std::vector<rodakos::FileEntry> entries;
-    if (!file_service_->ListDirectory(path, entries)) {
-        return;
-    }
-
-    for (const auto& entry : entries) {
-        if (entry.is_directory) {
-            const std::string next_path = path == "/" ? "/" + entry.name : path + "/" + entry.name;
-            ScanDirectory(next_path, depth - 1);
-            continue;
-        }
-        if (!rodakos::AudioService::IsSupportedAudioFile(entry.path)) {
-            continue;
-        }
-        Track track;
-        const size_t dot = entry.name.find_last_of('.');
-        track.title = dot == std::string::npos ? entry.name : entry.name.substr(0, dot);
-        track.path = entry.path;
-        track.size = entry.size;
-        tracks_.push_back(track);
-        ESP_LOGD(TAG, "Found audio track: %s (%zu bytes)", track.path.c_str(), track.size);
+        lv_label_set_text_fmt(track_count_label_, "%zu songs",
+                              music_player_ != nullptr ? music_player_->track_count() : 0);
     }
 }
 
@@ -524,7 +425,8 @@ void MusicApp::RebuildTrackList() {
 
     UpdateTrackCountLabel();
 
-    if (tracks_.empty()) {
+    const auto tracks = music_player_ != nullptr ? music_player_->GetTracks() : std::vector<rodakos::MusicTrack>{};
+    if (tracks.empty()) {
         auto* empty = CreateText(track_list_, "No supported audio files", &phone_font_12,
                                  rodakos_theme_text_tertiary());
         lv_obj_set_width(empty, 300);
@@ -532,7 +434,7 @@ void MusicApp::RebuildTrackList() {
         return;
     }
 
-    for (size_t i = 0; i < tracks_.size(); ++i) {
+    for (size_t i = 0; i < tracks.size(); ++i) {
         auto* row = lv_btn_create(track_list_);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 300, 42);
@@ -543,13 +445,13 @@ void MusicApp::RebuildTrackList() {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-        auto* title = CreateText(row, tracks_[i].title.c_str(), &phone_font_14,
+        auto* title = CreateText(row, tracks[i].title.c_str(), &phone_font_14,
                                  rodakos_theme_text_primary());
         lv_obj_set_width(title, 218);
         lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
         lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 5);
 
-        const auto size_text = FormatTrackSize(tracks_[i].size);
+        const auto size_text = FormatTrackSize(tracks[i].size);
         auto* detail = CreateText(row, size_text.c_str(), &phone_font_12,
                                   rodakos_theme_text_tertiary());
         lv_obj_set_width(detail, 218);
@@ -606,22 +508,11 @@ void MusicApp::HideVolumePanel() {
 }
 
 void MusicApp::TogglePlaybackMode() {
-    switch (playback_mode_) {
-        case PlaybackMode::kSequential:
-            playback_mode_ = PlaybackMode::kShuffle;
-            break;
-        case PlaybackMode::kShuffle:
-            playback_mode_ = PlaybackMode::kRepeatOne;
-            break;
-        case PlaybackMode::kRepeatOne:
-        default:
-            playback_mode_ = PlaybackMode::kSequential;
-            break;
+    if (music_player_ == nullptr) {
+        return;
     }
+    music_player_->TogglePlaybackMode();
     UpdatePlaybackModeLabel();
-    completion_handled_ = false;
-    queue_paused_ = false;
-    SavePlaybackState();
     if (ui_ != nullptr) {
         ui_->ShowToastUnlocked(PlaybackModeToastText());
     }
@@ -641,247 +532,105 @@ void MusicApp::UpdatePlaybackModeLabel() {
 }
 
 const char* MusicApp::PlaybackModeIconText() const {
-    switch (playback_mode_) {
-        case PlaybackMode::kShuffle:
+    const auto mode = music_player_ != nullptr
+        ? music_player_->playback_mode()
+        : rodakos::MusicPlaybackMode::kSequential;
+    switch (mode) {
+        case rodakos::MusicPlaybackMode::kShuffle:
             return LV_SYMBOL_SHUFFLE;
-        case PlaybackMode::kRepeatOne:
+        case rodakos::MusicPlaybackMode::kRepeatOne:
             return LV_SYMBOL_LOOP;
-        case PlaybackMode::kSequential:
+        case rodakos::MusicPlaybackMode::kSequential:
         default:
             return FONT_AWESOME_ARROW_RIGHT;
     }
 }
 
 bool MusicApp::PlaybackModeShowsBadge() const {
-    return playback_mode_ == PlaybackMode::kRepeatOne;
+    return music_player_ != nullptr &&
+           music_player_->playback_mode() == rodakos::MusicPlaybackMode::kRepeatOne;
 }
 
 const char* MusicApp::PlaybackModeToastText() const {
-    switch (playback_mode_) {
-        case PlaybackMode::kShuffle:
+    const auto mode = music_player_ != nullptr
+        ? music_player_->playback_mode()
+        : rodakos::MusicPlaybackMode::kSequential;
+    switch (mode) {
+        case rodakos::MusicPlaybackMode::kShuffle:
             return "Random play";
-        case PlaybackMode::kRepeatOne:
+        case rodakos::MusicPlaybackMode::kRepeatOne:
             return "Repeat one";
-        case PlaybackMode::kSequential:
+        case rodakos::MusicPlaybackMode::kSequential:
         default:
             return "Sequential play";
     }
 }
 
-void MusicApp::LoadPlaybackState() {
-    Settings settings(kMusicNamespace, false);
-    const int mode_value = settings.GetInt(kModeKey, 0);
-    switch (mode_value) {
-        case 1:
-            playback_mode_ = PlaybackMode::kShuffle;
-            break;
-        case 2:
-            playback_mode_ = PlaybackMode::kRepeatOne;
-            break;
-        case 0:
-        default:
-            playback_mode_ = PlaybackMode::kSequential;
-            break;
-    }
-
-    const std::string path = settings.GetString(kTrackPathKey, "");
-    SyncCurrentIndexFromPath(path);
-    if (current_index_ < 0) {
-        const int saved_index = settings.GetInt(kTrackIndexKey, -1);
-        if (saved_index >= 0 && saved_index < static_cast<int>(tracks_.size())) {
-            current_index_ = saved_index;
-        }
-    }
-
-    ESP_LOGI(TAG, "Loaded playback state: mode=%d index=%d path=%s",
-             mode_value, current_index_, path.c_str());
-}
-
-void MusicApp::SavePlaybackState() {
-    Settings settings(kMusicNamespace, true);
-    int mode_value = 0;
-    switch (playback_mode_) {
-        case PlaybackMode::kShuffle:
-            mode_value = 1;
-            break;
-        case PlaybackMode::kRepeatOne:
-            mode_value = 2;
-            break;
-        case PlaybackMode::kSequential:
-        default:
-            mode_value = 0;
-            break;
-    }
-
-    settings.SetInt(kModeKey, mode_value);
-    settings.SetInt(kTrackIndexKey, current_index_);
-    if (current_index_ >= 0 && current_index_ < static_cast<int>(tracks_.size())) {
-        settings.SetString(kTrackPathKey, tracks_[current_index_].path);
-    }
-}
-
-void MusicApp::SyncCurrentIndexFromPath(const std::string& path) {
-    if (path.empty()) {
-        return;
-    }
-
-    const std::string key = NormalizePathKey(path);
-    for (size_t i = 0; i < tracks_.size(); ++i) {
-        if (NormalizePathKey(tracks_[i].path) == key) {
-            current_index_ = static_cast<int>(i);
-            return;
-        }
-    }
-}
-
-size_t MusicApp::PickRandomTrackIndex() const {
-    if (tracks_.empty()) {
-        return 0;
-    }
-    if (tracks_.size() == 1) {
-        return 0;
-    }
-
-    size_t index = static_cast<size_t>(esp_random() % tracks_.size());
-    if (current_index_ >= 0 && index == static_cast<size_t>(current_index_)) {
-        index = (index + 1) % tracks_.size();
-    }
-    return index;
-}
-
-bool MusicApp::PlayFromCompletedState() {
-    if (tracks_.empty()) {
-        return false;
-    }
-
-    switch (playback_mode_) {
-        case PlaybackMode::kRepeatOne: {
-            const size_t index = current_index_ < 0 ? 0 : static_cast<size_t>(current_index_);
-            PlayTrack(index);
-            return true;
-        }
-        case PlaybackMode::kShuffle:
-            PlayTrack(PickRandomTrackIndex());
-            return true;
-        case PlaybackMode::kSequential:
-        default:
-            if (current_index_ >= 0 && current_index_ < static_cast<int>(tracks_.size() - 1)) {
-                PlayTrack(static_cast<size_t>(current_index_ + 1));
-                return true;
-            }
-            break;
-    }
-    return false;
-}
-
-bool MusicApp::HandlePlaybackCompleted() {
-    if (completion_handled_ || tracks_.empty()) {
-        return false;
-    }
-    completion_handled_ = true;
-    if (queue_paused_) {
-        return false;
-    }
-    return PlayFromCompletedState();
-}
-
 void MusicApp::PlayTrack(size_t index) {
-    if (index >= tracks_.size() || audio_service_ == nullptr) {
+    if (music_player_ == nullptr) {
         return;
     }
-    current_index_ = static_cast<int>(index);
-    completion_handled_ = false;
-    queue_paused_ = false;
-    SavePlaybackState();
-    if (!audio_service_->PlayFile(tracks_[index].path, tracks_[index].title)) {
+    if (!music_player_->PlayTrack(index)) {
         ui_->ShowToastUnlocked("Cannot play this file");
     }
     RefreshState();
 }
 
 void MusicApp::PlayPrevious() {
-    if (tracks_.empty()) {
+    if (music_player_ == nullptr) {
         return;
     }
-    const int index = current_index_ <= 0 ? static_cast<int>(tracks_.size() - 1) : current_index_ - 1;
-    PlayTrack(static_cast<size_t>(index));
+    if (!music_player_->PlayPrevious()) {
+        ui_->ShowToastUnlocked("No tracks");
+    }
+    RefreshState();
 }
 
 void MusicApp::PlayNext() {
-    if (tracks_.empty()) {
+    if (music_player_ == nullptr) {
         return;
     }
-    if (playback_mode_ == PlaybackMode::kShuffle) {
-        PlayTrack(PickRandomTrackIndex());
-        return;
+    if (!music_player_->PlayNext()) {
+        ui_->ShowToastUnlocked("No tracks");
     }
-    const int index = current_index_ < 0 || current_index_ >= static_cast<int>(tracks_.size() - 1)
-        ? 0 : current_index_ + 1;
-    PlayTrack(static_cast<size_t>(index));
+    RefreshState();
 }
 
 void MusicApp::TogglePlayPause() {
-    if (audio_service_ == nullptr) {
+    if (music_player_ == nullptr) {
         return;
     }
-    const auto state = audio_service_->GetState();
-    if (state.status == rodakos::AudioPlaybackStatus::kPaused) {
-        queue_paused_ = false;
-        audio_service_->Resume();
-    } else if (state.status == rodakos::AudioPlaybackStatus::kPlaying ||
-               state.status == rodakos::AudioPlaybackStatus::kLoading) {
-        queue_paused_ = true;
-        completion_handled_ = true;
-        audio_service_->Pause();
-    } else if (state.status == rodakos::AudioPlaybackStatus::kCompleted) {
-        queue_paused_ = false;
-        completion_handled_ = false;
-        if (!PlayFromCompletedState()) {
-            const size_t index = current_index_ < 0 ? 0 : static_cast<size_t>(current_index_);
-            PlayTrack(index);
-        }
-    } else if (!tracks_.empty()) {
-        queue_paused_ = false;
-        const size_t index = current_index_ < 0 ? 0 : static_cast<size_t>(current_index_);
-        PlayTrack(index);
+    if (!music_player_->TogglePlayPause()) {
+        ui_->ShowToastUnlocked("No tracks");
     }
     RefreshState();
 }
 
 void MusicApp::StopPlayback() {
-    if (audio_service_ != nullptr) {
-        audio_service_->Stop();
+    if (music_player_ != nullptr) {
+        music_player_->Stop();
     }
-    completion_handled_ = true;
-    queue_paused_ = true;
     RefreshState();
 }
 
 void MusicApp::RefreshState() {
-    if (audio_service_ == nullptr || track_title_label_ == nullptr) {
+    if (music_player_ == nullptr || track_title_label_ == nullptr) {
         return;
     }
 
     UpdateTrackCountLabel();
 
-    const auto state = audio_service_->GetState();
-    SyncCurrentIndexFromPath(state.file_path);
-    if (state.status == rodakos::AudioPlaybackStatus::kCompleted) {
-        if (HandlePlaybackCompleted()) {
-            return;
-        }
-    }
-    if (state.status == rodakos::AudioPlaybackStatus::kPlaying ||
-        state.status == rodakos::AudioPlaybackStatus::kLoading) {
-        completion_handled_ = false;
-    }
+    const auto player_state = music_player_->GetState();
+    const auto& state = player_state.audio;
 
     if (!state.title.empty()) {
         lv_label_set_text(track_title_label_, state.title.c_str());
-    } else if (tracks_.empty()) {
+    } else if (player_state.track_count == 0) {
         lv_label_set_text(track_title_label_, "No track");
+    } else if (!player_state.current_title.empty()) {
+        lv_label_set_text(track_title_label_, player_state.current_title.c_str());
     } else {
-        lv_label_set_text(track_title_label_, tracks_[current_index_ < 0 ? 0 : current_index_].title.c_str());
+        lv_label_set_text(track_title_label_, "Ready");
     }
 
     char status_text[96] = {};
@@ -890,7 +639,7 @@ void MusicApp::RefreshState() {
                       StatusText(state.status), state.progress_percent);
     } else if (!state.message.empty()) {
         std::snprintf(status_text, sizeof(status_text), "%s", state.message.c_str());
-    } else if (tracks_.empty()) {
+    } else if (player_state.track_count == 0) {
         std::snprintf(status_text, sizeof(status_text), "Put audio files in /music");
     } else {
         std::snprintf(status_text, sizeof(status_text), "Ready");

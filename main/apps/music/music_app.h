@@ -12,8 +12,7 @@ class PhoneAppRegistry;
 class PhoneUi;
 
 namespace rodakos {
-class AudioService;
-class FileService;
+class MusicPlayerService;
 }
 
 class MusicApp : public PhoneApp {
@@ -29,21 +28,7 @@ public:
     void RefreshState();
 
 private:
-    struct Track {
-        std::string title;
-        std::string path;
-        size_t size = 0;
-    };
-
-    enum class PlaybackMode {
-        kSequential,
-        kShuffle,
-        kRepeatOne,
-    };
-
     void CreateUi();
-    void ScanTracks();
-    void ScanDirectory(const std::string& path, int depth);
     void UpdateTrackCountLabel();
     void RebuildTrackList();
     void ShowTrackPicker();
@@ -55,12 +40,6 @@ private:
     const char* PlaybackModeIconText() const;
     bool PlaybackModeShowsBadge() const;
     const char* PlaybackModeToastText() const;
-    void LoadPlaybackState();
-    void SavePlaybackState();
-    size_t PickRandomTrackIndex() const;
-    void SyncCurrentIndexFromPath(const std::string& path);
-    bool PlayFromCompletedState();
-    bool HandlePlaybackCompleted();
     void PlayTrack(size_t index);
     void PlayPrevious();
     void PlayNext();
@@ -70,8 +49,7 @@ private:
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
-    rodakos::FileService* file_service_ = nullptr;
-    rodakos::AudioService* audio_service_ = nullptr;
+    rodakos::MusicPlayerService* music_player_ = nullptr;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* track_title_label_ = nullptr;
@@ -89,12 +67,6 @@ private:
     lv_obj_t* track_picker_ = nullptr;
     lv_obj_t* track_list_ = nullptr;
     lv_timer_t* refresh_timer_ = nullptr;
-
-    std::vector<Track> tracks_;
-    int current_index_ = -1;
-    PlaybackMode playback_mode_ = PlaybackMode::kSequential;
-    bool completion_handled_ = false;
-    bool queue_paused_ = false;
 };
 
 void RegisterMusicApp(PhoneAppRegistry& registry);

@@ -12,6 +12,7 @@ set(SOURCES
     "phone_os/phone_system.cc"
     "phone_os/audio_output_service.cc"
     "phone_os/audio_service.cc"
+    "phone_os/music_player_service.cc"
     "phone_os/time_service.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"

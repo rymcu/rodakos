@@ -7,6 +7,7 @@ namespace rodakos {
 class AudioOutputService;
 class AudioService;
 class FileService;
+class MusicPlayerService;
 class WebFileSystemService;
 }
 
@@ -27,6 +28,9 @@ public:
     void SetAudioOutput(rodakos::AudioOutputService* audio_output) { audio_output_ = audio_output; }
     rodakos::AudioOutputService* audio_output() { return audio_output_; }
 
+    void SetMusicPlayer(rodakos::MusicPlayerService* music_player) { music_player_ = music_player; }
+    rodakos::MusicPlayerService* music_player() { return music_player_; }
+
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
 
@@ -36,5 +40,6 @@ private:
     rodakos::FileService* file_service_ = nullptr;
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;
+    rodakos::MusicPlayerService* music_player_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
 };
