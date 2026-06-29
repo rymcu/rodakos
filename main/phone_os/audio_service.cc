@@ -1,15 +1,13 @@
 #include "phone_os/audio_service.h"
 
+#include "phone_os/audio_output_service.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <inttypes.h>
 
-#include <dev_audio_codec.h>
-#include <esp_board_manager.h>
-#include <esp_codec_dev.h>
-#include <esp_err.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <mp3dec.h>
@@ -17,7 +15,6 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "AudioService";
-constexpr const char* kAudioDacDeviceName = "audio_dac";
 constexpr size_t kPlaybackBufferSize = 4096;
 constexpr int kMp3ReadBufferSize = 16 * 1024;
 constexpr int kMp3RefillThreshold = 2 * MAINBUF_SIZE;
@@ -148,29 +145,10 @@ bool GetFileSize(FILE* fp, size_t& size) {
     return true;
 }
 
-bool OpenCodec(dev_audio_codec_handles_t* handle, uint32_t sample_rate, uint16_t channels,
-               uint16_t bits_per_sample) {
-    if (handle == nullptr || handle->codec_dev == nullptr) {
-        return false;
-    }
-
-    esp_codec_dev_sample_info_t sample_info = {};
-    sample_info.bits_per_sample = static_cast<uint8_t>(bits_per_sample);
-    sample_info.channel = static_cast<uint8_t>(channels);
-    sample_info.channel_mask = 0;
-    sample_info.sample_rate = sample_rate;
-    sample_info.mclk_multiple = (sample_rate % 11025U) == 0 ? 384 : 256;
-    const int ret = esp_codec_dev_open(handle->codec_dev, &sample_info);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to open codec: %d", ret);
-        return false;
-    }
-    return true;
-}
-
 }  // namespace
 
-AudioService::AudioService() {
+AudioService::AudioService(AudioOutputService& output)
+    : output_(output) {
     mutex_ = xSemaphoreCreateMutex();
     state_.volume = volume_;
 }
@@ -188,19 +166,8 @@ bool AudioService::Init() {
         return true;
     }
 
-    esp_err_t ret = esp_board_manager_init_device_by_name(kAudioDacDeviceName);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize audio DAC (%s)", esp_err_to_name(ret));
+    if (!output_.Init()) {
         SetState(AudioPlaybackStatus::kError, "Audio hardware unavailable");
-        return false;
-    }
-
-    ret = esp_board_manager_get_device_handle(kAudioDacDeviceName, &dac_handle_);
-    if (ret != ESP_OK || dac_handle_ == nullptr) {
-        ESP_LOGE(TAG, "Failed to get audio DAC handle (%s)", esp_err_to_name(ret));
-        esp_board_manager_deinit_device_by_name(kAudioDacDeviceName);
-        dac_handle_ = nullptr;
-        SetState(AudioPlaybackStatus::kError, "Audio handle unavailable");
         return false;
     }
 
@@ -213,19 +180,13 @@ bool AudioService::Init() {
 void AudioService::Deinit() {
     Stop();
     const bool playback_stopped = JoinPlaybackTask(1500);
-
-    if (playback_stopped && IsCodecOpen() && dac_handle_ != nullptr) {
-        auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-        if (handle->codec_dev != nullptr) {
-            esp_codec_dev_close(handle->codec_dev);
-        }
-        SetCodecOpen(false);
+    if (playback_stopped) {
+        output_.Close();
     }
 
     if (initialized_) {
-        esp_board_manager_deinit_device_by_name(kAudioDacDeviceName);
+        output_.Deinit();
         initialized_ = false;
-        dac_handle_ = nullptr;
         SetState(AudioPlaybackStatus::kIdle, "Stopped");
         ESP_LOGI(TAG, "Audio service deinitialized");
     }
@@ -334,17 +295,7 @@ bool AudioService::SetVolume(int volume) {
         volume_ = clamped;
     }
 
-    if (initialized_ && dac_handle_ != nullptr) {
-        auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-        if (handle->codec_dev != nullptr) {
-            const int ret = esp_codec_dev_set_out_vol(handle->codec_dev, volume_);
-            if (ret != ESP_CODEC_DEV_OK) {
-                ESP_LOGW(TAG, "Failed to set volume to %d", volume_);
-                return false;
-            }
-        }
-    }
-    return true;
+    return output_.SetVolume(volume_);
 }
 
 int AudioService::volume() const {
@@ -426,17 +377,15 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         return false;
     }
 
-    auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-    if (handle == nullptr || handle->codec_dev == nullptr) {
+    if (!output_.IsReady()) {
         SetState(AudioPlaybackStatus::kError, "Audio DAC unavailable");
         return false;
     }
 
-    if (!OpenCodec(handle, wav.sample_rate, wav.channels, wav.bits_per_sample)) {
+    if (!output_.Open(wav.sample_rate, wav.channels, wav.bits_per_sample)) {
         SetState(AudioPlaybackStatus::kError, "Codec open failed");
         return false;
     }
-    SetCodecOpen(true);
     SetVolume(volume_);
 
     if (mutex_ != nullptr) {
@@ -455,8 +404,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         buffer = static_cast<uint8_t*>(heap_caps_malloc(kPlaybackBufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (buffer == nullptr) {
-        esp_codec_dev_close(handle->codec_dev);
-        SetCodecOpen(false);
+        output_.Close();
         SetState(AudioPlaybackStatus::kError, "No audio buffer");
         return false;
     }
@@ -489,9 +437,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
             break;
         }
 
-        const int ret = esp_codec_dev_write(handle->codec_dev, buffer, static_cast<int>(bytes_read));
-        if (ret != ESP_CODEC_DEV_OK) {
-            ESP_LOGE(TAG, "Codec write failed: %d", ret);
+        if (!output_.Write(buffer, static_cast<int>(bytes_read))) {
             failed = true;
             break;
         }
@@ -500,8 +446,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
     }
 
     heap_caps_free(buffer);
-    esp_codec_dev_close(handle->codec_dev);
-    SetCodecOpen(false);
+    output_.Close();
 
     if (!failed && !stopped) {
         UpdateProgress(wav.data_size, wav.data_size);
@@ -517,8 +462,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         return false;
     }
 
-    auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
-    if (handle == nullptr || handle->codec_dev == nullptr) {
+    if (!output_.IsReady()) {
         SetState(AudioPlaybackStatus::kError, "Audio DAC unavailable");
         return false;
     }
@@ -632,14 +576,13 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
 
         if (!codec_ready) {
-            if (!OpenCodec(handle, static_cast<uint32_t>(frame_info.samprate),
-                           static_cast<uint16_t>(frame_info.nChans),
-                           static_cast<uint16_t>(frame_info.bitsPerSample))) {
+            if (!output_.Open(static_cast<uint32_t>(frame_info.samprate),
+                              static_cast<uint16_t>(frame_info.nChans),
+                              static_cast<uint16_t>(frame_info.bitsPerSample))) {
                 SetState(AudioPlaybackStatus::kError, "Codec open failed");
                 failed = true;
                 break;
             }
-            SetCodecOpen(true);
             codec_ready = true;
             SetVolume(volume_);
 
@@ -658,9 +601,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
 
         const int output_bytes = frame_info.outputSamps * (frame_info.bitsPerSample / 8);
-        const int write_ret = esp_codec_dev_write(handle->codec_dev, pcm_buffer, output_bytes);
-        if (write_ret != ESP_CODEC_DEV_OK) {
-            ESP_LOGE(TAG, "Codec write failed: %d", write_ret);
+        if (!output_.Write(pcm_buffer, output_bytes)) {
             failed = true;
             break;
         }
@@ -675,8 +616,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     }
 
     if (codec_ready) {
-        esp_codec_dev_close(handle->codec_dev);
-        SetCodecOpen(false);
+        output_.Close();
     }
     heap_caps_free(pcm_buffer);
     heap_caps_free(read_buffer);
@@ -776,24 +716,6 @@ bool AudioService::HasPlaybackTask() {
     const bool has_task = playback_task_active_;
     xSemaphoreGive(mutex_);
     return has_task;
-}
-
-void AudioService::SetCodecOpen(bool open) {
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        codec_open_ = open;
-        xSemaphoreGive(mutex_);
-    }
-}
-
-bool AudioService::IsCodecOpen() {
-    if (mutex_ == nullptr) {
-        return false;
-    }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool open = codec_open_;
-    xSemaphoreGive(mutex_);
-    return open;
 }
 
 bool AudioService::JoinPlaybackTask(uint32_t timeout_ms) {

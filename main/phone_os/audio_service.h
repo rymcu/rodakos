@@ -11,6 +11,8 @@
 
 namespace rodakos {
 
+class AudioOutputService;
+
 enum class AudioPlaybackStatus {
     kIdle,
     kLoading,
@@ -37,7 +39,7 @@ struct AudioPlaybackState {
 
 class AudioService {
 public:
-    AudioService();
+    explicit AudioService(AudioOutputService& output);
     ~AudioService();
 
     bool Init();
@@ -71,19 +73,16 @@ private:
     void StorePlaybackTaskHandle(TaskHandle_t task);
     void ClearPlaybackTask();
     bool HasPlaybackTask();
-    void SetCodecOpen(bool open);
-    bool IsCodecOpen();
     bool JoinPlaybackTask(uint32_t timeout_ms);
 
+    AudioOutputService& output_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t playback_task_ = nullptr;
     bool playback_task_active_ = false;
     bool initialized_ = false;
-    bool codec_open_ = false;
     bool stop_requested_ = false;
     bool pause_requested_ = false;
     int volume_ = 60;
-    void* dac_handle_ = nullptr;
     AudioPlaybackState state_;
 };
 

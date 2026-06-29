@@ -4,7 +4,10 @@
 #include "rodakos_adapters/file_service.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/audio_focus_service.h"
+#include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
+#include "phone_os/music_player_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_ui.h"
@@ -307,8 +310,11 @@ extern "C" void app_main(void) {
     static rodakos::FileService* file_service = rodakos::CreateFileService();
     ESP_LOGI(TAG, "File service ready - SD card will mount on demand");
 
-    static rodakos::AudioService audio_service;
-    ESP_LOGI(TAG, "Audio service ready - playback will open codec on demand");
+    static rodakos::AudioOutputService audio_output_service;
+    static rodakos::AudioService audio_service(audio_output_service);
+    static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
+    static rodakos::AudioFocusService audio_focus_service(music_player_service);
+    ESP_LOGI(TAG, "Audio services ready - focus and playback open codec on demand");
 
     static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
@@ -318,6 +324,9 @@ extern "C" void app_main(void) {
     services.SetWiFi(wifi);
     services.SetFileService(file_service);
     services.SetAudio(&audio_service);
+    services.SetAudioOutput(&audio_output_service);
+    services.SetMusicPlayer(&music_player_service);
+    services.SetAudioFocus(&audio_focus_service);
     services.SetWebFiles(&web_files_service);
 
     static PhoneSystem system(ui, services);
