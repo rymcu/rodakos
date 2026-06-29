@@ -175,6 +175,9 @@ LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size)
 LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, FreeFunc free_func)
     : free_func_(free_func) {
     std::memset(&image_dsc_, 0, sizeof(image_dsc_));
+    image_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    image_dsc_.header.cf = LV_COLOR_FORMAT_RAW_ALPHA;
+    image_dsc_.header.flags = 0;
     image_dsc_.data = static_cast<const uint8_t*>(data);
     image_dsc_.data_size = size;
 

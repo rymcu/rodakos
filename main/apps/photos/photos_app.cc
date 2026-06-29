@@ -24,8 +24,39 @@ constexpr int kGridCols = 3;
 constexpr int kGridRows = 3;
 constexpr lv_coord_t kThumbnailSize = 84;
 constexpr lv_coord_t kThumbnailGap = 8;
-constexpr int32_t kPhotoAreaWidth = 280;
-constexpr int32_t kPhotoAreaHeight = 180;
+constexpr int32_t kPhotoAreaWidth = 300;
+constexpr int32_t kPhotoAreaHeight = 146;
+constexpr lv_coord_t kPhotoAreaTop = 42;
+constexpr lv_coord_t kFullscreenTopBarHeight = 40;
+
+// UI 常量 - 参考 xiaozhi image_app 的圆形按钮设计
+constexpr lv_coord_t kRoundButtonSize = 38;
+
+lv_obj_t* CreateRoundButton(lv_obj_t* parent, const char* icon_text, bool is_primary) {
+    auto* button = lv_btn_create(parent);
+    lv_obj_remove_style_all(button);
+    lv_obj_set_size(button, kRoundButtonSize, kRoundButtonSize);
+    lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
+
+    // 使用全局主题颜色
+    lv_obj_set_style_bg_color(button, is_primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+
+    // 按压效果 - 轻微变亮 + 外发光 + 位移
+    lv_obj_set_style_bg_opa(button, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_set_style_outline_width(button, 2, LV_STATE_PRESSED);
+    lv_obj_set_style_outline_color(button, rodakos_theme_primary(), LV_STATE_PRESSED);
+    lv_obj_set_style_translate_y(button, 2, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_all(button, 0, 0);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* label = lv_label_create(button);
+    lv_label_set_text(label, icon_text);
+    lv_obj_set_style_text_font(label, PhoneIconFont(), 0);
+    lv_obj_set_style_text_color(label, rodakos_theme_text_primary(), 0);
+    lv_obj_center(label);
+    return button;
+}
 
 struct PhotoButtonPayload {
     PhotosApp* app = nullptr;
@@ -84,7 +115,7 @@ bool PhotosApp::OnCreate(PhoneAppContext& context) {
     root_ = lv_obj_create(ui_->screen());
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(root_, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(root_, rodakos_theme_bg_primary(), 0);
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(root_, 0, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
@@ -175,6 +206,9 @@ void PhotosApp::ShowFullScreen(size_t index) {
     const auto& photo = photos_[current_photo_index_];
     ESP_LOGI(TAG, "Loading photo: %s", photo.path.c_str());
 
+    // 更新文件名（左上角）
+    lv_label_set_text(filename_label_, photo.filename.c_str());
+
     // 使用 ImageLibrary 加载图片
     current_image_ = rodakos::ImageLibrary::LoadImageForDisplay(photo.path);
     if (current_image_ != nullptr) {
@@ -199,20 +233,17 @@ void PhotosApp::ShowFullScreen(size_t index) {
                  static_cast<unsigned>(header.cf),
                  static_cast<int>(scale));
 
-        auto image = std::move(current_image_);
         lv_image_set_src(photo_img_, nullptr);
-        current_image_ = std::move(image);
-        lv_obj_set_size(photo_img_, header.w, header.h);
+        lv_obj_set_size(photo_img_, kPhotoAreaWidth, kPhotoAreaHeight);
+        lv_image_set_inner_align(photo_img_, LV_IMAGE_ALIGN_CENTER);
         lv_image_set_scale(photo_img_, static_cast<uint32_t>(scale));
         lv_image_set_src(photo_img_, image_source);
-        lv_obj_align(photo_img_, LV_ALIGN_CENTER, 0, -10);
+        lv_obj_align(photo_img_, LV_ALIGN_TOP_MID, 0, kPhotoAreaTop);
     } else {
         ESP_LOGW(TAG, "Failed to load image: %s", photo.path.c_str());
         ShowImageLoadError(photo_img_, filename_label_, "Failed to load image");
         return;
     }
-
-    lv_label_set_text(filename_label_, photo.filename.c_str());
 }
 
 void PhotosApp::ShowGridView() {
@@ -239,7 +270,7 @@ void PhotosApp::CreateGridView() {
     grid_body_ = lv_obj_create(root_);
     lv_obj_remove_style_all(grid_body_);
     lv_obj_set_size(grid_body_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(grid_body_, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(grid_body_, rodakos_theme_bg_primary(), 0);
     lv_obj_set_style_bg_opa(grid_body_, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(grid_body_, 0, 0);
 
@@ -301,8 +332,12 @@ void PhotosApp::CreateGridView() {
         auto* btn = lv_btn_create(grid_container_);
         lv_obj_set_size(btn, kThumbnailSize, kThumbnailSize);
         lv_obj_set_style_bg_color(btn, rodakos_theme_bg_secondary(), 0);
-        lv_obj_set_style_radius(btn, 4, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
         lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_border_color(btn, rodakos_theme_bg_secondary(), 0);
+        lv_obj_set_style_border_color(btn, rodakos_theme_primary(), LV_STATE_PRESSED);
+        lv_obj_set_style_translate_y(btn, 1, LV_STATE_PRESSED);
 
         // TODO: 加载缩略图
         // auto* img = lv_img_create(btn);
@@ -330,6 +365,7 @@ void PhotosApp::CreateGridView() {
         lv_label_set_text(empty_label, "No photos found\n\nInsert SD card with photos");
         lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(empty_label, rodakos_theme_text_secondary(), 0);
+        lv_obj_set_style_text_font(empty_label, &phone_font_14, 0);
         lv_obj_center(empty_label);
     }
 }
@@ -338,78 +374,68 @@ void PhotosApp::CreateFullScreenView() {
     fullscreen_body_ = lv_obj_create(root_);
     lv_obj_remove_style_all(fullscreen_body_);
     lv_obj_set_size(fullscreen_body_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(fullscreen_body_, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(fullscreen_body_, rodakos_theme_bg_primary(), 0);
     lv_obj_set_style_bg_opa(fullscreen_body_, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(fullscreen_body_, 0, 0);
 
-    // 照片显示区域
-    photo_img_ = lv_image_create(fullscreen_body_);
-    lv_obj_set_size(photo_img_, kPhotoAreaWidth, kPhotoAreaHeight);
-    lv_obj_align(photo_img_, LV_ALIGN_CENTER, 0, -10);
-    lv_obj_set_style_bg_opa(photo_img_, LV_OPA_TRANSP, 0);
-    lv_image_set_inner_align(photo_img_, LV_IMAGE_ALIGN_CENTER);
+    auto* top_bar = lv_obj_create(fullscreen_body_);
+    lv_obj_remove_style_all(top_bar);
+    lv_obj_set_size(top_bar, LV_PCT(100), kFullscreenTopBarHeight);
+    lv_obj_set_style_bg_color(top_bar, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(top_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(top_bar, 12, 0);
+    lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 0);
 
-    // 文件名标签
-    filename_label_ = lv_label_create(fullscreen_body_);
-    lv_label_set_text(filename_label_, "");
-    lv_obj_set_width(filename_label_, 280);
-    lv_label_set_long_mode(filename_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(filename_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(filename_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(filename_label_, &phone_font_12, 0);
-    lv_obj_align(filename_label_, LV_ALIGN_BOTTOM_MID, 0, -40);
-
-    // 导航按钮容器
-    auto* nav_container = lv_obj_create(fullscreen_body_);
-    lv_obj_remove_style_all(nav_container);
-    lv_obj_set_size(nav_container, 280, 32);
-    lv_obj_align(nav_container, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_flex_flow(nav_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(nav_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // 返回按钮
-    auto* back_btn = lv_btn_create(nav_container);
-    lv_obj_set_size(back_btn, 80, 32);
-    lv_obj_set_style_bg_color(back_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(back_btn, 6, 0);
-
-    auto* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_color(back_label, rodakos_theme_text_primary(), 0);
-    lv_obj_center(back_label);
-
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    auto* close_btn = RodakosCreateHeaderIconButton(top_bar, FONT_AWESOME_ARROW_LEFT);
+    lv_obj_align(close_btn, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_event_cb(close_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->BackToGrid();
     }, LV_EVENT_CLICKED, this);
 
+    filename_label_ = lv_label_create(top_bar);
+    lv_label_set_text(filename_label_, "");
+    lv_obj_set_width(filename_label_, 236);
+    lv_label_set_long_mode(filename_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(filename_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(filename_label_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(filename_label_, &phone_font_14, 0);
+    lv_obj_align(filename_label_, LV_ALIGN_CENTER, 0, 0);
+
+    // 照片显示区域放在顶部栏和底部按钮之间，避免图片盖住控件。
+    photo_img_ = lv_image_create(fullscreen_body_);
+    lv_obj_set_size(photo_img_, kPhotoAreaWidth, kPhotoAreaHeight);
+    lv_obj_align(photo_img_, LV_ALIGN_TOP_MID, 0, kPhotoAreaTop);
+    lv_obj_set_style_bg_opa(photo_img_, LV_OPA_TRANSP, 0);
+    lv_image_set_inner_align(photo_img_, LV_IMAGE_ALIGN_CENTER);
+
+    // 导航按钮容器（底部居中，圆形按钮）
+    auto* controls = lv_obj_create(fullscreen_body_);
+    lv_obj_remove_style_all(controls);
+    lv_obj_set_size(controls, 220, 44);
+    lv_obj_align(controls, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_set_layout(controls, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(controls, 18, 0);
+    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
+
     // 上一张按钮
-    auto* prev_btn = lv_btn_create(nav_container);
-    lv_obj_set_size(prev_btn, 60, 32);
-    lv_obj_set_style_bg_color(prev_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(prev_btn, 6, 0);
-
-    auto* prev_label = lv_label_create(prev_btn);
-    lv_label_set_text(prev_label, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(prev_label, rodakos_theme_text_primary(), 0);
-    lv_obj_center(prev_label);
-
+    auto* prev_btn = CreateRoundButton(controls, FONT_AWESOME_BACKWARD_STEP, false);
     lv_obj_add_event_cb(prev_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->ShowPreviousPhoto();
     }, LV_EVENT_CLICKED, this);
 
+    // 返回网格按钮（中间，主按钮）
+    auto* back_btn = CreateRoundButton(controls, FONT_AWESOME_IMAGE, true);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
+        self->BackToGrid();
+    }, LV_EVENT_CLICKED, this);
+
     // 下一张按钮
-    auto* next_btn = lv_btn_create(nav_container);
-    lv_obj_set_size(next_btn, 60, 32);
-    lv_obj_set_style_bg_color(next_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(next_btn, 6, 0);
-
-    auto* next_label = lv_label_create(next_btn);
-    lv_label_set_text(next_label, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(next_label, rodakos_theme_text_primary(), 0);
-    lv_obj_center(next_label);
-
+    auto* next_btn = CreateRoundButton(controls, FONT_AWESOME_FORWARD_STEP, false);
     lv_obj_add_event_cb(next_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->ShowNextPhoto();
