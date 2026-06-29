@@ -18,6 +18,7 @@ struct WebFileSystemServiceState {
     bool running = false;
     bool busy = false;
     std::string url;
+    std::string token;
     std::string message;
     std::string last_file;
     size_t last_bytes = 0;
@@ -41,6 +42,7 @@ private:
     void SetBusy(bool busy, const std::string& file_name = "");
     void AddActiveBytes(size_t bytes);
     void CompleteUpload(const std::string& file_name, size_t bytes);
+    bool AuthenticateRequest(httpd_req_t* req) const;
 
     static esp_err_t IndexHandler(httpd_req_t* req);
     static esp_err_t ListHandler(httpd_req_t* req);
@@ -49,12 +51,12 @@ private:
     static esp_err_t MkdirHandler(httpd_req_t* req);
     static esp_err_t RenameHandler(httpd_req_t* req);
     static esp_err_t DeleteHandler(httpd_req_t* req);
-    static esp_err_t OptionsHandler(httpd_req_t* req);
 
     FileService* file_service_ = nullptr;
     httpd_handle_t server_ = nullptr;
     SemaphoreHandle_t mutex_ = nullptr;
     WebFileSystemServiceState state_;
+    std::string access_token_;
 };
 
 }  // namespace rodakos

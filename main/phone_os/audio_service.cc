@@ -173,14 +173,14 @@ bool AudioService::Init() {
 
 void AudioService::Deinit() {
     Stop();
-    JoinPlaybackTask(1500);
+    const bool playback_stopped = JoinPlaybackTask(1500);
 
-    if (codec_open_ && dac_handle_ != nullptr) {
+    if (playback_stopped && IsCodecOpen() && dac_handle_ != nullptr) {
         auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle_);
         if (handle->codec_dev != nullptr) {
             esp_codec_dev_close(handle->codec_dev);
         }
-        codec_open_ = false;
+        SetCodecOpen(false);
     }
 
     if (initialized_) {
@@ -202,7 +202,10 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
     }
 
     Stop();
-    JoinPlaybackTask(1500);
+    if (!JoinPlaybackTask(1500)) {
+        SetState(AudioPlaybackStatus::kError, "Previous playback busy");
+        return false;
+    }
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -217,19 +220,23 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
         xSemaphoreGive(mutex_);
     }
 
+    MarkPlaybackTaskStarting();
 #if CONFIG_SOC_CPU_CORES_NUM > 1
+    TaskHandle_t task_handle = nullptr;
     const BaseType_t task_ret = xTaskCreatePinnedToCore(
-        PlaybackTaskEntry, "audio_play", kTaskStackWords, this, 5, &playback_task_, 0);
+        PlaybackTaskEntry, "audio_play", kTaskStackWords, this, 5, &task_handle, 0);
 #else
+    TaskHandle_t task_handle = nullptr;
     const BaseType_t task_ret = xTaskCreate(
-        PlaybackTaskEntry, "audio_play", kTaskStackWords, this, 5, &playback_task_);
+        PlaybackTaskEntry, "audio_play", kTaskStackWords, this, 5, &task_handle);
 #endif
     if (task_ret != pdPASS) {
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         SetState(AudioPlaybackStatus::kError, "No memory for playback task");
         ESP_LOGE(TAG, "Failed to create playback task");
         return false;
     }
+    StorePlaybackTaskHandle(task_handle);
 
     return true;
 }
@@ -277,11 +284,14 @@ void AudioService::TogglePause() {
 }
 
 bool AudioService::SetVolume(int volume) {
-    volume_ = std::clamp(volume, 0, 100);
+    const int clamped = std::clamp(volume, 0, 100);
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        volume_ = clamped;
         state_.volume = volume_;
         xSemaphoreGive(mutex_);
+    } else {
+        volume_ = clamped;
     }
 
     if (initialized_ && dac_handle_ != nullptr) {
@@ -295,6 +305,16 @@ bool AudioService::SetVolume(int volume) {
         }
     }
     return true;
+}
+
+int AudioService::volume() const {
+    if (mutex_ == nullptr) {
+        return volume_;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const int volume = volume_;
+    xSemaphoreGive(mutex_);
+    return volume;
 }
 
 AudioPlaybackState AudioService::GetState() {
@@ -328,7 +348,7 @@ void AudioService::PlaybackTask() {
     if (fp == nullptr) {
         ESP_LOGE(TAG, "Failed to open %s", path.c_str());
         SetState(AudioPlaybackStatus::kError, "Cannot open file");
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         vTaskDelete(nullptr);
         return;
     }
@@ -337,7 +357,7 @@ void AudioService::PlaybackTask() {
     if (!ReadWavHeader(fp, wav)) {
         fclose(fp);
         SetState(AudioPlaybackStatus::kError, "Unsupported WAV");
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         vTaskDelete(nullptr);
         return;
     }
@@ -346,7 +366,7 @@ void AudioService::PlaybackTask() {
     if (handle == nullptr || handle->codec_dev == nullptr) {
         fclose(fp);
         SetState(AudioPlaybackStatus::kError, "Audio DAC unavailable");
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         vTaskDelete(nullptr);
         return;
     }
@@ -362,11 +382,11 @@ void AudioService::PlaybackTask() {
         fclose(fp);
         ESP_LOGE(TAG, "Failed to open codec: %d", ret);
         SetState(AudioPlaybackStatus::kError, "Codec open failed");
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         vTaskDelete(nullptr);
         return;
     }
-    codec_open_ = true;
+    SetCodecOpen(true);
     SetVolume(volume_);
 
     if (mutex_ != nullptr) {
@@ -387,9 +407,9 @@ void AudioService::PlaybackTask() {
     if (buffer == nullptr) {
         fclose(fp);
         esp_codec_dev_close(handle->codec_dev);
-        codec_open_ = false;
+        SetCodecOpen(false);
         SetState(AudioPlaybackStatus::kError, "No audio buffer");
-        playback_task_ = nullptr;
+        ClearPlaybackTask();
         vTaskDelete(nullptr);
         return;
     }
@@ -443,7 +463,7 @@ void AudioService::PlaybackTask() {
     heap_caps_free(buffer);
     fclose(fp);
     esp_codec_dev_close(handle->codec_dev);
-    codec_open_ = false;
+    SetCodecOpen(false);
 
     if (failed) {
         SetState(AudioPlaybackStatus::kError, "Playback failed");
@@ -455,7 +475,7 @@ void AudioService::PlaybackTask() {
     }
 
     ESP_LOGI(TAG, "Playback ended: %s", path.c_str());
-    playback_task_ = nullptr;
+    ClearPlaybackTask();
     vTaskDelete(nullptr);
 }
 
@@ -482,13 +502,70 @@ void AudioService::UpdateProgress(size_t bytes_played, size_t data_bytes) {
     }
 }
 
-void AudioService::JoinPlaybackTask(uint32_t timeout_ms) {
+void AudioService::MarkPlaybackTaskStarting() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        playback_task_active_ = true;
+        playback_task_ = nullptr;
+        xSemaphoreGive(mutex_);
+    }
+}
+
+void AudioService::StorePlaybackTaskHandle(TaskHandle_t task) {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (playback_task_active_) {
+            playback_task_ = task;
+        }
+        xSemaphoreGive(mutex_);
+    }
+}
+
+void AudioService::ClearPlaybackTask() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        playback_task_active_ = false;
+        playback_task_ = nullptr;
+        xSemaphoreGive(mutex_);
+    }
+}
+
+bool AudioService::HasPlaybackTask() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool has_task = playback_task_active_;
+    xSemaphoreGive(mutex_);
+    return has_task;
+}
+
+void AudioService::SetCodecOpen(bool open) {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        codec_open_ = open;
+        xSemaphoreGive(mutex_);
+    }
+}
+
+bool AudioService::IsCodecOpen() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool open = codec_open_;
+    xSemaphoreGive(mutex_);
+    return open;
+}
+
+bool AudioService::JoinPlaybackTask(uint32_t timeout_ms) {
     const int delay_ms = 20;
     uint32_t waited = 0;
-    while (playback_task_ != nullptr && waited < timeout_ms) {
+    while (HasPlaybackTask() && waited < timeout_ms) {
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
         waited += delay_ms;
     }
+    return !HasPlaybackTask();
 }
 
 }  // namespace rodakos

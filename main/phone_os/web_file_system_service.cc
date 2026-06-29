@@ -6,11 +6,13 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <inttypes.h>
 #include <string>
 #include <vector>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_random.h>
 
 namespace rodakos {
 namespace {
@@ -18,6 +20,7 @@ constexpr const char* TAG = "WebFiles";
 constexpr uint16_t kWebFilePort = 8080;
 constexpr size_t kIoBufferSize = 4096;
 constexpr size_t kMaxUploadBytes = 100 * 1024 * 1024;
+constexpr int kMaxUploadReceiveTimeouts = 90;
 
 const char kIndexHtml[] =
     "<!doctype html><html><head><meta charset=\"utf-8\">"
@@ -41,25 +44,26 @@ const char kIndexHtml[] =
     "<progress id=\"bar\" value=\"0\" max=\"100\" hidden></progress><div id=\"status\"></div>"
     "<table><thead><tr><th>Name</th><th class=\"hide-sm\">Size</th><th class=\"actions\">Actions</th></tr></thead><tbody id=\"list\"></tbody></table>"
     "<script>"
-    "let cwd='/';const $=id=>document.getElementById(id);"
+    "let cwd='/';const $=id=>document.getElementById(id);const token=new URLSearchParams(location.search).get('token')||'';"
     "function enc(v){return encodeURIComponent(v)}"
+    "function auth(url){return url+(url.includes('?')?'&':'?')+'token='+enc(token)}"
     "function join(a,b){if(a==='/'||!a)return '/'+b;return a+'/'+b}"
     "function parent(p){if(p==='/'||!p)return '/';let i=p.lastIndexOf('/');return i<=0?'/':p.slice(0,i)}"
     "function size(n){if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';return(n/1048576).toFixed(1)+' MB'}"
     "async function textFetch(url,opt){let r=await fetch(url,opt);let t=await r.text();if(!r.ok)throw new Error(t||r.statusText);return t}"
     "async function load(p=cwd){cwd=p;$('path').textContent=cwd;$('status').textContent='Loading...';"
-    "try{let r=await fetch('/api/list?path='+enc(cwd));if(!r.ok)throw new Error(await r.text());let data=await r.json();"
+    "try{let r=await fetch(auth('/api/list?path='+enc(cwd)));if(!r.ok)throw new Error(await r.text());let data=await r.json();"
     "let rows=data.entries.map(e=>`<tr><td class=\"name\" data-name=\"${e.name}\" data-dir=\"${e.dir?1:0}\">${e.dir?'[DIR] ':'[FILE] '}${e.name}</td><td class=\"hide-sm muted\">${e.dir?'Folder':size(e.size)}</td><td class=\"actions\">${e.dir?'':`<button data-act=\"download\" data-name=\"${e.name}\">Download</button>`}<button data-act=\"rename\" data-name=\"${e.name}\">Rename</button><button class=\"danger\" data-act=\"delete\" data-name=\"${e.name}\">Delete</button></td></tr>`).join('');"
     "$('list').innerHTML=rows||'<tr><td colspan=\"3\" class=\"muted\">Empty folder</td></tr>';$('status').textContent='';"
     "}catch(e){$('status').textContent='List failed: '+e.message}}"
     "$('list').onclick=async ev=>{let t=ev.target;if(t.dataset.dir==='1')return load(join(cwd,t.dataset.name));"
-    "if(t.dataset.act==='download')location.href='/api/download?path='+enc(join(cwd,t.dataset.name));"
-    "if(t.dataset.act==='rename'){let old=join(cwd,t.dataset.name),name=prompt('Rename to',t.dataset.name);if(name)try{await textFetch('/api/rename?from='+enc(old)+'&to='+enc(join(cwd,name)),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}"
-    "if(t.dataset.act==='delete'){let p=join(cwd,t.dataset.name);if(confirm('Delete '+p+'?'))try{await textFetch('/api/delete?path='+enc(p),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}};"
+    "if(t.dataset.act==='download')location.href=auth('/api/download?path='+enc(join(cwd,t.dataset.name)));"
+    "if(t.dataset.act==='rename'){let old=join(cwd,t.dataset.name),name=prompt('Rename to',t.dataset.name);if(name)try{await textFetch(auth('/api/rename?from='+enc(old)+'&to='+enc(join(cwd,name))),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}"
+    "if(t.dataset.act==='delete'){let p=join(cwd,t.dataset.name);if(confirm('Delete '+p+'?'))try{await textFetch(auth('/api/delete?path='+enc(p)),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}};"
     "$('up').onclick=()=>load(parent(cwd));$('refresh').onclick=()=>load();"
-    "$('mkdir').onclick=async()=>{let name=prompt('Folder name');if(!name)return;try{await textFetch('/api/mkdir?path='+enc(join(cwd,name)),{method:'POST'});load()}catch(e){$('status').textContent=e.message}};"
+    "$('mkdir').onclick=async()=>{let name=prompt('Folder name');if(!name)return;try{await textFetch(auth('/api/mkdir?path='+enc(join(cwd,name))),{method:'POST'});load()}catch(e){$('status').textContent=e.message}};"
     "$('upload').onclick=()=>{let file=$('file').files[0];if(!file){$('status').textContent='Choose a file first.';return}"
-    "let xhr=new XMLHttpRequest(),dest=join(cwd,file.name);xhr.open('POST','/api/upload?path='+enc(dest));xhr.setRequestHeader('Content-Type','application/octet-stream');"
+    "let xhr=new XMLHttpRequest(),dest=join(cwd,file.name);xhr.open('POST',auth('/api/upload?path='+enc(dest)));xhr.setRequestHeader('Content-Type','application/octet-stream');"
     "$('upload').disabled=true;$('bar').hidden=false;$('bar').value=0;$('status').textContent='Uploading '+file.name+'...';"
     "xhr.upload.onprogress=e=>{if(e.lengthComputable)$('bar').value=Math.round(e.loaded*100/e.total)};"
     "xhr.onload=()=>{$('upload').disabled=false;$('bar').hidden=true;if(xhr.status>=200&&xhr.status<300){$('status').textContent='Uploaded '+dest;load()}else $('status').textContent=xhr.responseText||('Upload failed: '+xhr.status)};"
@@ -237,10 +241,15 @@ bool GetQueryValue(httpd_req_t* req, const char* key, std::string& value) {
     return true;
 }
 
+std::string GenerateAccessToken() {
+    char token[17] = {};
+    std::snprintf(token, sizeof(token), "%08" PRIx32 "%08" PRIx32, esp_random(), esp_random());
+    return token;
+}
+
 void SendText(httpd_req_t* req, int status_code, const char* status, const char* text) {
     httpd_resp_set_status(req, status);
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
     ESP_LOGW(TAG, "HTTP %d: %s", status_code, text);
 }
@@ -312,7 +321,6 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
         {"/api/mkdir", HTTP_POST, MkdirHandler},
         {"/api/rename", HTTP_POST, RenameHandler},
         {"/api/delete", HTTP_POST, DeleteHandler},
-        {"/*", HTTP_OPTIONS, OptionsHandler},
     };
 
     for (const auto& route : routes) {
@@ -333,8 +341,10 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        access_token_ = GenerateAccessToken();
         state_.running = true;
-        state_.url = "http://" + ip_address + ":" + std::to_string(kWebFilePort) + "/";
+        state_.token = access_token_;
+        state_.url = "http://" + ip_address + ":" + std::to_string(kWebFilePort) + "/?token=" + access_token_;
         state_.message = "Listening";
         xSemaphoreGive(mutex_);
     }
@@ -353,7 +363,9 @@ void WebFileSystemService::Stop() {
         state_.busy = false;
         state_.active_bytes = 0;
         state_.url.clear();
+        state_.token.clear();
         state_.message = "Stopped";
+        access_token_.clear();
         xSemaphoreGive(mutex_);
     }
     ESP_LOGI(TAG, "Web file system stopped");
@@ -438,7 +450,33 @@ void WebFileSystemService::CompleteUpload(const std::string& file_name, size_t b
     }
 }
 
+bool WebFileSystemService::AuthenticateRequest(httpd_req_t* req) const {
+    std::string token;
+    if (!GetQueryValue(req, "token", token)) {
+        SendText(req, 401, "401 Unauthorized", "Missing access token");
+        return false;
+    }
+
+    if (mutex_ == nullptr) {
+        SendText(req, 503, "503 Service Unavailable", "Service unavailable");
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool valid = state_.running && !access_token_.empty() && token == access_token_;
+    xSemaphoreGive(mutex_);
+    if (!valid) {
+        SendText(req, 401, "401 Unauthorized", "Invalid access token");
+        return false;
+    }
+    return true;
+}
+
 esp_err_t WebFileSystemService::IndexHandler(httpd_req_t* req) {
+    auto* self = static_cast<WebFileSystemService*>(req->user_ctx);
+    if (self == nullptr || !self->AuthenticateRequest(req)) {
+        return ESP_FAIL;
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, kIndexHtml, HTTPD_RESP_USE_STRLEN);
@@ -449,6 +487,9 @@ esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {
     std::string path;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!GetQueryValue(req, "path", path) || !IsSafePath(path, true)) {
@@ -484,7 +525,6 @@ esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_send(req, json.c_str(), json.size());
 }
 
@@ -493,6 +533,9 @@ esp_err_t WebFileSystemService::DownloadHandler(httpd_req_t* req) {
     std::string path;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
@@ -521,7 +564,6 @@ esp_err_t WebFileSystemService::DownloadHandler(httpd_req_t* req) {
     std::string disposition = "attachment; filename=\"" + HeaderFileName(path) + "\"";
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Disposition", disposition.c_str());
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
     esp_err_t ret = ESP_OK;
     while (true) {
@@ -551,6 +593,9 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
     std::string upload_path;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (req->content_len <= 0 || req->content_len > kMaxUploadBytes) {
@@ -596,13 +641,18 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
     int remaining = req->content_len;
     size_t written_total = 0;
     bool failed = false;
+    int timeout_count = 0;
     while (remaining > 0) {
         const int to_read = std::min<int>(remaining, static_cast<int>(kIoBufferSize));
         const int received = httpd_req_recv(req, reinterpret_cast<char*>(buffer), to_read);
         if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT && ++timeout_count <= kMaxUploadReceiveTimeouts) {
+                continue;
+            }
             failed = true;
             break;
         }
+        timeout_count = 0;
 
         const size_t written = std::fwrite(buffer, 1, static_cast<size_t>(received), fp);
         if (written != static_cast<size_t>(received)) {
@@ -629,7 +679,6 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
     self->CompleteUpload(upload_path, written_total);
     ESP_LOGI(TAG, "Upload complete: %s (%zu bytes)", upload_path.c_str(), written_total);
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, "OK");
 }
 
@@ -638,6 +687,9 @@ esp_err_t WebFileSystemService::MkdirHandler(httpd_req_t* req) {
     std::string path;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
@@ -658,7 +710,6 @@ esp_err_t WebFileSystemService::MkdirHandler(httpd_req_t* req) {
         SendText(req, 500, "500 Internal Server Error", "Cannot create folder");
         return ESP_FAIL;
     }
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, "OK");
 }
 
@@ -668,6 +719,9 @@ esp_err_t WebFileSystemService::RenameHandler(httpd_req_t* req) {
     std::string to;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!GetQueryValue(req, "from", from) || !GetQueryValue(req, "to", to) ||
@@ -693,7 +747,6 @@ esp_err_t WebFileSystemService::RenameHandler(httpd_req_t* req) {
         SendText(req, 500, "500 Internal Server Error", "Rename failed");
         return ESP_FAIL;
     }
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, "OK");
 }
 
@@ -702,6 +755,9 @@ esp_err_t WebFileSystemService::DeleteHandler(httpd_req_t* req) {
     std::string path;
     if (self == nullptr || self->file_service_ == nullptr) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
+        return ESP_FAIL;
+    }
+    if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
@@ -726,15 +782,7 @@ esp_err_t WebFileSystemService::DeleteHandler(httpd_req_t* req) {
         SendText(req, 500, "500 Internal Server Error", "Delete failed");
         return ESP_FAIL;
     }
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, "OK");
-}
-
-esp_err_t WebFileSystemService::OptionsHandler(httpd_req_t* req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
-    return httpd_resp_send(req, nullptr, 0);
 }
 
 }  // namespace rodakos
