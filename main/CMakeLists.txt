@@ -10,6 +10,7 @@ set(SOURCES
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"
     "phone_os/phone_system.cc"
+    "phone_os/audio_output_service.cc"
     "phone_os/audio_service.cc"
     "phone_os/time_service.cc"
     "phone_os/web_file_system_service.cc"
