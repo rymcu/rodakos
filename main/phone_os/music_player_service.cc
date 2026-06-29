@@ -336,6 +336,25 @@ bool MusicPlayerService::TogglePlayPause() {
     return index >= 0 && PlayTrack(static_cast<size_t>(index));
 }
 
+void MusicPlayerService::Pause() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        queue_paused_ = true;
+        completion_handled_ = true;
+        xSemaphoreGive(mutex_);
+    }
+    audio_.Pause();
+}
+
+void MusicPlayerService::Resume() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        queue_paused_ = false;
+        xSemaphoreGive(mutex_);
+    }
+    audio_.Resume();
+}
+
 void MusicPlayerService::Stop() {
     audio_.Stop();
     if (mutex_ != nullptr) {

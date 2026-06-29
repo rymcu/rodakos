@@ -55,6 +55,8 @@ public:
     bool PlayPrevious();
     bool PlayNext();
     bool TogglePlayPause();
+    void Pause();
+    void Resume();
     void Stop();
     bool Refresh();
 
