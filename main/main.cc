@@ -5,6 +5,7 @@
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/time_service.h"
+#include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/phone_fonts.h"
@@ -305,10 +306,14 @@ extern "C" void app_main(void) {
     static rodakos::FileService* file_service = rodakos::CreateFileService();
     ESP_LOGI(TAG, "File service ready - SD card will mount on demand");
 
+    static rodakos::WebFileSystemService web_files_service(file_service);
+    ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
+
     static PhoneServices services;
     services.SetBacklight(&backlight);
     services.SetWiFi(wifi);
     services.SetFileService(file_service);
+    services.SetWebFiles(&web_files_service);
 
     static PhoneSystem system(ui, services);
     if (!system.Start()) {

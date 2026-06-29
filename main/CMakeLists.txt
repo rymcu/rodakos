@@ -11,6 +11,7 @@ set(SOURCES
     "phone_os/phone_navigation.cc"
     "phone_os/phone_system.cc"
     "phone_os/time_service.cc"
+    "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/phone_fonts.cc"
     "phone_ui/phone_theme.cc"
@@ -38,6 +39,7 @@ idf_component_register(
         esp_lvgl_port
         nvs_flash
         esp_wifi
+        esp_http_server
         esp_netif
         lwip
         esp_board_manager

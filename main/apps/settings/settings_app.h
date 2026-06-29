@@ -17,6 +17,7 @@ enum class SettingsPage {
     kWiFiList,    // WiFi 列表页面
     kWiFiDetail,  // WiFi 详情页面
     kDateTime,    // 日期与时间页面
+    kWebFiles,    // Web 文件管理页面
 };
 
 class SettingsApp final : public PhoneApp {
@@ -36,6 +37,10 @@ private:
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
+    void CreateWebFilesPage();
+    void UpdateWebFilesPage();
+    void StartWebFiles();
+    void StopWebFiles();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -85,6 +90,14 @@ private:
     lv_timer_t* time_sync_timer_ = nullptr;
     bool time_sync_in_progress_ = false;
     uint32_t time_sync_poll_count_ = 0;
+
+    // Web 上传页面控件
+    lv_obj_t* web_upload_body_ = nullptr;
+    lv_obj_t* web_upload_status_label_ = nullptr;
+    lv_obj_t* web_upload_url_label_ = nullptr;
+    lv_obj_t* web_upload_last_label_ = nullptr;
+    lv_obj_t* web_upload_start_btn_ = nullptr;
+    lv_obj_t* web_upload_stop_btn_ = nullptr;
 
     // WiFi 页面控件
     lv_obj_t* wifi_body_ = nullptr;

@@ -5,6 +5,7 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/time_service.h"
+#include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_components.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/phone_fonts.h"
@@ -298,6 +299,7 @@ void SettingsApp::OnDestroy() {
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
     datetime_body_ = nullptr;
+    web_upload_body_ = nullptr;
     brightness_label_ = nullptr;
     brightness_slider_ = nullptr;
     std::fill(std::begin(theme_buttons_), std::end(theme_buttons_), nullptr);
@@ -314,6 +316,11 @@ void SettingsApp::OnDestroy() {
     time_sync_timer_ = nullptr;
     time_sync_in_progress_ = false;
     time_sync_poll_count_ = 0;
+    web_upload_status_label_ = nullptr;
+    web_upload_url_label_ = nullptr;
+    web_upload_last_label_ = nullptr;
+    web_upload_start_btn_ = nullptr;
+    web_upload_stop_btn_ = nullptr;
     wifi_status_label_ = nullptr;
     wifi_list_container_ = nullptr;
     detail_ssid_label_ = nullptr;
@@ -345,6 +352,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
     }
     if (datetime_body_ != nullptr) {
         lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (web_upload_body_ != nullptr) {
+        lv_obj_add_flag(web_upload_body_, LV_OBJ_FLAG_HIDDEN);
     }
 
     // 显示目标页面
@@ -388,6 +398,17 @@ void SettingsApp::ShowPage(SettingsPage page) {
             if (header_title_label_ != nullptr) {
                 lv_label_set_text(header_title_label_, "Date & Time");
             }
+            break;
+
+        case SettingsPage::kWebFiles:
+            if (web_upload_body_ == nullptr) {
+                CreateWebFilesPage();
+            }
+            lv_obj_clear_flag(web_upload_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "Web Files");
+            }
+            UpdateWebFilesPage();
             break;
     }
 }
@@ -573,8 +594,32 @@ void SettingsApp::CreateMainPage() {
         self->ShowPage(SettingsPage::kDateTime);
     }, LV_EVENT_CLICKED, this);
 
+    // ===== Web 上传入口 =====
+    auto* upload_card = CreateSettingCard(main_body_, 316);
+    lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
+
+    auto* upload_icon = lv_label_create(upload_card);
+    lv_label_set_text(upload_icon, FONT_AWESOME_CLOUD);
+    lv_obj_set_style_text_color(upload_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(upload_icon, PhoneIconFont(), 0);
+    lv_obj_align(upload_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* upload_title = CreateSettingLabel(upload_card, "Web Files");
+    lv_obj_align(upload_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* upload_arrow = lv_label_create(upload_card);
+    lv_label_set_text(upload_arrow, ">");
+    lv_obj_set_style_text_color(upload_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(upload_arrow, &phone_font_18, 0);
+    lv_obj_align(upload_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(upload_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kWebFiles);
+    }, LV_EVENT_CLICKED, this);
+
     // ===== USB 磁盘模式入口 =====
-    auto* usb_card = CreateSettingCard(main_body_, 316);
+    auto* usb_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
     auto* usb_icon = lv_label_create(usb_card);
@@ -740,13 +785,179 @@ void SettingsApp::ShowUsbDiskEnablePage() {
     lv_timer_set_repeat_count(usb_disk_restart_timer_, 1);
 }
 
+void SettingsApp::CreateWebFilesPage() {
+    web_upload_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
+    lv_obj_remove_style_all(web_upload_body_);
+    lv_obj_set_size(web_upload_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
+    lv_obj_set_pos(web_upload_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
+    lv_obj_set_style_bg_opa(web_upload_body_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(web_upload_body_, 0, 0);
+    lv_obj_add_flag(web_upload_body_, LV_OBJ_FLAG_HIDDEN);
+
+    auto* status_card = CreateSettingCard(web_upload_body_, 4, 72);
+    lv_obj_set_style_pad_all(status_card, 10, 0);
+
+    auto* status_icon = lv_label_create(status_card);
+    lv_label_set_text(status_icon, FONT_AWESOME_CLOUD);
+    lv_obj_set_style_text_color(status_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
+    lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* status_title = CreateSettingLabel(status_card, "File service", true);
+    lv_obj_set_style_text_font(status_title, &phone_font_12, 0);
+    lv_obj_align(status_title, LV_ALIGN_TOP_LEFT, 32, 0);
+
+    web_upload_status_label_ = CreateSettingLabel(status_card, "Stopped", false);
+    lv_obj_set_width(web_upload_status_label_, 240);
+    lv_label_set_long_mode(web_upload_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(web_upload_status_label_, LV_ALIGN_TOP_LEFT, 32, 22);
+
+    web_upload_url_label_ = CreateSettingLabel(status_card, "Start to show URL", true);
+    lv_obj_set_width(web_upload_url_label_, 240);
+    lv_label_set_long_mode(web_upload_url_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_align(web_upload_url_label_, LV_ALIGN_TOP_LEFT, 32, 42);
+
+    auto* last_card = CreateSettingCard(web_upload_body_, 84, 50);
+    lv_obj_set_style_pad_all(last_card, 10, 0);
+
+    auto* last_title = CreateSettingLabel(last_card, "Last upload", true);
+    lv_obj_set_style_text_font(last_title, &phone_font_12, 0);
+    lv_obj_align(last_title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    web_upload_last_label_ = CreateSettingLabel(last_card, "None", false);
+    lv_obj_set_width(web_upload_last_label_, 276);
+    lv_label_set_long_mode(web_upload_last_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(web_upload_last_label_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    auto* controls = lv_obj_create(web_upload_body_);
+    lv_obj_remove_style_all(controls);
+    lv_obj_set_size(controls, 300, 38);
+    lv_obj_set_pos(controls, 10, 148);
+    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
+
+    web_upload_start_btn_ = lv_btn_create(controls);
+    lv_obj_set_size(web_upload_start_btn_, 142, 34);
+    lv_obj_set_style_bg_color(web_upload_start_btn_, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(web_upload_start_btn_, 6, 0);
+    lv_obj_set_style_shadow_width(web_upload_start_btn_, 0, 0);
+    auto* start_label = lv_label_create(web_upload_start_btn_);
+    lv_label_set_text(start_label, "Start");
+    lv_obj_set_style_text_color(start_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(start_label, &phone_font_12, 0);
+    lv_obj_center(start_label);
+    lv_obj_add_event_cb(web_upload_start_btn_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->StartWebFiles();
+    }, LV_EVENT_CLICKED, this);
+
+    web_upload_stop_btn_ = lv_btn_create(controls);
+    lv_obj_set_size(web_upload_stop_btn_, 142, 34);
+    lv_obj_set_style_bg_color(web_upload_stop_btn_, rodakos_theme_error(), 0);
+    lv_obj_set_style_radius(web_upload_stop_btn_, 6, 0);
+    lv_obj_set_style_shadow_width(web_upload_stop_btn_, 0, 0);
+    auto* stop_label = lv_label_create(web_upload_stop_btn_);
+    lv_label_set_text(stop_label, "Stop");
+    lv_obj_set_style_text_color(stop_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(stop_label, &phone_font_12, 0);
+    lv_obj_center(stop_label);
+    lv_obj_add_event_cb(web_upload_stop_btn_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->StopWebFiles();
+    }, LV_EVENT_CLICKED, this);
+
+    UpdateWebFilesPage();
+}
+
+void SettingsApp::UpdateWebFilesPage() {
+    auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
+    if (web_files == nullptr || web_upload_status_label_ == nullptr) {
+        return;
+    }
+
+    const auto state = web_files->GetState();
+    const std::string status = state.running
+        ? (state.busy ? "Uploading..." : "Running")
+        : "Stopped";
+    lv_label_set_text(web_upload_status_label_, status.c_str());
+    lv_label_set_text(web_upload_url_label_, state.running ? state.url.c_str() : state.message.c_str());
+
+    if (state.last_file.empty()) {
+        lv_label_set_text(web_upload_last_label_, "None");
+    } else {
+        char text[220] = {};
+        std::snprintf(text, sizeof(text), "%s (%u KB)",
+                      state.last_file.c_str(),
+                      static_cast<unsigned>((state.last_bytes + 1023) / 1024));
+        lv_label_set_text(web_upload_last_label_, text);
+    }
+
+    if (web_upload_start_btn_ != nullptr) {
+        if (state.running) {
+            lv_obj_add_state(web_upload_start_btn_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_state(web_upload_start_btn_, LV_STATE_DISABLED);
+        }
+    }
+    if (web_upload_stop_btn_ != nullptr) {
+        if (state.running) {
+            lv_obj_clear_state(web_upload_stop_btn_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(web_upload_stop_btn_, LV_STATE_DISABLED);
+        }
+    }
+}
+
+void SettingsApp::StartWebFiles() {
+    auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
+    auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
+    if (wifi == nullptr || web_files == nullptr) {
+        ui_->ShowToastUnlocked("Web files unavailable");
+        return;
+    }
+    if (wifi->GetStatus() != WiFiStatus::kConnected || wifi->GetIPAddress().empty()) {
+        ui_->ShowToastUnlocked("Connect WiFi first");
+        if (web_upload_status_label_ != nullptr) {
+            lv_label_set_text(web_upload_status_label_, "WiFi not connected");
+        }
+        return;
+    }
+
+    if (web_files->Start(wifi->GetIPAddress())) {
+        const auto state = web_files->GetState();
+        ui_->ShowToastUnlocked("Web files started");
+        if (web_upload_url_label_ != nullptr) {
+            lv_label_set_text(web_upload_url_label_, state.url.c_str());
+        }
+    } else {
+        const auto state = web_files->GetState();
+        ui_->ShowToastUnlocked("Web files failed");
+        if (web_upload_status_label_ != nullptr) {
+            lv_label_set_text(web_upload_status_label_, state.message.c_str());
+        }
+    }
+    UpdateWebFilesPage();
+}
+
+void SettingsApp::StopWebFiles() {
+    auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
+    if (web_files == nullptr) {
+        return;
+    }
+    web_files->Stop();
+    ui_->ShowToastUnlocked("Web files stopped");
+    UpdateWebFilesPage();
+}
+
 void SettingsApp::NavigateBack() {
     if (current_page_ == SettingsPage::kWiFiDetail) {
         ShowPage(SettingsPage::kWiFiList);
         return;
     }
     if (current_page_ == SettingsPage::kWiFiList ||
-        current_page_ == SettingsPage::kDateTime) {
+        current_page_ == SettingsPage::kDateTime ||
+        current_page_ == SettingsPage::kWebFiles) {
         ShowPage(SettingsPage::kMain);
         return;
     }

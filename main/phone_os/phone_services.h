@@ -5,6 +5,7 @@ class WiFiAdapter;
 
 namespace rodakos {
 class FileService;
+class WebFileSystemService;
 }
 
 class PhoneServices {
@@ -18,8 +19,12 @@ public:
     void SetFileService(rodakos::FileService* file_service) { file_service_ = file_service; }
     rodakos::FileService* file_service() { return file_service_; }
 
+    void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
+    rodakos::WebFileSystemService* web_files() { return web_files_; }
+
 private:
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
     rodakos::FileService* file_service_ = nullptr;
+    rodakos::WebFileSystemService* web_files_ = nullptr;
 };
