@@ -23,8 +23,9 @@ const char* TriggerName(VoiceAssistantTrigger trigger) {
 
 }  // namespace
 
-VoiceAssistantService::VoiceAssistantService(AudioFocusService& audio_focus)
-    : audio_focus_(audio_focus) {
+VoiceAssistantService::VoiceAssistantService(AudioFocusService& audio_focus,
+                                             VoiceAssistantTransport& transport)
+    : audio_focus_(audio_focus), transport_(transport) {
     mutex_ = xSemaphoreCreateMutex();
 }
 
@@ -73,14 +74,27 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (focus_active_) {
+    const bool already_active = focus_active_ && transport_active_;
+    if (already_active) {
         trigger_ = trigger;
         last_wake_word_ = wake_word;
-        SetPhaseLocked(VoiceAssistantPhase::kListening, "Listening");
-        xSemaphoreGive(mutex_);
-        return true;
     }
     xSemaphoreGive(mutex_);
+
+    if (already_active) {
+        if (trigger == VoiceAssistantTrigger::kWakeWord && !wake_word.empty()) {
+            if (!transport_.SendWakeWordDetected(wake_word)) {
+                MarkError(transport_.last_error());
+                return false;
+            }
+        }
+        if (!transport_.SendStartListening(VoiceListeningMode::kAutoStop)) {
+            MarkError(transport_.last_error());
+            return false;
+        }
+        MarkListening("Listening");
+        return true;
+    }
 
     AudioFocusRequest request;
     request.owner = kFocusOwner;
@@ -98,10 +112,15 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     focus_token_ = token;
     trigger_ = trigger;
     last_wake_word_ = wake_word;
-    SetPhaseLocked(VoiceAssistantPhase::kListening,
-                   trigger == VoiceAssistantTrigger::kWakeWord ? "Wake word accepted" : "Listening");
+    SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     xSemaphoreGive(mutex_);
 
+    if (!OpenTransportForInteraction(trigger, wake_word)) {
+        MarkError(transport_.last_error());
+        return false;
+    }
+
+    MarkListening(trigger == VoiceAssistantTrigger::kWakeWord ? "Wake word accepted" : "Listening");
     ESP_LOGI(TAG, "Interaction started: trigger=%s focus_token=%" PRIu32,
              TriggerName(trigger), token);
     return true;
@@ -110,18 +129,25 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
 void VoiceAssistantService::StopInteraction() {
     uint32_t token = 0;
     bool should_release = false;
+    bool should_stop_transport = false;
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         token = focus_token_;
         should_release = focus_active_;
+        should_stop_transport = transport_active_;
         focus_active_ = false;
+        transport_active_ = false;
         focus_token_ = 0;
         phase_ = VoiceAssistantPhase::kIdle;
         message_ = "Ready";
         xSemaphoreGive(mutex_);
     }
 
+    if (should_stop_transport) {
+        transport_.SendStopListening();
+        transport_.CloseAudioChannel();
+    }
     ReleaseFocusIfNeeded(token, should_release);
 }
 
@@ -161,11 +187,13 @@ void VoiceAssistantService::MarkError(const char* message) {
         token = focus_token_;
         should_release = focus_active_;
         focus_active_ = false;
+        transport_active_ = false;
         focus_token_ = 0;
         SetPhaseLocked(VoiceAssistantPhase::kError, message != nullptr ? message : "Error");
         xSemaphoreGive(mutex_);
     }
 
+    transport_.CloseAudioChannel();
     ReleaseFocusIfNeeded(token, should_release);
 }
 
@@ -180,9 +208,11 @@ VoiceAssistantState VoiceAssistantService::GetState() {
     state.trigger = trigger_;
     state.initialized = initialized_;
     state.focus_active = focus_active_;
+    state.transport_active = transport_active_;
     state.focus_token = focus_token_;
     state.message = message_;
     state.last_wake_word = last_wake_word_;
+    state.transport_name = transport_.name();
     xSemaphoreGive(mutex_);
     return state;
 }
@@ -199,6 +229,32 @@ void VoiceAssistantService::ReleaseFocusIfNeeded(uint32_t token, bool should_rel
         audio_focus_.ReleaseFocus(token);
         ESP_LOGI(TAG, "Interaction stopped: focus_token=%" PRIu32, token);
     }
+}
+
+bool VoiceAssistantService::OpenTransportForInteraction(VoiceAssistantTrigger trigger,
+                                                        const std::string& wake_word) {
+    if (!transport_.Start()) {
+        return false;
+    }
+    if (!transport_.OpenAudioChannel()) {
+        return false;
+    }
+    if (trigger == VoiceAssistantTrigger::kWakeWord && !wake_word.empty() &&
+        !transport_.SendWakeWordDetected(wake_word)) {
+        transport_.CloseAudioChannel();
+        return false;
+    }
+    if (!transport_.SendStartListening(VoiceListeningMode::kAutoStop)) {
+        transport_.CloseAudioChannel();
+        return false;
+    }
+
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        transport_active_ = true;
+        xSemaphoreGive(mutex_);
+    }
+    return true;
 }
 
 }  // namespace rodakos

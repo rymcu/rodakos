@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/voice_assistant_transport.h"
 
 #include <cstdint>
 #include <string>
@@ -29,14 +30,16 @@ struct VoiceAssistantState {
     VoiceAssistantTrigger trigger = VoiceAssistantTrigger::kManual;
     bool initialized = false;
     bool focus_active = false;
+    bool transport_active = false;
     uint32_t focus_token = 0;
     std::string message;
     std::string last_wake_word;
+    std::string transport_name;
 };
 
 class VoiceAssistantService {
 public:
-    explicit VoiceAssistantService(AudioFocusService& audio_focus);
+    VoiceAssistantService(AudioFocusService& audio_focus, VoiceAssistantTransport& transport);
     ~VoiceAssistantService();
 
     bool Init();
@@ -56,11 +59,14 @@ public:
 private:
     void SetPhaseLocked(VoiceAssistantPhase phase, const char* message);
     void ReleaseFocusIfNeeded(uint32_t token, bool should_release);
+    bool OpenTransportForInteraction(VoiceAssistantTrigger trigger, const std::string& wake_word);
 
     AudioFocusService& audio_focus_;
+    VoiceAssistantTransport& transport_;
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
     bool focus_active_ = false;
+    bool transport_active_ = false;
     uint32_t focus_token_ = 0;
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
