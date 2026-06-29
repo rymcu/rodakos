@@ -171,6 +171,16 @@ dependencies:
     - esp32p4
     - esp32h4
     version: 2.1.1
+  espressif/esp_websocket_client:
+    component_hash: 3fb288702517ef4d75bf933a115f1056ee0c2540d964f9e1d856e0bb67e1dfeb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.0
   espressif/tinyusb:
     component_hash: 5ea9d3b6d6b0734a0a0b3491967aa0e1bece2974132294dbda5dd2839b247bfa
     dependencies:
@@ -224,9 +234,10 @@ direct_dependencies:
 - espressif/esp_lvgl_port
 - espressif/esp_new_jpeg
 - espressif/esp_tinyusb
+- espressif/esp_websocket_client
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 7fab19b0216c3a72bc988c507fa9f022b3c246f5633231f626a1b21eab05f606
+manifest_hash: e9281b42cc4595ca5ac272376a91fd49b4b7735ab45de7bad450d5d6649d5cee
 target: esp32s3
 version: 2.0.0
