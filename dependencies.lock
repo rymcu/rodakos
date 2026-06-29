@@ -21,6 +21,16 @@ dependencies:
       path: D:\workspace\rodakos\components\brookesia_lib_utils
       type: local
     version: 0.7.9
+  chmorgan/esp-libhelix-mp3:
+    component_hash: cbb76089dc2c5749f7b470e2e70aedc44c9da519e04eb9a67d4c7ec275229e53
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.3
   cmake_utilities:
     dependencies: []
     source:
@@ -199,6 +209,7 @@ dependencies:
     version: 9.3.0
 direct_dependencies:
 - 78/xiaozhi-fonts
+- chmorgan/esp-libhelix-mp3
 - esp_io_expander_pca9557
 - espressif/brookesia_hal_interface
 - espressif/brookesia_lib_utils
@@ -216,6 +227,6 @@ direct_dependencies:
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 15abe7b806c7fed04bd3662dd62336231378e764f08ef8120877555d9fdae713
+manifest_hash: 7fab19b0216c3a72bc988c507fa9f022b3c246f5633231f626a1b21eab05f606
 target: esp32s3
 version: 2.0.0

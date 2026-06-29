@@ -144,11 +144,12 @@ public:
             FileEntry entry;
             entry.name = ent->d_name;
             entry.path = full_path + "/" + ent->d_name;
-            entry.is_directory = (ent->d_type == DT_DIR);
+            entry.is_directory = false;
 
             // Get file info
             struct stat st;
             if (stat(entry.path.c_str(), &st) == 0) {
+                entry.is_directory = S_ISDIR(st.st_mode);
                 entry.size = st.st_size;
                 entry.modified_time = st.st_mtime;
             } else {

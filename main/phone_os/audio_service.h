@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -60,6 +61,9 @@ public:
 private:
     static void PlaybackTaskEntry(void* arg);
     void PlaybackTask();
+    bool PlayWavFile(FILE* fp, const std::string& path, bool& stopped);
+    bool PlayMp3File(FILE* fp, const std::string& path, bool& stopped);
+    bool ShouldStopOrPause(bool& should_pause);
     void SetState(AudioPlaybackStatus status, const char* message = nullptr);
     void UpdateProgress(size_t bytes_played, size_t data_bytes);
     void MarkPlaybackTaskStarting();

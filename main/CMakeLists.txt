@@ -46,6 +46,7 @@ idf_component_register(
         lwip
         esp_board_manager
         espressif__esp_codec_dev
+        chmorgan__esp-libhelix-mp3
         esp_app_format
         esp_timer
         heap

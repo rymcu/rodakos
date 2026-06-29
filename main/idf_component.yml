@@ -18,6 +18,7 @@ dependencies:
 
   # Audio codec playback through Board Manager audio_dac
   espressif/esp_codec_dev: ~1.5
+  chmorgan/esp-libhelix-mp3: ^1.0.3
 
   idf:
     version: ">=5.4.0"

@@ -10,6 +10,7 @@
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
 #include "rodakos_adapters/file_service.h"
+#include "settings.h"
 
 #include <algorithm>
 #include <cctype>
@@ -22,7 +23,10 @@
 
 namespace {
 constexpr const char* TAG = "MusicApp";
-constexpr lv_coord_t kHeaderHeight = 40;
+constexpr const char* kMusicNamespace = "music";
+constexpr const char* kModeKey = "mode";
+constexpr const char* kTrackPathKey = "track";
+constexpr const char* kTrackIndexKey = "idx";
 
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
@@ -110,6 +114,7 @@ bool MusicApp::OnCreate(PhoneAppContext& context) {
     audio_service_ = context.services().audio();
 
     ScanTracks();
+    LoadPlaybackState();
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -125,11 +130,21 @@ bool MusicApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
-void MusicApp::OnDestroy() {
-    if (audio_service_ != nullptr) {
-        audio_service_->Stop();
+void MusicApp::OnShow() {
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(root_);
+        RefreshState();
     }
+}
 
+void MusicApp::OnHide() {
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void MusicApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
@@ -160,6 +175,9 @@ void MusicApp::OnDestroy() {
     track_list_ = nullptr;
     tracks_.clear();
     current_index_ = -1;
+    playback_mode_ = PlaybackMode::kSequential;
+    completion_handled_ = false;
+    queue_paused_ = false;
     context_ = nullptr;
     ui_ = nullptr;
     file_service_ = nullptr;
@@ -174,31 +192,13 @@ void MusicApp::CreateUi() {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* header = lv_obj_create(root_);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_size(header, LV_PCT(100), kHeaderHeight);
-    lv_obj_set_style_bg_color(header, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(header, 10, 0);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* back_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_ARROW_LEFT);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    CreateAppHeader(root_, "Music", [](lv_event_t* e) {
         auto* self = static_cast<MusicApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* title = CreateText(header, "Music", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_center(title);
-
-    auto* home_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_HOUSE);
-    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+    }, [](lv_event_t* e) {
         auto* self = static_cast<MusicApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
+    }, this);
 
     auto* now_card = lv_obj_create(root_);
     lv_obj_remove_style_all(now_card);
@@ -218,7 +218,7 @@ void MusicApp::CreateUi() {
     lv_label_set_long_mode(track_title_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(track_title_label_, LV_ALIGN_TOP_LEFT, 50, 8);
 
-    status_label_ = CreateText(now_card, "Load WAV files", &phone_font_12,
+    status_label_ = CreateText(now_card, "Load audio files", &phone_font_12,
                                rodakos_theme_text_secondary());
     lv_obj_set_width(status_label_, 160);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
@@ -410,29 +410,11 @@ void MusicApp::CreateUi() {
     lv_obj_clear_flag(track_picker_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(track_picker_, LV_OBJ_FLAG_HIDDEN);
 
-    auto* picker_header = lv_obj_create(track_picker_);
-    lv_obj_remove_style_all(picker_header);
-    lv_obj_set_size(picker_header, LV_PCT(100), kHeaderHeight);
-    lv_obj_set_style_bg_color(picker_header, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(picker_header, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(picker_header, 10, 0);
-    lv_obj_align(picker_header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(picker_header, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* picker_back_btn = RodakosCreateHeaderIconButton(picker_header, FONT_AWESOME_ARROW_LEFT);
-    lv_obj_align(picker_back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_add_event_cb(picker_back_btn, [](lv_event_t* e) {
+    CreateAppHeader(track_picker_, "Songs", [](lv_event_t* e) {
         static_cast<MusicApp*>(lv_event_get_user_data(e))->HideTrackPicker();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* picker_title = CreateText(picker_header, "Songs", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_center(picker_title);
-
-    auto* picker_home_btn = RodakosCreateHeaderIconButton(picker_header, FONT_AWESOME_HOUSE);
-    lv_obj_align(picker_home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(picker_home_btn, [](lv_event_t* e) {
+    }, [](lv_event_t* e) {
         static_cast<MusicApp*>(lv_event_get_user_data(e))->NavigateHome();
-    }, LV_EVENT_CLICKED, this);
+    }, this);
 
     track_list_ = lv_obj_create(track_picker_);
     lv_obj_remove_style_all(track_list_);
@@ -448,17 +430,34 @@ void MusicApp::CreateUi() {
 void MusicApp::ScanTracks() {
     tracks_.clear();
     if (file_service_ == nullptr) {
+        ESP_LOGW(TAG, "No file service available");
         return;
     }
     if (!file_service_->IsMounted() && !file_service_->Init()) {
         ESP_LOGW(TAG, "SD card is not mounted");
         return;
     }
+    ESP_LOGI(TAG, "SD card mounted at %s", file_service_->GetMountPoint());
 
-    ScanDirectory("/Music", 3);
-    ScanDirectory("/MUSIC", 3);
+    std::vector<rodakos::FileEntry> root_entries;
+    if (file_service_->ListDirectory("/", root_entries)) {
+        ESP_LOGI(TAG, "Music scan root has %zu entries", root_entries.size());
+        for (const auto& entry : root_entries) {
+            ESP_LOGI(TAG, "Root entry: %s dir=%d size=%zu path=%s",
+                     entry.name.c_str(), entry.is_directory ? 1 : 0, entry.size, entry.path.c_str());
+            if (entry.is_directory && NormalizePathKey(entry.name) == "music") {
+                const std::string scan_path = "/" + entry.name;
+                ESP_LOGI(TAG, "Scanning music directory: %s", scan_path.c_str());
+                ScanDirectory(scan_path, 3);
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "Failed to list SD card root");
+    }
+
     if (tracks_.empty()) {
-        ScanDirectory("/", 1);
+        ESP_LOGI(TAG, "No tracks in /music; scanning SD root fallback");
+        ScanDirectory("/", 3);
     }
 
     std::sort(tracks_.begin(), tracks_.end(), [](const Track& a, const Track& b) {
@@ -472,6 +471,14 @@ void MusicApp::ScanTracks() {
     std::sort(tracks_.begin(), tracks_.end(), [](const Track& a, const Track& b) {
         return a.title < b.title;
     });
+
+    ESP_LOGI(TAG, "Music scan found %zu tracks", tracks_.size());
+}
+
+void MusicApp::UpdateTrackCountLabel() {
+    if (track_count_label_ != nullptr) {
+        lv_label_set_text_fmt(track_count_label_, "%zu songs", tracks_.size());
+    }
 }
 
 void MusicApp::ScanDirectory(const std::string& path, int depth) {
@@ -490,7 +497,7 @@ void MusicApp::ScanDirectory(const std::string& path, int depth) {
             ScanDirectory(next_path, depth - 1);
             continue;
         }
-        if (!rodakos::AudioService::IsSupportedAudioFile(entry.name)) {
+        if (!rodakos::AudioService::IsSupportedAudioFile(entry.path)) {
             continue;
         }
         Track track;
@@ -499,6 +506,7 @@ void MusicApp::ScanDirectory(const std::string& path, int depth) {
         track.path = entry.path;
         track.size = entry.size;
         tracks_.push_back(track);
+        ESP_LOGI(TAG, "Found audio track: %s (%zu bytes)", track.path.c_str(), track.size);
     }
 }
 
@@ -508,12 +516,10 @@ void MusicApp::RebuildTrackList() {
     }
     lv_obj_clean(track_list_);
 
-    if (track_count_label_ != nullptr) {
-        lv_label_set_text_fmt(track_count_label_, "%zu songs", tracks_.size());
-    }
+    UpdateTrackCountLabel();
 
     if (tracks_.empty()) {
-        auto* empty = CreateText(track_list_, "No WAV files on SD card", &phone_font_12,
+        auto* empty = CreateText(track_list_, "No supported audio files", &phone_font_12,
                                  rodakos_theme_text_tertiary());
         lv_obj_set_width(empty, 300);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
@@ -608,6 +614,8 @@ void MusicApp::TogglePlaybackMode() {
     }
     UpdatePlaybackModeLabel();
     completion_handled_ = false;
+    queue_paused_ = false;
+    SavePlaybackState();
     if (ui_ != nullptr) {
         ui_->ShowToastUnlocked(PlaybackModeToastText());
     }
@@ -654,6 +662,72 @@ const char* MusicApp::PlaybackModeToastText() const {
     }
 }
 
+void MusicApp::LoadPlaybackState() {
+    Settings settings(kMusicNamespace, false);
+    const int mode_value = settings.GetInt(kModeKey, 0);
+    switch (mode_value) {
+        case 1:
+            playback_mode_ = PlaybackMode::kShuffle;
+            break;
+        case 2:
+            playback_mode_ = PlaybackMode::kRepeatOne;
+            break;
+        case 0:
+        default:
+            playback_mode_ = PlaybackMode::kSequential;
+            break;
+    }
+
+    const std::string path = settings.GetString(kTrackPathKey, "");
+    SyncCurrentIndexFromPath(path);
+    if (current_index_ < 0) {
+        const int saved_index = settings.GetInt(kTrackIndexKey, -1);
+        if (saved_index >= 0 && saved_index < static_cast<int>(tracks_.size())) {
+            current_index_ = saved_index;
+        }
+    }
+
+    ESP_LOGI(TAG, "Loaded playback state: mode=%d index=%d path=%s",
+             mode_value, current_index_, path.c_str());
+}
+
+void MusicApp::SavePlaybackState() {
+    Settings settings(kMusicNamespace, true);
+    int mode_value = 0;
+    switch (playback_mode_) {
+        case PlaybackMode::kShuffle:
+            mode_value = 1;
+            break;
+        case PlaybackMode::kRepeatOne:
+            mode_value = 2;
+            break;
+        case PlaybackMode::kSequential:
+        default:
+            mode_value = 0;
+            break;
+    }
+
+    settings.SetInt(kModeKey, mode_value);
+    settings.SetInt(kTrackIndexKey, current_index_);
+    if (current_index_ >= 0 && current_index_ < static_cast<int>(tracks_.size())) {
+        settings.SetString(kTrackPathKey, tracks_[current_index_].path);
+    }
+}
+
+void MusicApp::SyncCurrentIndexFromPath(const std::string& path) {
+    if (path.empty()) {
+        return;
+    }
+
+    const std::string key = NormalizePathKey(path);
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+        if (NormalizePathKey(tracks_[i].path) == key) {
+            current_index_ = static_cast<int>(i);
+            return;
+        }
+    }
+}
+
 size_t MusicApp::PickRandomTrackIndex() const {
     if (tracks_.empty()) {
         return 0;
@@ -669,11 +743,10 @@ size_t MusicApp::PickRandomTrackIndex() const {
     return index;
 }
 
-bool MusicApp::HandlePlaybackCompleted() {
-    if (completion_handled_ || tracks_.empty()) {
+bool MusicApp::PlayFromCompletedState() {
+    if (tracks_.empty()) {
         return false;
     }
-    completion_handled_ = true;
 
     switch (playback_mode_) {
         case PlaybackMode::kRepeatOne: {
@@ -695,12 +768,25 @@ bool MusicApp::HandlePlaybackCompleted() {
     return false;
 }
 
+bool MusicApp::HandlePlaybackCompleted() {
+    if (completion_handled_ || tracks_.empty()) {
+        return false;
+    }
+    completion_handled_ = true;
+    if (queue_paused_) {
+        return false;
+    }
+    return PlayFromCompletedState();
+}
+
 void MusicApp::PlayTrack(size_t index) {
     if (index >= tracks_.size() || audio_service_ == nullptr) {
         return;
     }
     current_index_ = static_cast<int>(index);
     completion_handled_ = false;
+    queue_paused_ = false;
+    SavePlaybackState();
     if (!audio_service_->PlayFile(tracks_[index].path, tracks_[index].title)) {
         ui_->ShowToastUnlocked("Cannot play this file");
     }
@@ -733,10 +819,23 @@ void MusicApp::TogglePlayPause() {
         return;
     }
     const auto state = audio_service_->GetState();
-    if (state.status == rodakos::AudioPlaybackStatus::kPlaying ||
-        state.status == rodakos::AudioPlaybackStatus::kPaused) {
-        audio_service_->TogglePause();
+    if (state.status == rodakos::AudioPlaybackStatus::kPaused) {
+        queue_paused_ = false;
+        audio_service_->Resume();
+    } else if (state.status == rodakos::AudioPlaybackStatus::kPlaying ||
+               state.status == rodakos::AudioPlaybackStatus::kLoading) {
+        queue_paused_ = true;
+        completion_handled_ = true;
+        audio_service_->Pause();
+    } else if (state.status == rodakos::AudioPlaybackStatus::kCompleted) {
+        queue_paused_ = false;
+        completion_handled_ = false;
+        if (!PlayFromCompletedState()) {
+            const size_t index = current_index_ < 0 ? 0 : static_cast<size_t>(current_index_);
+            PlayTrack(index);
+        }
     } else if (!tracks_.empty()) {
+        queue_paused_ = false;
         const size_t index = current_index_ < 0 ? 0 : static_cast<size_t>(current_index_);
         PlayTrack(index);
     }
@@ -748,6 +847,7 @@ void MusicApp::StopPlayback() {
         audio_service_->Stop();
     }
     completion_handled_ = true;
+    queue_paused_ = true;
     RefreshState();
 }
 
@@ -756,15 +856,17 @@ void MusicApp::RefreshState() {
         return;
     }
 
+    UpdateTrackCountLabel();
+
     const auto state = audio_service_->GetState();
+    SyncCurrentIndexFromPath(state.file_path);
     if (state.status == rodakos::AudioPlaybackStatus::kCompleted) {
         if (HandlePlaybackCompleted()) {
             return;
         }
     }
     if (state.status == rodakos::AudioPlaybackStatus::kPlaying ||
-        state.status == rodakos::AudioPlaybackStatus::kLoading ||
-        state.status == rodakos::AudioPlaybackStatus::kPaused) {
+        state.status == rodakos::AudioPlaybackStatus::kLoading) {
         completion_handled_ = false;
     }
 
@@ -783,16 +885,17 @@ void MusicApp::RefreshState() {
     } else if (!state.message.empty()) {
         std::snprintf(status_text, sizeof(status_text), "%s", state.message.c_str());
     } else if (tracks_.empty()) {
-        std::snprintf(status_text, sizeof(status_text), "Put WAV files in /Music");
+        std::snprintf(status_text, sizeof(status_text), "Put audio files in /music");
     } else {
-        std::snprintf(status_text, sizeof(status_text), "%zu songs", tracks_.size());
+        std::snprintf(status_text, sizeof(status_text), "Ready");
     }
     lv_label_set_text(status_label_, status_text);
 
     lv_bar_set_value(progress_bar_, state.progress_percent, LV_ANIM_OFF);
     lv_label_set_text_fmt(progress_label_, "%d%%", state.progress_percent);
-    lv_label_set_text(play_icon_label_,
-                      state.status == rodakos::AudioPlaybackStatus::kPlaying ? FONT_AWESOME_PAUSE : FONT_AWESOME_PLAY);
+    const bool show_pause = state.status == rodakos::AudioPlaybackStatus::kPlaying ||
+                            state.status == rodakos::AudioPlaybackStatus::kLoading;
+    lv_label_set_text(play_icon_label_, show_pause ? FONT_AWESOME_PAUSE : FONT_AWESOME_PLAY);
 
     if (volume_slider_ != nullptr) {
         lv_slider_set_value(volume_slider_, state.volume, LV_ANIM_OFF);
@@ -816,7 +919,9 @@ void RegisterMusicApp(PhoneAppRegistry& registry) {
     descriptor.title = "Music";
     descriptor.icon = FONT_AWESOME_MUSIC;
     descriptor.category = PhoneAppCategory::kMedia;
-    descriptor.capabilities = PhoneCapability::kStorage | PhoneCapability::kAudioPlayback;
+    descriptor.capabilities = PhoneCapability::kStorage |
+                              PhoneCapability::kAudioPlayback |
+                              PhoneCapability::kBackgroundTick;
     descriptor.create = []() -> std::unique_ptr<PhoneApp> {
         return std::make_unique<MusicApp>();
     };
