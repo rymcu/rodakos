@@ -10,6 +10,7 @@ constexpr const char* TAG = "VoiceWakeService";
 constexpr const char* kSettingsNamespace = "voice_wake";
 constexpr const char* kEnabledKey = "enabled";
 constexpr TickType_t kSupervisorIntervalTicks = pdMS_TO_TICKS(1000);
+constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(30000);
 
 const char* StatusMessage(VoiceWakeStatus status) {
     switch (status) {
@@ -208,11 +209,17 @@ void VoiceWakeService::NotifyWakeWordDetected(const std::string& wake_word) {
 
     ESP_LOGI(TAG, "Wake word detected: %s", detected.c_str());
     if (!assistant_.StartInteraction(VoiceAssistantTrigger::kWakeWord, detected)) {
+        assistant_.StopInteraction();
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        assistant_active_since_ticks_ = 0;
         SetStatusLocked(VoiceWakeStatus::kError, "Assistant start failed");
         xSemaphoreGive(mutex_);
         return;
     }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    assistant_active_since_ticks_ = xTaskGetTickCount();
+    xSemaphoreGive(mutex_);
 }
 
 void VoiceWakeService::SupervisorTask(void* arg) {
@@ -280,7 +287,26 @@ void VoiceWakeService::SupervisorTick() {
         return;
     }
 
+    if (assistant_state.phase == VoiceAssistantPhase::kError) {
+        assistant_active_since_ticks_ = 0;
+        SetStatusLocked(VoiceWakeStatus::kError,
+                        assistant_state.message.empty() ? "Assistant failed" : assistant_state.message.c_str());
+        xSemaphoreGive(mutex_);
+        assistant_.StopInteraction();
+        return;
+    }
+
     if (assistant_state.focus_active || assistant_state.phase != VoiceAssistantPhase::kIdle) {
+        const TickType_t now = xTaskGetTickCount();
+        if (assistant_active_since_ticks_ == 0) {
+            assistant_active_since_ticks_ = now;
+        } else if ((now - assistant_active_since_ticks_) >= kAssistantSessionTimeoutTicks) {
+            assistant_active_since_ticks_ = 0;
+            SetStatusLocked(VoiceWakeStatus::kError, "Assistant session timed out");
+            xSemaphoreGive(mutex_);
+            assistant_.StopInteraction();
+            return;
+        }
         if (listening_) {
             StopRuntimeLocked("Assistant active");
         }
@@ -289,6 +315,7 @@ void VoiceWakeService::SupervisorTick() {
         return;
     }
 
+    assistant_active_since_ticks_ = 0;
     if (!listening_) {
         StartRuntimeLocked();
     }
@@ -327,8 +354,8 @@ void VoiceWakeService::StopRuntimeLocked(const char* message) {
         runtime_.StopListening();
     }
     listening_ = false;
-    if (status_ == VoiceWakeStatus::kListening || status_ == VoiceWakeStatus::kAssistantActive) {
-        SetStatusLocked(enabled_ ? VoiceWakeStatus::kDisabled : VoiceWakeStatus::kDisabled, message);
+    if (status_ == VoiceWakeStatus::kListening) {
+        SetStatusLocked(VoiceWakeStatus::kDisabled, message);
     }
 }
 

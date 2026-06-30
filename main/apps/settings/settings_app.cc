@@ -15,11 +15,15 @@
 #include "settings.h"
 #include "usb_msc_mode.h"
 
+#include <esp_lvgl_port.h>
 #include <esp_system.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace {
@@ -29,6 +33,15 @@ constexpr const char* kBrightnessKey = "brightness";
 constexpr const char* kThemeKey = "theme";
 constexpr const char* kLanguageKey = "language";
 constexpr uint32_t kTimeSyncTimeoutPolls = 20;
+
+struct CloudRefreshPayload {
+    std::shared_ptr<SettingsCloudRefreshGuard> guard;
+    rodakos::DeviceCloudConfigService* service = nullptr;
+    uint32_t generation = 0;
+    bool ok = false;
+    rodakos::DeviceCloudConfig config;
+    std::string error;
+};
 
 struct ThemeOption {
     const char* id;
@@ -66,6 +79,47 @@ void DeferReloadSettings(void* user_data) {
 void RestartTimerCallback(lv_timer_t* timer) {
     lv_timer_delete(timer);
     esp_restart();
+}
+
+void CloudRefreshCompleteCallback(void* user_data) {
+    auto* payload = static_cast<CloudRefreshPayload*>(user_data);
+    if (payload == nullptr) {
+        return;
+    }
+    auto guard = payload->guard;
+    SettingsApp* app = guard ? guard->app.load() : nullptr;
+    if (app != nullptr) {
+        app->OnDeviceCloudRefreshComplete(payload->ok,
+                                          payload->config,
+                                          payload->error,
+                                          payload->generation);
+    }
+    delete payload;
+}
+
+void CloudRefreshTask(void* arg) {
+    auto* payload = static_cast<CloudRefreshPayload*>(arg);
+    if (payload != nullptr && payload->service != nullptr) {
+        payload->ok = payload->service->Refresh(payload->config);
+        if (!payload->ok) {
+            payload->error = payload->service->last_error();
+        }
+        bool queued = false;
+        if (lvgl_port_lock(1000)) {
+            queued = lv_async_call(CloudRefreshCompleteCallback, payload) == LV_RESULT_OK;
+            lvgl_port_unlock();
+        }
+        if (!queued) {
+            auto guard = payload->guard;
+            if (guard && payload->generation == guard->refresh_generation.load()) {
+                guard->refresh_in_progress.store(false);
+            }
+            delete payload;
+        }
+    } else {
+        delete payload;
+    }
+    vTaskDelete(nullptr);
 }
 
 std::string TrimServerName(const char* text) {
@@ -246,6 +300,10 @@ SettingsApp::~SettingsApp() {
 bool SettingsApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
+    cloud_refresh_guard_ = std::make_shared<SettingsCloudRefreshGuard>();
+    cloud_refresh_guard_->app.store(this);
+    cloud_refresh_guard_->refresh_in_progress.store(false);
+    cloud_refresh_guard_->refresh_generation.store(0);
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -290,6 +348,11 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
 }
 
 void SettingsApp::OnDestroy() {
+    if (cloud_refresh_guard_) {
+        cloud_refresh_guard_->refresh_generation.fetch_add(1);
+        cloud_refresh_guard_->refresh_in_progress.store(false);
+        cloud_refresh_guard_->app.store(nullptr);
+    }
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
@@ -1157,22 +1220,62 @@ void SettingsApp::RefreshDeviceCloud() {
         return;
     }
 
+    if (!cloud_refresh_guard_) {
+        ui_->ShowToastUnlocked("Device services unavailable");
+        return;
+    }
+    bool expected = false;
+    if (!cloud_refresh_guard_->refresh_in_progress.compare_exchange_strong(expected, true)) {
+        ui_->ShowToastUnlocked("Device services refreshing");
+        return;
+    }
+
     if (cloud_status_label_ != nullptr) {
         lv_label_set_text(cloud_status_label_, "Refreshing...");
     }
 
-    rodakos::DeviceCloudConfig config;
-    if (device_cloud->Refresh(config)) {
-        UpdateDeviceCloudPage();
+    auto* payload = new CloudRefreshPayload;
+    payload->guard = cloud_refresh_guard_;
+    payload->service = device_cloud;
+    payload->generation = cloud_refresh_guard_->refresh_generation.load();
+
+    const BaseType_t ret = xTaskCreate(
+        CloudRefreshTask, "cloud_refresh", 6144, payload, 3, nullptr);
+    if (ret != pdPASS) {
+        cloud_refresh_guard_->refresh_in_progress.store(false);
+        delete payload;
+        ui_->ShowToastUnlocked("Device services failed");
+        if (cloud_status_label_ != nullptr) {
+            lv_label_set_text(cloud_status_label_, "Refresh task failed");
+        }
+    }
+}
+
+void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
+                                               const rodakos::DeviceCloudConfig& config,
+                                               const std::string& error,
+                                               uint32_t generation) {
+    if (ui_ == nullptr) {
+        return;
+    }
+    if (!cloud_refresh_guard_) {
+        return;
+    }
+    if (generation != cloud_refresh_guard_->refresh_generation.load()) {
+        return;
+    }
+
+    cloud_refresh_guard_->refresh_in_progress.store(false);
+    UpdateDeviceCloudPage();
+    if (ok) {
         ui_->ShowToastUnlocked("Device services updated");
         if (cloud_status_label_ != nullptr) {
             lv_label_set_text(cloud_status_label_, "Ready");
         }
     } else {
-        UpdateDeviceCloudPage();
         ui_->ShowToastUnlocked("Device services failed");
         if (cloud_status_label_ != nullptr) {
-            lv_label_set_text(cloud_status_label_, device_cloud->last_error());
+            lv_label_set_text(cloud_status_label_, error.empty() ? "Refresh failed" : error.c_str());
         }
         if (config.has_activation_code && cloud_activation_label_ != nullptr) {
             lv_label_set_text_fmt(cloud_activation_label_, "Activation: %s",

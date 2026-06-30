@@ -76,6 +76,11 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
         return false;
     }
 
+    if (trigger != VoiceAssistantTrigger::kWakeWord) {
+        MarkError("Waiting for wake word");
+        return false;
+    }
+
     xSemaphoreTake(mutex_, portMAX_DELAY);
     const bool already_active = focus_active_ && transport_active_;
     if (already_active) {
@@ -118,12 +123,12 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     xSemaphoreGive(mutex_);
 
-    if (!OpenTransportForInteraction(trigger, wake_word)) {
-        MarkError(transport_.last_error());
-        return false;
-    }
     if (!StartRecorderForInteraction()) {
         MarkError(recorder_.last_error());
+        return false;
+    }
+    if (!OpenTransportForInteraction(trigger, wake_word)) {
+        MarkError(transport_.last_error());
         return false;
     }
     if (!transport_.SendStartListening(VoiceListeningMode::kAutoStop)) {

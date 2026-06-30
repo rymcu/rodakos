@@ -91,6 +91,7 @@ private:
     bool task_running_ = false;
     bool enabled_ = false;
     bool listening_ = false;
+    TickType_t assistant_active_since_ticks_ = 0;
     TaskHandle_t task_ = nullptr;
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;
     std::string message_ = "Disabled";
