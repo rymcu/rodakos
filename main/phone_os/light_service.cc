@@ -18,7 +18,7 @@ constexpr const char* TAG = "LightService";
 
 extern "C" const esp_board_device_desc_t g_esp_board_devices[];
 
-dev_led_strip_config_t* ConfigForDevice(const char* device_name) {
+const dev_led_strip_config_t* ConfigForDevice(const char* device_name) {
     if (device_name == nullptr) {
         return nullptr;
     }
@@ -27,7 +27,7 @@ dev_led_strip_config_t* ConfigForDevice(const char* device_name) {
     if (err != ESP_OK || config == nullptr) {
         return nullptr;
     }
-    return static_cast<dev_led_strip_config_t*>(config);
+    return static_cast<const dev_led_strip_config_t*>(config);
 }
 
 std::string IndexedId(const char* device_name, uint32_t index, uint32_t count) {

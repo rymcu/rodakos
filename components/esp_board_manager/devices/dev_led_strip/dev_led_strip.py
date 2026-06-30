@@ -11,13 +11,20 @@ VALID_SUB_TYPES = ['rmt', 'spi']
 COLOR_COMPONENT_FORMAT_MAP = {
     'LED_STRIP_COLOR_COMPONENT_FMT_GRB': 'LED_PIXEL_FORMAT_GRB',
     'LED_STRIP_COLOR_COMPONENT_FMT_GRBW': 'LED_PIXEL_FORMAT_GRBW',
-    'LED_STRIP_COLOR_COMPONENT_FMT_RGB': 'LED_PIXEL_FORMAT_GRB',
-    'LED_STRIP_COLOR_COMPONENT_FMT_RGBW': 'LED_PIXEL_FORMAT_GRBW',
+}
+
+UNSUPPORTED_COLOR_COMPONENT_FORMATS = {
+    'LED_STRIP_COLOR_COMPONENT_FMT_RGB',
+    'LED_STRIP_COLOR_COMPONENT_FMT_RGBW',
 }
 
 
 def _parse_pixel_format(config: dict) -> str:
     value = config.get('led_pixel_format', config.get('color_component_format', 'LED_PIXEL_FORMAT_GRB'))
+    if value in UNSUPPORTED_COLOR_COMPONENT_FORMATS:
+        raise ValueError(
+            f'{value} has no exact led_pixel_format equivalent in the current led_strip driver'
+        )
     return COLOR_COMPONENT_FORMAT_MAP.get(value, value)
 
 
