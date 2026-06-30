@@ -5,12 +5,23 @@
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include <lvgl.h>
-#include <vector>
+#include <atomic>
 #include <memory>
+#include <string>
+#include <vector>
 
 class PhoneAppContext;
 class PhoneAppRegistry;
 class PhoneUi;
+class SettingsApp;
+
+struct SettingsCloudRefreshGuard {
+    std::atomic<SettingsApp*> app{nullptr};
+};
+
+namespace rodakos {
+struct DeviceCloudConfig;
+}
 
 enum class SettingsPage {
     kMain,        // 主设置页面
@@ -30,6 +41,10 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    void OnDeviceCloudRefreshComplete(bool ok,
+                                      const rodakos::DeviceCloudConfig& config,
+                                      const std::string& error,
+                                      uint32_t generation);
 
 private:
     // 页面切换
@@ -108,6 +123,9 @@ private:
     lv_obj_t* cloud_activation_label_ = nullptr;
     lv_obj_t* cloud_url_dialog_ = nullptr;
     lv_obj_t* cloud_url_textarea_ = nullptr;
+    bool cloud_refresh_in_progress_ = false;
+    uint32_t cloud_refresh_generation_ = 0;
+    std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
 
     // Web 上传页面控件
     lv_obj_t* web_upload_body_ = nullptr;

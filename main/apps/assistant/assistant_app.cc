@@ -244,7 +244,7 @@ void AssistantApp::CreateUi() {
     auto* cloud_icon = CreateText(cloud_card, FONT_AWESOME_CLOUD, PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(cloud_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
-    cloud_detail_label_ = CreateText(cloud_card, "Offline", &phone_font_12,
+    cloud_detail_label_ = CreateText(cloud_card, "Wake-only cloud", &phone_font_12,
                                      rodakos_theme_text_tertiary());
     lv_obj_set_width(cloud_detail_label_, 236);
     lv_label_set_long_mode(cloud_detail_label_, LV_LABEL_LONG_DOT);
@@ -288,7 +288,7 @@ void AssistantApp::RefreshState() {
     lv_label_set_text_fmt(cloud_detail_label_, "%s/%s - %s",
                           assistant_state.transport_name.empty() ? "offline" : assistant_state.transport_name.c_str(),
                           assistant_state.recorder_name.empty() ? "offline" : assistant_state.recorder_name.c_str(),
-                          assistant_state.transport_active && assistant_state.recorder_active ? "active" : "idle");
+                          assistant_state.transport_active ? "wake session" : "wake-only");
 }
 
 void AssistantApp::ToggleWakeListening(bool enabled) {
