@@ -404,16 +404,16 @@ Project uses custom 16MB partition table (`partitions_16m.csv`):
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x200000,
-storage,  data, fat,     ,        0xDE0000,
+factory,  app,  factory, 0x10000, 0x800000,
+storage,  data, fat,     ,        0x7E0000,
 ```
 
 **Important**: Use hex values, not "1M"/"15M" notation, to avoid partition size calculation errors.
 
 - `nvs` (24KB) - WiFi config, Settings storage
 - `phy_init` (4KB) - PHY calibration data
-- `factory` (2MB) - Main firmware (current ~668KB)
-- `storage` (~14MB) - FAT filesystem for SD card mount
+- `factory` (8MB) - Main firmware, sized for RodakOS apps and assistant/system services
+- `storage` (~8MB) - Internal FAT data partition; SD card media remains external storage
 
 ## Code Style
 
@@ -432,7 +432,7 @@ storage,  data, fat,     ,        0xDE0000,
 
 ## Performance Notes
 
-- Current firmware size: ~2.0MB (100% of 2MB factory partition)
+- Current firmware size: ~3.4MB (about 42% of 8MB factory partition)
 - LVGL buffer: `lcd_width * 40` bytes (double buffering)
 - PSRAM available: ~7MB for LVGL buffers and app data
 - LVGL task priority: 4, stack: 6144 bytes
