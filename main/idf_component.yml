@@ -13,6 +13,9 @@ dependencies:
   # USB Mass Storage device mode
   espressif/esp_tinyusb: ~2.1.1
 
+  # Board RGB LED control through RMT
+  espressif/led_strip: ^2.5.2
+
   # JPEG decode for SD card photo rendering
   espressif/esp_new_jpeg: ^0.6.1
 

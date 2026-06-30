@@ -8,6 +8,7 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
+#include "phone_os/light_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/voice_assistant_service.h"
@@ -319,6 +320,8 @@ extern "C" void app_main(void) {
     static rodakos::AudioOutputService audio_output_service;
     static rodakos::AudioService audio_service(audio_output_service);
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
+    static rodakos::LightService light_service;
+    light_service.Init();
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
@@ -341,6 +344,7 @@ extern "C" void app_main(void) {
     services.SetAudio(&audio_service);
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
+    services.SetLights(&light_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
     services.SetVoiceAssistant(&voice_assistant_service);
