@@ -7,9 +7,11 @@ namespace rodakos {
 class AudioFocusService;
 class AudioOutputService;
 class AudioService;
+class DeviceCloudConfigService;
 class FileService;
 class MusicPlayerService;
 class VoiceAssistantService;
+class VoiceWakeService;
 class WebFileSystemService;
 }
 
@@ -36,8 +38,14 @@ public:
     void SetAudioFocus(rodakos::AudioFocusService* audio_focus) { audio_focus_ = audio_focus; }
     rodakos::AudioFocusService* audio_focus() { return audio_focus_; }
 
+    void SetDeviceCloud(rodakos::DeviceCloudConfigService* device_cloud) { device_cloud_ = device_cloud; }
+    rodakos::DeviceCloudConfigService* device_cloud() { return device_cloud_; }
+
     void SetVoiceAssistant(rodakos::VoiceAssistantService* voice_assistant) { voice_assistant_ = voice_assistant; }
     rodakos::VoiceAssistantService* voice_assistant() { return voice_assistant_; }
+
+    void SetVoiceWake(rodakos::VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
+    rodakos::VoiceWakeService* voice_wake() { return voice_wake_; }
 
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
@@ -50,6 +58,8 @@ private:
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::MusicPlayerService* music_player_ = nullptr;
     rodakos::AudioFocusService* audio_focus_ = nullptr;
+    rodakos::DeviceCloudConfigService* device_cloud_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
+    rodakos::VoiceWakeService* voice_wake_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
 };

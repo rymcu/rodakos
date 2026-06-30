@@ -17,6 +17,10 @@ set(SOURCES
     "phone_os/time_service.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_assistant_transport.cc"
+    "phone_os/voice_recorder_service.cc"
+    "phone_os/voice_wake_service.cc"
+    "phone_os/device_cloud_config.cc"
+    "phone_os/voice_cloud_websocket_transport.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/phone_fonts.cc"
@@ -48,11 +52,15 @@ idf_component_register(
         nvs_flash
         esp_wifi
         esp_http_server
+        esp_http_client
         esp_netif
         lwip
+        json
         esp_board_manager
+        espressif__esp_websocket_client
         espressif__esp_codec_dev
         chmorgan__esp-libhelix-mp3
+        app_update
         esp_app_format
         esp_timer
         heap

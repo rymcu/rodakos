@@ -88,8 +88,8 @@ esp_board_manager_check_name(name);  // 检查设备是否存在
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x200000,
-storage,  data, fat,     ,        0xDE0000,
+factory,  app,  factory, 0x10000, 0x800000,
+storage,  data, fat,     ,        0x7E0000,
 ```
 
 **注意**：必须使用十六进制值，不要用 "1M"/"15M"！

@@ -5,6 +5,7 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/voice_assistant_service.h"
+#include "phone_os/voice_wake_service.h"
 #include "phone_ui/phone_components.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
@@ -40,17 +41,6 @@ lv_obj_t* CreateText(lv_obj_t* parent, const char* text, const lv_font_t* font, 
     return label;
 }
 
-void StyleButton(lv_obj_t* button, lv_coord_t width, bool primary) {
-    lv_obj_remove_style_all(button);
-    lv_obj_set_size(button, width, 34);
-    lv_obj_set_style_radius(button, 8, 0);
-    lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(button, rodakos_theme_bg_secondary(), LV_STATE_PRESSED);
-    lv_obj_set_style_translate_y(button, 1, LV_STATE_PRESSED);
-    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
-}
-
 const char* PhaseText(rodakos::VoiceAssistantPhase phase) {
     switch (phase) {
         case rodakos::VoiceAssistantPhase::kConnecting:
@@ -67,16 +57,39 @@ const char* PhaseText(rodakos::VoiceAssistantPhase phase) {
     }
 }
 
-const char* TriggerText(rodakos::VoiceAssistantTrigger trigger) {
-    switch (trigger) {
-        case rodakos::VoiceAssistantTrigger::kWakeWord:
-            return "Wake word";
-        case rodakos::VoiceAssistantTrigger::kRemote:
-            return "Remote";
-        case rodakos::VoiceAssistantTrigger::kManual:
+const char* WakeStatusText(rodakos::VoiceWakeStatus status) {
+    switch (status) {
+        case rodakos::VoiceWakeStatus::kListening:
+            return "Listening";
+        case rodakos::VoiceWakeStatus::kAssistantActive:
+            return "Assistant active";
+        case rodakos::VoiceWakeStatus::kUnavailable:
+            return "Unavailable";
+        case rodakos::VoiceWakeStatus::kError:
+            return "Error";
+        case rodakos::VoiceWakeStatus::kDisabled:
         default:
-            return "Manual";
+            return "Disabled";
     }
+}
+
+lv_obj_t* CreateCard(lv_obj_t* parent, lv_coord_t y, lv_coord_t height) {
+    auto* card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, 300, height);
+    lv_obj_set_pos(card, 10, y);
+    lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    return card;
+}
+
+void StyleSwitch(lv_obj_t* sw) {
+    lv_obj_set_size(sw, 48, 26);
+    lv_obj_set_style_bg_color(sw, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sw, rodakos_theme_primary(), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(sw, lv_color_white(), LV_PART_KNOB);
 }
 
 }  // namespace
@@ -89,9 +102,13 @@ bool AssistantApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
     assistant_ = context.services().voice_assistant();
+    wake_ = context.services().voice_wake();
 
     if (assistant_ != nullptr) {
         assistant_->Init();
+    }
+    if (wake_ != nullptr) {
+        wake_->Init();
     }
 
     PhoneUiLock lock(*ui_);
@@ -142,14 +159,16 @@ void AssistantApp::OnDestroy() {
     }
 
     root_ = nullptr;
-    phase_label_ = nullptr;
-    detail_label_ = nullptr;
-    focus_label_ = nullptr;
-    cloud_label_ = nullptr;
+    wake_switch_ = nullptr;
+    wake_status_label_ = nullptr;
+    assistant_status_label_ = nullptr;
+    assistant_detail_label_ = nullptr;
+    runtime_detail_label_ = nullptr;
     cloud_detail_label_ = nullptr;
     context_ = nullptr;
     ui_ = nullptr;
     assistant_ = nullptr;
+    wake_ = nullptr;
 }
 
 void AssistantApp::CreateUi() {
@@ -168,120 +187,119 @@ void AssistantApp::CreateUi() {
         self->NavigateHome();
     }, this);
 
-    auto* status_card = lv_obj_create(root_);
-    lv_obj_remove_style_all(status_card);
-    lv_obj_set_size(status_card, 300, 78);
-    lv_obj_set_pos(status_card, 10, 48);
-    lv_obj_set_style_bg_color(status_card, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(status_card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(status_card, 8, 0);
-    lv_obj_clear_flag(status_card, LV_OBJ_FLAG_SCROLLABLE);
+    auto* wake_card = CreateCard(root_, 46, 62);
 
-    auto* assistant_icon = CreateText(status_card, FONT_AWESOME_USER_ROBOT,
-                                      PhoneIconFontLarge(), rodakos_theme_primary());
-    lv_obj_align(assistant_icon, LV_ALIGN_LEFT_MID, 14, 0);
+    auto* wake_icon = CreateText(wake_card, FONT_AWESOME_MICROPHONE,
+                                 PhoneIconFont(), rodakos_theme_primary());
+    lv_obj_align(wake_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
-    phase_label_ = CreateText(status_card, "Ready", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_set_width(phase_label_, 168);
-    lv_label_set_long_mode(phase_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(phase_label_, LV_ALIGN_TOP_LEFT, 56, 12);
+    auto* wake_title = CreateText(wake_card, "Wake listening", &phone_font_14, rodakos_theme_text_primary());
+    lv_obj_set_width(wake_title, 176);
+    lv_label_set_long_mode(wake_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(wake_title, LV_ALIGN_TOP_LEFT, 44, 8);
 
-    detail_label_ = CreateText(status_card, "Manual", &phone_font_12, rodakos_theme_text_secondary());
-    lv_obj_set_width(detail_label_, 168);
-    lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(detail_label_, LV_ALIGN_TOP_LEFT, 56, 40);
+    wake_status_label_ = CreateText(wake_card, "Disabled", &phone_font_12, rodakos_theme_text_secondary());
+    lv_obj_set_width(wake_status_label_, 176);
+    lv_label_set_long_mode(wake_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(wake_status_label_, LV_ALIGN_TOP_LEFT, 44, 32);
 
-    focus_label_ = CreateText(status_card, "Idle", &phone_font_12, rodakos_theme_text_tertiary());
-    lv_obj_set_width(focus_label_, 72);
-    lv_obj_set_style_text_align(focus_label_, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(focus_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(focus_label_, LV_ALIGN_TOP_RIGHT, -12, 14);
+    wake_switch_ = lv_switch_create(wake_card);
+    StyleSwitch(wake_switch_);
+    lv_obj_align(wake_switch_, LV_ALIGN_RIGHT_MID, -12, 0);
+    lv_obj_add_event_cb(wake_switch_, [](lv_event_t* e) {
+        auto* self = static_cast<AssistantApp*>(lv_event_get_user_data(e));
+        auto* sw = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        self->ToggleWakeListening(lv_obj_has_state(sw, LV_STATE_CHECKED));
+    }, LV_EVENT_VALUE_CHANGED, this);
 
-    auto* cloud_card = lv_obj_create(root_);
-    lv_obj_remove_style_all(cloud_card);
-    lv_obj_set_size(cloud_card, 300, 42);
-    lv_obj_set_pos(cloud_card, 10, 136);
-    lv_obj_set_style_bg_color(cloud_card, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(cloud_card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(cloud_card, 8, 0);
-    lv_obj_clear_flag(cloud_card, LV_OBJ_FLAG_SCROLLABLE);
+    auto* assistant_card = CreateCard(root_, 114, 48);
+    auto* assistant_icon = CreateText(assistant_card, FONT_AWESOME_USER_ROBOT,
+                                      PhoneIconFont(), rodakos_theme_primary());
+    lv_obj_align(assistant_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
+    assistant_status_label_ = CreateText(assistant_card, "Assistant", &phone_font_14,
+                                         rodakos_theme_text_primary());
+    lv_obj_set_width(assistant_status_label_, 220);
+    lv_label_set_long_mode(assistant_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(assistant_status_label_, LV_ALIGN_TOP_LEFT, 44, 5);
+
+    assistant_detail_label_ = CreateText(assistant_card, "Ready", &phone_font_12,
+                                         rodakos_theme_text_tertiary());
+    lv_obj_set_width(assistant_detail_label_, 220);
+    lv_label_set_long_mode(assistant_detail_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(assistant_detail_label_, LV_ALIGN_TOP_LEFT, 44, 27);
+
+    auto* runtime_card = CreateCard(root_, 168, 32);
+    auto* runtime_icon = CreateText(runtime_card, FONT_AWESOME_CIRCLE_INFO, PhoneIconFont(),
+                                    rodakos_theme_primary());
+    lv_obj_align(runtime_icon, LV_ALIGN_LEFT_MID, 12, 0);
+
+    runtime_detail_label_ = CreateText(runtime_card, "Wake runtime: unavailable", &phone_font_12,
+                                       rodakos_theme_text_secondary());
+    lv_obj_set_width(runtime_detail_label_, 236);
+    lv_label_set_long_mode(runtime_detail_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(runtime_detail_label_, LV_ALIGN_LEFT_MID, 44, 0);
+
+    auto* cloud_card = CreateCard(root_, 206, 32);
     auto* cloud_icon = CreateText(cloud_card, FONT_AWESOME_CLOUD, PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(cloud_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
-    cloud_label_ = CreateText(cloud_card, "Voice link", &phone_font_14, rodakos_theme_text_primary());
-    lv_obj_set_width(cloud_label_, 220);
-    lv_label_set_long_mode(cloud_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(cloud_label_, LV_ALIGN_TOP_LEFT, 44, 5);
-
     cloud_detail_label_ = CreateText(cloud_card, "Offline", &phone_font_12,
                                      rodakos_theme_text_tertiary());
-    lv_obj_set_width(cloud_detail_label_, 220);
+    lv_obj_set_width(cloud_detail_label_, 236);
     lv_label_set_long_mode(cloud_detail_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(cloud_detail_label_, LV_ALIGN_TOP_LEFT, 44, 23);
-
-    auto* controls = lv_obj_create(root_);
-    lv_obj_remove_style_all(controls);
-    lv_obj_set_size(controls, 300, 42);
-    lv_obj_set_pos(controls, 10, 188);
-    lv_obj_set_layout(controls, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(controls, 10, 0);
-    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* talk_btn = lv_btn_create(controls);
-    StyleButton(talk_btn, 145, true);
-    auto* talk_label = CreateText(talk_btn, FONT_AWESOME_MICROPHONE "  Talk", &phone_font_14, lv_color_white());
-    lv_obj_center(talk_label);
-    lv_obj_add_event_cb(talk_btn, [](lv_event_t* e) {
-        static_cast<AssistantApp*>(lv_event_get_user_data(e))->StartInteraction();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* stop_btn = lv_btn_create(controls);
-    StyleButton(stop_btn, 145, false);
-    auto* stop_label = CreateText(stop_btn, FONT_AWESOME_STOP "  Stop", &phone_font_14,
-                                  rodakos_theme_text_primary());
-    lv_obj_center(stop_label);
-    lv_obj_add_event_cb(stop_btn, [](lv_event_t* e) {
-        static_cast<AssistantApp*>(lv_event_get_user_data(e))->StopInteraction();
-    }, LV_EVENT_CLICKED, this);
+    lv_obj_align(cloud_detail_label_, LV_ALIGN_LEFT_MID, 44, 0);
 }
 
 void AssistantApp::RefreshState() {
-    if (phase_label_ == nullptr || assistant_ == nullptr) {
+    if (assistant_status_label_ == nullptr || assistant_ == nullptr) {
         return;
     }
 
-    const auto state = assistant_->GetState();
-    lv_label_set_text(phase_label_, PhaseText(state.phase));
-    lv_label_set_text_fmt(detail_label_, "%s - %s",
-                          TriggerText(state.trigger),
-                          state.message.empty() ? "Ready" : state.message.c_str());
-    lv_label_set_text(focus_label_, state.focus_active ? "Exclusive" : "Idle");
-    lv_obj_set_style_text_color(focus_label_,
-                                state.focus_active ? rodakos_theme_primary()
-                                                    : rodakos_theme_text_tertiary(),
-                                0);
-    lv_label_set_text_fmt(cloud_detail_label_, "%s - %s",
-                          state.transport_name.empty() ? "offline" : state.transport_name.c_str(),
-                          state.transport_active ? "active" : "idle");
+    const auto assistant_state = assistant_->GetState();
+    lv_label_set_text_fmt(assistant_status_label_, "Assistant - %s",
+                          PhaseText(assistant_state.phase));
+    lv_label_set_text_fmt(assistant_detail_label_, "%s%s",
+                          assistant_state.focus_active ? "Exclusive focus - " : "",
+                          assistant_state.message.empty() ? "Ready" : assistant_state.message.c_str());
+
+    if (wake_ != nullptr && wake_switch_ != nullptr) {
+        const auto wake_state = wake_->GetState();
+        if (wake_state.enabled) {
+            lv_obj_add_state(wake_switch_, LV_STATE_CHECKED);
+        } else {
+            lv_obj_remove_state(wake_switch_, LV_STATE_CHECKED);
+        }
+        lv_label_set_text_fmt(wake_status_label_, "%s - %s",
+                              WakeStatusText(wake_state.status),
+                              wake_state.message.empty() ? "Ready" : wake_state.message.c_str());
+        lv_obj_set_style_text_color(
+            wake_status_label_,
+            wake_state.status == rodakos::VoiceWakeStatus::kListening ? rodakos_theme_primary()
+                                                                      : rodakos_theme_text_secondary(),
+            0);
+        lv_label_set_text_fmt(runtime_detail_label_, "%s - %s",
+                              wake_state.runtime_name.empty() ? "wake-runtime" : wake_state.runtime_name.c_str(),
+                              wake_state.runtime_available ? "ready" : "not installed");
+    } else if (wake_status_label_ != nullptr) {
+        lv_label_set_text(wake_status_label_, "Wake service unavailable");
+    }
+
+    lv_label_set_text_fmt(cloud_detail_label_, "%s/%s - %s",
+                          assistant_state.transport_name.empty() ? "offline" : assistant_state.transport_name.c_str(),
+                          assistant_state.recorder_name.empty() ? "offline" : assistant_state.recorder_name.c_str(),
+                          assistant_state.transport_active && assistant_state.recorder_active ? "active" : "idle");
 }
 
-void AssistantApp::StartInteraction() {
-    if (assistant_ == nullptr) {
-        ui_->ShowToastUnlocked("Assistant unavailable");
+void AssistantApp::ToggleWakeListening(bool enabled) {
+    if (wake_ == nullptr) {
+        ui_->ShowToastUnlocked("Wake service unavailable");
         return;
     }
-    if (!assistant_->StartInteraction(rodakos::VoiceAssistantTrigger::kManual)) {
-        ui_->ShowToastUnlocked("Assistant failed");
-    }
-    RefreshState();
-}
-
-void AssistantApp::StopInteraction() {
-    if (assistant_ != nullptr) {
-        assistant_->StopInteraction();
+    if (!wake_->SetEnabled(enabled) && enabled) {
+        ui_->ShowToastUnlocked("Wake runtime unavailable");
+    } else {
+        ui_->ShowToastUnlocked(enabled ? "Wake listening enabled" : "Wake listening disabled");
     }
     RefreshState();
 }
@@ -300,11 +318,9 @@ void RegisterAssistantApp(PhoneAppRegistry& registry) {
         .icon = FONT_AWESOME_USER_ROBOT,
         .category = PhoneAppCategory::kTools,
         .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
-        .capabilities = PhoneCapability::kNetwork |
-                         PhoneCapability::kAudioPlayback |
-                         PhoneCapability::kBackgroundTick,
+        .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
-        .aliases = {"voice", "xiaozhi", "siri", "语音", "助手"},
+        .aliases = {"voice", "assistant", "siri", "语音", "助手"},
         .create = []() { return std::make_unique<AssistantApp>(); },
     });
 }

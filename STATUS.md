@@ -152,8 +152,8 @@ E (927) DEV_IO_EXPANDER: No IO Expander found on the I2C bus
 ### 固件大小
 - **Bootloader**: ~22 KB
 - **Partition Table**: 4 KB
-- **应用固件**: ~2 MB（100% of 2MB factory partition）
-- **存储分区**: ~14 MB（SD 卡挂载点）
+- **应用固件**: ~3.4 MB（约 42% of 8MB factory partition）
+- **存储分区**: ~8 MB（内部 FAT 数据分区；媒体文件使用 SD 卡）
 
 ### 启动时间
 - 冷启动到 HomeApp 显示：约 1.2 秒

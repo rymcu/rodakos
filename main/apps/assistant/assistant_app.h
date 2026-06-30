@@ -10,6 +10,7 @@ class PhoneUi;
 
 namespace rodakos {
 class VoiceAssistantService;
+class VoiceWakeService;
 }
 
 class AssistantApp final : public PhoneApp {
@@ -27,20 +28,21 @@ public:
 
 private:
     void CreateUi();
-    void StartInteraction();
-    void StopInteraction();
+    void ToggleWakeListening(bool enabled);
     void NavigateHome();
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
     rodakos::VoiceAssistantService* assistant_ = nullptr;
+    rodakos::VoiceWakeService* wake_ = nullptr;
 
     lv_obj_t* root_ = nullptr;
     lv_timer_t* refresh_timer_ = nullptr;
-    lv_obj_t* phase_label_ = nullptr;
-    lv_obj_t* detail_label_ = nullptr;
-    lv_obj_t* focus_label_ = nullptr;
-    lv_obj_t* cloud_label_ = nullptr;
+    lv_obj_t* wake_switch_ = nullptr;
+    lv_obj_t* wake_status_label_ = nullptr;
+    lv_obj_t* assistant_status_label_ = nullptr;
+    lv_obj_t* assistant_detail_label_ = nullptr;
+    lv_obj_t* runtime_detail_label_ = nullptr;
     lv_obj_t* cloud_detail_label_ = nullptr;
 };
 

@@ -85,21 +85,21 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16m.csv"
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x200000,
-storage,  data, fat,     ,        0xDE0000,
+factory,  app,  factory, 0x10000, 0x800000,
+storage,  data, fat,     ,        0x7E0000,
 ```
 
 **分区说明：**
 - `nvs` (24KB) - 存储 WiFi 配置、Settings 等
 - `phy_init` (4KB) - PHY 校准数据
-- `factory` (2MB = 0x200000) - 主固件（当前 ~668KB，留足够余量）
-- `storage` (~14MB = 0xDE0000) - FAT 文件系统（SD 卡挂载点）
+- `factory` (8MB = 0x800000) - 主固件（为 RodakOS app、Assistant 和系统服务留余量）
+- `storage` (~8MB = 0x7E0000) - 内部 FAT 数据分区；照片/音乐等媒体仍优先使用 SD 卡
 
 **重要：** 
 - 16MB flash = 0x1000000 bytes
 - 必须减去前面的 offset (0x10000) 和已分配空间
 - 使用十六进制精确计算，避免 "1M"/"15M" 这种单位导致对齐问题
-- 总计算：0x10000 + 0x200000 + 0xDE0000 = 0xFF0000 < 0x1000000 ✅
+- 总计算：0x10000 + 0x800000 + 0x7E0000 = 0xFF0000 < 0x1000000 ✅
 
 ---
 
@@ -237,15 +237,15 @@ factory,  app,  factory, 0x10000, 1M,
 storage,  data, fat,     ,        15M,
 
 # 正确的配置（十六进制精确计算）
-factory,  app,  factory, 0x10000, 0x200000,    # 2MB
-storage,  data, fat,     ,        0xDE0000,    # ~14MB
+factory,  app,  factory, 0x10000, 0x800000,    # 8MB
+storage,  data, fat,     ,        0x7E0000,    # ~8MB
 ```
 
 **计算公式：**
 - 16MB flash = 0x1000000 bytes
 - 可用空间 = 0x1000000 - 0x10000 (bootloader/partition table 区域) = 0xFF0000
-- factory (2MB) = 0x200000
-- storage = 0xFF0000 - 0x200000 = 0xDF0000（实际用 0xDE0000 留余量）
+- factory (8MB) = 0x800000
+- storage = 0xFF0000 - 0x800000 = 0x7F0000（实际用 0x7E0000 留余量）
 
 ---
 
@@ -355,4 +355,3 @@ flags:
 1. 尝试切换 `swap_bytes` 为 `true`/`false`
 2. 重新构建并烧录：`idf.py build flash`
 3. 观察颜色是否正常
-
