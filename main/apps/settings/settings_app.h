@@ -6,6 +6,7 @@
 #include "rodakos_adapters/wifi_config.h"
 #include <lvgl.h>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +18,8 @@ class SettingsApp;
 
 struct SettingsCloudRefreshGuard {
     std::atomic<SettingsApp*> app{nullptr};
+    std::atomic<bool> refresh_in_progress{false};
+    std::atomic<uint32_t> refresh_generation{0};
 };
 
 namespace rodakos {
@@ -123,8 +126,6 @@ private:
     lv_obj_t* cloud_activation_label_ = nullptr;
     lv_obj_t* cloud_url_dialog_ = nullptr;
     lv_obj_t* cloud_url_textarea_ = nullptr;
-    bool cloud_refresh_in_progress_ = false;
-    uint32_t cloud_refresh_generation_ = 0;
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
 
     // Web 上传页面控件

@@ -110,6 +110,10 @@ void CloudRefreshTask(void* arg) {
             lvgl_port_unlock();
         }
         if (!queued) {
+            auto guard = payload->guard;
+            if (guard && payload->generation == guard->refresh_generation.load()) {
+                guard->refresh_in_progress.store(false);
+            }
             delete payload;
         }
     } else {
@@ -298,6 +302,8 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
     ui_ = &context.ui();
     cloud_refresh_guard_ = std::make_shared<SettingsCloudRefreshGuard>();
     cloud_refresh_guard_->app.store(this);
+    cloud_refresh_guard_->refresh_in_progress.store(false);
+    cloud_refresh_guard_->refresh_generation.store(0);
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -342,9 +348,9 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
 }
 
 void SettingsApp::OnDestroy() {
-    cloud_refresh_generation_++;
-    cloud_refresh_in_progress_ = false;
     if (cloud_refresh_guard_) {
+        cloud_refresh_guard_->refresh_generation.fetch_add(1);
+        cloud_refresh_guard_->refresh_in_progress.store(false);
         cloud_refresh_guard_->app.store(nullptr);
     }
     if (ui_ != nullptr) {
@@ -1214,12 +1220,13 @@ void SettingsApp::RefreshDeviceCloud() {
         return;
     }
 
-    if (cloud_refresh_in_progress_) {
-        ui_->ShowToastUnlocked("Device services refreshing");
-        return;
-    }
     if (!cloud_refresh_guard_) {
         ui_->ShowToastUnlocked("Device services unavailable");
+        return;
+    }
+    bool expected = false;
+    if (!cloud_refresh_guard_->refresh_in_progress.compare_exchange_strong(expected, true)) {
+        ui_->ShowToastUnlocked("Device services refreshing");
         return;
     }
 
@@ -1230,13 +1237,12 @@ void SettingsApp::RefreshDeviceCloud() {
     auto* payload = new CloudRefreshPayload;
     payload->guard = cloud_refresh_guard_;
     payload->service = device_cloud;
-    payload->generation = cloud_refresh_generation_;
+    payload->generation = cloud_refresh_guard_->refresh_generation.load();
 
-    cloud_refresh_in_progress_ = true;
     const BaseType_t ret = xTaskCreate(
         CloudRefreshTask, "cloud_refresh", 6144, payload, 3, nullptr);
     if (ret != pdPASS) {
-        cloud_refresh_in_progress_ = false;
+        cloud_refresh_guard_->refresh_in_progress.store(false);
         delete payload;
         ui_->ShowToastUnlocked("Device services failed");
         if (cloud_status_label_ != nullptr) {
@@ -1252,11 +1258,14 @@ void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
     if (ui_ == nullptr) {
         return;
     }
-    if (generation != cloud_refresh_generation_) {
+    if (!cloud_refresh_guard_) {
+        return;
+    }
+    if (generation != cloud_refresh_guard_->refresh_generation.load()) {
         return;
     }
 
-    cloud_refresh_in_progress_ = false;
+    cloud_refresh_guard_->refresh_in_progress.store(false);
     UpdateDeviceCloudPage();
     if (ok) {
         ui_->ShowToastUnlocked("Device services updated");

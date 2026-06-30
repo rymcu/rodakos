@@ -355,7 +355,7 @@ void VoiceWakeService::StopRuntimeLocked(const char* message) {
     }
     listening_ = false;
     if (status_ == VoiceWakeStatus::kListening) {
-        SetStatusLocked(enabled_ ? VoiceWakeStatus::kUnavailable : VoiceWakeStatus::kDisabled, message);
+        SetStatusLocked(VoiceWakeStatus::kDisabled, message);
     }
 }
 
