@@ -14,6 +14,7 @@ set(SOURCES
     "phone_os/audio_output_service.cc"
     "phone_os/audio_service.cc"
     "phone_os/music_player_service.cc"
+    "phone_os/light_service.cc"
     "phone_os/time_service.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_assistant_transport.cc"
@@ -41,6 +42,7 @@ set(SOURCES
     "apps/music/music_app.cc"
     "apps/assistant/assistant_app.cc"
     "apps/system_info/system_info_app.cc"
+    "apps/smart/smart_app.cc"
 )
 
 idf_component_register(
@@ -64,6 +66,7 @@ idf_component_register(
         esp_app_format
         esp_timer
         heap
+        led_strip
         spi_flash
         fatfs
         sdmmc

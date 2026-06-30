@@ -9,6 +9,7 @@ class AudioOutputService;
 class AudioService;
 class DeviceCloudConfigService;
 class FileService;
+class LightService;
 class MusicPlayerService;
 class VoiceAssistantService;
 class VoiceWakeService;
@@ -35,6 +36,9 @@ public:
     void SetMusicPlayer(rodakos::MusicPlayerService* music_player) { music_player_ = music_player; }
     rodakos::MusicPlayerService* music_player() { return music_player_; }
 
+    void SetLights(rodakos::LightService* lights) { lights_ = lights; }
+    rodakos::LightService* lights() { return lights_; }
+
     void SetAudioFocus(rodakos::AudioFocusService* audio_focus) { audio_focus_ = audio_focus; }
     rodakos::AudioFocusService* audio_focus() { return audio_focus_; }
 
@@ -57,6 +61,7 @@ private:
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::MusicPlayerService* music_player_ = nullptr;
+    rodakos::LightService* lights_ = nullptr;
     rodakos::AudioFocusService* audio_focus_ = nullptr;
     rodakos::DeviceCloudConfigService* device_cloud_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;

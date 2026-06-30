@@ -14,13 +14,17 @@
     # - LED_MODEL_SK6812
     # - LED_MODEL_WS2811
     # - LED_MODEL_WS2816
-    color_component_format: LED_STRIP_COLOR_COMPONENT_FMT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
+    led_pixel_format: LED_PIXEL_FORMAT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
     # Common values include:
-    # - LED_STRIP_COLOR_COMPONENT_FMT_GRB
-    # - LED_STRIP_COLOR_COMPONENT_FMT_RGB
-    # - LED_STRIP_COLOR_COMPONENT_FMT_GRBW
-    # - LED_STRIP_COLOR_COMPONENT_FMT_RGBW
+    # - LED_PIXEL_FORMAT_GRB
+    # - LED_PIXEL_FORMAT_GRBW
     invert_out: false                  # Invert output signal level (default: false)
+    # Optional logical lights. Omit this section to expose one logical light per LED.
+    logical_lights:
+      - id: status_rgb
+        title: Status RGB
+        first_led: 0
+        led_count: 1
     # led_strip_rmt_config_t fields
     rmt:
       clk_src: RMT_CLK_SRC_DEFAULT     # RMT clock source (rmt_clock_source_t)
@@ -42,13 +46,21 @@
     # - LED_MODEL_SK6812
     # - LED_MODEL_WS2811
     # - LED_MODEL_WS2816
-    color_component_format: LED_STRIP_COLOR_COMPONENT_FMT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
+    led_pixel_format: LED_PIXEL_FORMAT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
     # Common values include:
-    # - LED_STRIP_COLOR_COMPONENT_FMT_GRB
-    # - LED_STRIP_COLOR_COMPONENT_FMT_RGB
-    # - LED_STRIP_COLOR_COMPONENT_FMT_GRBW
-    # - LED_STRIP_COLOR_COMPONENT_FMT_RGBW
+    # - LED_PIXEL_FORMAT_GRB
+    # - LED_PIXEL_FORMAT_GRBW
     invert_out: false                  # Invert output signal level (default: false)
+    # Optional: group physical pixels into named logical lights.
+    logical_lights:
+      - id: left_ambient
+        title: Left Ambient
+        first_led: 0
+        led_count: 4
+      - id: right_ambient
+        title: Right Ambient
+        first_led: 4
+        led_count: 4
     # led_strip_spi_config_t fields; the led_strip driver initializes this SPI bus internally.
     spi:
       clk_src: SPI_CLK_SRC_DEFAULT     # SPI clock source (spi_clock_source_t)

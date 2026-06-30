@@ -15,6 +15,7 @@ extern "C" {
 
 #define ESP_BOARD_DEVICE_LED_STRIP_SUB_TYPE_RMT  "rmt"  /*!< LED strip over RMT */
 #define ESP_BOARD_DEVICE_LED_STRIP_SUB_TYPE_SPI  "spi"  /*!< LED strip over SPI */
+#define DEV_LED_STRIP_MAX_LOGICAL_LIGHTS         32     /*!< Maximum named logical ranges */
 
 /**
  * @brief  LED strip RMT sub configuration
@@ -38,13 +39,25 @@ typedef struct {
 } dev_led_strip_handles_t;
 
 /**
+ * @brief  Logical light range exposed by one LED strip device
+ */
+typedef struct {
+    const char *id;          /*!< Stable logical light id, optional */
+    const char *title;       /*!< User-facing light title, optional */
+    uint32_t    first_led;   /*!< First physical LED index in this logical light */
+    uint32_t    led_count;   /*!< Number of physical LEDs controlled together */
+} dev_led_strip_logical_light_t;
+
+/**
  * @brief  LED strip device configuration
  */
 typedef struct {
-    const char         *name;          /*!< Device name */
-    const char         *chip;          /*!< LED strip chip/model name */
-    const char         *sub_type;      /*!< Sub type: rmt or spi */
-    led_strip_config_t  strip_config;  /*!< Native led_strip common configuration */
+    const char                         *name;                 /*!< Device name */
+    const char                         *chip;                 /*!< LED strip chip/model name */
+    const char                         *sub_type;             /*!< Sub type: rmt or spi */
+    led_strip_config_t                  strip_config;         /*!< Native led_strip common configuration */
+    dev_led_strip_logical_light_t       logical_lights[DEV_LED_STRIP_MAX_LOGICAL_LIGHTS]; /*!< Optional ranges */
+    uint32_t                            logical_light_count;  /*!< Number of logical light ranges */
     union {
         dev_led_strip_rmt_sub_config_t  rmt;
         dev_led_strip_spi_sub_config_t  spi;
