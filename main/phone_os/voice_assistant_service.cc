@@ -130,6 +130,11 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
         MarkError(transport_.last_error());
         return false;
     }
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        transport_active_ = true;
+        xSemaphoreGive(mutex_);
+    }
 
     MarkListening(trigger == VoiceAssistantTrigger::kWakeWord ? "Wake word accepted" : "Listening");
     ESP_LOGI(TAG, "Interaction started: trigger=%s focus_token=%" PRIu32,
@@ -264,11 +269,6 @@ bool VoiceAssistantService::OpenTransportForInteraction(VoiceAssistantTrigger tr
         !transport_.SendWakeWordDetected(wake_word)) {
         transport_.CloseAudioChannel();
         return false;
-    }
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        transport_active_ = true;
-        xSemaphoreGive(mutex_);
     }
     return true;
 }
