@@ -1,4 +1,4 @@
-#include "phone_os/xiaozhi_cloud_config.h"
+#include "phone_os/voice_cloud_config.h"
 
 #include "settings.h"
 
@@ -25,8 +25,9 @@
 
 namespace rodakos {
 namespace {
-constexpr const char* TAG = "XiaozhiCloud";
-constexpr const char* kOtaNamespace = "xiaozhi";
+constexpr const char* TAG = "VoiceCloud";
+constexpr const char* kOtaNamespace = "voice_cloud";
+constexpr const char* kLegacyOtaNamespace = "xiaozhi";
 constexpr const char* kWebsocketNamespace = "websocket";
 constexpr const char* kBoardNamespace = "board";
 constexpr const char* kOtaUrlKey = "ota_url";
@@ -89,13 +90,20 @@ void AddIntIfPresent(cJSON* root, const char* key, int& output) {
 
 }  // namespace
 
-const char* XiaozhiCloudConfigService::DefaultOtaUrl() {
+const char* VoiceCloudConfigService::DefaultOtaUrl() {
     return kDefaultOtaUrl;
 }
 
-bool XiaozhiCloudConfigService::Load(XiaozhiCloudConfig& config) {
+bool VoiceCloudConfigService::Load(VoiceCloudConfig& config) {
     Settings cloud_settings(kOtaNamespace, false);
     config.ota_url = cloud_settings.GetString(kOtaUrlKey, kDefaultOtaUrl);
+    if (config.ota_url.empty() || config.ota_url == kDefaultOtaUrl) {
+        Settings legacy_settings(kLegacyOtaNamespace, false);
+        const std::string legacy_url = legacy_settings.GetString(kOtaUrlKey, "");
+        if (!legacy_url.empty()) {
+            config.ota_url = legacy_url;
+        }
+    }
     if (config.ota_url.empty()) {
         config.ota_url = kDefaultOtaUrl;
     }
@@ -111,7 +119,7 @@ bool XiaozhiCloudConfigService::Load(XiaozhiCloudConfig& config) {
     return config.has_websocket_config;
 }
 
-bool XiaozhiCloudConfigService::RefreshFromOta(XiaozhiCloudConfig& config) {
+bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
     Load(config);
     if (config.ota_url.empty()) {
         config.ota_url = kDefaultOtaUrl;
@@ -125,7 +133,7 @@ bool XiaozhiCloudConfigService::RefreshFromOta(XiaozhiCloudConfig& config) {
     http_config.buffer_size = 1024;
     http_config.buffer_size_tx = 1024;
     http_config.crt_bundle_attach = esp_crt_bundle_attach;
-    http_config.user_agent = "RodakOS/xiaozhi";
+    http_config.user_agent = "RodakOS/voice-cloud";
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == nullptr) {
@@ -139,7 +147,7 @@ bool XiaozhiCloudConfigService::RefreshFromOta(XiaozhiCloudConfig& config) {
     esp_http_client_set_header(client, "Device-Id", mac.c_str());
     esp_http_client_set_header(client, "Client-Id", client_id.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    ESP_LOGI(TAG, "Refreshing XiaoZhi cloud config from %s", config.ota_url.c_str());
+    ESP_LOGI(TAG, "Refreshing voice cloud config from %s", config.ota_url.c_str());
     if (payload.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         SetError("OTA request payload is too large");
         esp_http_client_cleanup(client);
@@ -197,7 +205,7 @@ bool XiaozhiCloudConfigService::RefreshFromOta(XiaozhiCloudConfig& config) {
     return config.has_websocket_config;
 }
 
-std::string XiaozhiCloudConfigService::GetClientId() {
+std::string VoiceCloudConfigService::GetClientId() {
     Settings settings(kBoardNamespace, true);
     std::string uuid = settings.GetString(kUuidKey, "");
     if (uuid.empty()) {
@@ -207,7 +215,7 @@ std::string XiaozhiCloudConfigService::GetClientId() {
     return uuid;
 }
 
-bool XiaozhiCloudConfigService::SaveWebsocketConfig(const XiaozhiCloudConfig& config) {
+bool VoiceCloudConfigService::SaveWebsocketConfig(const VoiceCloudConfig& config) {
     Settings settings(kWebsocketNamespace, true);
     settings.SetString(kUrlKey, config.websocket_url);
     settings.SetString(kTokenKey, config.websocket_token);
@@ -215,8 +223,8 @@ bool XiaozhiCloudConfigService::SaveWebsocketConfig(const XiaozhiCloudConfig& co
     return true;
 }
 
-bool XiaozhiCloudConfigService::ParseOtaResponse(const std::string& response,
-                                                 XiaozhiCloudConfig& config) {
+bool VoiceCloudConfigService::ParseOtaResponse(const std::string& response,
+                                                 VoiceCloudConfig& config) {
     cJSON* root = cJSON_Parse(response.c_str());
     if (root == nullptr) {
         SetError("OTA response is not JSON");
@@ -240,19 +248,19 @@ bool XiaozhiCloudConfigService::ParseOtaResponse(const std::string& response,
 
     cJSON_Delete(root);
     if (!config.has_websocket_config) {
-        SetError(config.has_activation_code ? "Activate on xiaozhi.me" : "No websocket config from XiaoZhi cloud");
+        SetError(config.has_activation_code ? "Activate the device in the cloud console" : "No websocket config from voice cloud");
         return false;
     }
     if (config.websocket_version <= 0) {
         config.websocket_version = 1;
     }
     last_error_.clear();
-    ESP_LOGI(TAG, "XiaoZhi websocket config ready: version=%d url=%s",
+    ESP_LOGI(TAG, "Voice cloud websocket config ready: version=%d url=%s",
              config.websocket_version, config.websocket_url.c_str());
     return true;
 }
 
-std::string XiaozhiCloudConfigService::BuildSystemInfoJson() {
+std::string VoiceCloudConfigService::BuildSystemInfoJson() {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "version", 2);
     cJSON_AddStringToObject(root, "language", "zh-CN");
@@ -294,7 +302,7 @@ std::string XiaozhiCloudConfigService::BuildSystemInfoJson() {
     return json;
 }
 
-std::string XiaozhiCloudConfigService::BuildBoardJson() {
+std::string VoiceCloudConfigService::BuildBoardJson() {
     cJSON* board = cJSON_CreateObject();
     cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
     cJSON_AddStringToObject(board, "name", "RodakOS RYMCU BigSmart");
@@ -304,7 +312,7 @@ std::string XiaozhiCloudConfigService::BuildBoardJson() {
     return json;
 }
 
-void XiaozhiCloudConfigService::SetError(const std::string& message) {
+void VoiceCloudConfigService::SetError(const std::string& message) {
     last_error_ = message;
     ESP_LOGW(TAG, "%s", last_error_.c_str());
 }

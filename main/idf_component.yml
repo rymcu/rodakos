@@ -20,7 +20,7 @@ dependencies:
   espressif/esp_codec_dev: ~1.5
   chmorgan/esp-libhelix-mp3: ^1.0.3
 
-  # XiaoZhi-compatible cloud transport
+  # Voice cloud websocket transport
   espressif/esp_websocket_client: ^1.7.0
 
   idf:

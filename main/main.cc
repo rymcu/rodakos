@@ -12,9 +12,10 @@
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_recorder_service.h"
+#include "phone_os/voice_wake_service.h"
 #include "phone_os/web_file_system_service.h"
-#include "phone_os/xiaozhi_cloud_config.h"
-#include "phone_os/xiaozhi_websocket_transport.h"
+#include "phone_os/voice_cloud_config.h"
+#include "phone_os/voice_cloud_websocket_transport.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/phone_fonts.h"
@@ -319,12 +320,15 @@ extern "C" void app_main(void) {
     static rodakos::AudioService audio_service(audio_output_service);
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
-    static rodakos::XiaozhiCloudConfigService xiaozhi_cloud_config_service;
-    static rodakos::XiaozhiWebSocketTransport voice_assistant_transport(
-        xiaozhi_cloud_config_service);
+    static rodakos::VoiceCloudConfigService voice_cloud_config_service;
+    static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
+        voice_cloud_config_service);
     static rodakos::NoopVoiceRecorderService voice_recorder_service;
     static rodakos::VoiceAssistantService voice_assistant_service(
         audio_focus_service, voice_assistant_transport, voice_recorder_service);
+    static rodakos::UnavailableVoiceWakeRuntime voice_wake_runtime;
+    static rodakos::VoiceWakeService voice_wake_service(
+        voice_assistant_service, voice_wake_runtime);
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
 
     static rodakos::WebFileSystemService web_files_service(file_service);
@@ -339,6 +343,7 @@ extern "C" void app_main(void) {
     services.SetMusicPlayer(&music_player_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetVoiceAssistant(&voice_assistant_service);
+    services.SetVoiceWake(&voice_wake_service);
     services.SetWebFiles(&web_files_service);
 
     static PhoneSystem system(ui, services);
@@ -346,6 +351,8 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         return;
     }
+
+    voice_wake_service.Start();
 
     // WiFi 自动连接放在系统启动后，避免阻塞 UI
     if (wifi != nullptr) {

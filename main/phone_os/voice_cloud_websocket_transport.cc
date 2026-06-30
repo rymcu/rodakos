@@ -1,4 +1,4 @@
-#include "phone_os/xiaozhi_websocket_transport.h"
+#include "phone_os/voice_cloud_websocket_transport.h"
 
 #include <cJSON.h>
 #include <arpa/inet.h>
@@ -12,7 +12,7 @@
 
 namespace rodakos {
 namespace {
-constexpr const char* TAG = "XiaozhiWs";
+constexpr const char* TAG = "VoiceWs";
 constexpr EventBits_t kConnectedBit = BIT0;
 constexpr EventBits_t kHelloBit = BIT1;
 constexpr EventBits_t kErrorBit = BIT2;
@@ -87,13 +87,13 @@ std::vector<uint8_t> WrapAudioPacketV3(const VoiceAudioPacket& packet) {
 
 }  // namespace
 
-XiaozhiWebSocketTransport::XiaozhiWebSocketTransport(XiaozhiCloudConfigService& config_service)
+VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(VoiceCloudConfigService& config_service)
     : config_service_(config_service) {
     mutex_ = xSemaphoreCreateMutex();
     events_ = xEventGroupCreate();
 }
 
-XiaozhiWebSocketTransport::~XiaozhiWebSocketTransport() {
+VoiceCloudWebSocketTransport::~VoiceCloudWebSocketTransport() {
     CloseAudioChannel();
     if (events_ != nullptr) {
         vEventGroupDelete(events_);
@@ -105,7 +105,7 @@ XiaozhiWebSocketTransport::~XiaozhiWebSocketTransport() {
     }
 }
 
-bool XiaozhiWebSocketTransport::Start() {
+bool VoiceCloudWebSocketTransport::Start() {
     if (started_) {
         return true;
     }
@@ -113,7 +113,7 @@ bool XiaozhiWebSocketTransport::Start() {
     return true;
 }
 
-bool XiaozhiWebSocketTransport::OpenAudioChannel() {
+bool VoiceCloudWebSocketTransport::OpenAudioChannel() {
     CloseAudioChannel();
     if (events_ == nullptr) {
         SetError("Transport events unavailable");
@@ -152,7 +152,7 @@ bool XiaozhiWebSocketTransport::OpenAudioChannel() {
     ws_config.network_timeout_ms = 10000;
     ws_config.reconnect_timeout_ms = 10000;
     ws_config.pingpong_timeout_sec = 30;
-    ws_config.task_name = "xiaozhi_ws";
+    ws_config.task_name = "voice_ws";
     ws_config.task_stack = 6144;
     ws_config.crt_bundle_attach = esp_crt_bundle_attach;
 
@@ -163,7 +163,7 @@ bool XiaozhiWebSocketTransport::OpenAudioChannel() {
     }
     esp_websocket_register_events(client_, WEBSOCKET_EVENT_ANY, EventHandler, this);
 
-    ESP_LOGI(TAG, "Connecting to XiaoZhi websocket: %s", config_.websocket_url.c_str());
+    ESP_LOGI(TAG, "Connecting to voice cloud websocket: %s", config_.websocket_url.c_str());
     esp_err_t err = esp_websocket_client_start(client_);
     if (err != ESP_OK) {
         SetError(std::string("Websocket start failed: ") + esp_err_to_name(err));
@@ -187,7 +187,7 @@ bool XiaozhiWebSocketTransport::OpenAudioChannel() {
     bits = xEventGroupWaitBits(events_, kHelloBit | kErrorBit, pdTRUE, pdFALSE,
                                pdMS_TO_TICKS(kHelloTimeoutMs));
     if ((bits & kHelloBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error_ : "XiaoZhi hello timeout");
+        SetError((bits & kErrorBit) ? last_error_ : "Voice cloud hello timeout");
         CloseAudioChannel();
         return false;
     }
@@ -201,7 +201,7 @@ bool XiaozhiWebSocketTransport::OpenAudioChannel() {
     return true;
 }
 
-void XiaozhiWebSocketTransport::CloseAudioChannel() {
+void VoiceCloudWebSocketTransport::CloseAudioChannel() {
     esp_websocket_client_handle_t client = client_;
     client_ = nullptr;
 
@@ -220,7 +220,7 @@ void XiaozhiWebSocketTransport::CloseAudioChannel() {
     }
 }
 
-bool XiaozhiWebSocketTransport::IsAudioChannelOpen() const {
+bool VoiceCloudWebSocketTransport::IsAudioChannelOpen() const {
     if (mutex_ == nullptr) {
         return false;
     }
@@ -231,7 +231,7 @@ bool XiaozhiWebSocketTransport::IsAudioChannelOpen() const {
     return open;
 }
 
-bool XiaozhiWebSocketTransport::SendAudio(const VoiceAudioPacket& packet) {
+bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet) {
     if (!IsAudioChannelOpen()) {
         SetError("Audio channel is not open");
         return false;
@@ -271,7 +271,7 @@ bool XiaozhiWebSocketTransport::SendAudio(const VoiceAudioPacket& packet) {
     return true;
 }
 
-bool XiaozhiWebSocketTransport::SendStartListening(VoiceListeningMode mode) {
+bool VoiceCloudWebSocketTransport::SendStartListening(VoiceListeningMode mode) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
@@ -282,7 +282,7 @@ bool XiaozhiWebSocketTransport::SendStartListening(VoiceListeningMode mode) {
     return SendText(message);
 }
 
-bool XiaozhiWebSocketTransport::SendStopListening() {
+bool VoiceCloudWebSocketTransport::SendStopListening() {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
@@ -292,7 +292,7 @@ bool XiaozhiWebSocketTransport::SendStopListening() {
     return SendText(message);
 }
 
-bool XiaozhiWebSocketTransport::SendWakeWordDetected(const std::string& wake_word) {
+bool VoiceCloudWebSocketTransport::SendWakeWordDetected(const std::string& wake_word) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
@@ -303,7 +303,7 @@ bool XiaozhiWebSocketTransport::SendWakeWordDetected(const std::string& wake_wor
     return SendText(message);
 }
 
-bool XiaozhiWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason) {
+bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "type", "abort");
@@ -315,7 +315,7 @@ bool XiaozhiWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason) {
     return SendText(message);
 }
 
-bool XiaozhiWebSocketTransport::SendMcpMessage(const std::string& payload) {
+bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload) {
     if (!IsAudioChannelOpen()) {
         SetError("Audio channel is not open");
         return false;
@@ -335,11 +335,11 @@ bool XiaozhiWebSocketTransport::SendMcpMessage(const std::string& payload) {
     return SendText(message);
 }
 
-void XiaozhiWebSocketTransport::EventHandler(void* arg,
+void VoiceCloudWebSocketTransport::EventHandler(void* arg,
                                              esp_event_base_t,
                                              int32_t event_id,
                                              void* event_data) {
-    auto* self = static_cast<XiaozhiWebSocketTransport*>(arg);
+    auto* self = static_cast<VoiceCloudWebSocketTransport*>(arg);
     auto* data = static_cast<esp_websocket_event_data_t*>(event_data);
     if (self == nullptr) {
         return;
@@ -377,7 +377,7 @@ void XiaozhiWebSocketTransport::EventHandler(void* arg,
     }
 }
 
-bool XiaozhiWebSocketTransport::SendText(const std::string& text) {
+bool VoiceCloudWebSocketTransport::SendText(const std::string& text) {
     if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
         SetError("Websocket is not connected");
         return false;
@@ -392,11 +392,11 @@ bool XiaozhiWebSocketTransport::SendText(const std::string& text) {
     return true;
 }
 
-bool XiaozhiWebSocketTransport::SendHello() {
+bool VoiceCloudWebSocketTransport::SendHello() {
     return SendText(BuildHelloMessage());
 }
 
-std::string XiaozhiWebSocketTransport::BuildHelloMessage() const {
+std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "hello");
     cJSON_AddNumberToObject(root, "version", config_.websocket_version);
@@ -419,14 +419,14 @@ std::string XiaozhiWebSocketTransport::BuildHelloMessage() const {
     return message;
 }
 
-void XiaozhiWebSocketTransport::HandleTextFrame(const char* data, int len) {
+void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data, int len) {
     if (data == nullptr || len <= 0) {
         return;
     }
     std::string payload(data, len);
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
-        ESP_LOGW(TAG, "Invalid JSON from XiaoZhi: %.*s", len, data);
+        ESP_LOGW(TAG, "Invalid JSON from voice cloud: %.*s", len, data);
         return;
     }
 
@@ -434,12 +434,12 @@ void XiaozhiWebSocketTransport::HandleTextFrame(const char* data, int len) {
     if (cJSON_IsString(type) && std::strcmp(type->valuestring, "hello") == 0) {
         ParseServerHello(payload);
     } else if (cJSON_IsString(type)) {
-        ESP_LOGI(TAG, "XiaoZhi message: type=%s", type->valuestring);
+        ESP_LOGI(TAG, "Voice cloud message: type=%s", type->valuestring);
     }
     cJSON_Delete(root);
 }
 
-void XiaozhiWebSocketTransport::ParseServerHello(const std::string& payload) {
+void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload) {
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
         SetError("Invalid server hello");
@@ -450,7 +450,7 @@ void XiaozhiWebSocketTransport::ParseServerHello(const std::string& payload) {
     cJSON* transport = cJSON_GetObjectItem(root, "transport");
     if (!cJSON_IsString(transport) || std::strcmp(transport->valuestring, "websocket") != 0) {
         cJSON_Delete(root);
-        SetError("Unsupported XiaoZhi transport");
+        SetError("Unsupported voice cloud transport");
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -476,15 +476,15 @@ void XiaozhiWebSocketTransport::ParseServerHello(const std::string& payload) {
     }
 
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "XiaoZhi hello received: session=%s sample_rate=%d frame=%d",
+    ESP_LOGI(TAG, "Voice cloud hello received: session=%s sample_rate=%d frame=%d",
              session_id_.c_str(), server_sample_rate_, server_frame_duration_ms_);
     xEventGroupSetBits(events_, kHelloBit);
 }
 
-void XiaozhiWebSocketTransport::SetError(const std::string& message) {
+void VoiceCloudWebSocketTransport::SetError(const std::string& message) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        last_error_ = message.empty() ? "XiaoZhi transport error" : message;
+        last_error_ = message.empty() ? "Voice cloud transport error" : message;
         xSemaphoreGive(mutex_);
     } else {
         last_error_ = message;

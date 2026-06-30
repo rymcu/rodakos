@@ -5,7 +5,7 @@
 
 namespace rodakos {
 
-struct XiaozhiCloudConfig {
+struct VoiceCloudConfig {
     std::string ota_url;
     std::string websocket_url;
     std::string websocket_token;
@@ -16,18 +16,18 @@ struct XiaozhiCloudConfig {
     bool has_activation_code = false;
 };
 
-class XiaozhiCloudConfigService {
+class VoiceCloudConfigService {
 public:
-    bool Load(XiaozhiCloudConfig& config);
-    bool RefreshFromOta(XiaozhiCloudConfig& config);
+    bool Load(VoiceCloudConfig& config);
+    bool RefreshFromOta(VoiceCloudConfig& config);
     std::string GetClientId();
     const char* last_error() const { return last_error_.c_str(); }
 
     static const char* DefaultOtaUrl();
 
 private:
-    bool SaveWebsocketConfig(const XiaozhiCloudConfig& config);
-    bool ParseOtaResponse(const std::string& response, XiaozhiCloudConfig& config);
+    bool SaveWebsocketConfig(const VoiceCloudConfig& config);
+    bool ParseOtaResponse(const std::string& response, VoiceCloudConfig& config);
     std::string BuildSystemInfoJson();
     std::string BuildBoardJson();
     void SetError(const std::string& message);

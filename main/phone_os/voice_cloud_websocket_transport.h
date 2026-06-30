@@ -1,7 +1,7 @@
 #pragma once
 
 #include "phone_os/voice_assistant_transport.h"
-#include "phone_os/xiaozhi_cloud_config.h"
+#include "phone_os/voice_cloud_config.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -13,10 +13,10 @@
 
 namespace rodakos {
 
-class XiaozhiWebSocketTransport final : public VoiceAssistantTransport {
+class VoiceCloudWebSocketTransport final : public VoiceAssistantTransport {
 public:
-    explicit XiaozhiWebSocketTransport(XiaozhiCloudConfigService& config_service);
-    ~XiaozhiWebSocketTransport() override;
+    explicit VoiceCloudWebSocketTransport(VoiceCloudConfigService& config_service);
+    ~VoiceCloudWebSocketTransport() override;
 
     bool Start() override;
     bool OpenAudioChannel() override;
@@ -30,7 +30,7 @@ public:
     bool SendAbortSpeaking(VoiceAbortReason reason) override;
     bool SendMcpMessage(const std::string& payload) override;
 
-    const char* name() const override { return "xiaozhi.me"; }
+    const char* name() const override { return "voice-cloud"; }
     const char* last_error() const override { return last_error_.c_str(); }
 
 private:
@@ -43,11 +43,11 @@ private:
     void ParseServerHello(const std::string& payload);
     void SetError(const std::string& message);
 
-    XiaozhiCloudConfigService& config_service_;
+    VoiceCloudConfigService& config_service_;
     mutable SemaphoreHandle_t mutex_ = nullptr;
     EventGroupHandle_t events_ = nullptr;
     esp_websocket_client_handle_t client_ = nullptr;
-    XiaozhiCloudConfig config_;
+    VoiceCloudConfig config_;
     std::string headers_;
     std::string authorization_header_;
     std::string protocol_version_header_;
