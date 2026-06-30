@@ -9,12 +9,12 @@
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
 #include "phone_os/time_service.h"
+#include "phone_os/device_cloud_config.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_recorder_service.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/web_file_system_service.h"
-#include "phone_os/voice_cloud_config.h"
 #include "phone_os/voice_cloud_websocket_transport.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
@@ -320,9 +320,9 @@ extern "C" void app_main(void) {
     static rodakos::AudioService audio_service(audio_output_service);
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
-    static rodakos::VoiceCloudConfigService voice_cloud_config_service;
+    static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
-        voice_cloud_config_service);
+        device_cloud_config_service);
     static rodakos::NoopVoiceRecorderService voice_recorder_service;
     static rodakos::VoiceAssistantService voice_assistant_service(
         audio_focus_service, voice_assistant_transport, voice_recorder_service);
@@ -342,6 +342,7 @@ extern "C" void app_main(void) {
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
     services.SetAudioFocus(&audio_focus_service);
+    services.SetDeviceCloud(&device_cloud_config_service);
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
     services.SetWebFiles(&web_files_service);

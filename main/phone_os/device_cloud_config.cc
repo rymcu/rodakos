@@ -1,4 +1,4 @@
-#include "phone_os/voice_cloud_config.h"
+#include "phone_os/device_cloud_config.h"
 
 #include "settings.h"
 
@@ -25,19 +25,21 @@
 
 namespace rodakos {
 namespace {
-constexpr const char* TAG = "VoiceCloud";
-constexpr const char* kOtaNamespace = "voice_cloud";
-constexpr const char* kLegacyOtaNamespace = "xiaozhi";
+constexpr const char* TAG = "DeviceCloud";
+constexpr const char* kCloudNamespace = "device_cloud";
+constexpr const char* kLegacyVoiceNamespace = "voice_cloud";
+constexpr const char* kLegacyXiaozhiNamespace = "xiaozhi";
 constexpr const char* kWebsocketNamespace = "websocket";
 constexpr const char* kBoardNamespace = "board";
-constexpr const char* kOtaUrlKey = "ota_url";
+constexpr const char* kProvisioningUrlKey = "prov_url";
+constexpr const char* kLegacyOtaUrlKey = "ota_url";
 constexpr const char* kUrlKey = "url";
 constexpr const char* kTokenKey = "token";
 constexpr const char* kVersionKey = "version";
 constexpr const char* kUuidKey = "uuid";
-constexpr const char* kDefaultOtaUrl = "https://api.tenclass.net/xiaozhi/ota/";
-constexpr int kOtaTimeoutMs = 10000;
-constexpr size_t kMaxOtaResponseBytes = 8192;
+constexpr const char* kDefaultProvisioningUrl = "https://api.tenclass.net/xiaozhi/ota/";
+constexpr int kProvisioningTimeoutMs = 10000;
+constexpr size_t kMaxProvisioningResponseBytes = 8192;
 
 std::string MacAddress() {
     uint8_t mac[6] = {};
@@ -90,22 +92,33 @@ void AddIntIfPresent(cJSON* root, const char* key, int& output) {
 
 }  // namespace
 
-const char* VoiceCloudConfigService::DefaultOtaUrl() {
-    return kDefaultOtaUrl;
+const char* DeviceCloudConfigService::DefaultProvisioningUrl() {
+    return kDefaultProvisioningUrl;
 }
 
-bool VoiceCloudConfigService::Load(VoiceCloudConfig& config) {
-    Settings cloud_settings(kOtaNamespace, false);
-    config.ota_url = cloud_settings.GetString(kOtaUrlKey, kDefaultOtaUrl);
-    if (config.ota_url.empty() || config.ota_url == kDefaultOtaUrl) {
-        Settings legacy_settings(kLegacyOtaNamespace, false);
-        const std::string legacy_url = legacy_settings.GetString(kOtaUrlKey, "");
+bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
+    Settings cloud_settings(kCloudNamespace, false);
+    config.provisioning_url = cloud_settings.GetString(kProvisioningUrlKey, "");
+    bool should_migrate_provisioning_url = false;
+    if (config.provisioning_url.empty()) {
+        Settings legacy_voice_settings(kLegacyVoiceNamespace, false);
+        config.provisioning_url = legacy_voice_settings.GetString(kLegacyOtaUrlKey, "");
+        should_migrate_provisioning_url = !config.provisioning_url.empty();
+    }
+    if (config.provisioning_url.empty()) {
+        Settings legacy_settings(kLegacyXiaozhiNamespace, false);
+        const std::string legacy_url = legacy_settings.GetString(kLegacyOtaUrlKey, "");
         if (!legacy_url.empty()) {
-            config.ota_url = legacy_url;
+            config.provisioning_url = legacy_url;
+            should_migrate_provisioning_url = true;
         }
     }
-    if (config.ota_url.empty()) {
-        config.ota_url = kDefaultOtaUrl;
+    if (config.provisioning_url.empty()) {
+        config.provisioning_url = kDefaultProvisioningUrl;
+    }
+    if (should_migrate_provisioning_url) {
+        Settings write_settings(kCloudNamespace, true);
+        write_settings.SetString(kProvisioningUrlKey, config.provisioning_url);
     }
 
     Settings ws_settings(kWebsocketNamespace, false);
@@ -119,25 +132,25 @@ bool VoiceCloudConfigService::Load(VoiceCloudConfig& config) {
     return config.has_websocket_config;
 }
 
-bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
+bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     Load(config);
-    if (config.ota_url.empty()) {
-        config.ota_url = kDefaultOtaUrl;
+    if (config.provisioning_url.empty()) {
+        config.provisioning_url = kDefaultProvisioningUrl;
     }
 
     const std::string payload = BuildSystemInfoJson();
     esp_http_client_config_t http_config = {};
-    http_config.url = config.ota_url.c_str();
+    http_config.url = config.provisioning_url.c_str();
     http_config.method = HTTP_METHOD_POST;
-    http_config.timeout_ms = kOtaTimeoutMs;
+    http_config.timeout_ms = kProvisioningTimeoutMs;
     http_config.buffer_size = 1024;
     http_config.buffer_size_tx = 1024;
     http_config.crt_bundle_attach = esp_crt_bundle_attach;
-    http_config.user_agent = "RodakOS/voice-cloud";
+    http_config.user_agent = "RodakOS/device-cloud";
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == nullptr) {
-        SetError("Failed to create OTA client");
+        SetError("Failed to create cloud provisioning client");
         return false;
     }
 
@@ -147,23 +160,23 @@ bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
     esp_http_client_set_header(client, "Device-Id", mac.c_str());
     esp_http_client_set_header(client, "Client-Id", client_id.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    ESP_LOGI(TAG, "Refreshing voice cloud config from %s", config.ota_url.c_str());
+    ESP_LOGI(TAG, "Refreshing device cloud config from %s", config.provisioning_url.c_str());
     if (payload.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-        SetError("OTA request payload is too large");
+        SetError("Provisioning request payload is too large");
         esp_http_client_cleanup(client);
         return false;
     }
 
     esp_err_t err = esp_http_client_open(client, payload.size());
     if (err != ESP_OK) {
-        SetError(std::string("OTA open failed: ") + esp_err_to_name(err));
+        SetError(std::string("Provisioning open failed: ") + esp_err_to_name(err));
         esp_http_client_cleanup(client);
         return false;
     }
 
     const int write_len = esp_http_client_write(client, payload.c_str(), payload.size());
     if (write_len != static_cast<int>(payload.size())) {
-        SetError(write_len < 0 ? "OTA request write failed" : "OTA request write incomplete");
+        SetError(write_len < 0 ? "Provisioning request write failed" : "Provisioning request write incomplete");
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return false;
@@ -171,7 +184,7 @@ bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
 
     const int64_t content_length = esp_http_client_fetch_headers(client);
     if (content_length < 0) {
-        SetError("OTA response header fetch failed");
+        SetError("Provisioning response header fetch failed");
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return false;
@@ -179,23 +192,24 @@ bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
 
     const int status_code = esp_http_client_get_status_code(client);
     if (status_code != 200) {
-        SetError("OTA request returned HTTP " + std::to_string(status_code));
+        SetError("Provisioning request returned HTTP " + std::to_string(status_code));
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return false;
     }
 
-    std::vector<char> response(kMaxOtaResponseBytes + 1, '\0');
-    const int read_len = esp_http_client_read_response(client, response.data(), kMaxOtaResponseBytes);
+    std::vector<char> response(kMaxProvisioningResponseBytes + 1, '\0');
+    const int read_len = esp_http_client_read_response(client, response.data(), kMaxProvisioningResponseBytes);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     if (read_len <= 0) {
-        SetError("OTA response is empty");
+        SetError("Provisioning response is empty");
         return false;
     }
-    response[std::min(static_cast<size_t>(read_len), kMaxOtaResponseBytes)] = '\0';
+    response[std::min(static_cast<size_t>(read_len), kMaxProvisioningResponseBytes)] = '\0';
 
-    if (!ParseOtaResponse(std::string(response.data(), read_len), config)) {
+    if (!ParseProvisioningResponse(std::string(response.data(), read_len), config)) {
+        ClearWebsocketConfig();
         return false;
     }
 
@@ -205,7 +219,15 @@ bool VoiceCloudConfigService::RefreshFromOta(VoiceCloudConfig& config) {
     return config.has_websocket_config;
 }
 
-std::string VoiceCloudConfigService::GetClientId() {
+bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
+    Settings settings(kCloudNamespace, true);
+    settings.SetString(kProvisioningUrlKey, url.empty() ? kDefaultProvisioningUrl : url);
+    ClearWebsocketConfig();
+    last_error_.clear();
+    return true;
+}
+
+std::string DeviceCloudConfigService::GetClientId() {
     Settings settings(kBoardNamespace, true);
     std::string uuid = settings.GetString(kUuidKey, "");
     if (uuid.empty()) {
@@ -215,7 +237,7 @@ std::string VoiceCloudConfigService::GetClientId() {
     return uuid;
 }
 
-bool VoiceCloudConfigService::SaveWebsocketConfig(const VoiceCloudConfig& config) {
+bool DeviceCloudConfigService::SaveWebsocketConfig(const DeviceCloudConfig& config) {
     Settings settings(kWebsocketNamespace, true);
     settings.SetString(kUrlKey, config.websocket_url);
     settings.SetString(kTokenKey, config.websocket_token);
@@ -223,13 +245,28 @@ bool VoiceCloudConfigService::SaveWebsocketConfig(const VoiceCloudConfig& config
     return true;
 }
 
-bool VoiceCloudConfigService::ParseOtaResponse(const std::string& response,
-                                                 VoiceCloudConfig& config) {
+void DeviceCloudConfigService::ClearWebsocketConfig() {
+    Settings settings(kWebsocketNamespace, true);
+    settings.SetString(kUrlKey, "");
+    settings.SetString(kTokenKey, "");
+    settings.SetInt(kVersionKey, 1);
+}
+
+bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& response,
+                                                         DeviceCloudConfig& config) {
     cJSON* root = cJSON_Parse(response.c_str());
     if (root == nullptr) {
-        SetError("OTA response is not JSON");
+        SetError("Provisioning response is not JSON");
         return false;
     }
+
+    config.websocket_url.clear();
+    config.websocket_token.clear();
+    config.websocket_version = 1;
+    config.activation_code.clear();
+    config.activation_message.clear();
+    config.has_websocket_config = false;
+    config.has_activation_code = false;
 
     cJSON* websocket = cJSON_GetObjectItem(root, "websocket");
     if (cJSON_IsObject(websocket)) {
@@ -248,19 +285,19 @@ bool VoiceCloudConfigService::ParseOtaResponse(const std::string& response,
 
     cJSON_Delete(root);
     if (!config.has_websocket_config) {
-        SetError(config.has_activation_code ? "Activate the device in the cloud console" : "No websocket config from voice cloud");
+        SetError(config.has_activation_code ? "Activate the device in the cloud console" : "No websocket config from device cloud");
         return false;
     }
     if (config.websocket_version <= 0) {
         config.websocket_version = 1;
     }
     last_error_.clear();
-    ESP_LOGI(TAG, "Voice cloud websocket config ready: version=%d url=%s",
+    ESP_LOGI(TAG, "Device cloud websocket config ready: version=%d url=%s",
              config.websocket_version, config.websocket_url.c_str());
     return true;
 }
 
-std::string VoiceCloudConfigService::BuildSystemInfoJson() {
+std::string DeviceCloudConfigService::BuildSystemInfoJson() {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "version", 2);
     cJSON_AddStringToObject(root, "language", "zh-CN");
@@ -302,7 +339,7 @@ std::string VoiceCloudConfigService::BuildSystemInfoJson() {
     return json;
 }
 
-std::string VoiceCloudConfigService::BuildBoardJson() {
+std::string DeviceCloudConfigService::BuildBoardJson() {
     cJSON* board = cJSON_CreateObject();
     cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
     cJSON_AddStringToObject(board, "name", "RodakOS RYMCU BigSmart");
@@ -312,7 +349,7 @@ std::string VoiceCloudConfigService::BuildBoardJson() {
     return json;
 }
 
-void VoiceCloudConfigService::SetError(const std::string& message) {
+void DeviceCloudConfigService::SetError(const std::string& message) {
     last_error_ = message;
     ESP_LOGW(TAG, "%s", last_error_.c_str());
 }

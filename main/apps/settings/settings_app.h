@@ -17,6 +17,7 @@ enum class SettingsPage {
     kWiFiList,    // WiFi 列表页面
     kWiFiDetail,  // WiFi 详情页面
     kDateTime,    // 日期与时间页面
+    kDeviceCloud, // 设备云配置页面
     kWebFiles,    // Web 文件管理页面
 };
 
@@ -37,6 +38,13 @@ private:
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
+    void CreateDeviceCloudPage();
+    void UpdateDeviceCloudPage();
+    void RefreshDeviceCloud();
+    void ShowCloudProvisioningUrlDialog();
+    void CloseCloudProvisioningUrlDialog();
+    void CloseCloudProvisioningUrlDialogAsync();
+    void SaveCloudProvisioningUrl(const std::string& url);
     void CreateWebFilesPage();
     void UpdateWebFilesPage();
     void StartWebFiles();
@@ -90,6 +98,16 @@ private:
     lv_timer_t* time_sync_timer_ = nullptr;
     bool time_sync_in_progress_ = false;
     uint32_t time_sync_poll_count_ = 0;
+
+    // 设备云配置页面控件
+    lv_obj_t* device_cloud_body_ = nullptr;
+    lv_obj_t* cloud_status_label_ = nullptr;
+    lv_obj_t* cloud_url_label_ = nullptr;
+    lv_obj_t* cloud_client_id_label_ = nullptr;
+    lv_obj_t* cloud_websocket_label_ = nullptr;
+    lv_obj_t* cloud_activation_label_ = nullptr;
+    lv_obj_t* cloud_url_dialog_ = nullptr;
+    lv_obj_t* cloud_url_textarea_ = nullptr;
 
     // Web 上传页面控件
     lv_obj_t* web_upload_body_ = nullptr;

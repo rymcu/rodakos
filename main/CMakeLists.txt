@@ -19,7 +19,7 @@ set(SOURCES
     "phone_os/voice_assistant_transport.cc"
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_service.cc"
-    "phone_os/voice_cloud_config.cc"
+    "phone_os/device_cloud_config.cc"
     "phone_os/voice_cloud_websocket_transport.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"

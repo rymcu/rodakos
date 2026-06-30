@@ -87,7 +87,7 @@ std::vector<uint8_t> WrapAudioPacketV3(const VoiceAudioPacket& packet) {
 
 }  // namespace
 
-VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(VoiceCloudConfigService& config_service)
+VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(DeviceCloudConfigService& config_service)
     : config_service_(config_service) {
     mutex_ = xSemaphoreCreateMutex();
     events_ = xEventGroupCreate();
@@ -121,7 +121,7 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel() {
     }
     xEventGroupClearBits(events_, kConnectedBit | kHelloBit | kErrorBit);
 
-    if (!config_service_.Load(config_) && !config_service_.RefreshFromOta(config_)) {
+    if (!config_service_.Load(config_) && !config_service_.Refresh(config_)) {
         SetError(config_service_.last_error());
         return false;
     }

@@ -5,8 +5,8 @@
 
 namespace rodakos {
 
-struct VoiceCloudConfig {
-    std::string ota_url;
+struct DeviceCloudConfig {
+    std::string provisioning_url;
     std::string websocket_url;
     std::string websocket_token;
     int websocket_version = 1;
@@ -16,18 +16,20 @@ struct VoiceCloudConfig {
     bool has_activation_code = false;
 };
 
-class VoiceCloudConfigService {
+class DeviceCloudConfigService {
 public:
-    bool Load(VoiceCloudConfig& config);
-    bool RefreshFromOta(VoiceCloudConfig& config);
+    bool Load(DeviceCloudConfig& config);
+    bool Refresh(DeviceCloudConfig& config);
+    bool SaveProvisioningUrl(const std::string& url);
     std::string GetClientId();
     const char* last_error() const { return last_error_.c_str(); }
 
-    static const char* DefaultOtaUrl();
+    static const char* DefaultProvisioningUrl();
 
 private:
-    bool SaveWebsocketConfig(const VoiceCloudConfig& config);
-    bool ParseOtaResponse(const std::string& response, VoiceCloudConfig& config);
+    bool SaveWebsocketConfig(const DeviceCloudConfig& config);
+    void ClearWebsocketConfig();
+    bool ParseProvisioningResponse(const std::string& response, DeviceCloudConfig& config);
     std::string BuildSystemInfoJson();
     std::string BuildBoardJson();
     void SetError(const std::string& message);

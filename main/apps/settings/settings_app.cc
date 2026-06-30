@@ -4,6 +4,7 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/device_cloud_config.h"
 #include "phone_os/time_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_components.h"
@@ -80,6 +81,23 @@ std::string TrimServerName(const char* text) {
     value = value.substr(first, last - first + 1);
     if (value.size() > 63) {
         value.resize(63);
+    }
+    return value;
+}
+
+std::string TrimCloudUrl(const char* text) {
+    if (text == nullptr) {
+        return "";
+    }
+    std::string value(text);
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    value = value.substr(first, last - first + 1);
+    if (value.size() > 191) {
+        value.resize(191);
     }
     return value;
 }
@@ -285,6 +303,7 @@ void SettingsApp::OnDestroy() {
             }
             usb_disk_hint_page_ = nullptr;
             CloseNtpServerDialog();
+            CloseCloudProvisioningUrlDialog();
             if (time_sync_timer_ != nullptr) {
                 lv_timer_delete(time_sync_timer_);
                 time_sync_timer_ = nullptr;
@@ -299,6 +318,7 @@ void SettingsApp::OnDestroy() {
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
     datetime_body_ = nullptr;
+    device_cloud_body_ = nullptr;
     web_upload_body_ = nullptr;
     brightness_label_ = nullptr;
     brightness_slider_ = nullptr;
@@ -316,6 +336,13 @@ void SettingsApp::OnDestroy() {
     time_sync_timer_ = nullptr;
     time_sync_in_progress_ = false;
     time_sync_poll_count_ = 0;
+    cloud_status_label_ = nullptr;
+    cloud_url_label_ = nullptr;
+    cloud_client_id_label_ = nullptr;
+    cloud_websocket_label_ = nullptr;
+    cloud_activation_label_ = nullptr;
+    cloud_url_dialog_ = nullptr;
+    cloud_url_textarea_ = nullptr;
     web_upload_status_label_ = nullptr;
     web_upload_url_label_ = nullptr;
     web_upload_last_label_ = nullptr;
@@ -352,6 +379,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
     }
     if (datetime_body_ != nullptr) {
         lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (device_cloud_body_ != nullptr) {
+        lv_obj_add_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
     }
     if (web_upload_body_ != nullptr) {
         lv_obj_add_flag(web_upload_body_, LV_OBJ_FLAG_HIDDEN);
@@ -398,6 +428,17 @@ void SettingsApp::ShowPage(SettingsPage page) {
             if (header_title_label_ != nullptr) {
                 lv_label_set_text(header_title_label_, "Date & Time");
             }
+            break;
+
+        case SettingsPage::kDeviceCloud:
+            if (device_cloud_body_ == nullptr) {
+                CreateDeviceCloudPage();
+            }
+            lv_obj_clear_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "Device Services");
+            }
+            UpdateDeviceCloudPage();
             break;
 
         case SettingsPage::kWebFiles:
@@ -600,8 +641,28 @@ void SettingsApp::CreateMainPage() {
         self->ShowPage(SettingsPage::kDateTime);
     }, LV_EVENT_CLICKED, this);
 
+    // ===== 设备服务入口 =====
+    auto* cloud_card = CreateSettingCard(main_body_, 316);
+    lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
+
+    CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
+
+    auto* cloud_title = CreateSettingLabel(cloud_card, "Device Services");
+    lv_obj_align(cloud_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* cloud_arrow = lv_label_create(cloud_card);
+    lv_label_set_text(cloud_arrow, ">");
+    lv_obj_set_style_text_color(cloud_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(cloud_arrow, &phone_font_18, 0);
+    lv_obj_align(cloud_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(cloud_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kDeviceCloud);
+    }, LV_EVENT_CLICKED, this);
+
     // ===== Web 上传入口 =====
-    auto* upload_card = CreateSettingCard(main_body_, 316);
+    auto* upload_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(upload_card, FONT_AWESOME_CLOUD);
@@ -621,7 +682,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== USB 磁盘模式入口 =====
-    auto* usb_card = CreateSettingCard(main_body_, 374);
+    auto* usb_card = CreateSettingCard(main_body_, 432);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(usb_card, FONT_AWESOME_SD_CARD);
@@ -948,6 +1009,295 @@ void SettingsApp::StopWebFiles() {
     UpdateWebFilesPage();
 }
 
+void SettingsApp::CreateDeviceCloudPage() {
+    device_cloud_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
+    lv_obj_remove_style_all(device_cloud_body_);
+    lv_obj_set_size(device_cloud_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
+    lv_obj_set_pos(device_cloud_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
+    lv_obj_set_style_bg_opa(device_cloud_body_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(device_cloud_body_, 0, 0);
+    lv_obj_add_flag(device_cloud_body_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(device_cloud_body_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(device_cloud_body_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
+
+    auto* status_card = CreateSettingCard(device_cloud_body_, 4, 50);
+    lv_obj_set_style_pad_all(status_card, 10, 0);
+
+    auto* status_icon = lv_label_create(status_card);
+    lv_label_set_text(status_icon, FONT_AWESOME_CLOUD);
+    lv_obj_set_style_text_color(status_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
+    lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* status_title = CreateSettingLabel(status_card, "System configuration", true);
+    lv_obj_set_style_text_font(status_title, &phone_font_12, 0);
+    lv_obj_align(status_title, LV_ALIGN_TOP_LEFT, 32, 0);
+
+    cloud_status_label_ = CreateSettingLabel(status_card, "Idle", false);
+    lv_obj_set_width(cloud_status_label_, 236);
+    lv_label_set_long_mode(cloud_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(cloud_status_label_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
+
+    auto* url_card = CreateSettingCard(device_cloud_body_, 62, 62);
+    lv_obj_set_style_pad_all(url_card, 8, 0);
+
+    auto* url_icon = lv_label_create(url_card);
+    lv_label_set_text(url_icon, FONT_AWESOME_LINK);
+    lv_obj_set_style_text_color(url_icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(url_icon, PhoneIconFont(), 0);
+    lv_obj_align(url_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* url_title = CreateSettingLabel(url_card, "Provisioning endpoint", true);
+    lv_obj_set_style_text_font(url_title, &phone_font_12, 0);
+    lv_obj_set_width(url_title, 196);
+    lv_label_set_long_mode(url_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(url_title, LV_ALIGN_TOP_LEFT, 32, 0);
+
+    cloud_url_label_ = CreateSettingLabel(url_card, "", false);
+    lv_obj_set_width(cloud_url_label_, 196);
+    lv_label_set_long_mode(cloud_url_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_align(cloud_url_label_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
+
+    auto* edit_btn = lv_btn_create(url_card);
+    lv_obj_remove_style_all(edit_btn);
+    lv_obj_set_size(edit_btn, 32, 28);
+    lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, -36, 0);
+    lv_obj_set_style_bg_color(edit_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_bg_opa(edit_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(edit_btn, 6, 0);
+    lv_obj_clear_flag(edit_btn, LV_OBJ_FLAG_SCROLLABLE);
+    auto* edit_icon = lv_label_create(edit_btn);
+    lv_label_set_text(edit_icon, FONT_AWESOME_PEN_TO_SQUARE);
+    lv_obj_set_style_text_color(edit_icon, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(edit_icon, PhoneIconFont(), 0);
+    lv_obj_center(edit_icon);
+    lv_obj_add_event_cb(edit_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowCloudProvisioningUrlDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* refresh_btn = lv_btn_create(url_card);
+    lv_obj_remove_style_all(refresh_btn);
+    lv_obj_set_size(refresh_btn, 32, 28);
+    lv_obj_align(refresh_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(refresh_btn, rodakos_theme_primary(), 0);
+    lv_obj_set_style_bg_opa(refresh_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(refresh_btn, 6, 0);
+    lv_obj_clear_flag(refresh_btn, LV_OBJ_FLAG_SCROLLABLE);
+    auto* refresh_icon = lv_label_create(refresh_btn);
+    lv_label_set_text(refresh_icon, FONT_AWESOME_ARROWS_ROTATE);
+    lv_obj_set_style_text_color(refresh_icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(refresh_icon, PhoneIconFont(), 0);
+    lv_obj_center(refresh_icon);
+    lv_obj_add_event_cb(refresh_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->RefreshDeviceCloud();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* id_card = CreateSettingCard(device_cloud_body_, 132, 40);
+    lv_obj_set_style_pad_all(id_card, 8, 0);
+    cloud_client_id_label_ = CreateSettingLabel(id_card, "Device ID", true);
+    lv_obj_set_width(cloud_client_id_label_, 264);
+    lv_label_set_long_mode(cloud_client_id_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_align(cloud_client_id_label_, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* ws_card = CreateSettingCard(device_cloud_body_, 180, 40);
+    lv_obj_set_style_pad_all(ws_card, 8, 0);
+    cloud_websocket_label_ = CreateSettingLabel(ws_card, "Realtime service: not configured", true);
+    lv_obj_set_width(cloud_websocket_label_, 264);
+    lv_label_set_long_mode(cloud_websocket_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(cloud_websocket_label_, LV_ALIGN_LEFT_MID, 0, 0);
+
+    auto* activation_card = CreateSettingCard(device_cloud_body_, 228, 40);
+    lv_obj_set_style_pad_all(activation_card, 8, 0);
+    cloud_activation_label_ = CreateSettingLabel(activation_card, "Activation: not required", true);
+    lv_obj_set_width(cloud_activation_label_, 264);
+    lv_label_set_long_mode(cloud_activation_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(cloud_activation_label_, LV_ALIGN_LEFT_MID, 0, 0);
+
+    UpdateDeviceCloudPage();
+}
+
+void SettingsApp::UpdateDeviceCloudPage() {
+    auto* device_cloud = context_ != nullptr ? context_->services().device_cloud() : nullptr;
+    if (device_cloud == nullptr || cloud_status_label_ == nullptr) {
+        return;
+    }
+
+    rodakos::DeviceCloudConfig config;
+    device_cloud->Load(config);
+    lv_label_set_text(cloud_status_label_,
+                      config.has_websocket_config ? "Ready" : "Refresh required");
+    lv_label_set_text(cloud_url_label_, config.provisioning_url.c_str());
+    const std::string client_id = "Device ID: " + device_cloud->GetClientId();
+    lv_label_set_text(cloud_client_id_label_, client_id.c_str());
+    lv_label_set_text_fmt(cloud_websocket_label_, "Realtime service: %s",
+                          config.has_websocket_config ? "configured" : "not configured");
+    if (config.has_activation_code) {
+        lv_label_set_text_fmt(cloud_activation_label_, "Activation: %s",
+                              config.activation_code.c_str());
+    } else {
+        lv_label_set_text(cloud_activation_label_, "Activation: not required");
+    }
+}
+
+void SettingsApp::RefreshDeviceCloud() {
+    auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
+    auto* device_cloud = context_ != nullptr ? context_->services().device_cloud() : nullptr;
+    if (device_cloud == nullptr) {
+        ui_->ShowToastUnlocked("Device services unavailable");
+        return;
+    }
+    if (wifi == nullptr || wifi->GetStatus() != WiFiStatus::kConnected) {
+        ui_->ShowToastUnlocked("Connect WiFi first");
+        if (cloud_status_label_ != nullptr) {
+            lv_label_set_text(cloud_status_label_, "WiFi not connected");
+        }
+        return;
+    }
+
+    if (cloud_status_label_ != nullptr) {
+        lv_label_set_text(cloud_status_label_, "Refreshing...");
+    }
+
+    rodakos::DeviceCloudConfig config;
+    if (device_cloud->Refresh(config)) {
+        UpdateDeviceCloudPage();
+        ui_->ShowToastUnlocked("Device services updated");
+        if (cloud_status_label_ != nullptr) {
+            lv_label_set_text(cloud_status_label_, "Ready");
+        }
+    } else {
+        UpdateDeviceCloudPage();
+        ui_->ShowToastUnlocked("Device services failed");
+        if (cloud_status_label_ != nullptr) {
+            lv_label_set_text(cloud_status_label_, device_cloud->last_error());
+        }
+        if (config.has_activation_code && cloud_activation_label_ != nullptr) {
+            lv_label_set_text_fmt(cloud_activation_label_, "Activation: %s",
+                                  config.activation_code.c_str());
+        }
+    }
+}
+
+void SettingsApp::ShowCloudProvisioningUrlDialog() {
+    if (cloud_url_dialog_ != nullptr) {
+        return;
+    }
+
+    auto* device_cloud = context_ != nullptr ? context_->services().device_cloud() : nullptr;
+    rodakos::DeviceCloudConfig config;
+    if (device_cloud != nullptr) {
+        device_cloud->Load(config);
+    }
+    if (config.provisioning_url.empty()) {
+        config.provisioning_url = rodakos::DeviceCloudConfigService::DefaultProvisioningUrl();
+    }
+
+    cloud_url_dialog_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(cloud_url_dialog_);
+    lv_obj_set_size(cloud_url_dialog_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(cloud_url_dialog_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(cloud_url_dialog_, LV_OPA_70, 0);
+    lv_obj_clear_flag(cloud_url_dialog_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* dialog_box = lv_obj_create(cloud_url_dialog_);
+    lv_obj_remove_style_all(dialog_box);
+    lv_obj_set_size(dialog_box, 288, 152);
+    lv_obj_align(dialog_box, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dialog_box, 8, 0);
+    lv_obj_set_style_pad_all(dialog_box, 12, 0);
+    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = CreateSettingLabel(dialog_box, "Provisioning endpoint");
+    lv_obj_set_style_text_font(title, &phone_font_14, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    cloud_url_textarea_ = lv_textarea_create(dialog_box);
+    lv_obj_set_size(cloud_url_textarea_, 264, 42);
+    lv_obj_align(cloud_url_textarea_, LV_ALIGN_TOP_LEFT, 0, 28);
+    lv_textarea_set_one_line(cloud_url_textarea_, true);
+    lv_textarea_set_max_length(cloud_url_textarea_, 191);
+    lv_textarea_set_text(cloud_url_textarea_, config.provisioning_url.c_str());
+    lv_textarea_set_placeholder_text(cloud_url_textarea_, rodakos::DeviceCloudConfigService::DefaultProvisioningUrl());
+    lv_obj_set_style_bg_color(cloud_url_textarea_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_text_color(cloud_url_textarea_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cloud_url_textarea_, &phone_font_12, 0);
+    lv_obj_set_style_border_width(cloud_url_textarea_, 0, 0);
+    lv_obj_set_style_radius(cloud_url_textarea_, 6, 0);
+
+    auto* cancel_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(cancel_btn, 126, 30);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cancel_btn, 6, 0);
+    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
+
+    auto* cancel_label = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_label, "Cancel");
+    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
+    lv_obj_center(cancel_label);
+    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->CloseCloudProvisioningUrlDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* save_btn = lv_btn_create(dialog_box);
+    lv_obj_set_size(save_btn, 126, 30);
+    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(save_btn, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(save_btn, 6, 0);
+    lv_obj_set_style_shadow_width(save_btn, 0, 0);
+
+    auto* save_label = lv_label_create(save_btn);
+    lv_label_set_text(save_label, "Save");
+    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
+    lv_obj_center(save_label);
+    lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->SaveCloudProvisioningUrl(TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_)));
+        self->CloseCloudProvisioningUrlDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    soft_keyboard_.Show(cloud_url_textarea_, [this]() {
+        SaveCloudProvisioningUrl(TrimCloudUrl(lv_textarea_get_text(cloud_url_textarea_)));
+        CloseCloudProvisioningUrlDialogAsync();
+    });
+}
+
+void SettingsApp::CloseCloudProvisioningUrlDialog() {
+    soft_keyboard_.Hide();
+    if (cloud_url_dialog_ != nullptr && lv_obj_is_valid(cloud_url_dialog_)) {
+        lv_obj_delete(cloud_url_dialog_);
+    }
+    cloud_url_dialog_ = nullptr;
+    cloud_url_textarea_ = nullptr;
+}
+
+void SettingsApp::CloseCloudProvisioningUrlDialogAsync() {
+    lv_async_call([](void* user_data) {
+        auto* self = static_cast<SettingsApp*>(user_data);
+        if (self != nullptr) {
+            self->CloseCloudProvisioningUrlDialog();
+        }
+    }, this);
+}
+
+void SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
+    auto* device_cloud = context_ != nullptr ? context_->services().device_cloud() : nullptr;
+    if (device_cloud == nullptr) {
+        return;
+    }
+    device_cloud->SaveProvisioningUrl(url);
+    ui_->ShowToastUnlocked("Provisioning endpoint saved");
+    UpdateDeviceCloudPage();
+}
+
 void SettingsApp::NavigateBack() {
     if (current_page_ == SettingsPage::kWiFiDetail) {
         ShowPage(SettingsPage::kWiFiList);
@@ -955,6 +1305,7 @@ void SettingsApp::NavigateBack() {
     }
     if (current_page_ == SettingsPage::kWiFiList ||
         current_page_ == SettingsPage::kDateTime ||
+        current_page_ == SettingsPage::kDeviceCloud ||
         current_page_ == SettingsPage::kWebFiles) {
         ShowPage(SettingsPage::kMain);
         return;

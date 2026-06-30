@@ -1,7 +1,7 @@
 #pragma once
 
 #include "phone_os/voice_assistant_transport.h"
-#include "phone_os/voice_cloud_config.h"
+#include "phone_os/device_cloud_config.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -15,7 +15,7 @@ namespace rodakos {
 
 class VoiceCloudWebSocketTransport final : public VoiceAssistantTransport {
 public:
-    explicit VoiceCloudWebSocketTransport(VoiceCloudConfigService& config_service);
+    explicit VoiceCloudWebSocketTransport(DeviceCloudConfigService& config_service);
     ~VoiceCloudWebSocketTransport() override;
 
     bool Start() override;
@@ -43,11 +43,11 @@ private:
     void ParseServerHello(const std::string& payload);
     void SetError(const std::string& message);
 
-    VoiceCloudConfigService& config_service_;
+    DeviceCloudConfigService& config_service_;
     mutable SemaphoreHandle_t mutex_ = nullptr;
     EventGroupHandle_t events_ = nullptr;
     esp_websocket_client_handle_t client_ = nullptr;
-    VoiceCloudConfig config_;
+    DeviceCloudConfig config_;
     std::string headers_;
     std::string authorization_header_;
     std::string protocol_version_header_;
