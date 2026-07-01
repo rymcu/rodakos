@@ -7,6 +7,7 @@ namespace rodakos {
 class AudioFocusService;
 class AudioOutputService;
 class AudioService;
+class ButtonBindingService;
 class DeviceCloudConfigService;
 class FileService;
 class LightService;
@@ -39,6 +40,9 @@ public:
     void SetLights(rodakos::LightService* lights) { lights_ = lights; }
     rodakos::LightService* lights() { return lights_; }
 
+    void SetButtons(rodakos::ButtonBindingService* buttons) { buttons_ = buttons; }
+    rodakos::ButtonBindingService* buttons() { return buttons_; }
+
     void SetAudioFocus(rodakos::AudioFocusService* audio_focus) { audio_focus_ = audio_focus; }
     rodakos::AudioFocusService* audio_focus() { return audio_focus_; }
 
@@ -62,6 +66,7 @@ private:
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::MusicPlayerService* music_player_ = nullptr;
     rodakos::LightService* lights_ = nullptr;
+    rodakos::ButtonBindingService* buttons_ = nullptr;
     rodakos::AudioFocusService* audio_focus_ = nullptr;
     rodakos::DeviceCloudConfigService* device_cloud_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;

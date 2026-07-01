@@ -1,4 +1,7 @@
 devices:
+  # Software-bindable ESP32-S3 button: IO0_BOOT -> switch -> GND.
+  # This doubles as the boot strap pin, so avoid default long-press actions that
+  # could surprise users during reset/flash workflows.
   - name: boot_button
     type: button
     sub_type: gpio
@@ -21,13 +24,15 @@ devices:
     peripherals:
       - name: gpio_boot_button
 
+  # Software-bindable ESP32-S3 button: IO10_KEY -> switch -> GND.
   - name: io10_key_button
     type: button
     sub_type: gpio
     config:
       active_level: 0
       long_press_time: 2000
-      short_press_time: 100
+      # Double-click arbitration window. 100 ms is too tight for a physical side key.
+      short_press_time: 300
       events_cfg:
         press_down: true
         press_up: true

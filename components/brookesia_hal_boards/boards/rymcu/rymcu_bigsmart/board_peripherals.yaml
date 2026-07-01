@@ -12,7 +12,7 @@ peripherals:
     type: gpio
     role: io
     config:
-      pin: 0
+      pin: 0   # IO0_BOOT: external button pulls to GND; 10k external pull-up to 3V3
       mode: GPIO_MODE_INPUT
       pull_up: true
       pull_down: false
@@ -23,12 +23,16 @@ peripherals:
     type: gpio
     role: io
     config:
-      pin: 10
+      pin: 10  # IO10_KEY: external button pulls to GND; 10k external pull-up to 3V3
       mode: GPIO_MODE_INPUT
       pull_up: true
       pull_down: false
       intr_type: GPIO_INTR_DISABLE
       default_level: 0
+
+  # KEY_POWER is wired to the STC8G1K08A power-control MCU, not directly to ESP32-S3.
+  # Keep it out of RodakOS software button bindings; long-press power behavior belongs
+  # to the power controller firmware/hardware path.
 
   - name: adc_battery_charge
     type: adc

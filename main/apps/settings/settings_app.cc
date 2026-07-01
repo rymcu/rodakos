@@ -4,6 +4,7 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/button_binding_service.h"
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/time_service.h"
 #include "phone_os/web_file_system_service.h"
@@ -51,6 +52,10 @@ struct ThemeOption {
     bool phone_ui_light;
     uint32_t swatch;
     uint32_t label_color;
+};
+
+struct ButtonActionOption {
+    rodakos::ButtonAction action;
 };
 
 constexpr std::array<ThemeOption, 4> kThemeOptions = {{
@@ -169,6 +174,48 @@ int ThemeIndexFromId(const std::string& theme) {
         }
     }
     return 0;
+}
+
+bool SameButtonAction(const rodakos::ButtonAction& lhs, const rodakos::ButtonAction& rhs) {
+    if (lhs.type != rhs.type) {
+        return false;
+    }
+    if (lhs.type == rodakos::ButtonActionType::kLaunchApp) {
+        return lhs.app_id == rhs.app_id;
+    }
+    return true;
+}
+
+std::vector<ButtonActionOption> BuildButtonActionOptions(const PhoneAppRegistry& registry) {
+    std::vector<ButtonActionOption> options;
+    options.push_back(ButtonActionOption{
+        .action = {.type = rodakos::ButtonActionType::kNone},
+    });
+    options.push_back(ButtonActionOption{
+        .action = {.type = rodakos::ButtonActionType::kHome},
+    });
+
+    for (const auto& app : registry.apps()) {
+        options.push_back(ButtonActionOption{
+            .action = {.type = rodakos::ButtonActionType::kLaunchApp, .app_id = app.id},
+        });
+    }
+    return options;
+}
+
+rodakos::ButtonAction NextButtonAction(const PhoneAppRegistry& registry,
+                                       const rodakos::ButtonAction& current) {
+    const auto options = BuildButtonActionOptions(registry);
+    if (options.empty()) {
+        return rodakos::ButtonAction{.type = rodakos::ButtonActionType::kNone};
+    }
+
+    for (size_t i = 0; i < options.size(); ++i) {
+        if (SameButtonAction(options[i].action, current)) {
+            return options[(i + 1) % options.size()].action;
+        }
+    }
+    return options.front().action;
 }
 
 void ApplyThemeToRuntime(PhoneUi* ui, const ThemeOption& option) {
@@ -381,6 +428,7 @@ void SettingsApp::OnDestroy() {
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
     datetime_body_ = nullptr;
+    buttons_body_ = nullptr;
     device_cloud_body_ = nullptr;
     web_upload_body_ = nullptr;
     brightness_label_ = nullptr;
@@ -443,6 +491,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
     if (datetime_body_ != nullptr) {
         lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
     }
+    if (buttons_body_ != nullptr) {
+        lv_obj_add_flag(buttons_body_, LV_OBJ_FLAG_HIDDEN);
+    }
     if (device_cloud_body_ != nullptr) {
         lv_obj_add_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -491,6 +542,17 @@ void SettingsApp::ShowPage(SettingsPage page) {
             if (header_title_label_ != nullptr) {
                 lv_label_set_text(header_title_label_, "Date & Time");
             }
+            break;
+
+        case SettingsPage::kButtons:
+            if (buttons_body_ == nullptr) {
+                CreateButtonBindingsPage();
+            }
+            lv_obj_clear_flag(buttons_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "Buttons");
+            }
+            UpdateButtonBindingsPage();
             break;
 
         case SettingsPage::kDeviceCloud:
@@ -704,8 +766,28 @@ void SettingsApp::CreateMainPage() {
         self->ShowPage(SettingsPage::kDateTime);
     }, LV_EVENT_CLICKED, this);
 
+    // ===== 按键绑定入口 =====
+    auto* buttons_card = CreateSettingCard(main_body_, 316);
+    lv_obj_add_flag(buttons_card, LV_OBJ_FLAG_CLICKABLE);
+
+    CreateSettingIcon(buttons_card, FONT_AWESOME_KEY);
+
+    auto* buttons_title = CreateSettingLabel(buttons_card, "Button Bindings");
+    lv_obj_align(buttons_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* buttons_arrow = lv_label_create(buttons_card);
+    lv_label_set_text(buttons_arrow, ">");
+    lv_obj_set_style_text_color(buttons_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(buttons_arrow, &phone_font_18, 0);
+    lv_obj_align(buttons_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(buttons_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kButtons);
+    }, LV_EVENT_CLICKED, this);
+
     // ===== 设备服务入口 =====
-    auto* cloud_card = CreateSettingCard(main_body_, 316);
+    auto* cloud_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
@@ -725,7 +807,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== Web 上传入口 =====
-    auto* upload_card = CreateSettingCard(main_body_, 374);
+    auto* upload_card = CreateSettingCard(main_body_, 432);
     lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(upload_card, FONT_AWESOME_CLOUD);
@@ -745,7 +827,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== USB 磁盘模式入口 =====
-    auto* usb_card = CreateSettingCard(main_body_, 432);
+    auto* usb_card = CreateSettingCard(main_body_, 490);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(usb_card, FONT_AWESOME_SD_CARD);
@@ -1401,6 +1483,116 @@ void SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
     UpdateDeviceCloudPage();
 }
 
+void SettingsApp::CreateButtonBindingsPage() {
+    buttons_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
+    lv_obj_remove_style_all(buttons_body_);
+    lv_obj_set_size(buttons_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
+    lv_obj_set_pos(buttons_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
+    lv_obj_set_style_bg_opa(buttons_body_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(buttons_body_, 0, 0);
+    lv_obj_add_flag(buttons_body_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(buttons_body_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(buttons_body_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(buttons_body_, LV_OBJ_FLAG_HIDDEN);
+
+    UpdateButtonBindingsPage();
+}
+
+void SettingsApp::UpdateButtonBindingsPage() {
+    if (buttons_body_ == nullptr) {
+        return;
+    }
+
+    lv_obj_clean(buttons_body_);
+
+    auto* buttons = context_ != nullptr ? context_->services().buttons() : nullptr;
+    if (buttons == nullptr || !buttons->IsAvailable()) {
+        auto* empty_card = CreateSettingCard(buttons_body_, 8, 76);
+        CreateSettingIcon(empty_card, FONT_AWESOME_KEY);
+        auto* title = CreateSettingLabel(empty_card, "No button devices");
+        lv_obj_align(title, LV_ALIGN_TOP_LEFT, 28, 2);
+        auto* detail = CreateSettingLabel(empty_card, "Check board_devices.yaml", true);
+        lv_obj_set_style_text_font(detail, &phone_font_12, 0);
+        lv_obj_align(detail, LV_ALIGN_BOTTOM_LEFT, 28, -2);
+        return;
+    }
+
+    lv_coord_t y = 8;
+    for (const auto& button : buttons->ListButtons()) {
+        auto* title_card = CreateSettingCard(buttons_body_, y, 42);
+        CreateSettingIcon(title_card, FONT_AWESOME_KEY);
+        auto* title = CreateSettingLabel(title_card, button.title.c_str());
+        lv_obj_align(title, LV_ALIGN_LEFT_MID, 28, 0);
+        auto* device = CreateSettingLabel(title_card, button.device_name.c_str(), true);
+        lv_obj_set_width(device, 110);
+        lv_label_set_long_mode(device, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(device, &phone_font_12, 0);
+        lv_obj_align(device, LV_ALIGN_RIGHT_MID, 0, 0);
+        y += 48;
+
+        for (button_event_t event : {BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START}) {
+            const auto binding = buttons->GetBinding(button.id, event);
+
+            auto* row = CreateSettingCard(buttons_body_, y, 46);
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_user_data(row, new rodakos::ButtonBinding(binding));
+
+            auto* event_label = CreateSettingLabel(
+                row, rodakos::ButtonBindingService::EventLabel(event), true);
+            lv_obj_set_style_text_font(event_label, &phone_font_12, 0);
+            lv_obj_align(event_label, LV_ALIGN_TOP_LEFT, 0, -2);
+
+            const std::string action_text =
+                rodakos::ButtonBindingService::ActionLabel(binding.action) +
+                (binding.custom ? " *" : "");
+            auto* action_label = CreateSettingLabel(row, action_text.c_str());
+            lv_obj_set_width(action_label, 226);
+            lv_label_set_long_mode(action_label, LV_LABEL_LONG_DOT);
+            lv_obj_align(action_label, LV_ALIGN_BOTTOM_LEFT, 0, 2);
+
+            auto* arrow = lv_label_create(row);
+            lv_label_set_text(arrow, ">");
+            lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
+            lv_obj_set_style_text_font(arrow, &phone_font_18, 0);
+            lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+                auto* row = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
+                auto* binding = static_cast<rodakos::ButtonBinding*>(lv_obj_get_user_data(row));
+                if (self == nullptr || binding == nullptr || self->context_ == nullptr) {
+                    return;
+                }
+                const rodakos::ButtonBinding binding_copy = *binding;
+                auto* buttons = self->context_->services().buttons();
+                if (buttons == nullptr) {
+                    return;
+                }
+                const auto next_action = NextButtonAction(self->context_->registry(), binding_copy.action);
+                if (buttons->SetBinding(binding_copy.button_id, binding_copy.event, next_action)) {
+                    binding->action = next_action;
+                    binding->custom = true;
+                    if (auto* action_label = lv_obj_get_child(row, 1); action_label != nullptr) {
+                        const std::string action_text =
+                            rodakos::ButtonBindingService::ActionLabel(next_action) + " *";
+                        lv_label_set_text(action_label, action_text.c_str());
+                    }
+                    self->ui_->ShowToastUnlocked("Button binding saved");
+                }
+            }, LV_EVENT_CLICKED, this);
+
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                auto* binding = static_cast<rodakos::ButtonBinding*>(
+                    lv_obj_get_user_data(static_cast<lv_obj_t*>(lv_event_get_current_target(e))));
+                delete binding;
+            }, LV_EVENT_DELETE, nullptr);
+
+            y += 52;
+        }
+        y += 4;
+    }
+}
+
 void SettingsApp::NavigateBack() {
     if (current_page_ == SettingsPage::kWiFiDetail) {
         ShowPage(SettingsPage::kWiFiList);
@@ -1408,6 +1600,7 @@ void SettingsApp::NavigateBack() {
     }
     if (current_page_ == SettingsPage::kWiFiList ||
         current_page_ == SettingsPage::kDateTime ||
+        current_page_ == SettingsPage::kButtons ||
         current_page_ == SettingsPage::kDeviceCloud ||
         current_page_ == SettingsPage::kWebFiles) {
         ShowPage(SettingsPage::kMain);

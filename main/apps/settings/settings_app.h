@@ -31,6 +31,7 @@ enum class SettingsPage {
     kWiFiList,    // WiFi 列表页面
     kWiFiDetail,  // WiFi 详情页面
     kDateTime,    // 日期与时间页面
+    kButtons,     // 按键绑定页面
     kDeviceCloud, // 设备云配置页面
     kWebFiles,    // Web 文件管理页面
 };
@@ -56,6 +57,8 @@ private:
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
+    void CreateButtonBindingsPage();
+    void UpdateButtonBindingsPage();
     void CreateDeviceCloudPage();
     void UpdateDeviceCloudPage();
     void RefreshDeviceCloud();
@@ -116,6 +119,9 @@ private:
     lv_timer_t* time_sync_timer_ = nullptr;
     bool time_sync_in_progress_ = false;
     uint32_t time_sync_poll_count_ = 0;
+
+    // 按键绑定页面控件
+    lv_obj_t* buttons_body_ = nullptr;
 
     // 设备云配置页面控件
     lv_obj_t* device_cloud_body_ = nullptr;
