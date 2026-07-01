@@ -94,6 +94,7 @@ private:
     void DiscoverButtons();
     void RegisterCallbacks();
     bool StartWorker();
+    void ResetDiscoveredState();
     void HandleButtonEvent(button_handle_t handle);
     void ExecuteBinding(const RegisteredButton& button, button_event_t event);
     void ScheduleSingleClick(const RegisteredButton& button);

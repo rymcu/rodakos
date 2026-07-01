@@ -98,7 +98,6 @@ bool ButtonBindingService::Init(PhoneNavigation& navigation, PhoneUi& ui) {
 
     navigation_ = &navigation;
     ui_ = &ui;
-    initialized_ = true;
     buttons_.clear();
     registered_.clear();
 
@@ -107,10 +106,12 @@ bool ButtonBindingService::Init(PhoneNavigation& navigation, PhoneUi& ui) {
     click_timers_.assign(registered_.size(), nullptr);
     if (!registered_.empty() && !StartWorker()) {
         ESP_LOGW(TAG, "Button worker unavailable; hardware bindings disabled");
+        ResetDiscoveredState();
         return false;
     }
     RegisterCallbacks();
 
+    initialized_ = true;
     ESP_LOGI(TAG, "Discovered %u board button(s)", static_cast<unsigned>(buttons_.size()));
     return IsAvailable();
 }
@@ -311,6 +312,14 @@ void ButtonBindingService::RegisterCallbacks() {
             }
         }
     }
+}
+
+void ButtonBindingService::ResetDiscoveredState() {
+    buttons_.clear();
+    registered_.clear();
+    click_generations_.clear();
+    click_timers_.clear();
+    initialized_ = false;
 }
 
 bool ButtonBindingService::StartWorker() {
