@@ -15,6 +15,7 @@ set(SOURCES
     "phone_os/audio_service.cc"
     "phone_os/music_player_service.cc"
     "phone_os/light_service.cc"
+    "phone_os/button_binding_service.cc"
     "phone_os/time_service.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_assistant_transport.cc"

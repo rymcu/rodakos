@@ -9,6 +9,7 @@
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
 #include "phone_os/light_service.h"
+#include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/voice_assistant_service.h"
@@ -322,6 +323,7 @@ extern "C" void app_main(void) {
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::LightService light_service;
     light_service.Init();
+    static rodakos::ButtonBindingService button_binding_service;
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
@@ -345,6 +347,7 @@ extern "C" void app_main(void) {
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
     services.SetLights(&light_service);
+    services.SetButtons(&button_binding_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
     services.SetVoiceAssistant(&voice_assistant_service);
@@ -356,6 +359,8 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         return;
     }
+
+    button_binding_service.Init(system.navigation(), ui);
 
     voice_wake_service.Start();
 
