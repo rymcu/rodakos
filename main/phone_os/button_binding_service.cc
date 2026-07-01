@@ -306,7 +306,9 @@ void ButtonBindingService::RegisterCallbacks() {
         for (button_event_t event : {BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START}) {
             const esp_err_t err = iot_button_register_cb(
                 button.handle, event, nullptr, ButtonEventCallback, this);
-            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+                ESP_LOGI(TAG, "Listening for '%s' %s", button.button_id.c_str(), EventName(event));
+            } else {
                 ESP_LOGW(TAG, "Failed to register %s for '%s': %s",
                          EventName(event), button.button_id.c_str(), esp_err_to_name(err));
             }
@@ -359,6 +361,7 @@ void ButtonBindingService::HandleButtonEvent(button_handle_t handle) {
         return;
     }
 
+    ESP_LOGI(TAG, "Button '%s' event: %s", button->button_id.c_str(), EventName(event));
     if (event == BUTTON_SINGLE_CLICK) {
         ScheduleSingleClick(*button);
         return;

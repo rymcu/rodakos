@@ -23,6 +23,8 @@ struct SettingsCloudRefreshGuard {
 };
 
 namespace rodakos {
+struct ButtonAction;
+struct ButtonBinding;
 struct DeviceCloudConfig;
 }
 
@@ -59,6 +61,10 @@ private:
     void CreateDateTimePage();
     void CreateButtonBindingsPage();
     void UpdateButtonBindingsPage();
+    void ShowButtonActionDialog(const rodakos::ButtonBinding& binding);
+    void CloseButtonActionDialog();
+    void SaveButtonBindingAction(const rodakos::ButtonBinding& binding,
+                                 const rodakos::ButtonAction& action);
     void CreateDeviceCloudPage();
     void UpdateDeviceCloudPage();
     void RefreshDeviceCloud();
@@ -122,6 +128,7 @@ private:
 
     // 按键绑定页面控件
     lv_obj_t* buttons_body_ = nullptr;
+    lv_obj_t* button_action_dialog_ = nullptr;
 
     // 设备云配置页面控件
     lv_obj_t* device_cloud_body_ = nullptr;

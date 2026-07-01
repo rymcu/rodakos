@@ -7,8 +7,10 @@ devices:
     sub_type: gpio
     config:
       active_level: 0
-      long_press_time: 3000
-      short_press_time: 100
+      long_press_time: 2000
+      # Keep the same double-click window as IO10. 100 ms makes BOOT's
+      # double-click path effectively unreachable on the physical key.
+      short_press_time: 300
       events_cfg:
         press_down: true
         press_up: true
