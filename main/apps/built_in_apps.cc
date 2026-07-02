@@ -3,6 +3,7 @@
 #include "apps/home/home_app.h"
 #include "apps/settings/settings_app.h"
 #include "apps/photos/photos_app.h"
+#include "apps/camera/camera_app.h"
 #include "apps/clock/clock_app.h"
 #include "apps/file_manager/file_manager_app.h"
 #include "apps/music/music_app.h"
@@ -15,6 +16,7 @@ void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterHomeApp(registry);
     RegisterSettingsApp(registry);
     RegisterPhotosApp(registry);
+    RegisterCameraApp(registry);
     RegisterClockApp(registry);
     RegisterFileManagerApp(registry);
     RegisterSystemInfoApp(registry);

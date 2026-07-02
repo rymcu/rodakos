@@ -12,6 +12,7 @@
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/camera_service.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_recorder_service.h"
@@ -339,6 +340,9 @@ extern "C" void app_main(void) {
     static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
 
+    static rodakos::CameraService camera_service(file_service);
+    ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
+
     static PhoneServices services;
     services.SetBacklight(&backlight);
     services.SetWiFi(wifi);
@@ -353,6 +357,7 @@ extern "C" void app_main(void) {
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
     services.SetWebFiles(&web_files_service);
+    services.SetCamera(&camera_service);
 
     static PhoneSystem system(ui, services);
     if (!system.Start()) {

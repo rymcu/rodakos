@@ -4,6 +4,7 @@
 #include <esp_board_manager.h>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
+#include <cerrno>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -129,7 +130,7 @@ public:
         std::string full_path = GetFullPath(path);
         DIR* dir = opendir(full_path.c_str());
         if (dir == nullptr) {
-            ESP_LOGE(TAG, "Failed to open directory: %s", full_path.c_str());
+            ESP_LOGE(TAG, "Failed to open directory: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
@@ -183,7 +184,7 @@ public:
         std::string full_path = GetFullPath(path);
         FILE* f = fopen(full_path.c_str(), "rb");
         if (f == nullptr) {
-            ESP_LOGE(TAG, "Failed to open file: %s", full_path.c_str());
+            ESP_LOGE(TAG, "Failed to open file: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
@@ -220,7 +221,7 @@ public:
         const char* mode = append ? "ab" : "wb";
         FILE* f = fopen(full_path.c_str(), mode);
         if (f == nullptr) {
-            ESP_LOGE(TAG, "Failed to open file: %s", full_path.c_str());
+            ESP_LOGE(TAG, "Failed to open file: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
@@ -244,7 +245,7 @@ public:
 
         std::string full_path = GetFullPath(path);
         if (unlink(full_path.c_str()) != 0) {
-            ESP_LOGE(TAG, "Failed to delete file: %s", full_path.c_str());
+            ESP_LOGE(TAG, "Failed to delete file: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
@@ -273,7 +274,7 @@ public:
                 }
             } else {
                 if (unlink(entry.path.c_str()) != 0) {
-                    ESP_LOGE(TAG, "Failed to delete file: %s", entry.path.c_str());
+                    ESP_LOGE(TAG, "Failed to delete file: %s (%s)", entry.path.c_str(), std::strerror(errno));
                     return false;
                 }
             }
@@ -281,7 +282,7 @@ public:
 
         // Delete empty directory
         if (rmdir(full_path.c_str()) != 0) {
-            ESP_LOGE(TAG, "Failed to delete directory: %s", full_path.c_str());
+            ESP_LOGE(TAG, "Failed to delete directory: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
@@ -297,7 +298,12 @@ public:
 
         std::string full_path = GetFullPath(path);
         if (mkdir(full_path.c_str(), 0775) != 0) {
-            ESP_LOGE(TAG, "Failed to create directory: %s", full_path.c_str());
+            const int err = errno;
+            struct stat st;
+            if (err == EEXIST && stat(full_path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                return true;
+            }
+            ESP_LOGE(TAG, "Failed to create directory: %s (%s)", full_path.c_str(), std::strerror(err));
             return false;
         }
 
@@ -315,7 +321,7 @@ public:
         std::string full_new = GetFullPath(new_path);
 
         if (rename(full_old.c_str(), full_new.c_str()) != 0) {
-            ESP_LOGE(TAG, "Failed to rename %s to %s", full_old.c_str(), full_new.c_str());
+            ESP_LOGE(TAG, "Failed to rename %s to %s (%s)", full_old.c_str(), full_new.c_str(), std::strerror(errno));
             return false;
         }
 
