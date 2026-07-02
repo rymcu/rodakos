@@ -18,6 +18,7 @@
 namespace {
 constexpr const char* TAG = "PhotosApp";
 constexpr const char* kPhotosPath = "/DCIM";  // 标准相机目录
+constexpr const char* kRodakosPhotosPath = "/photos";
 
 // 网格布局常量
 constexpr int kGridCols = 3;
@@ -161,11 +162,23 @@ void PhotosApp::ScanPhotos() {
         return;
     }
 
-    // 使用 ImageLibrary 扫描图片
-    std::vector<std::string> image_paths = rodakos::ImageLibrary::ScanImagesWithFileService(
-        fs, kPhotosPath, 3);  // 最大深度 3
+    std::vector<std::string> image_paths;
+    auto append_scanned_images = [&](const char* directory, int max_depth) {
+        if (!fs->Exists(directory)) {
+            return;
+        }
+        auto scanned = rodakos::ImageLibrary::ScanImagesWithFileService(fs, directory, max_depth);
+        for (auto& path : scanned) {
+            if (std::find(image_paths.begin(), image_paths.end(), path) == image_paths.end()) {
+                image_paths.push_back(std::move(path));
+            }
+        }
+    };
 
-    // 如果 DCIM 为空，扫描根目录
+    append_scanned_images(kRodakosPhotosPath, 3);
+    append_scanned_images(kPhotosPath, 3);
+
+    // 如果常用照片目录为空，扫描根目录
     if (image_paths.empty()) {
         image_paths = rodakos::ImageLibrary::ScanImagesWithFileService(fs, "/", 2);
     }

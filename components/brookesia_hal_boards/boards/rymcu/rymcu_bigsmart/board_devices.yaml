@@ -113,11 +113,41 @@ devices:
     config:
       max_pins: 8                      # Maximum number of GPIO pins supported
       output_io_mask: [0, 1, 2]        # List of pins configured as output
-      output_io_level_mask: [1, 1, 0]  # Match BigSmart PCA9557 default: LCD/PA enabled, DVP held low
+      output_io_level_mask: [1, 1, 0]  # BigSmart DVP enable is active-low; keep camera powered for lazy init
       input_io_mask: NULL
     peripherals:
       - name: i2c_master
         i2c_addr: [0x32]         # I2C address of the IO expander
+
+  - name: camera
+    chip: gc0308
+    type: camera
+    depends_on: gpio_expander
+    version: default
+    sub_type: dvp
+    init_skip: true
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 44
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        de_io: 46
+        pclk_io: 7
+        xclk_io: 5
+        xclk_freq: 20000000
+        data_io:
+          data_io_0: 16
+          data_io_1: 18
+          data_io_2: 8
+          data_io_3: 17
+          data_io_4: 15
+          data_io_5: 6
+          data_io_6: 4
+          data_io_7: 9
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
 
   - name: display_lcd
     chip: st7789

@@ -41,6 +41,12 @@ CONFIG_TINYUSB_MSC_BUFSIZE=8192
 # Clock SNTP fallback servers
 CONFIG_LWIP_SNTP_MAX_SERVERS=4
 
+# FATFS / SD card
+# Camera and Photos use timestamped image names that exceed 8.3 filenames.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+
 # RYMCU BigSmart uses ES8311 for speaker output and ES7210 for microphone input.
 # Keep unused codec drivers out of the firmware image.
 CONFIG_CODEC_ES8311_SUPPORT=y

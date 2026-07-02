@@ -8,6 +8,7 @@ class AudioFocusService;
 class AudioOutputService;
 class AudioService;
 class ButtonBindingService;
+class CameraService;
 class DeviceCloudConfigService;
 class FileService;
 class LightService;
@@ -58,6 +59,9 @@ public:
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
 
+    void SetCamera(rodakos::CameraService* camera) { camera_ = camera; }
+    rodakos::CameraService* camera() { return camera_; }
+
 private:
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
@@ -72,4 +76,5 @@ private:
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
     rodakos::VoiceWakeService* voice_wake_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
+    rodakos::CameraService* camera_ = nullptr;
 };
