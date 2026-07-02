@@ -142,6 +142,15 @@ function Get-IdfVersionFromPath {
     return $null
 }
 
+function Normalize-IdfVersionName {
+    param([string]$VersionValue)
+    if (-not $VersionValue) { return $null }
+    $trimmed = $VersionValue.Trim()
+    if (-not $trimmed) { return $null }
+    if ($trimmed -match '^v') { return $trimmed }
+    return "v$trimmed"
+}
+
 # ---------- Discovery ----------
 
 $eimVersions = Find-EimInstalledVersions
@@ -182,11 +191,20 @@ if ($Version) {
         Write-Error "Requested ESP-IDF version '$Version' not found. Use -List to see installed versions."
     }
 } elseif ($env:IDF_PATH -and (Test-Path $env:IDF_PATH)) {
+    $versionName = Normalize-IdfVersionName (Get-IdfVersionFromPath $env:IDF_PATH)
+    if (-not $versionName) {
+        $versionName = Normalize-IdfVersionName $env:ESP_IDF_VERSION
+    }
+    if (-not $versionName) {
+        $parentName = Split-Path -Leaf (Split-Path -Parent $env:IDF_PATH)
+        if ($parentName -match '^v\d+\.\d+\.\d+$') { $versionName = $parentName }
+    }
+
     $selected = [PSCustomObject]@{
-        Version = "v$(Get-IdfVersionFromPath $env:IDF_PATH)"
+        Version = $versionName
         IdfPath = $env:IDF_PATH
-        PythonVenv = $null
-        ToolsPath  = $null
+        PythonVenv = $env:IDF_PYTHON_ENV_PATH
+        ToolsPath  = $env:IDF_TOOLS_PATH
         Source     = "env"
     }
 } else {
@@ -219,18 +237,26 @@ if (-not (Test-Path $idfPath)) {
 $versionActual = Get-IdfVersionFromPath $idfPath
 if (-not $versionActual) {
     Write-Warning "Could not parse IDF version from $idfPath\tools\cmake\version.cmake"
-    $versionActual = $selected.Version.TrimStart('v')
+    if ($selected.Version) {
+        $versionActual = $selected.Version.TrimStart('v')
+    } else {
+        $versionActual = "unknown"
+    }
 }
 
 $toolsRoot = $selected.ToolsPath
-if (-not $toolsRoot) { $toolsRoot = Resolve-ToolsRoot -IdfPath $idfPath }
+if (-not $toolsRoot -or -not (Test-Path $toolsRoot)) { $toolsRoot = Resolve-ToolsRoot -IdfPath $idfPath }
 
 $pythonVenv = Resolve-PythonVenv -Hint $selected.PythonVenv
-if (-not $pythonVenv -and $toolsRoot) {
+if (-not $pythonVenv -and $toolsRoot -and $selected.Version) {
     $pythonVenv = Find-PythonVenvForVersion -VersionName $selected.Version -ToolsRoot $toolsRoot
 }
 if (-not $pythonVenv) {
-    Write-Error "Could not locate Python venv for $($selected.Version). Check $toolsRoot\python\$($selected.Version)\venv\Scripts\python.exe"
+    if ($selected.Version -and $toolsRoot) {
+        Write-Error "Could not locate Python venv for $($selected.Version). Check $toolsRoot\python\$($selected.Version)\venv\Scripts\python.exe"
+    } else {
+        Write-Error "Could not locate Python venv. Set IDF_PYTHON_ENV_PATH or use an ESP-IDF install discoverable by activate_idf.ps1."
+    }
 }
 
 $pythonExe = Join-Path $pythonVenv "Scripts\python.exe"
@@ -262,6 +288,10 @@ if ($toolsRoot -and (Test-Path $toolsRoot)) {
             Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue | ForEach-Object {
                 $nestedBin = Join-Path $_.FullName "bin"
                 if (Test-Path $nestedBin) { $pathParts += $nestedBin }
+            }
+            # Some tools, including ninja, place their executable at the version root.
+            if (Get-ChildItem -Path $_.FullName -File -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1) {
+                $pathParts += $_.FullName
             }
             # Top-level fallback (e.g. esp-rom-elfs has no bin but its dir is on PATH).
             if (-not (Test-Path $binDir) -and $tool -eq "esp-rom-elfs") {

@@ -12,12 +12,20 @@ idf.py: command not found
 
 Fix:
 
-- Open the ESP-IDF PowerShell shortcut, or run `export.ps1` from your ESP-IDF installation.
-- Verify with:
+Use the project-local activator from the repository root, then verify the session:
 
 ```powershell
+cd D:\workspace\rodakos
+. .\activate_idf.ps1
 echo $env:IDF_PATH
 idf.py --version
+```
+
+If more than one ESP-IDF version is installed, list and select one explicitly:
+
+```powershell
+. .\activate_idf.ps1 -List
+. .\activate_idf.ps1 -Version v5.5.4
 ```
 
 ## Board "rymcu_bigsmart" Not Found
