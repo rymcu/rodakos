@@ -18,6 +18,7 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void OnTick() override {}
 
     void Refresh();
@@ -29,6 +30,8 @@ private:
     };
 
     void CreateUi();
+    void DestroyUi();
+    void ResetUiPointers();
     InfoLabels CreateInfoCard(lv_obj_t* parent, const char* icon, const char* title);
     void ProbeStorage(bool allow_mount);
     void NavigateHome();

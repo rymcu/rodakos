@@ -17,11 +17,14 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void UpdateClock();
     void UpdateSyncStatus();
 
 private:
     void CreateUi();
+    void DestroyUi();
+    void ResetUiPointers();
     void StartSync();
     void NavigateHome();
     bool TimeIsValid() const;

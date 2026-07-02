@@ -2,6 +2,7 @@
 
 #include "phone_ui/phone_theme.h"
 
+#include <cstdint>
 #include <string>
 
 #include <lvgl.h>
@@ -19,6 +20,7 @@ public:
 
     void SetThemeName(const std::string& name);
     const std::string& theme_name() const { return theme_name_; }
+    uint32_t theme_revision() const { return theme_revision_; }
     void ShowToast(const char* message, int duration_ms = 1800);
     void ShowToastUnlocked(const char* message, int duration_ms = 1800);
 
@@ -27,6 +29,7 @@ private:
     int height_;
     std::string theme_name_ = "dark";
     PhoneTheme theme_;
+    uint32_t theme_revision_ = 0;
     lv_obj_t* toast_ = nullptr;
     lv_timer_t* toast_timer_ = nullptr;
 };

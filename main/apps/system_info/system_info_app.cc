@@ -137,16 +137,49 @@ void SystemInfoApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
-            if (refresh_timer_ != nullptr) {
-                lv_timer_delete(refresh_timer_);
-                refresh_timer_ = nullptr;
-            }
-            if (root_ != nullptr && lv_obj_is_valid(root_)) {
-                lv_obj_delete(root_);
-            }
+            DestroyUi();
         }
     }
 
+    context_ = nullptr;
+    ui_ = nullptr;
+    file_service_ = nullptr;
+}
+
+bool SystemInfoApp::OnThemeChanged(PhoneAppContext& context) {
+    context_ = &context;
+    ui_ = &context.ui();
+    file_service_ = context.services().file_service();
+
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return false;
+    }
+
+    const bool was_hidden = root_ != nullptr && lv_obj_is_valid(root_) &&
+                            lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    DestroyUi();
+    CreateUi();
+    Refresh();
+    if (was_hidden && root_ != nullptr) {
+        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    }
+    refresh_timer_ = lv_timer_create(RefreshTimerCallback, 2000, this);
+    return true;
+}
+
+void SystemInfoApp::DestroyUi() {
+    if (refresh_timer_ != nullptr) {
+        lv_timer_delete(refresh_timer_);
+        refresh_timer_ = nullptr;
+    }
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_delete(root_);
+    }
+    ResetUiPointers();
+}
+
+void SystemInfoApp::ResetUiPointers() {
     root_ = nullptr;
     body_ = nullptr;
     wifi_ = {};
@@ -156,9 +189,6 @@ void SystemInfoApp::OnDestroy() {
     firmware_ = {};
     chip_ = {};
     heap_detail_ = {};
-    context_ = nullptr;
-    ui_ = nullptr;
-    file_service_ = nullptr;
 }
 
 void SystemInfoApp::CreateUi() {

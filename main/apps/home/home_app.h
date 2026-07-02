@@ -17,9 +17,14 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void UpdateClock();
 
 private:
+    bool CreateUi(PhoneAppContext& context);
+    void DestroyUi();
+    void ResetUiPointers();
+
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
 

@@ -4,6 +4,7 @@
 #include "phone_ui/soft_keyboard.h"
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
+#include "apps/settings/settings_web_files_page.h"
 #include <lvgl.h>
 #include <atomic>
 #include <cstdint>
@@ -47,13 +48,19 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void OnDeviceCloudRefreshComplete(bool ok,
                                       const rodakos::DeviceCloudConfig& config,
                                       const std::string& error,
                                       uint32_t generation);
+    void ReloadUiForTheme();
+    void RefreshThemeFromNavigation();
 
 private:
     // 页面切换
+    bool CreateUi();
+    void DestroyUi();
+    void ResetUiPointers();
     void ShowPage(SettingsPage page);
     void CreateMainPage();
     void CreateWiFiListPage();
@@ -72,10 +79,6 @@ private:
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
     void SaveCloudProvisioningUrl(const std::string& url);
-    void CreateWebFilesPage();
-    void UpdateWebFilesPage();
-    void StartWebFiles();
-    void StopWebFiles();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -142,12 +145,7 @@ private:
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
 
     // Web 上传页面控件
-    lv_obj_t* web_upload_body_ = nullptr;
-    lv_obj_t* web_upload_status_label_ = nullptr;
-    lv_obj_t* web_upload_url_label_ = nullptr;
-    lv_obj_t* web_upload_last_label_ = nullptr;
-    lv_obj_t* web_upload_start_btn_ = nullptr;
-    lv_obj_t* web_upload_stop_btn_ = nullptr;
+    SettingsWebFilesPage web_files_page_;
 
     // WiFi 页面控件
     lv_obj_t* wifi_body_ = nullptr;
