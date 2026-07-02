@@ -1,85 +1,89 @@
-# esp-brookesia HAL 本地迁移 - 问题解决记录
+# RodakOS Troubleshooting
 
-> **参考**: [Espressif esp-brookesia](https://github.com/espressif/esp-brookesia)  
-> **文档**: [Board Manager 开发指南](https://github.com/espressif/esp-brookesia/blob/main/docs/board_manager.md)
+This file is the single place for current build, flash, and runtime fixes. Old migration notes, quick-fix cards, and touch/Clang one-off reports have been merged here.
 
-## 问题 1: override_path 指向已删除的 managed_components
+## ESP-IDF Environment Missing
 
-**错误信息：**
-```
-ERROR: The "override_path" field in the manifest file
-```
+Symptom:
 
-**原因：**
-`idf.py bmgr -b rymcu_bigsmart` 生成的 `components/gen_bmgr_codes/idf_component.yml` 包含绝对路径，指向 `D:\workspace\rodakos\managed_components\...`，但我们已经将组件迁移到 `components/` 并删除了 `managed_components/`。
-
-**解决方案：**
-手动修正 `components/gen_bmgr_codes/idf_component.yml`：
-
-```yaml
-# 修正前
-dependencies:
-  esp_io_expander_pca9557:
-    override_path: D:\workspace\rodakos\managed_components\espressif__brookesia_hal_boards\boards\rymcu\rymcu_bigsmart/components/esp_io_expander_pca9557
-
-# 修正后
-dependencies:
-  esp_io_expander_pca9557:
-    override_path: ../../components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/components/esp_io_expander_pca9557
+```text
+idf.py: command not found
 ```
 
----
+Fix:
 
-## 问题 2: CMakeLists.txt 路径硬编码
+Use the project-local activator from the repository root, then verify the session:
 
-**错误信息：**
-```
-找不到 setup_device.c
-```
-
-**原因：**
-`components/gen_bmgr_codes/CMakeLists.txt` 中的 `SRC_DIRS` 和 `INCLUDE_DIRS` 硬编码为 `../../managed_components/...`。
-
-**解决方案：**
-修正 `components/gen_bmgr_codes/CMakeLists.txt`：
-
-```cmake
-# 修正前
-idf_component_register(
-    SRC_DIRS "." "../../managed_components/espressif__brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
-    INCLUDE_DIRS "." "../../managed_components/espressif__brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
-    REQUIRES esp_board_manager
-)
-
-# 修正后
-idf_component_register(
-    SRC_DIRS "." "../../components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
-    INCLUDE_DIRS "." "../../components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
-    REQUIRES esp_board_manager
-)
+```powershell
+cd D:\workspace\rodakos
+. .\activate_idf.ps1
+echo $env:IDF_PATH
+idf.py --version
 ```
 
----
+If more than one ESP-IDF version is installed, list and select one explicitly:
 
-## 问题 3: 缺少 partitions_16m.csv 分区表
-
-**错误信息：**
-```
-FileNotFoundError: [Errno 2] No such file or directory: 'D:/workspace/rodakos/partitions_16m.csv'
-ninja: error: 'D:/workspace/rodakos/partitions_16m.csv', needed by 'partition_table/partition-table.bin', missing and no known rule to make it
+```powershell
+. .\activate_idf.ps1 -List
+. .\activate_idf.ps1 -Version v5.5.4
 ```
 
-**原因：**
-BigSmart 板级配置的 `sdkconfig.defaults.board` 要求自定义分区表：
-```
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16m.csv"
+## Board "rymcu_bigsmart" Not Found
+
+Symptom:
+
+```text
+Board "rymcu_bigsmart" not found
 ```
 
-但项目根目录没有这个文件。
+Cause: `brookesia_hal_boards` keeps BigSmart under `boards/rymcu/rymcu_bigsmart`, while Board Manager may scan `components/esp_board_manager/boards/` directly.
 
-**解决方案：**
-创建 `partitions_16m.csv`（ESP32-S3 16MB flash 标准分区）：
+Fix:
+
+```powershell
+.\setup_board.ps1
+idf.py bmgr -b rymcu_bigsmart
+.\fix_gen_paths.ps1
+idf.py build
+```
+
+Manual junction:
+
+```powershell
+cd D:\workspace\rodakos\components\esp_board_manager\boards
+New-Item -ItemType Junction -Path "rymcu_bigsmart" -Target "..\..\brookesia_hal_boards\boards\rymcu\rymcu_bigsmart"
+```
+
+## Generated Paths Point To managed_components
+
+Symptoms include `override_path` errors or CMake failing to find `setup_device.c`.
+
+Cause: `idf.py bmgr` can generate paths that refer to the old `managed_components` location.
+
+Fix:
+
+```powershell
+idf.py bmgr -b rymcu_bigsmart
+.\fix_gen_paths.ps1
+idf.py build
+```
+
+Check these files if needed:
+
+- `components/gen_bmgr_codes/idf_component.yml`
+- `components/gen_bmgr_codes/CMakeLists.txt`
+
+They should point to `../../components/brookesia_hal_boards`, not `managed_components`.
+
+## Missing partitions_16m.csv
+
+Symptom:
+
+```text
+FileNotFoundError: partitions_16m.csv
+```
+
+Fix: keep `partitions_16m.csv` in the project root. The current 16MB layout is:
 
 ```csv
 # Name,   Type, SubType, Offset,  Size, Flags
@@ -89,269 +93,172 @@ factory,  app,  factory, 0x10000, 0x800000,
 storage,  data, fat,     ,        0x7E0000,
 ```
 
-**分区说明：**
-- `nvs` (24KB) - 存储 WiFi 配置、Settings 等
-- `phy_init` (4KB) - PHY 校准数据
-- `factory` (8MB = 0x800000) - 主固件（为 RodakOS app、Assistant 和系统服务留余量）
-- `storage` (~8MB = 0x7E0000) - 内部 FAT 数据分区；照片/音乐等媒体仍优先使用 SD 卡
+## Partition Table Exceeds 16MB
 
-**重要：** 
-- 16MB flash = 0x1000000 bytes
-- 必须减去前面的 offset (0x10000) 和已分配空间
-- 使用十六进制精确计算，避免 "1M"/"15M" 这种单位导致对齐问题
-- 总计算：0x10000 + 0x800000 + 0x7E0000 = 0xFF0000 < 0x1000000 ✅
+Symptom:
 
----
-
-## 经验总结
-
-### 1. 本地迁移的必要步骤
-
-将 Brookesia HAL 从远端迁移到本地后，**必须手动修正生成代码中的路径**：
-
-1. 运行 `idf.py bmgr -b rymcu_bigsmart`
-2. 检查并修正 `components/gen_bmgr_codes/idf_component.yml`
-3. 检查并修正 `components/gen_bmgr_codes/CMakeLists.txt`
-4. 确保板级要求的文件存在（如分区表）
-
-### 2. 自动化脚本（建议）
-
-可以编写 PowerShell 脚本自动修正路径：
-
-```powershell
-# fix_gen_paths.ps1
-$genDir = "components/gen_bmgr_codes"
-
-# 修正 idf_component.yml
-(Get-Content "$genDir/idf_component.yml") `
-    -replace 'managed_components\\espressif__brookesia_hal_boards', 'components/brookesia_hal_boards' `
-    | Set-Content "$genDir/idf_component.yml"
-
-# 修正 CMakeLists.txt
-(Get-Content "$genDir/CMakeLists.txt") `
-    -replace '../../managed_components/espressif__brookesia_hal_boards', '../../components/brookesia_hal_boards' `
-    | Set-Content "$genDir/CMakeLists.txt"
-
-Write-Host "✅ Paths fixed in gen_bmgr_codes"
+```text
+Partitions table occupies ... which does not fit in configured flash size 16MB
 ```
 
-使用：
+Fix: use exact hexadecimal sizes, not shorthand `1M`/`15M`. The current `factory` partition is 8MB and `storage` is about 8MB with margin.
+
+## Bootloader Clang Response-File Error On Windows
+
+Symptom:
+
+```text
+clang: error: no such file or directory: '@D:/workspace/rodakos/build/bootloader/toolchain/cflags'
+```
+
+Cause: ESP-IDF 5.5.4 with Clang on Windows can mishandle response files.
+
+Preferred fixes:
+
+1. Use GCC. Current `sdkconfig` sets:
+
+```ini
+CONFIG_IDF_TOOLCHAIN="gcc"
+CONFIG_IDF_TOOLCHAIN_GCC=y
+```
+
+2. Clean and regenerate:
+
 ```powershell
+idf.py fullclean
+Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force components/gen_bmgr_codes -ErrorAction SilentlyContinue
 idf.py bmgr -b rymcu_bigsmart
 .\fix_gen_paths.ps1
 idf.py build
 ```
 
-### 3. gitignore 配置
+3. If command-line builds remain broken, use the VSCode ESP-IDF extension.
 
-确保 `.gitignore` 包含：
-```
-components/gen_bmgr_codes/
-```
+## LCD Config Field Errors
 
-生成的代码不应提交，每次 `idf.py bmgr` 都会重新生成。
+Symptom:
 
-### 4. 分区表管理
-
-BigSmart 使用 16MB flash，建议：
-- `factory` 1-2MB（当前固件 ~668KB）
-- `nvs` 24-32KB（足够存 WiFi/Settings）
-- `storage` 剩余空间（SD 卡、音频文件）
-
-如果需要 OTA，改用：
-```csv
-nvs,      data, nvs,     0x9000,  0x6000,
-otadata,  data, ota,     0xf000,  0x2000,
-phy_init, data, phy,     0x11000, 0x1000,
-ota_0,    app,  ota_0,   0x20000, 2M,
-ota_1,    app,  ota_1,   ,        2M,
-storage,  data, fat,     ,        12M,
+```text
+dev_display_lcd_config_t has no member named x_max
+dev_display_lcd_config_t has no member named y_max
 ```
 
----
-
-## 快速参考
-
-### 完整构建流程
-
-```powershell
-# 首次 / 切换板卡后
-idf.py bmgr -b rymcu_bigsmart
-
-# 修正生成代码路径（手动或脚本）
-# 1. components/gen_bmgr_codes/idf_component.yml
-# 2. components/gen_bmgr_codes/CMakeLists.txt
-
-# 确保分区表存在
-# 项目根目录需要 partitions_16m.csv
-
-# 构建
-idf.py build
-
-# 烧录
-idf.py -p COM3 flash monitor
-```
-
-### 验证清单
-
-- [ ] `components/gen_bmgr_codes/idf_component.yml` 路径正确
-- [ ] `components/gen_bmgr_codes/CMakeLists.txt` 路径正确
-- [ ] `partitions_16m.csv` 存在于项目根目录
-- [ ] `.gitignore` 包含 `components/gen_bmgr_codes/`
-- [ ] `managed_components/` 已删除
-- [ ] `main/board/` 已删除
-
-### 回滚方案
-
-如果迁移失败，可以回滚到旧架构：
-
-```powershell
-git checkout main/board/
-git checkout main/idf_component.yml
-git checkout main/CMakeLists.txt
-git checkout main/main.cc
-rm -r components/brookesia_*
-rm -r components/esp_board_manager
-idf.py fullclean
-idf.py build
-```
-
----
-
-## 问题 4: 分区表超出 flash 容量
-
-**错误信息：**
-```
-Partitions tables occupies 16.1MB of flash (16842752 bytes) which does not fit in configured flash size 16MB.
-```
-
-**原因：**
-使用 "1M" 和 "15M" 这种简写单位时，分区生成工具按 1024*1024 计算，但没有考虑前面的 offset (0x10000 = 64KB) 和对齐要求，导致总和超出 16MB。
-
-**解决方案：**
-使用十六进制精确指定大小：
-
-```csv
-# 错误的配置（会超出）
-factory,  app,  factory, 0x10000, 1M,
-storage,  data, fat,     ,        15M,
-
-# 正确的配置（十六进制精确计算）
-factory,  app,  factory, 0x10000, 0x800000,    # 8MB
-storage,  data, fat,     ,        0x7E0000,    # ~8MB
-```
-
-**计算公式：**
-- 16MB flash = 0x1000000 bytes
-- 可用空间 = 0x1000000 - 0x10000 (bootloader/partition table 区域) = 0xFF0000
-- factory (8MB) = 0x800000
-- storage = 0xFF0000 - 0x800000 = 0x7F0000（实际用 0x7E0000 留余量）
-
----
-
-## 问题 5: dev_display_lcd_config_t 字段名错误
-
-**错误信息：**
-```
-error: 'dev_display_lcd_config_t' has no member named 'x_max'
-error: 'dev_display_lcd_config_t' has no member named 'y_max'
-```
-
-**原因：**
-Brookesia HAL 的 LCD 配置结构体字段名与预期不同。
-
-**解决方案：**
-使用正确的字段名：
+Fix: use `lcd_width` and `lcd_height` from `dev_display_lcd_config_t`.
 
 ```cpp
-// 错误
-static PhoneUi ui(lcd_cfg->x_max, lcd_cfg->y_max);
-
-// 正确
 static PhoneUi ui(lcd_cfg->lcd_width, lcd_cfg->lcd_height);
 ```
 
-**完整结构体定义** (`components/esp_board_manager/devices/dev_display_lcd/dev_display_lcd.h`)：
-```c
-struct dev_display_lcd_config {
-    const char *name;
-    const char *chip;
-    const char *sub_type;
-    uint16_t lcd_width;     // 使用这个
-    uint16_t lcd_height;    // 使用这个
-    uint8_t swap_xy : 1;
-    uint8_t mirror_x : 1;
-    uint8_t mirror_y : 1;
-    // ...
-};
-```
+## Backlight LEDC API Errors
 
----
+Symptom: missing `dev_ledc_ctrl_set_brightness_percent` or invalid cast errors.
 
-## 问题 6: dev_ledc_ctrl API 不存在
+Cause: the esp-brookesia LEDC device layer exposes handles; RodakOS controls brightness through ESP-IDF LEDC APIs.
 
-**错误信息：**
-```
-error: expected '(' before '*' token
-static_cast<dev_ledc_ctrl_handles_t*>(ledc_handle_)
-```
-
-**原因：**
-esp-brookesia HAL 的 dev_ledc_ctrl 只提供了 init/deinit 接口，没有提供 `dev_ledc_ctrl_set_brightness_percent` 等便捷函数。需要直接使用底层的 periph_ledc API。
-
-**解决方案：**
-使用 `periph_ledc_handle_t` 和 ESP-IDF 的 `ledc_set_duty` / `ledc_update_duty` API：
+Pattern:
 
 ```cpp
-// 错误的用法（不存在的 API）
-dev_ledc_ctrl_set_brightness_percent(handle, brightness);
-
-// 正确的用法
-auto handle = static_cast<periph_ledc_handle_t*>(ledc_handle_);
-uint32_t max_duty = (1 << 13) - 1;  // 13-bit resolution
-uint32_t duty = (brightness * max_duty) / 100;
+auto handle = static_cast<periph_ledc_handle_t*>(ledc_handle);
+uint32_t duty = (brightness * 8191) / 100;
 ledc_set_duty(handle->speed_mode, handle->channel, duty);
 ledc_update_duty(handle->speed_mode, handle->channel);
 ```
 
-**必要的 include**：
-```cpp
-#include <periph_ledc.h>
-#include <driver/ledc.h>
+## LVGL Lock Or Blank Screen
+
+Checks:
+
+- `esp_board_manager_init()` must run before display handle lookup.
+- `lvgl_port_init()` and `lvgl_port_add_disp()` must run before `PhoneSystem::Start()`.
+- Backlight should be initialized and restored after LVGL display setup.
+- LVGL buffer should be at least `lcd_width * 40`.
+- Display config currently uses RGB565 byte swapping through `.flags.swap_bytes = true`.
+
+Expected order in `main.cc`:
+
+```text
+NVS
+USB MSC boot gate
+Board Manager
+Theme and PhoneUi
+LVGL port and display
+Touch cached polling
+Fonts
+Backlight
+Services
+PhoneSystem
 ```
 
----
+## Touch Not Responding
 
-## 问题 8: LCD 色彩异常（颜色错乱）
+Current design: GT911 touch is handled by a cached polling bridge in `main.cc`, not by direct `lvgl_port_add_touch()`.
 
-**现象：**
-- 系统启动正常，LVGL 初始化成功
-- 屏幕有显示，但颜色不对（例如：红蓝互换）
+Why: earlier direct LVGL-task polling could hang the I2C bus on hardware without a GT911 interrupt pin.
 
-**原因：**
-RGB565 格式的字节序设置不正确。ST7789 需要正确的 `swap_bytes` 配置。
+Healthy log:
 
-**解决方案：**
-在 `main.cc` 的 LVGL display 配置中调整 `swap_bytes` 标志：
-
-```cpp
-const lvgl_port_display_cfg_t disp_cfg = {
-    // ... 其他配置 ...
-    .flags = {
-        .buff_dma = true,
-        .swap_bytes = true,  // 改为 true 试试
-    }
-};
+```text
+Touch input registered with cached polling
 ```
 
-或者检查板级配置中的 LCD 设置：
-```yaml
-# board_devices.yaml 中的 display_lcd
-flags:
-  swap_bytes: true  # 根据实际屏幕调整
+If touch does not work:
+
+- Check `lcd_touch` exists in generated Board Manager config.
+- Check GT911 I2C address and bus health.
+- Look for repeated `Touch read failed` warnings.
+- Keep I2C reads out of LVGL callbacks; update the cached bridge instead.
+
+## SD Card Or Photos Show Empty
+
+Symptoms:
+
+```text
+sdmmc_init_ocr ... returned 0x107
+Photos app shows no photos
 ```
 
-**调试步骤**：
-1. 尝试切换 `swap_bytes` 为 `true`/`false`
-2. 重新构建并烧录：`idf.py build flash`
-3. 观察颜色是否正常
+Checks:
+
+- Insert a FAT-formatted SD card.
+- Put images under `/photos` or `/DCIM`; Photos also has a shallow fallback scan from root.
+- Supported image formats: `.jpg`, `.jpeg`, `.png`, `.bmp`.
+- FileService mounts the Board Manager `fs_sdcard` device on demand.
+- USB MSC mode uses the early-boot path in `main/usb_msc_mode.cc`.
+
+## Out Of Memory Loading Images
+
+Checks:
+
+- Confirm PSRAM is enabled.
+- Reduce very large source images.
+- Check `ImageLibrary::LoadImage()` return value.
+- Prefer scanned FileService paths rather than hard-coded local paths.
+
+## WiFi Does Not Auto-Connect
+
+Checks:
+
+- Settings must save credentials through `WiFiConfig`.
+- Auto-connect starts after `PhoneSystem::Start()`, so early boot logs may show UI before WiFi connects.
+- Clear credentials from Settings or erase flash if NVS is polluted during testing.
+
+## Audio, Assistant, Or Camera Unavailable
+
+These services intentionally open heavy hardware paths on demand. If an app says unavailable:
+
+- Check Board Manager device names: `audio_dac`, `audio_adc`, `camera`, `fs_sdcard`.
+- Check I2C errors from codec/camera setup.
+- Confirm SD card files exist for Music and Photos.
+- For Assistant wake/runtime, current code may report unavailable when no real wake runtime or recorder is configured.
+
+## USB Disk Mode
+
+USB disk mode is not a normal app runtime state. Settings requests a one-shot boot flag, then the next boot enters TinyUSB MSC before the normal UI and services start.
+
+If it does not appear on the host:
+
+- Reboot after enabling the mode.
+- Check SD card presence.
+- Confirm USB cable supports data.
+- Use the board's MSC startup button path only if that hardware input is configured.

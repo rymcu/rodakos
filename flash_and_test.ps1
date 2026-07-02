@@ -33,10 +33,12 @@ if (-not (Test-Path "build/rodakos.bin")) {
 Write-Host "[1/3] 检查固件大小..." -ForegroundColor Yellow
 $appSize = (Get-Item "build/rodakos.bin").Length
 Write-Host "  固件大小: $([math]::Round($appSize/1KB, 2)) KB" -ForegroundColor White
-if ($appSize -gt 2MB) {
-    Write-Host "  ⚠️  警告: 固件超过 2MB，可能无法烧录到 factory 分区" -ForegroundColor Yellow
+$factorySize = 0x800000
+if ($appSize -gt $factorySize) {
+    Write-Host "  ⚠️  警告: 固件超过 8MB，无法烧录到当前 factory 分区" -ForegroundColor Yellow
 } else {
-    Write-Host "  ✅ 固件大小正常" -ForegroundColor Green
+    $percent = [math]::Round(($appSize / $factorySize) * 100, 1)
+    Write-Host "  ✅ 固件大小正常（factory 分区使用率: $percent%）" -ForegroundColor Green
 }
 Write-Host ""
 

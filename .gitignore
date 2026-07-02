@@ -1,6 +1,10 @@
 build/
 managed_components/
 sdkconfig.old
+ScreenShot_*.png
+*.log
+*.tmp
+*.bak
 *.pyc
 __pycache__/
 

@@ -1,72 +1,136 @@
-# RodakOS 固件下载方法
+# RodakOS Firmware Build And Flash
 
-本文档记录 RodakOS 固件编译、下载到 ESP32-S3 设备、串口监视和常见问题处理流程。
+This guide covers building RodakOS, flashing it to an ESP32-S3 RYMCU BigSmart, and checking serial logs.
 
-## 硬件与环境
+## Environment
 
-- 项目路径：`D:\workspace\rodakos`
-- 目标芯片：ESP32-S3
-- 硬件基线：RYMCU BigSmart 风格 320x240 触摸设备，ST7789 + GT911 + PCA9557 + GPIO42 背光
-- 串口：`COM3`
-- 推荐环境：ESP-IDF 5.4+，当前本机已验证 ESP-IDF 5.5.4
+- Project path: `D:\workspace\rodakos`
+- Target: `esp32s3`
+- Flash: 16MB
+- Default port: `COM3`
+- Current local toolchain config: GCC on ESP-IDF 5.5.4
 
-如果当前 PowerShell 找不到 `idf.py`，先加载 Espressif PowerShell 环境：
+Activate the project-local script once per PowerShell session:
 
 ```powershell
-. C:\Espressif\tools\Microsoft.v5.5.4.PowerShell_profile.ps1
+. .\activate_idf.ps1                 # auto-detect installed ESP-IDF
+. .\activate_idf.ps1 -Version v5.4.2 # pin a specific version
+. .\activate_idf.ps1 -List           # show what's installed
 ```
 
-## 首次配置目标芯片
+The activator scans `C:\esp\<vX.Y.Z>\esp-idf\`, reads `C:\Espressif\tools\eim_idf.json`, and falls back to `$env:IDF_PATH`. After activation, `idf.py` is on PATH and `$env:IDF_PATH` is set, so the project scripts (`build_rodakos.ps1`, `flash_and_test.ps1`, etc.) work directly without the official Microsoft `*PowerShell_profile.ps1`.
 
-首次拉起项目或清理过构建目录后，确认目标芯片是 `esp32s3`：
+Verify the environment:
+
+```powershell
+echo $env:IDF_PATH
+idf.py --version
+```
+
+## First Build Or Board Regeneration
 
 ```powershell
 cd D:\workspace\rodakos
+. .\activate_idf.ps1
+.\build_rodakos.ps1
+```
+
+The script:
+
+1. Checks required files such as `partitions_16m.csv`.
+2. Runs `idf.py bmgr -b rymcu_bigsmart`.
+3. Runs the generated-path fix.
+4. Reconfigures and builds the project.
+
+Manual equivalent:
+
+```powershell
+cd D:\workspace\rodakos
+. .\activate_idf.ps1
 idf.py set-target esp32s3
-```
-
-目标芯片设置会影响 `sdkconfig`、分区表、编译参数和烧录参数，不要把它切成普通 `esp32`。
-
-## 编译固件
-
-```powershell
-cd D:\workspace\rodakos
+idf.py bmgr -b rymcu_bigsmart
+.\fix_gen_paths.ps1
 idf.py build
 ```
 
-成功后主要产物位于：
+## Daily Build
+
+For ordinary app or service changes:
+
+```powershell
+cd D:\workspace\rodakos
+. .\activate_idf.ps1
+idf.py build
+```
+
+For a quick build with optional flash:
+
+```powershell
+.\quick_build.ps1
+.\quick_build.ps1 -Flash -Port COM3
+```
+
+## Flash And Monitor
+
+```powershell
+cd D:\workspace\rodakos
+. .\activate_idf.ps1
+.\flash_and_test.ps1
+```
+
+Choose another port:
+
+```powershell
+.\flash_and_test.ps1 -Port COM5
+```
+
+Manual commands:
+
+```powershell
+idf.py -p COM3 flash
+idf.py -p COM3 monitor
+```
+
+Exit monitor with:
+
+```text
+Ctrl+]
+```
+
+## Expected Boot Signals
+
+Healthy boot logs should include messages like:
+
+```text
+RodakOS: Starting RodakOS with esp-brookesia HAL
+Board manager initialized
+Touch input registered with cached polling
+LVGL port initialized
+BacklightAdapter: Backlight adapter initialized
+Audio services ready - focus, assistant, and playback open codec on demand
+Web file system ready - start from Settings when needed
+Camera service ready - camera opens on demand
+PhoneSystem: Starting Phone OS
+HomeApp: Phone desktop ready with N apps
+RodakOS: RodakOS started successfully
+```
+
+`N` depends on which apps are registered in `main/apps/built_in_apps.cc`.
+
+## Firmware Artifacts
+
+After a successful build:
 
 - `build\bootloader\bootloader.bin`
 - `build\partition_table\partition-table.bin`
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-当前验证过的 app 固件大小约为 `668448` bytes，1MB app 分区仍有约 36% 空间。
+Current observed `build\rodakos.bin` size is about 3.7MB. The factory partition is 8MB.
 
-## 下载到设备
+## Direct Esptool Flash
 
-常规下载命令：
-
-```powershell
-cd D:\workspace\rodakos
-idf.py -p COM3 flash
-```
-
-下载完成后，ESP-IDF 会自动复位设备。也可以下载后直接打开串口监视：
-
-```powershell
-idf.py -p COM3 flash monitor
-```
-
-退出 monitor 使用：
-
-```text
-Ctrl+]
-```
-
-## 精确 esptool 下载参数
-
-一般优先使用 `idf.py -p COM3 flash`。如果需要在产线脚本或独立工具里下载，可以按当前 `build\flasher_args.json` 使用以下地址：
+Prefer `idf.py -p COM3 flash`. If a production script needs raw offsets, use the generated `build\flasher_args.json`. Current offsets are:
 
 ```powershell
 esptool.py --chip esp32s3 -p COM3 --before default_reset --after hard_reset write_flash `
@@ -76,72 +140,17 @@ esptool.py --chip esp32s3 -p COM3 --before default_reset --after hard_reset writ
   0x10000 build\rodakos.bin
 ```
 
-这些 offset 来自 ESP-IDF 生成的烧录参数：
+## Resetting Device State
 
-- `0x0`：bootloader
-- `0x8000`：partition table
-- `0x10000`：RodakOS app
-
-## 串口日志确认
-
-打开 monitor：
-
-```powershell
-cd D:\workspace\rodakos
-idf.py -p COM3 monitor
-```
-
-正常启动时应能看到类似日志：
-
-```text
-RodakOS: Starting RodakOS
-LVGL: Starting LVGL task
-BigSmartBoard: GT911 touch initialized at 0x5D
-HomeApp: Phone desktop ready with 1 apps
-```
-
-其中 `HomeApp: Phone desktop ready with 1 apps` 表示 Phone OS、Phone UI、Home 桌面和应用注册表已完成首屏拉起。
-
-## 常见问题
-
-### 找不到 COM3
-
-1. 检查 USB 线是否支持数据传输。
-2. 在 Windows 设备管理器里确认串口号是否仍是 `COM3`。
-3. 如果串口号变化，临时改用实际端口，例如 `idf.py -p COM5 flash`。
-
-### 串口被占用
-
-关闭其它串口工具、旧的 `idf.py monitor`、Arduino Serial Monitor 或厂商下载工具，然后重新执行：
-
-```powershell
-idf.py -p COM3 flash
-```
-
-### 下载连接失败
-
-如果自动进入下载模式失败，按住设备 `BOOT` 键，再点按 `RESET`，随后松开 `BOOT`，重新执行 flash 命令。
-
-### 启动状态异常或 NVS 配置污染
-
-设置 app 会把亮度、主题、语言偏好写入 NVS。需要清空整片 flash 时使用：
+To clear NVS settings, WiFi credentials, and internal data:
 
 ```powershell
 idf.py -p COM3 erase-flash
 idf.py -p COM3 flash monitor
 ```
 
-`erase-flash` 会清掉所有 NVS 和应用数据，只在调试异常状态或确认需要重置设备时使用。
+Use this only when you intentionally want to reset device state.
 
-## 推荐开发循环
+## Common Problems
 
-日常开发建议使用以下循环：
-
-```powershell
-. C:\Espressif\tools\Microsoft.v5.5.4.PowerShell_profile.ps1
-cd D:\workspace\rodakos
-idf.py build
-idf.py -p COM3 flash monitor
-```
-
-如果只是改 UI 布局、Home 桌面或 Settings app，通常不需要重新 `set-target`。
+See [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) for Board Manager path fixes, Clang response-file issues, partition errors, touch polling notes, SD card errors, and runtime diagnostics.
