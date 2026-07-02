@@ -19,6 +19,7 @@ public:
     void RegisterBuiltInApps();
     bool Start();
     bool LaunchApp(std::string_view app_id);
+    bool RefreshTheme();
     bool ReturnHome();
 
     PhoneAppRegistry& registry() { return registry_; }

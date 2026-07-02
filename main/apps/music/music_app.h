@@ -24,11 +24,14 @@ public:
     void OnShow() override;
     void OnHide() override;
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void OnTick() override {}
     void RefreshState();
 
 private:
     void CreateUi();
+    void DestroyUi();
+    void ResetUiPointers();
     void UpdateTrackCountLabel();
     void RebuildTrackList();
     void ShowTrackPicker();

@@ -104,6 +104,10 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
         return false;
     }
 
+    return CreateUi(context);
+}
+
+bool HomeApp::CreateUi(PhoneAppContext& context) {
     // 从设置中加载并应用主题
     Settings display_settings("display", false);
     const std::string theme_name = display_settings.GetString("theme", "dark");
@@ -267,23 +271,44 @@ void HomeApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
-            if (clock_timer_ != nullptr) {
-                lv_timer_delete(clock_timer_);
-                clock_timer_ = nullptr;
-            }
-            if (root_ != nullptr && lv_obj_is_valid(root_)) {
-                lv_obj_delete(root_);
-            }
+            DestroyUi();
         }
     }
+    context_ = nullptr;
+    ui_ = nullptr;
+}
+
+bool HomeApp::OnThemeChanged(PhoneAppContext& context) {
+    context_ = &context;
+    ui_ = &context.ui();
+
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return false;
+    }
+
+    DestroyUi();
+    return CreateUi(context);
+}
+
+void HomeApp::DestroyUi() {
+    if (clock_timer_ != nullptr) {
+        lv_timer_delete(clock_timer_);
+        clock_timer_ = nullptr;
+    }
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_delete(root_);
+    }
+    ResetUiPointers();
+}
+
+void HomeApp::ResetUiPointers() {
     root_ = nullptr;
     grid_ = nullptr;
     clock_label_ = nullptr;
     status_cluster_ = nullptr;
     battery_label_ = nullptr;
     wifi_label_ = nullptr;
-    context_ = nullptr;
-    ui_ = nullptr;
 }
 
 void HomeApp::UpdateClock() {

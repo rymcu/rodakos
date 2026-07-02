@@ -94,20 +94,62 @@ void ClockApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
-            if (clock_timer_ != nullptr) {
-                lv_timer_delete(clock_timer_);
-                clock_timer_ = nullptr;
-            }
-            if (sync_timer_ != nullptr) {
-                lv_timer_delete(sync_timer_);
-                sync_timer_ = nullptr;
-            }
-            if (root_ != nullptr && lv_obj_is_valid(root_)) {
-                lv_obj_delete(root_);
-            }
+            DestroyUi();
         }
     }
 
+    context_ = nullptr;
+    ui_ = nullptr;
+    sync_in_progress_ = false;
+    sync_poll_count_ = 0;
+}
+
+bool ClockApp::OnThemeChanged(PhoneAppContext& context) {
+    context_ = &context;
+    ui_ = &context.ui();
+
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return false;
+    }
+
+    const bool was_hidden = root_ != nullptr && lv_obj_is_valid(root_) &&
+                            lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    const bool restart_sync_timer = sync_in_progress_;
+
+    DestroyUi();
+    CreateUi();
+    UpdateClock();
+    if (sync_status_label_ != nullptr && sync_in_progress_) {
+        lv_label_set_text(sync_status_label_, "Syncing...");
+        lv_obj_set_style_text_color(sync_status_label_, rodakos_theme_primary(), 0);
+    }
+    if (was_hidden && root_ != nullptr) {
+        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    }
+    clock_timer_ = lv_timer_create(ClockTimerCallback, 1000, this);
+    if (restart_sync_timer) {
+        sync_timer_ = lv_timer_create(SyncTimerCallback, 1000, this);
+    }
+    return true;
+}
+
+void ClockApp::DestroyUi() {
+    if (clock_timer_ != nullptr) {
+        lv_timer_delete(clock_timer_);
+        clock_timer_ = nullptr;
+    }
+    if (sync_timer_ != nullptr) {
+        lv_timer_delete(sync_timer_);
+        sync_timer_ = nullptr;
+    }
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_delete(root_);
+    }
+    ResetUiPointers();
+}
+
+void ClockApp::ResetUiPointers() {
     root_ = nullptr;
     time_label_ = nullptr;
     seconds_label_ = nullptr;
@@ -116,10 +158,6 @@ void ClockApp::OnDestroy() {
     server_label_ = nullptr;
     sync_status_label_ = nullptr;
     time_row_ = nullptr;
-    context_ = nullptr;
-    ui_ = nullptr;
-    sync_in_progress_ = false;
-    sync_poll_count_ = 0;
 }
 
 void ClockApp::CreateUi() {

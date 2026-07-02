@@ -4,6 +4,7 @@
 #include "phone_ui/soft_keyboard.h"
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
+#include "apps/settings/settings_web_files_page.h"
 #include <lvgl.h>
 #include <atomic>
 #include <cstdint>
@@ -20,6 +21,11 @@ struct SettingsCloudRefreshGuard {
     std::atomic<SettingsApp*> app{nullptr};
     std::atomic<bool> refresh_in_progress{false};
     std::atomic<uint32_t> refresh_generation{0};
+};
+
+struct SettingsWiFiAsyncGuard {
+    std::atomic<SettingsApp*> app{nullptr};
+    std::atomic<uint32_t> generation{0};
 };
 
 namespace rodakos {
@@ -47,13 +53,22 @@ public:
     void OnShow() override {}
     void OnHide() override {}
     void OnDestroy() override;
+    bool OnThemeChanged(PhoneAppContext& context) override;
     void OnDeviceCloudRefreshComplete(bool ok,
                                       const rodakos::DeviceCloudConfig& config,
                                       const std::string& error,
                                       uint32_t generation);
+    void ReloadUiForTheme();
+    void OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results);
+    void OnWiFiConnectAsyncComplete(WiFiStatus status,
+                                    const std::string& ssid,
+                                    const std::string& password);
 
 private:
     // 页面切换
+    bool CreateUi();
+    void DestroyUi();
+    void ResetUiPointers();
     void ShowPage(SettingsPage page);
     void CreateMainPage();
     void CreateWiFiListPage();
@@ -72,10 +87,6 @@ private:
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
     void SaveCloudProvisioningUrl(const std::string& url);
-    void CreateWebFilesPage();
-    void UpdateWebFilesPage();
-    void StartWebFiles();
-    void StopWebFiles();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -142,12 +153,7 @@ private:
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
 
     // Web 上传页面控件
-    lv_obj_t* web_upload_body_ = nullptr;
-    lv_obj_t* web_upload_status_label_ = nullptr;
-    lv_obj_t* web_upload_url_label_ = nullptr;
-    lv_obj_t* web_upload_last_label_ = nullptr;
-    lv_obj_t* web_upload_start_btn_ = nullptr;
-    lv_obj_t* web_upload_stop_btn_ = nullptr;
+    SettingsWebFilesPage web_files_page_;
 
     // WiFi 页面控件
     lv_obj_t* wifi_body_ = nullptr;
@@ -155,6 +161,7 @@ private:
     lv_obj_t* wifi_list_container_ = nullptr;
     lv_obj_t* password_dialog_ = nullptr;
     lv_obj_t* password_textarea_ = nullptr;
+    std::shared_ptr<SettingsWiFiAsyncGuard> wifi_async_guard_;
     std::vector<WiFiScanResult> wifi_scan_results_;
     std::string connecting_ssid_;
     SoftKeyboard soft_keyboard_;

@@ -36,6 +36,23 @@ bool PhoneSystem::LaunchApp(std::string_view app_id) {
     return host_.Launch(*descriptor, context_);
 }
 
+bool PhoneSystem::RefreshTheme() {
+    ESP_LOGI(TAG, "Theme refresh requested");
+    if (host_.RefreshCurrentTheme(context_)) {
+        return true;
+    }
+    const std::string app_id(host_.current_app_id());
+    if (app_id.empty()) {
+        return false;
+    }
+    const auto* descriptor = registry_.FindById(app_id);
+    if (descriptor == nullptr) {
+        ESP_LOGE(TAG, "Cannot recreate unknown app for theme refresh: %s", app_id.c_str());
+        return false;
+    }
+    return host_.RecreateCurrent(*descriptor, context_);
+}
+
 bool PhoneSystem::ReturnHome() {
     ESP_LOGI(TAG, "Return home requested");
     return LaunchApp(kHomeAppId);

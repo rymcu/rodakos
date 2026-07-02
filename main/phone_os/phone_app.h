@@ -48,6 +48,7 @@ public:
     virtual void OnShow() = 0;
     virtual void OnHide() = 0;
     virtual void OnDestroy() = 0;
+    virtual bool OnThemeChanged(PhoneAppContext&) { return false; }
     virtual void OnTick() {}
 };
 

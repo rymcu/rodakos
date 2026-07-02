@@ -137,16 +137,59 @@ void MusicApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
-            if (refresh_timer_ != nullptr) {
-                lv_timer_delete(refresh_timer_);
-                refresh_timer_ = nullptr;
-            }
-            if (root_ != nullptr && lv_obj_is_valid(root_)) {
-                lv_obj_delete(root_);
-            }
+            DestroyUi();
         }
     }
 
+    context_ = nullptr;
+    ui_ = nullptr;
+    music_player_ = nullptr;
+}
+
+bool MusicApp::OnThemeChanged(PhoneAppContext& context) {
+    context_ = &context;
+    ui_ = &context.ui();
+
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return false;
+    }
+
+    const bool was_hidden = root_ != nullptr && lv_obj_is_valid(root_) &&
+                            lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    const bool track_picker_was_visible = track_picker_ != nullptr &&
+                                          !lv_obj_has_flag(track_picker_, LV_OBJ_FLAG_HIDDEN);
+    const bool volume_panel_was_visible = volume_panel_ != nullptr &&
+                                          !lv_obj_has_flag(volume_panel_, LV_OBJ_FLAG_HIDDEN);
+
+    DestroyUi();
+    CreateUi();
+    RebuildTrackList();
+    RefreshState();
+    if (track_picker_was_visible) {
+        ShowTrackPicker();
+    } else if (volume_panel_was_visible) {
+        ShowVolumePanel();
+    }
+    if (was_hidden && root_ != nullptr) {
+        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+    }
+    refresh_timer_ = lv_timer_create(RefreshTimerCallback, 500, this);
+    return true;
+}
+
+void MusicApp::DestroyUi() {
+    if (refresh_timer_ != nullptr) {
+        lv_timer_delete(refresh_timer_);
+        refresh_timer_ = nullptr;
+    }
+    if (root_ != nullptr && lv_obj_is_valid(root_)) {
+        lv_obj_delete(root_);
+    }
+    ResetUiPointers();
+}
+
+void MusicApp::ResetUiPointers() {
     root_ = nullptr;
     track_title_label_ = nullptr;
     status_label_ = nullptr;
@@ -162,9 +205,6 @@ void MusicApp::OnDestroy() {
     track_count_label_ = nullptr;
     track_picker_ = nullptr;
     track_list_ = nullptr;
-    context_ = nullptr;
-    ui_ = nullptr;
-    music_player_ = nullptr;
 }
 
 void MusicApp::CreateUi() {

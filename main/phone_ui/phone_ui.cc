@@ -22,6 +22,11 @@ lv_obj_t* PhoneUi::screen() const {
 void PhoneUi::SetThemeName(const std::string& name) {
     theme_name_ = name == "light" ? "light" : "dark";
     theme_ = theme_name_ == "light" ? PhoneLightTheme() : PhoneDarkTheme();
+    if (toast_ != nullptr && lv_obj_is_valid(toast_)) {
+        lv_obj_set_style_bg_color(toast_, theme_.surface_alt, 0);
+        lv_obj_set_style_text_color(toast_, theme_.text_primary, 0);
+    }
+    ++theme_revision_;
 }
 
 void PhoneUi::ShowToast(const char* message, int duration_ms) {
