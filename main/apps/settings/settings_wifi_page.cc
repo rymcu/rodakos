@@ -6,12 +6,75 @@
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 
+#include <esp_lvgl_port.h>
 #include <esp_log.h>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace {
 constexpr const char* TAG = "SettingsApp";
+
+struct WiFiScanPayload {
+    std::shared_ptr<SettingsWiFiAsyncGuard> guard;
+    uint32_t generation = 0;
+    std::vector<WiFiScanResult> results;
+};
+
+struct WiFiConnectPayload {
+    std::shared_ptr<SettingsWiFiAsyncGuard> guard;
+    uint32_t generation = 0;
+    WiFiStatus status = WiFiStatus::kDisconnected;
+    std::string ssid;
+    std::string password;
+};
+
+struct NetworkItemPayload {
+    size_t index = 0;
+};
+
+void NetworkItemDeleteEvent(lv_event_t* e) {
+    auto* payload = static_cast<NetworkItemPayload*>(lv_event_get_user_data(e));
+    delete payload;
+}
+
+void WiFiScanCompleteCallback(void* user_data) {
+    auto* payload = static_cast<WiFiScanPayload*>(user_data);
+    if (payload == nullptr) {
+        return;
+    }
+    auto guard = payload->guard;
+    auto* app = guard ? guard->app.load() : nullptr;
+    if (app != nullptr && payload->generation == guard->generation.load()) {
+        app->OnWiFiScanAsyncComplete(payload->results);
+    }
+    delete payload;
+}
+
+void WiFiConnectCompleteCallback(void* user_data) {
+    auto* payload = static_cast<WiFiConnectPayload*>(user_data);
+    if (payload == nullptr) {
+        return;
+    }
+    auto guard = payload->guard;
+    auto* app = guard ? guard->app.load() : nullptr;
+    if (app != nullptr && payload->generation == guard->generation.load()) {
+        app->OnWiFiConnectAsyncComplete(payload->status, payload->ssid, payload->password);
+    }
+    delete payload;
+}
+
+template <typename Payload, typename Callback>
+void QueueWiFiAsyncPayload(Payload* payload, Callback callback) {
+    bool queued = false;
+    if (lvgl_port_lock(1000)) {
+        queued = lv_async_call(callback, payload) == LV_RESULT_OK;
+        lvgl_port_unlock();
+    }
+    if (!queued) {
+        delete payload;
+    }
+}
 
 lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t index,
                              bool is_connected, bool is_saved) {
@@ -169,13 +232,21 @@ void SettingsApp::StartWiFiScan() {
     lv_label_set_text(wifi_status_label_, "Scanning...");
     lv_obj_clean(wifi_list_container_);
 
-    wifi->StartScan([this](const std::vector<WiFiScanResult>& results) {
-        wifi_scan_results_ = results;
-        lv_async_call([](void* user_data) {
-            auto* self = static_cast<SettingsApp*>(user_data);
-            self->OnWiFiScanComplete(self->wifi_scan_results_);
-        }, this);
+    auto guard = wifi_async_guard_;
+    const uint32_t generation = guard != nullptr ? guard->generation.load() : 0;
+    wifi->StartScan([guard, generation](const std::vector<WiFiScanResult>& results) {
+        auto* payload = new WiFiScanPayload{
+            .guard = guard,
+            .generation = generation,
+            .results = results,
+        };
+        QueueWiFiAsyncPayload(payload, WiFiScanCompleteCallback);
     });
+}
+
+void SettingsApp::OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results) {
+    wifi_scan_results_ = results;
+    OnWiFiScanComplete(wifi_scan_results_);
 }
 
 void SettingsApp::OnWiFiScanComplete(const std::vector<WiFiScanResult>& results) {
@@ -203,12 +274,15 @@ void SettingsApp::OnWiFiScanComplete(const std::vector<WiFiScanResult>& results)
         bool is_saved = (results[i].ssid == saved_ssid);
 
         auto* item = CreateNetworkItem(wifi_list_container_, results[i], i, is_current, is_saved);
-        lv_obj_set_user_data(item, (void*)i);
+        auto* payload = new NetworkItemPayload{.index = i};
+        lv_obj_set_user_data(item, payload);
+        lv_obj_add_event_cb(item, NetworkItemDeleteEvent, LV_EVENT_DELETE, payload);
 
         lv_obj_add_event_cb(item, [](lv_event_t* e) {
             auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
             auto* item = static_cast<lv_obj_t*>(lv_event_get_target(e));
-            size_t index = reinterpret_cast<size_t>(lv_obj_get_user_data(item));
+            auto* payload = static_cast<NetworkItemPayload*>(lv_obj_get_user_data(item));
+            const size_t index = payload != nullptr ? payload->index : self->wifi_scan_results_.size();
 
             if (index < self->wifi_scan_results_.size()) {
                 const auto& ap = self->wifi_scan_results_[index];
@@ -518,21 +592,27 @@ void SettingsApp::ConnectToNetwork(const std::string& ssid, const std::string& p
     snprintf(status_text, sizeof(status_text), "Connecting to %s...", ssid.c_str());
     lv_label_set_text(wifi_status_label_, status_text);
 
-    wifi->Connect(ssid, password, [this, ssid, password](WiFiStatus status) {
-        // 连接成功后保存凭据
-        if (status == WiFiStatus::kConnected) {
-            wifi_config_.SaveCredentials(ssid, password);
-        }
-
-        lv_async_call([](void* user_data) {
-            auto* self = static_cast<SettingsApp*>(user_data);
-            // 从连接状态获取结果
-            auto* wifi = self->context_->services().wifi();
-            if (wifi != nullptr) {
-                self->OnConnectResult(wifi->GetStatus(), self->connecting_ssid_);
-            }
-        }, this);
+    auto guard = wifi_async_guard_;
+    const uint32_t generation = guard != nullptr ? guard->generation.load() : 0;
+    wifi->Connect(ssid, password, [guard, generation, ssid, password](WiFiStatus status) {
+        auto* payload = new WiFiConnectPayload{
+            .guard = guard,
+            .generation = generation,
+            .status = status,
+            .ssid = ssid,
+            .password = password,
+        };
+        QueueWiFiAsyncPayload(payload, WiFiConnectCompleteCallback);
     });
+}
+
+void SettingsApp::OnWiFiConnectAsyncComplete(WiFiStatus status,
+                                             const std::string& ssid,
+                                             const std::string& password) {
+    if (status == WiFiStatus::kConnected) {
+        wifi_config_.SaveCredentials(ssid, password);
+    }
+    OnConnectResult(status, ssid);
 }
 
 void SettingsApp::OnConnectResult(WiFiStatus status, const std::string& ssid) {

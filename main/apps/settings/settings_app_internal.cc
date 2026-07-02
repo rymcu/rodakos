@@ -17,10 +17,10 @@ void DeferReturnHome(void* user_data) {
 }
 
 void DeferReloadSettings(void* user_data) {
-    auto* app = static_cast<SettingsApp*>(user_data);
-    if (app != nullptr) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) {
         lv_indev_reset(nullptr, nullptr);
-        app->RefreshThemeFromNavigation();
+        context->navigation().RefreshTheme();
     }
 }
 

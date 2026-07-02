@@ -23,6 +23,11 @@ struct SettingsCloudRefreshGuard {
     std::atomic<uint32_t> refresh_generation{0};
 };
 
+struct SettingsWiFiAsyncGuard {
+    std::atomic<SettingsApp*> app{nullptr};
+    std::atomic<uint32_t> generation{0};
+};
+
 namespace rodakos {
 struct ButtonAction;
 struct ButtonBinding;
@@ -54,7 +59,10 @@ public:
                                       const std::string& error,
                                       uint32_t generation);
     void ReloadUiForTheme();
-    void RefreshThemeFromNavigation();
+    void OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results);
+    void OnWiFiConnectAsyncComplete(WiFiStatus status,
+                                    const std::string& ssid,
+                                    const std::string& password);
 
 private:
     // 页面切换
@@ -153,6 +161,7 @@ private:
     lv_obj_t* wifi_list_container_ = nullptr;
     lv_obj_t* password_dialog_ = nullptr;
     lv_obj_t* password_textarea_ = nullptr;
+    std::shared_ptr<SettingsWiFiAsyncGuard> wifi_async_guard_;
     std::vector<WiFiScanResult> wifi_scan_results_;
     std::string connecting_ssid_;
     SoftKeyboard soft_keyboard_;

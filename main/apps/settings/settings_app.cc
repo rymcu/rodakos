@@ -31,6 +31,9 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
     cloud_refresh_guard_->app.store(this);
     cloud_refresh_guard_->refresh_in_progress.store(false);
     cloud_refresh_guard_->refresh_generation.store(0);
+    wifi_async_guard_ = std::make_shared<SettingsWiFiAsyncGuard>();
+    wifi_async_guard_->app.store(this);
+    wifi_async_guard_->generation.store(0);
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -86,6 +89,10 @@ void SettingsApp::OnDestroy() {
         cloud_refresh_guard_->refresh_in_progress.store(false);
         cloud_refresh_guard_->app.store(nullptr);
     }
+    if (wifi_async_guard_) {
+        wifi_async_guard_->generation.fetch_add(1);
+        wifi_async_guard_->app.store(nullptr);
+    }
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
@@ -94,6 +101,7 @@ void SettingsApp::OnDestroy() {
     }
     context_ = nullptr;
     ui_ = nullptr;
+    wifi_async_guard_.reset();
 }
 
 void SettingsApp::ReloadUiForTheme() {
@@ -103,6 +111,9 @@ void SettingsApp::ReloadUiForTheme() {
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
         return;
+    }
+    if (wifi_async_guard_) {
+        wifi_async_guard_->generation.fetch_add(1);
     }
     DestroyUi();
     current_page_ = SettingsPage::kMain;
@@ -114,12 +125,6 @@ bool SettingsApp::OnThemeChanged(PhoneAppContext& context) {
     ui_ = &context.ui();
     ReloadUiForTheme();
     return root_ != nullptr;
-}
-
-void SettingsApp::RefreshThemeFromNavigation() {
-    if (context_ == nullptr || !context_->navigation().RefreshTheme()) {
-        ReloadUiForTheme();
-    }
 }
 
 void SettingsApp::DestroyUi() {

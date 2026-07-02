@@ -130,7 +130,7 @@ void SettingsApp::CreateMainPage() {
                 lv_indev_wait_release(indev);
             }
             ESP_LOGI(TAG, "Theme changed to %s, reloading settings", option->id);
-            lv_async_call(DeferReloadSettings, self);
+            lv_async_call(DeferReloadSettings, self->context_);
         }
         }, LV_EVENT_CLICKED, this);
     }
