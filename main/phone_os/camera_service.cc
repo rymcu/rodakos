@@ -36,6 +36,8 @@ constexpr const char* kPhotoDir = "/photos";
 constexpr int kBufferCount = 2;
 constexpr int kPreviewTaskStackWords = 8192;
 constexpr uint8_t kJpegQuality = 82;
+constexpr int64_t kMinValidUnixTime = 1700000000;
+constexpr int kMaxPhotoNameSuffix = 9999;
 
 const char* ErrnoName() {
     return std::strerror(errno);
@@ -205,6 +207,7 @@ bool CameraService::StartPreview(int width, int height) {
         stop_requested_ = false;
         has_frame_ = false;
         frame_count_ = 0;
+        latest_frame_ = {};
         xSemaphoreGive(mutex_);
     }
 
@@ -365,6 +368,10 @@ bool CameraService::CapturePhoto(std::string& saved_path) {
     }
 
     saved_path = BuildPhotoPath();
+    if (saved_path.empty()) {
+        SetError("Failed to choose a unique photo path");
+        return false;
+    }
     if (!file_service_->WriteFile(saved_path, encoded, false)) {
         SetError("Failed to save photo");
         return false;
@@ -637,7 +644,7 @@ void CameraService::SetError(const std::string& error) {
 std::string CameraService::BuildPhotoPath() {
     char name[48] = {};
     const std::time_t now = std::time(nullptr);
-    if (now > 1700000000) {
+    if (static_cast<int64_t>(now) > kMinValidUnixTime) {
         std::tm timeinfo = {};
         localtime_r(&now, &timeinfo);
         std::strftime(name, sizeof(name), "IMG_%Y%m%d_%H%M%S.jpg", &timeinfo);
@@ -649,16 +656,35 @@ std::string CameraService::BuildPhotoPath() {
     if (file_service_ == nullptr) {
         return path;
     }
-    for (int suffix = 1; suffix < 100 && file_service_->Exists(path); ++suffix) {
-        char numbered[56] = {};
-        const char* dot = std::strrchr(name, '.');
-        if (dot != nullptr) {
-            std::snprintf(numbered, sizeof(numbered), "%.*s_%02d%s",
-                          static_cast<int>(dot - name), name, suffix, dot);
-        } else {
-            std::snprintf(numbered, sizeof(numbered), "%s_%02d.jpg", name, suffix);
-        }
+
+    const char* dot = std::strrchr(name, '.');
+    const std::string stem = dot != nullptr ? std::string(name, static_cast<size_t>(dot - name)) : name;
+    const std::string extension = dot != nullptr ? dot : ".jpg";
+
+    for (int suffix = 1; suffix <= kMaxPhotoNameSuffix && file_service_->Exists(path); ++suffix) {
+        char numbered[80] = {};
+        std::snprintf(numbered, sizeof(numbered), "%s_%04d%s",
+                      stem.c_str(), suffix, extension.c_str());
         path = JoinPath(kPhotoDir, numbered);
+    }
+    if (!file_service_->Exists(path)) {
+        return path;
+    }
+
+    for (int attempt = 0; attempt <= kMaxPhotoNameSuffix && file_service_->Exists(path); ++attempt) {
+        char unique_name[96] = {};
+        const int64_t timestamp_us = esp_timer_get_time();
+        if (dot != nullptr) {
+            std::snprintf(unique_name, sizeof(unique_name), "%s_%" PRId64 "_%04d%s",
+                          stem.c_str(), timestamp_us, attempt, extension.c_str());
+        } else {
+            std::snprintf(unique_name, sizeof(unique_name), "%s_%" PRId64 "_%04d.jpg",
+                          stem.c_str(), timestamp_us, attempt);
+        }
+        path = JoinPath(kPhotoDir, unique_name);
+    }
+    if (file_service_->Exists(path)) {
+        return {};
     }
     return path;
 }

@@ -182,9 +182,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
         auto* self = static_cast<CameraApp*>(lv_event_get_user_data(e));
         self->CapturePhoto();
     }, LV_EVENT_CLICKED, this);
-    if (!preview_started) {
-        lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
-    }
+    lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
 
     if (preview_started) {
         UpdateStatus("Waiting for preview...");
@@ -244,11 +242,10 @@ void CameraApp::CapturePhoto() {
     }
 
     const uint32_t generation = capture_guard_->generation.fetch_add(1) + 1;
-    auto* payload = new CameraCapturePayload{
-        .guard = capture_guard_,
-        .camera = camera_,
-        .generation = generation,
-    };
+    auto* payload = new CameraCapturePayload();
+    payload->guard = capture_guard_;
+    payload->camera = camera_;
+    payload->generation = generation;
 
     UpdateStatus("Saving photo...");
     if (capture_button_ != nullptr) {
