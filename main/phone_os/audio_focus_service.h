@@ -21,6 +21,7 @@ struct AudioFocusRequest {
     AudioFocusGain gain = AudioFocusGain::kPause;
     int duck_volume = 20;
     bool resume_on_release = true;
+    bool release_playback_hardware = false;
 };
 
 struct AudioFocusState {
@@ -44,6 +45,7 @@ private:
     void ApplyFocusLocked(const AudioFocusRequest& request);
     void RestoreFocusLocked();
     void ClearFocusLocked();
+    void WaitForMusicIdle(uint32_t timeout_ms);
 
     MusicPlayerService& music_player_;
     SemaphoreHandle_t mutex_ = nullptr;
@@ -55,6 +57,7 @@ private:
     bool resume_on_release_ = true;
     bool music_was_playing_ = false;
     bool music_was_paused_ = false;
+    bool playback_hardware_released_ = false;
     int previous_volume_ = 60;
 };
 

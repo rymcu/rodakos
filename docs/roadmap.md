@@ -7,7 +7,7 @@ RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web pro
 As of 2026-07-02:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
-- Local esp-brookesia HAL + Board Manager configuration for `rymcu_bigsmart`.
+- Local Board Manager configuration and BigSmart board definition for `rymcu_bigsmart`.
 - LVGL 9.3 display pipeline, double buffering, xiaozhi fonts, theme/layout helpers.
 - ST7789 display, LEDC backlight, GT911 touch via cached polling, WiFi STA, SD FileService, USB MSC mode.
 - App registry/host/navigation model is in place and Home launches apps from descriptors.

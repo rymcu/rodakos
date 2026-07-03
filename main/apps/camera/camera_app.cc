@@ -14,6 +14,7 @@
 #include <cstring>
 #include <utility>
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_lvgl_port.h>
 
@@ -28,6 +29,7 @@ constexpr const char* TAG = "CameraApp";
 constexpr lv_coord_t kPreviewBoxWidth = 304;
 constexpr lv_coord_t kPreviewBoxHeight = 154;
 constexpr lv_coord_t kCaptureButtonSize = 54;
+constexpr uint32_t kCaptureTaskStackBytes = 4096;
 
 struct CameraCapturePayload {
     std::shared_ptr<CameraCaptureGuard> guard;
@@ -108,6 +110,16 @@ void CaptureTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
+void LogCaptureTaskCreateFailure() {
+    ESP_LOGW(TAG,
+             "Failed to start capture task: internal_free=%u internal_largest=%u "
+             "spiram_free=%u spiram_largest=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+}
+
 }  // namespace
 
 CameraApp::~CameraApp() {
@@ -118,8 +130,10 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
     camera_ = context.services().camera();
+    audio_focus_ = context.services().audio_focus();
     capture_guard_ = std::make_shared<CameraCaptureGuard>();
     capture_guard_->app.store(this);
+    RequestAudioResources();
 
     const bool preview_started = camera_ != nullptr && camera_->StartPreview();
 
@@ -128,6 +142,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
         if (camera_ != nullptr) {
             camera_->StopPreview();
         }
+        ReleaseAudioResources();
         return false;
     }
 
@@ -218,6 +233,7 @@ void CameraApp::OnDestroy() {
     if (camera_ != nullptr) {
         camera_->StopPreview();
     }
+    ReleaseAudioResources();
 
     root_ = nullptr;
     preview_box_ = nullptr;
@@ -228,6 +244,7 @@ void CameraApp::OnDestroy() {
     preview_pixels_.clear();
     displayed_sequence_ = 0;
     camera_ = nullptr;
+    audio_focus_ = nullptr;
     context_ = nullptr;
     ui_ = nullptr;
 }
@@ -251,13 +268,15 @@ void CameraApp::CapturePhoto() {
     if (capture_button_ != nullptr) {
         lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
     }
-    const BaseType_t ret = xTaskCreate(CaptureTask, "camera_capture", 8192, payload, 3, nullptr);
+    const BaseType_t ret =
+        xTaskCreate(CaptureTask, "camera_capture", kCaptureTaskStackBytes, payload, 3, nullptr);
     if (ret != pdPASS) {
         capture_guard_->running.store(false);
         delete payload;
         if (capture_button_ != nullptr) {
             lv_obj_clear_state(capture_button_, LV_STATE_DISABLED);
         }
+        LogCaptureTaskCreateFailure();
         UpdateStatus("Failed to start capture task", true);
     }
 }
@@ -349,6 +368,30 @@ void CameraApp::UpdateStatus(const char* text, bool error) {
     lv_obj_set_style_text_color(status_label_,
                                 error ? rodakos_theme_error() : rodakos_theme_text_secondary(),
                                 0);
+}
+
+void CameraApp::RequestAudioResources() {
+    if (audio_focus_ == nullptr || audio_focus_token_ != 0) {
+        return;
+    }
+
+    rodakos::AudioFocusRequest request;
+    request.owner = "camera";
+    request.gain = rodakos::AudioFocusGain::kExclusive;
+    request.resume_on_release = false;
+    request.release_playback_hardware = true;
+    if (!audio_focus_->RequestFocus(request, audio_focus_token_)) {
+        audio_focus_token_ = 0;
+        ESP_LOGW(TAG, "Camera could not acquire exclusive audio focus");
+    }
+}
+
+void CameraApp::ReleaseAudioResources() {
+    if (audio_focus_ == nullptr || audio_focus_token_ == 0) {
+        return;
+    }
+    audio_focus_->ReleaseFocus(audio_focus_token_);
+    audio_focus_token_ = 0;
 }
 
 void CameraApp::NavigateBack() {

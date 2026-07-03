@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "esp_err.h"
-#include "led_strip.h"
+#include "rodakos_adapters/board_device_adapter.h"
 
 namespace rodakos {
 
@@ -45,19 +45,11 @@ public:
     bool Apply(size_t index);
 
 private:
-    struct LightBinding {
-        led_strip_handle_t strip = nullptr;
-        uint32_t first_led = 0;
-        uint32_t led_count = 1;
-    };
-
-    uint8_t Scale(const LightState& state, uint8_t channel) const;
     bool ApplyLocked(size_t index);
     void RememberError(size_t index, esp_err_t err);
-    static std::string MakeTitle(const char* name);
 
     std::vector<LightState> lights_;
-    std::vector<LightBinding> bindings_;
+    std::vector<BoardLightDevice> board_lights_;
     bool initialized_ = false;
 };
 

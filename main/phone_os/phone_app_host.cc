@@ -32,9 +32,11 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
             return true;
         }
         ESP_LOGI(TAG, "Recreating active app for theme update: %s", descriptor.id.c_str());
+        context.ui().ResetInputState();
         CloseCurrent(false);
     }
 
+    context.ui().ResetInputState();
     CloseCurrent(true);
 
     if (background_ && background_app_id_ == descriptor.id) {

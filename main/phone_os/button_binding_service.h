@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -10,12 +11,24 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
-#include "iot_button.h"
+#include "rodakos_adapters/board_device_adapter.h"
 
 class PhoneNavigation;
 class PhoneUi;
 
 namespace rodakos {
+
+enum class ButtonEvent : uint8_t {
+    kSingleClick,
+    kDoubleClick,
+    kLongPressStart,
+};
+
+inline constexpr std::array<ButtonEvent, 3> kButtonEvents = {
+    ButtonEvent::kSingleClick,
+    ButtonEvent::kDoubleClick,
+    ButtonEvent::kLongPressStart,
+};
 
 enum class ButtonActionType {
     kNone,
@@ -31,7 +44,7 @@ struct ButtonAction {
 struct ButtonBinding {
     std::string button_id;
     std::string title;
-    button_event_t event = BUTTON_SINGLE_CLICK;
+    ButtonEvent event = ButtonEvent::kSingleClick;
     ButtonAction action;
     bool custom = false;
 };
@@ -53,12 +66,12 @@ public:
     std::vector<ButtonBinding> ListBindings() const;
 
     const ButtonState* GetButton(std::string_view button_id) const;
-    ButtonBinding GetBinding(std::string_view button_id, button_event_t event) const;
-    bool SetBinding(std::string_view button_id, button_event_t event, const ButtonAction& action);
-    bool ResetBinding(std::string_view button_id, button_event_t event);
+    ButtonBinding GetBinding(std::string_view button_id, ButtonEvent event) const;
+    bool SetBinding(std::string_view button_id, ButtonEvent event, const ButtonAction& action);
+    bool ResetBinding(std::string_view button_id, ButtonEvent event);
 
-    static const char* EventName(button_event_t event);
-    static const char* EventLabel(button_event_t event);
+    static const char* EventName(ButtonEvent event);
+    static const char* EventLabel(ButtonEvent event);
     static std::string EncodeAction(const ButtonAction& action);
     static ButtonAction DecodeAction(std::string_view encoded);
     static std::string ActionLabel(const ButtonAction& action);
@@ -69,7 +82,6 @@ private:
         std::string title;
         std::string device_name;
         uint8_t physical_index = 0;
-        button_handle_t handle = nullptr;
     };
 
     struct PendingAction {
@@ -86,7 +98,7 @@ private:
 
     struct QueuedButtonEvent {
         char button_id[32] = {};
-        button_event_t event = BUTTON_SINGLE_CLICK;
+        ButtonEvent event = ButtonEvent::kSingleClick;
         uint32_t generation = 0;
         bool check_generation = false;
     };
@@ -95,24 +107,23 @@ private:
     void RegisterCallbacks();
     bool StartWorker();
     void ResetDiscoveredState();
-    void HandleButtonEvent(button_handle_t handle);
-    void ExecuteBinding(const RegisteredButton& button, button_event_t event);
+    void HandleButtonEvent(std::string_view button_id, ButtonEvent event);
+    void ExecuteBinding(const RegisteredButton& button, ButtonEvent event);
     void ScheduleSingleClick(const RegisteredButton& button);
     void CancelSingleClick(const RegisteredButton& button);
     void ExecuteDeferredSingleClick(std::string_view button_id, uint32_t generation);
     bool QueueButtonEvent(std::string_view button_id,
-                          button_event_t event,
+                          ButtonEvent event,
                           uint32_t generation = 0,
                           bool check_generation = false);
     void ProcessQueuedEvent(const QueuedButtonEvent& event);
     void ExecuteAction(const ButtonAction& action, const std::string& toast);
-    ButtonAction DefaultAction(std::string_view button_id, button_event_t event) const;
-    std::string StorageKey(std::string_view button_id, button_event_t event) const;
-    const RegisteredButton* FindRegistered(button_handle_t handle) const;
+    ButtonAction DefaultAction(std::string_view button_id, ButtonEvent event) const;
+    std::string StorageKey(std::string_view button_id, ButtonEvent event) const;
     const RegisteredButton* FindRegistered(std::string_view button_id) const;
     const ButtonState* FindButton(std::string_view button_id) const;
 
-    static void ButtonEventCallback(void* button_handle, void* user_data);
+    static void ButtonEventCallback(const char* button_id, BoardButtonEvent event, void* user_data);
     static void SingleClickTimerCallback(TimerHandle_t timer);
     static void WorkerTask(void* user_data);
     static void RunPendingAction(void* user_data);
@@ -122,6 +133,7 @@ private:
     PhoneUi* ui_ = nullptr;
     std::vector<ButtonState> buttons_;
     std::vector<RegisteredButton> registered_;
+    std::vector<BoardButtonDevice> board_buttons_;
     std::vector<uint32_t> click_generations_;
     std::vector<TimerHandle_t> click_timers_;
     QueueHandle_t event_queue_ = nullptr;

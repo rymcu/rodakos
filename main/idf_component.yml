@@ -29,5 +29,5 @@ dependencies:
   idf:
     version: ">=5.4.0"
 
-# Brookesia HAL 组件已迁移到本地 components/ 目录
-# ESP-IDF 会自动发现并构建它们
+# Board Manager and board-specific helper components live under local components/.
+# ESP-IDF discovers and builds them from CMake dependencies.

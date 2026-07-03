@@ -79,7 +79,7 @@ After non-trivial changes, expect to:
 2. Run `idf.py build`.
 3. Check `build/rodakos.bin` size against the 8MB factory partition.
 3. Flash with `.\flash_and_test.ps1 -Port COM<n>` and confirm a healthy boot log:
-   - `RodakOS: Starting RodakOS with esp-brookesia HAL`
+   - `RodakOS: Starting RodakOS with Board Manager HAL`
    - `Board manager initialized`
    - `Touch input registered with cached polling`
    - `LVGL port initialized`

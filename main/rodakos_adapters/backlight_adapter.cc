@@ -1,9 +1,9 @@
 // BacklightAdapter implementation
 //
-// Adapts esp-brookesia HAL LEDC device API to RodakOS's Backlight interface.
+// Adapts the Board Manager LEDC device API to RodakOS's Backlight interface.
 // Uses NVS for persistence and wraps periph_ledc_* functions.
 //
-// Based on: Espressif esp-brookesia HAL (https://github.com/espressif/esp-brookesia)
+// Based on: Espressif Board Manager device model
 // API Reference: periph_ledc_handle_t / ledc_set_duty / ledc_update_duty
 //
 #include "backlight_adapter.h"

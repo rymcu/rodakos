@@ -23,15 +23,11 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-
-#include <dev_camera.h>
-#include <esp_board_manager.h>
 #endif
 
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "CameraService";
-constexpr const char* kCameraDeviceName = "camera";
 constexpr const char* kPhotoDir = "/photos";
 constexpr int kBufferCount = 2;
 constexpr int kPreviewTaskStackWords = 8192;
@@ -185,11 +181,7 @@ CameraService::~CameraService() {
 }
 
 bool CameraService::IsAvailable() const {
-#ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    return esp_board_manager_check_name(kCameraDeviceName);
-#else
-    return false;
-#endif
+    return camera_device_.IsConfigured();
 }
 
 bool CameraService::StartPreview(int width, int height) {
@@ -466,22 +458,19 @@ void CameraService::PreviewTask() {
 
 bool CameraService::OpenStream(int width, int height) {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    esp_err_t ret = esp_board_manager_init_device_by_name(kCameraDeviceName);
+    esp_err_t ret = camera_device_.Acquire();
     if (ret != ESP_OK) {
         SetError(std::string("Camera init failed: ") + esp_err_to_name(ret));
         return false;
     }
-    camera_ref_acquired_ = true;
 
-    dev_camera_handle_t* camera_handle = nullptr;
-    ret = esp_board_manager_get_device_handle(kCameraDeviceName,
-                                              reinterpret_cast<void**>(&camera_handle));
-    if (ret != ESP_OK || camera_handle == nullptr || camera_handle->dev_path == nullptr) {
+    const char* device_path = camera_device_.dev_path();
+    if (device_path == nullptr) {
         SetError("Camera device handle is not available");
         return false;
     }
 
-    fd_ = open(camera_handle->dev_path, O_RDWR | O_NONBLOCK);
+    fd_ = open(device_path, O_RDWR | O_NONBLOCK);
     if (fd_ < 0) {
         SetError(std::string("Failed to open camera device: ") + ErrnoName());
         return false;
@@ -502,15 +491,15 @@ bool CameraService::OpenStream(int width, int height) {
     format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     format.fmt.pix.width = width;
     format.fmt.pix.height = height;
-    format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
+    format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565X;
     if (ioctl(fd_, VIDIOC_S_FMT, &format) != 0) {
         format = {};
         format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         format.fmt.pix.width = width;
         format.fmt.pix.height = height;
-        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565X;
+        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
         if (ioctl(fd_, VIDIOC_S_FMT, &format) != 0) {
-            SetError("Camera RGB565 output is not available");
+            SetError("Camera RGB565/RGB565X output is not available");
             return false;
         }
     }
@@ -596,13 +585,7 @@ void CameraService::CloseStream() {
         close(fd_);
         fd_ = -1;
     }
-    if (camera_ref_acquired_) {
-        const esp_err_t ret = esp_board_manager_deinit_device_by_name(kCameraDeviceName);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Camera device release failed: %s", esp_err_to_name(ret));
-        }
-        camera_ref_acquired_ = false;
-    }
+    camera_device_.Release();
     active_width_ = 0;
     active_height_ = 0;
     active_stride_ = 0;

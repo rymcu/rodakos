@@ -9,6 +9,8 @@
 
 class PhoneUi {
 public:
+    using InputResetCallback = void (*)(void*);
+
     PhoneUi(int width, int height);
 
     bool Lock(int timeout_ms = 1000);
@@ -21,6 +23,8 @@ public:
     void SetThemeName(const std::string& name);
     const std::string& theme_name() const { return theme_name_; }
     uint32_t theme_revision() const { return theme_revision_; }
+    void SetInputResetCallback(InputResetCallback callback, void* user_data);
+    void ResetInputState();
     void ShowToast(const char* message, int duration_ms = 1800);
     void ShowToastUnlocked(const char* message, int duration_ms = 1800);
 
@@ -32,6 +36,8 @@ private:
     uint32_t theme_revision_ = 0;
     lv_obj_t* toast_ = nullptr;
     lv_timer_t* toast_timer_ = nullptr;
+    InputResetCallback input_reset_callback_ = nullptr;
+    void* input_reset_user_data_ = nullptr;
 };
 
 class PhoneUiLock {

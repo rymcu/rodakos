@@ -52,9 +52,25 @@ struct TouchInputBridge {
     uint32_t press_log_count = 0;
     uint32_t poll_count = 0;
     uint8_t release_samples = 0;
+    bool suppress_until_release = false;
+    uint8_t suppress_release_samples = 0;
 };
 
 TouchInputBridge g_touch_input;
+
+void ResetTouchInputBridge(void* user_data) {
+    auto* touch = static_cast<TouchInputBridge*>(user_data);
+    if (touch == nullptr) {
+        return;
+    }
+
+    portENTER_CRITICAL(&touch->lock);
+    touch->pressed = false;
+    touch->release_samples = 0;
+    touch->suppress_until_release = true;
+    touch->suppress_release_samples = 0;
+    portEXIT_CRITICAL(&touch->lock);
+}
 
 void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
     auto* touch = static_cast<TouchInputBridge*>(lv_indev_get_driver_data(indev));
@@ -103,7 +119,20 @@ void TouchPollTask(void* arg) {
         indev = touch->indev;
         if (ret == ESP_OK) {
             touch->consecutive_errors = 0;
-            if (pressed) {
+            if (touch->suppress_until_release) {
+                touch->pressed = false;
+                touch->release_samples = 0;
+                if (pressed) {
+                    touch->suppress_release_samples = 0;
+                } else {
+                    if (touch->suppress_release_samples < 2) {
+                        touch->suppress_release_samples++;
+                    }
+                    if (touch->suppress_release_samples >= 2) {
+                        touch->suppress_until_release = false;
+                    }
+                }
+            } else if (pressed) {
                 touch->release_samples = 0;
                 changed = !touch->pressed || touch->point.x != x || touch->point.y != y;
                 touch->pressed = true;
@@ -126,6 +155,8 @@ void TouchPollTask(void* arg) {
                 changed = touch->pressed;
                 touch->pressed = false;
                 touch->release_samples = 0;
+                touch->suppress_until_release = false;
+                touch->suppress_release_samples = 0;
             }
             reported_pressed = touch->pressed;
         }
@@ -230,7 +261,7 @@ extern "C" void app_main(void) {
         return;
     }
 
-    ESP_LOGI(TAG, "Starting RodakOS with esp-brookesia HAL");
+    ESP_LOGI(TAG, "Starting RodakOS with Board Manager HAL");
 
     // Initialize Board Manager (replaces BigSmartBoard::Initialize)
     ESP_ERROR_CHECK(esp_board_manager_init());
@@ -294,6 +325,7 @@ extern "C" void app_main(void) {
     }
 
     InitTouchInput(disp);
+    ui.SetInputResetCallback(ResetTouchInputBridge, &g_touch_input);
 
     ESP_LOGI(TAG, "LVGL port initialized");
 
