@@ -410,6 +410,10 @@ void MusicPlayerService::Stop() {
     }
 }
 
+void MusicPlayerService::ReleasePlaybackHardware() {
+    audio_.ReleasePlaybackHardware();
+}
+
 bool MusicPlayerService::Refresh() {
     const auto state = audio_.GetState();
     if (!state.file_path.empty()) {

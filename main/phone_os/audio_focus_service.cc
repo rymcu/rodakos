@@ -143,9 +143,12 @@ void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
             }
             break;
         case AudioFocusGain::kExclusive:
-            if (request.release_playback_hardware && (music_was_playing_ || music_was_paused_)) {
-                music_player_.Stop();
-                WaitForMusicIdle(kExclusiveStopTimeoutMs);
+            if (request.release_playback_hardware) {
+                if (music_was_playing_ || music_was_paused_) {
+                    music_player_.Stop();
+                    WaitForMusicIdle(kExclusiveStopTimeoutMs);
+                }
+                music_player_.ReleasePlaybackHardware();
                 playback_hardware_released_ = true;
             } else if (music_was_playing_) {
                 music_player_.Pause();

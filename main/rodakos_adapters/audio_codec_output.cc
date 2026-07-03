@@ -5,15 +5,27 @@
 #include <esp_codec_dev.h>
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_log_level.h>
 
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "AudioCodecOutput";
 constexpr const char* kAudioDacDeviceName = "audio_dac";
+constexpr const char* kI2sCommonTag = "i2s_common";
 
 esp_codec_dev_handle_t CodecFromHandle(void* dac_handle) {
     auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle);
     return handle != nullptr ? handle->codec_dev : nullptr;
+}
+
+int OpenCodecSuppressingBenignI2sDisable(esp_codec_dev_handle_t codec,
+                                         esp_codec_dev_sample_info_t* sample_info) {
+    // esp_codec_dev's I2S data-if disables before set_fmt even when it already tracks the channel as disabled.
+    const esp_log_level_t previous_level = esp_log_level_get(kI2sCommonTag);
+    esp_log_level_set(kI2sCommonTag, ESP_LOG_NONE);
+    const int ret = esp_codec_dev_open(codec, sample_info);
+    esp_log_level_set(kI2sCommonTag, previous_level);
+    return ret;
 }
 }  // namespace
 
@@ -58,7 +70,13 @@ bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bi
     if (!Init()) {
         return false;
     }
-    Close();
+
+    if (codec_open_ && MatchesOpenFormat(sample_rate, channels, bits_per_sample)) {
+        return SetVolume(volume);
+    }
+    if (codec_open_) {
+        Close();
+    }
 
     esp_codec_dev_handle_t codec = CodecFromHandle(dac_handle_);
     if (codec == nullptr) {
@@ -73,13 +91,17 @@ bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bi
     sample_info.sample_rate = sample_rate;
     sample_info.mclk_multiple = (sample_rate % 11025U) == 0 ? 384 : 256;
 
-    const int ret = esp_codec_dev_open(codec, &sample_info);
+    const int ret = OpenCodecSuppressingBenignI2sDisable(codec, &sample_info);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to open codec: %d", ret);
+        ClearOpenFormat();
         return false;
     }
 
     codec_open_ = true;
+    sample_rate_ = sample_rate;
+    channels_ = channels;
+    bits_per_sample_ = bits_per_sample;
     const int vol_ret = esp_codec_dev_set_out_vol(codec, volume);
     if (vol_ret != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set volume to %d", volume);
@@ -92,7 +114,7 @@ void AudioCodecOutput::Close() {
     if (codec_open_ && codec != nullptr) {
         esp_codec_dev_close(codec);
     }
-    codec_open_ = false;
+    ClearOpenFormat();
 }
 
 bool AudioCodecOutput::Write(const void* data, int bytes) {
@@ -125,6 +147,22 @@ bool AudioCodecOutput::SetVolume(int volume) {
         return false;
     }
     return true;
+}
+
+bool AudioCodecOutput::MatchesOpenFormat(uint32_t sample_rate,
+                                         uint16_t channels,
+                                         uint16_t bits_per_sample) const {
+    return codec_open_ &&
+           sample_rate_ == sample_rate &&
+           channels_ == channels &&
+           bits_per_sample_ == bits_per_sample;
+}
+
+void AudioCodecOutput::ClearOpenFormat() {
+    codec_open_ = false;
+    sample_rate_ = 0;
+    channels_ = 0;
+    bits_per_sample_ = 0;
 }
 
 }  // namespace rodakos

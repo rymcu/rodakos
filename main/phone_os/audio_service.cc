@@ -178,11 +178,7 @@ bool AudioService::Init() {
 }
 
 void AudioService::Deinit() {
-    Stop();
-    const bool playback_stopped = JoinPlaybackTask(1500);
-    if (playback_stopped) {
-        output_.Close();
-    }
+    ReleasePlaybackHardware();
 
     if (initialized_) {
         output_.Deinit();
@@ -247,6 +243,15 @@ void AudioService::Stop() {
         stop_requested_ = true;
         pause_requested_ = false;
         xSemaphoreGive(mutex_);
+    }
+}
+
+void AudioService::ReleasePlaybackHardware() {
+    Stop();
+    if (JoinPlaybackTask(1500)) {
+        output_.Close();
+    } else {
+        ESP_LOGW(TAG, "Timed out waiting to release playback hardware");
     }
 }
 
@@ -446,7 +451,9 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
     }
 
     heap_caps_free(buffer);
-    output_.Close();
+    if (failed || stopped) {
+        output_.Close();
+    }
 
     if (!failed && !stopped) {
         UpdateProgress(wav.data_size, wav.data_size);
@@ -615,7 +622,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
     }
 
-    if (codec_ready) {
+    if (codec_ready && (failed || stopped)) {
         output_.Close();
     }
     heap_caps_free(pcm_buffer);
