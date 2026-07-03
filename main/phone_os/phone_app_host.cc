@@ -28,6 +28,7 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
     const uint32_t theme_revision = context.ui().theme_revision();
     if (current_app_id_ == descriptor.id) {
         if (RefreshThemeIfNeeded(*current_, context, current_theme_revision_)) {
+            context.ui().ResetInputState();
             ESP_LOGI(TAG, "App already active: %s", descriptor.id.c_str());
             return true;
         }
@@ -56,6 +57,7 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
             background_capabilities_ = PhoneCapability::kNone;
             background_theme_revision_ = 0;
             current_->OnShow();
+            context.ui().ResetInputState();
             ESP_LOGI(TAG, "Restored background app: %s", current_app_id_.c_str());
             return true;
         }
@@ -83,6 +85,7 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
     current_capabilities_ = descriptor.capabilities;
     current_theme_revision_ = theme_revision;
     current_->OnShow();
+    context.ui().ResetInputState();
     ESP_LOGI(TAG, "App launched: %s", current_app_id_.c_str());
     return true;
 }

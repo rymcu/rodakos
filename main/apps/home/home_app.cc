@@ -52,7 +52,6 @@ struct DeferredLaunchPayload {
 void RunDeferredLaunch(void* data) {
     auto* payload = static_cast<DeferredLaunchPayload*>(data);
     if (payload != nullptr && payload->context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         ESP_LOGI(TAG, "Launching app from Home: %s", payload->app_id.c_str());
         payload->context->navigation().Launch(payload->app_id);
     }
@@ -62,9 +61,6 @@ void RunDeferredLaunch(void* data) {
 void AppButtonEvent(lv_event_t* e) {
     auto* payload = static_cast<AppButtonPayload*>(lv_event_get_user_data(e));
     if (payload != nullptr && payload->context != nullptr) {
-        if (auto* indev = lv_indev_active(); indev != nullptr) {
-            lv_indev_wait_release(indev);
-        }
         ESP_LOGI(TAG, "Home app button clicked: %s", payload->app_id.c_str());
         lv_async_call(RunDeferredLaunch, new DeferredLaunchPayload{
             .context = payload->context,

@@ -126,9 +126,6 @@ void SettingsApp::CreateMainPage() {
             settings.SetString(kThemeKey, option->id);
             ApplyThemeToRuntime(self->ui_, *option);
             self->ui_->ShowToastUnlocked("Theme changed");
-            if (auto* indev = lv_indev_active(); indev != nullptr) {
-                lv_indev_wait_release(indev);
-            }
             ESP_LOGI(TAG, "Theme changed to %s, reloading settings", option->id);
             lv_async_call(DeferReloadSettings, self->context_);
         }
