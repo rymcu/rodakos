@@ -15,6 +15,7 @@
 #include <esp_heap_caps.h>
 #include <esp_jpeg_enc.h>
 #include <esp_log.h>
+#include <esp_log_level.h>
 #include <esp_timer.h>
 
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
@@ -34,6 +35,7 @@ constexpr uint32_t kPreviewTaskStackSize = 4096;
 constexpr uint8_t kJpegQuality = 82;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
+constexpr const char* kGpioLogTag = "gpio";
 
 #if configSUPPORT_STATIC_ALLOCATION == 1
 StaticTask_t g_preview_task_buffer;
@@ -149,6 +151,15 @@ uint8_t* AllocAlignedJpegInput(size_t size) {
 }
 
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+int StreamOnSuppressingBenignGpioIsrLog(int fd, int* type) {
+    // The DVP driver intentionally ignores gpio_install_isr_service() when another device installed it first.
+    const esp_log_level_t previous_level = esp_log_level_get(kGpioLogTag);
+    esp_log_level_set(kGpioLogTag, ESP_LOG_NONE);
+    const int ret = ioctl(fd, VIDIOC_STREAMON, type);
+    esp_log_level_set(kGpioLogTag, previous_level);
+    return ret;
+}
+
 void CopyRgb565Frame(const uint8_t* src, size_t src_size, int stride, int height,
                      uint32_t pixelformat, std::vector<uint8_t>& dst) {
     const size_t frame_size = static_cast<size_t>(stride) * height;
@@ -586,7 +597,7 @@ bool CameraService::OpenStream(int width, int height) {
     }
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(fd_, VIDIOC_STREAMON, &type) != 0) {
+    if (StreamOnSuppressingBenignGpioIsrLog(fd_, &type) != 0) {
         SetError(std::string("Failed to start camera stream: ") + ErrnoName());
         return false;
     }
