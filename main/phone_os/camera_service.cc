@@ -30,13 +30,28 @@ namespace {
 constexpr const char* TAG = "CameraService";
 constexpr const char* kPhotoDir = "/photos";
 constexpr int kBufferCount = 2;
-constexpr int kPreviewTaskStackWords = 8192;
+constexpr uint32_t kPreviewTaskStackSize = 4096;
 constexpr uint8_t kJpegQuality = 82;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
 
+#if configSUPPORT_STATIC_ALLOCATION == 1
+StaticTask_t g_preview_task_buffer;
+StackType_t g_preview_task_stack[kPreviewTaskStackSize];
+#endif
+
 const char* ErrnoName() {
     return std::strerror(errno);
+}
+
+void LogPreviewTaskCreateFailure() {
+    ESP_LOGW(TAG,
+             "Failed to start camera preview task: internal_free=%u internal_largest=%u "
+             "spiram_free=%u spiram_largest=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
 }
 
 std::string JoinPath(const char* dir, const char* name) {
@@ -214,15 +229,33 @@ bool CameraService::StartPreview(int width, int height) {
         xSemaphoreGive(mutex_);
     }
 
+    TaskHandle_t task_handle = nullptr;
+#if configSUPPORT_STATIC_ALLOCATION == 1
+    task_handle = xTaskCreateStaticPinnedToCore(
+        PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize, this, 3,
+        g_preview_task_stack, &g_preview_task_buffer,
+#if CONFIG_SOC_CPU_CORES_NUM > 1
+        0
+#else
+        tskNO_AFFINITY
+#endif
+    );
+    preview_task_ = task_handle;
+#else
     const BaseType_t task_ret =
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-        xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackWords,
+        xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
                                 this, 3, &preview_task_, 0);
 #else
-        xTaskCreate(PreviewTaskEntry, "camera_preview", kPreviewTaskStackWords,
+        xTaskCreate(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
                     this, 3, &preview_task_);
 #endif
-    if (task_ret != pdPASS) {
+    if (task_ret == pdPASS) {
+        task_handle = preview_task_;
+    }
+#endif
+    if (task_handle == nullptr) {
+        LogPreviewTaskCreateFailure();
         SetError("Failed to start camera preview task");
         if (mutex_ != nullptr) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
