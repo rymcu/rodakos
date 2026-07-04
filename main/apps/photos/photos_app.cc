@@ -201,6 +201,7 @@ void PhotosApp::ReleaseCurrentImage(const char* reason) {
 }
 
 void PhotosApp::ReleaseThumbnail(ThumbnailItem& item) {
+    item.thumbnail_unavailable = false;
     if (item.thumbnail == nullptr) {
         return;
     }
