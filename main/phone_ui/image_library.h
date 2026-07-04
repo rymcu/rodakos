@@ -107,6 +107,11 @@ std::shared_ptr<LvglImage> LoadImage(const std::string& path);
  */
 std::shared_ptr<LvglImage> LoadImageForDisplay(const std::string& path);
 
+/**
+ * @brief Load a JPEG thumbnail decoded near the requested bounds.
+ */
+std::shared_ptr<LvglImage> LoadThumbnail(const std::string& path, int width, int height);
+
 }  // namespace ImageLibrary
 
 }  // namespace rodakos

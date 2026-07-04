@@ -47,6 +47,14 @@ private:
         size_t size;
     };
 
+    struct ThumbnailItem {
+        lv_obj_t* button = nullptr;
+        lv_obj_t* image = nullptr;
+        lv_obj_t* label = nullptr;
+        std::shared_ptr<rodakos::LvglImage> thumbnail;
+        bool thumbnail_unavailable = false;
+    };
+
     // 页面管理
     void ShowGridView();
     void CreateGridView();
@@ -62,6 +70,17 @@ private:
     void NavigateBack();
     void NavigateHome();
 
+    // 缩略图懒加载
+    void ScheduleThumbnailUpdate();
+    void UpdateVisibleThumbnails();
+    void ReleaseThumbnail(ThumbnailItem& item);
+    void ReleaseAllThumbnails();
+    void StopThumbnailTimer();
+    static void ThumbnailTimerCallback(lv_timer_t* timer);
+
+    // 大图内存释放
+    void ReleaseCurrentImage(const char* reason);
+
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
     lv_obj_t* root_ = nullptr;
@@ -71,6 +90,8 @@ private:
     lv_obj_t* grid_body_ = nullptr;
     lv_obj_t* grid_container_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
+    lv_timer_t* thumbnail_timer_ = nullptr;
+    std::vector<ThumbnailItem> thumbnail_items_;
 
     // 全屏视图控件
     lv_obj_t* fullscreen_body_ = nullptr;
