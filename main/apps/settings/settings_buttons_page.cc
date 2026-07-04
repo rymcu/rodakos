@@ -92,7 +92,7 @@ void SettingsApp::UpdateButtonBindingsPage() {
         lv_obj_align(device, LV_ALIGN_RIGHT_MID, 0, 0);
         y += 48;
 
-        for (button_event_t event : {BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START}) {
+        for (rodakos::ButtonEvent event : rodakos::kButtonEvents) {
             const auto binding = buttons->GetBinding(button.id, event);
 
             auto* row = CreateSettingCard(buttons_body_, y, 46);

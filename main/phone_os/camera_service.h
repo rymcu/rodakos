@@ -8,6 +8,8 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "rodakos_adapters/camera_device.h"
+
 namespace rodakos {
 
 class FileService;
@@ -61,11 +63,11 @@ private:
     std::string BuildPhotoPath();
 
     FileService* file_service_ = nullptr;
+    CameraDevice camera_device_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t preview_task_ = nullptr;
     bool preview_running_ = false;
     bool stop_requested_ = false;
-    bool camera_ref_acquired_ = false;
     int fd_ = -1;
     int active_width_ = 0;
     int active_height_ = 0;

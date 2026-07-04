@@ -58,6 +58,7 @@ public:
     void Pause();
     void Resume();
     void Stop();
+    void ReleasePlaybackHardware();
     bool Refresh();
 
     bool SetVolume(int volume);

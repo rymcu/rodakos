@@ -102,7 +102,7 @@ Ctrl+]
 Healthy boot logs should include messages like:
 
 ```text
-RodakOS: Starting RodakOS with esp-brookesia HAL
+RodakOS: Starting RodakOS with Board Manager HAL
 Board manager initialized
 Touch input registered with cached polling
 LVGL port initialized

@@ -29,6 +29,23 @@ void PhoneUi::SetThemeName(const std::string& name) {
     ++theme_revision_;
 }
 
+void PhoneUi::SetInputResetCallback(InputResetCallback callback, void* user_data) {
+    input_reset_callback_ = callback;
+    input_reset_user_data_ = user_data;
+}
+
+void PhoneUi::ResetInputState() {
+    if (input_reset_callback_ != nullptr) {
+        input_reset_callback_(input_reset_user_data_);
+    }
+
+    PhoneUiLock lock(*this, 1000);
+    if (!lock.locked()) {
+        return;
+    }
+    lv_indev_reset(nullptr, nullptr);
+}
+
 void PhoneUi::ShowToast(const char* message, int duration_ms) {
     PhoneUiLock lock(*this);
     if (!lock.locked()) {

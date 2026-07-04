@@ -2,6 +2,7 @@
 
 #include "phone_os/phone_app.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/audio_focus_service.h"
 
 #include <atomic>
 #include <memory>
@@ -36,12 +37,16 @@ private:
 
     void UpdatePreview();
     void UpdateStatus(const char* text, bool error = false);
+    void RequestAudioResources();
+    void ReleaseAudioResources();
     void NavigateBack();
     void NavigateHome();
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;
+    rodakos::AudioFocusService* audio_focus_ = nullptr;
+    uint32_t audio_focus_token_ = 0;
     lv_obj_t* root_ = nullptr;
     lv_obj_t* preview_box_ = nullptr;
     lv_obj_t* preview_image_ = nullptr;

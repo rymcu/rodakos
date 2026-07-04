@@ -22,7 +22,6 @@ constexpr const char* kRodakosPhotosPath = "/photos";
 
 // 网格布局常量
 constexpr int kGridCols = 3;
-constexpr int kGridRows = 3;
 constexpr lv_coord_t kThumbnailSize = 84;
 constexpr lv_coord_t kThumbnailGap = 8;
 constexpr int32_t kPhotoAreaWidth = 300;
@@ -67,7 +66,6 @@ struct PhotoButtonPayload {
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         context->navigation().ReturnHome();
     }
 }
@@ -336,10 +334,11 @@ void PhotosApp::CreateGridView() {
     lv_obj_set_flex_align(grid_container_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(grid_container_, kThumbnailGap, 0);
     lv_obj_set_style_pad_column(grid_container_, kThumbnailGap, 0);
+    lv_obj_set_scroll_dir(grid_container_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(grid_container_, LV_SCROLLBAR_MODE_AUTO);
 
     // 创建缩略图网格
-    size_t max_display = std::min(photos_.size(), static_cast<size_t>(kGridCols * kGridRows));
-    for (size_t i = 0; i < max_display; ++i) {
+    for (size_t i = 0; i < photos_.size(); ++i) {
         const auto& photo = photos_[i];
 
         auto* btn = lv_btn_create(grid_container_);
@@ -490,9 +489,6 @@ void PhotosApp::NavigateBack() {
 }
 
 void PhotosApp::NavigateHome() {
-    if (auto* indev = lv_indev_active(); indev != nullptr) {
-        lv_indev_wait_release(indev);
-    }
     ESP_LOGI(TAG, "Header home button returning home");
     lv_async_call(DeferReturnHome, context_);
 }

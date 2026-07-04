@@ -43,7 +43,6 @@ constexpr size_t ColorPresetCount() {
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         context->navigation().ReturnHome();
     }
 }
@@ -495,9 +494,6 @@ void SmartApp::SetColor(rodakos::RgbColor color) {
 }
 
 void SmartApp::NavigateHome() {
-    if (auto* indev = lv_indev_active(); indev != nullptr) {
-        lv_indev_wait_release(indev);
-    }
     lv_async_call(DeferReturnHome, context_);
 }
 

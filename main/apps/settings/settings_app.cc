@@ -315,9 +315,6 @@ void SettingsApp::NavigateBack() {
 }
 
 void SettingsApp::NavigateHome() {
-    if (auto* indev = lv_indev_active(); indev != nullptr) {
-        lv_indev_wait_release(indev);
-    }
     ESP_LOGI(TAG, "Header home button returning home");
     lv_async_call(DeferReturnHome, context_);
 }

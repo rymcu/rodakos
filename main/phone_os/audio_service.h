@@ -47,6 +47,7 @@ public:
 
     bool PlayFile(const std::string& path, const std::string& title = "");
     void Stop();
+    void ReleasePlaybackHardware();
     void Pause();
     void Resume();
     void TogglePause();

@@ -11,7 +11,6 @@ namespace rodakos_settings {
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         context->navigation().ReturnHome();
     }
 }
@@ -19,7 +18,6 @@ void DeferReturnHome(void* user_data) {
 void DeferReloadSettings(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         context->navigation().RefreshTheme();
     }
 }

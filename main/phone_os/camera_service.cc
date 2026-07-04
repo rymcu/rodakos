@@ -15,6 +15,7 @@
 #include <esp_heap_caps.h>
 #include <esp_jpeg_enc.h>
 #include <esp_log.h>
+#include <esp_log_level.h>
 #include <esp_timer.h>
 
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
@@ -23,24 +24,36 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-
-#include <dev_camera.h>
-#include <esp_board_manager.h>
 #endif
 
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "CameraService";
-constexpr const char* kCameraDeviceName = "camera";
 constexpr const char* kPhotoDir = "/photos";
 constexpr int kBufferCount = 2;
-constexpr int kPreviewTaskStackWords = 8192;
+constexpr uint32_t kPreviewTaskStackSize = 4096;
 constexpr uint8_t kJpegQuality = 82;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
+constexpr const char* kGpioLogTag = "gpio";
+
+#if configSUPPORT_STATIC_ALLOCATION == 1
+StaticTask_t g_preview_task_buffer;
+StackType_t g_preview_task_stack[kPreviewTaskStackSize];
+#endif
 
 const char* ErrnoName() {
     return std::strerror(errno);
+}
+
+void LogPreviewTaskCreateFailure() {
+    ESP_LOGW(TAG,
+             "Failed to start camera preview task: internal_free=%u internal_largest=%u "
+             "spiram_free=%u spiram_largest=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
 }
 
 std::string JoinPath(const char* dir, const char* name) {
@@ -138,6 +151,15 @@ uint8_t* AllocAlignedJpegInput(size_t size) {
 }
 
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+int StreamOnSuppressingBenignGpioIsrLog(int fd, int* type) {
+    // The DVP driver intentionally ignores gpio_install_isr_service() when another device installed it first.
+    const esp_log_level_t previous_level = esp_log_level_get(kGpioLogTag);
+    esp_log_level_set(kGpioLogTag, ESP_LOG_NONE);
+    const int ret = ioctl(fd, VIDIOC_STREAMON, type);
+    esp_log_level_set(kGpioLogTag, previous_level);
+    return ret;
+}
+
 void CopyRgb565Frame(const uint8_t* src, size_t src_size, int stride, int height,
                      uint32_t pixelformat, std::vector<uint8_t>& dst) {
     const size_t frame_size = static_cast<size_t>(stride) * height;
@@ -185,11 +207,7 @@ CameraService::~CameraService() {
 }
 
 bool CameraService::IsAvailable() const {
-#ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    return esp_board_manager_check_name(kCameraDeviceName);
-#else
-    return false;
-#endif
+    return camera_device_.IsConfigured();
 }
 
 bool CameraService::StartPreview(int width, int height) {
@@ -222,15 +240,33 @@ bool CameraService::StartPreview(int width, int height) {
         xSemaphoreGive(mutex_);
     }
 
+    TaskHandle_t task_handle = nullptr;
+#if configSUPPORT_STATIC_ALLOCATION == 1
+    task_handle = xTaskCreateStaticPinnedToCore(
+        PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize, this, 3,
+        g_preview_task_stack, &g_preview_task_buffer,
+#if CONFIG_SOC_CPU_CORES_NUM > 1
+        0
+#else
+        tskNO_AFFINITY
+#endif
+    );
+    preview_task_ = task_handle;
+#else
     const BaseType_t task_ret =
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-        xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackWords,
+        xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
                                 this, 3, &preview_task_, 0);
 #else
-        xTaskCreate(PreviewTaskEntry, "camera_preview", kPreviewTaskStackWords,
+        xTaskCreate(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
                     this, 3, &preview_task_);
 #endif
-    if (task_ret != pdPASS) {
+    if (task_ret == pdPASS) {
+        task_handle = preview_task_;
+    }
+#endif
+    if (task_handle == nullptr) {
+        LogPreviewTaskCreateFailure();
         SetError("Failed to start camera preview task");
         if (mutex_ != nullptr) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -466,22 +502,19 @@ void CameraService::PreviewTask() {
 
 bool CameraService::OpenStream(int width, int height) {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    esp_err_t ret = esp_board_manager_init_device_by_name(kCameraDeviceName);
+    esp_err_t ret = camera_device_.Acquire();
     if (ret != ESP_OK) {
         SetError(std::string("Camera init failed: ") + esp_err_to_name(ret));
         return false;
     }
-    camera_ref_acquired_ = true;
 
-    dev_camera_handle_t* camera_handle = nullptr;
-    ret = esp_board_manager_get_device_handle(kCameraDeviceName,
-                                              reinterpret_cast<void**>(&camera_handle));
-    if (ret != ESP_OK || camera_handle == nullptr || camera_handle->dev_path == nullptr) {
+    const char* device_path = camera_device_.dev_path();
+    if (device_path == nullptr) {
         SetError("Camera device handle is not available");
         return false;
     }
 
-    fd_ = open(camera_handle->dev_path, O_RDWR | O_NONBLOCK);
+    fd_ = open(device_path, O_RDWR | O_NONBLOCK);
     if (fd_ < 0) {
         SetError(std::string("Failed to open camera device: ") + ErrnoName());
         return false;
@@ -502,15 +535,15 @@ bool CameraService::OpenStream(int width, int height) {
     format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     format.fmt.pix.width = width;
     format.fmt.pix.height = height;
-    format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
+    format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565X;
     if (ioctl(fd_, VIDIOC_S_FMT, &format) != 0) {
         format = {};
         format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         format.fmt.pix.width = width;
         format.fmt.pix.height = height;
-        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565X;
+        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
         if (ioctl(fd_, VIDIOC_S_FMT, &format) != 0) {
-            SetError("Camera RGB565 output is not available");
+            SetError("Camera RGB565/RGB565X output is not available");
             return false;
         }
     }
@@ -564,7 +597,7 @@ bool CameraService::OpenStream(int width, int height) {
     }
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(fd_, VIDIOC_STREAMON, &type) != 0) {
+    if (StreamOnSuppressingBenignGpioIsrLog(fd_, &type) != 0) {
         SetError(std::string("Failed to start camera stream: ") + ErrnoName());
         return false;
     }
@@ -596,13 +629,7 @@ void CameraService::CloseStream() {
         close(fd_);
         fd_ = -1;
     }
-    if (camera_ref_acquired_) {
-        const esp_err_t ret = esp_board_manager_deinit_device_by_name(kCameraDeviceName);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Camera device release failed: %s", esp_err_to_name(ret));
-        }
-        camera_ref_acquired_ = false;
-    }
+    camera_device_.Release();
     active_width_ = 0;
     active_height_ = 0;
     active_stride_ = 0;

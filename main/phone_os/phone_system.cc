@@ -38,6 +38,7 @@ bool PhoneSystem::LaunchApp(std::string_view app_id) {
 
 bool PhoneSystem::RefreshTheme() {
     ESP_LOGI(TAG, "Theme refresh requested");
+    ui_.ResetInputState();
     if (host_.RefreshCurrentTheme(context_)) {
         return true;
     }

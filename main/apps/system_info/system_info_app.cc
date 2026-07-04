@@ -31,7 +31,6 @@ constexpr lv_coord_t kCardHeight = 56;
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        lv_indev_reset(nullptr, nullptr);
         context->navigation().ReturnHome();
     }
 }
@@ -379,9 +378,6 @@ void SystemInfoApp::ProbeStorage(bool allow_mount) {
 }
 
 void SystemInfoApp::NavigateHome() {
-    if (auto* indev = lv_indev_active(); indev != nullptr) {
-        lv_indev_wait_release(indev);
-    }
     ESP_LOGI(TAG, "Returning home");
     lv_async_call(DeferReturnHome, context_);
 }

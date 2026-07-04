@@ -9,18 +9,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.0
-  brookesia_hal_interface:
-    dependencies: []
-    source:
-      path: D:\workspace\rodakos\components\brookesia_hal_interface
-      type: local
-    version: 0.7.5
-  brookesia_lib_utils:
-    dependencies: []
-    source:
-      path: D:\workspace\rodakos\components\brookesia_lib_utils
-      type: local
-    version: 0.7.9
   chmorgan/esp-libhelix-mp3:
     component_hash: cbb76089dc2c5749f7b470e2e70aedc44c9da519e04eb9a67d4c7ec275229e53
     dependencies:
@@ -37,12 +25,6 @@ dependencies:
       path: D:\workspace\rodakos\components\cmake_utilities
       type: local
     version: 0.5.3
-  esp_board_manager:
-    dependencies: []
-    source:
-      path: D:\workspace\rodakos\components\esp_board_manager
-      type: local
-    version: 0.5.15
   esp_io_expander_pca9557:
     dependencies:
     - name: idf
@@ -68,16 +50,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 4.2.0
-  espressif/esp-boost:
-    component_hash: 332946a64356203e9443a3bae9cec93ef8aab6df37de2f61270c972f238f9b3f
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.5'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 0.6.0
   espressif/esp_cam_sensor:
     component_hash: 4ed9e34055a7ac5d6c60552c21dfa470deaadb7eda8040d157c5f3314de8d2fd
     dependencies:
@@ -314,16 +286,6 @@ dependencies:
     source:
       type: idf
     version: 5.5.4
-  joltwallet/littlefs:
-    component_hash: dcea25bcef2de023f089f5f01e8d8c46ad1b8ffef75861ad5ffb4098555839df
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.20.4
   lvgl/lvgl:
     component_hash: b702d642e03e95928046d5c6726558e6444e112420c77efa5fdb6650b0a13c5d
     dependencies: []
@@ -335,12 +297,7 @@ direct_dependencies:
 - 78/xiaozhi-fonts
 - chmorgan/esp-libhelix-mp3
 - esp_io_expander_pca9557
-- espressif/brookesia_hal_interface
-- espressif/brookesia_lib_utils
 - espressif/button
-- espressif/cmake_utilities
-- espressif/esp-boost
-- espressif/esp_board_manager
 - espressif/esp_codec_dev
 - espressif/esp_io_expander
 - espressif/esp_lcd_touch
@@ -352,8 +309,7 @@ direct_dependencies:
 - espressif/esp_websocket_client
 - espressif/led_strip
 - idf
-- joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 8427472f09e6531a85c86a5c4bb9e6e05672ad8a5e9964597beccb1fa3f92320
+manifest_hash: cd93257d1d4a8bcaa0c8c0b44f5e4d18a4b058c027f267913935bfe4c1622cb9
 target: esp32s3
 version: 2.0.0

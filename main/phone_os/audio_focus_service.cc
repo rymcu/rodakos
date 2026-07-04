@@ -10,6 +10,7 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "AudioFocusService";
+constexpr uint32_t kExclusiveStopTimeoutMs = 1200;
 
 const char* GainName(AudioFocusGain gain) {
     switch (gain) {
@@ -127,6 +128,7 @@ void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
     const auto state = music_player_.GetState();
     music_was_playing_ = IsPlayingStatus(state.audio.status);
     music_was_paused_ = state.audio.status == AudioPlaybackStatus::kPaused;
+    playback_hardware_released_ = false;
     previous_volume_ = state.audio.volume;
 
     switch (request.gain) {
@@ -136,8 +138,19 @@ void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
             }
             break;
         case AudioFocusGain::kPause:
-        case AudioFocusGain::kExclusive:
             if (music_was_playing_) {
+                music_player_.Pause();
+            }
+            break;
+        case AudioFocusGain::kExclusive:
+            if (request.release_playback_hardware) {
+                if (music_was_playing_ || music_was_paused_) {
+                    music_player_.Stop();
+                    WaitForMusicIdle(kExclusiveStopTimeoutMs);
+                }
+                music_player_.ReleasePlaybackHardware();
+                playback_hardware_released_ = true;
+            } else if (music_was_playing_) {
                 music_player_.Pause();
             }
             break;
@@ -156,7 +169,7 @@ void AudioFocusService::RestoreFocusLocked() {
         return;
     }
 
-    if (resume_on_release_ && music_was_playing_) {
+    if (resume_on_release_ && music_was_playing_ && !playback_hardware_released_) {
         music_player_.Resume();
     }
 }
@@ -169,7 +182,20 @@ void AudioFocusService::ClearFocusLocked() {
     resume_on_release_ = true;
     music_was_playing_ = false;
     music_was_paused_ = false;
+    playback_hardware_released_ = false;
     previous_volume_ = music_player_.volume();
+}
+
+void AudioFocusService::WaitForMusicIdle(uint32_t timeout_ms) {
+    const uint32_t delay_ms = 20;
+    for (uint32_t waited = 0; waited < timeout_ms; waited += delay_ms) {
+        const auto state = music_player_.GetState();
+        if (!IsPlayingStatus(state.audio.status) && state.audio.status != AudioPlaybackStatus::kPaused) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+    ESP_LOGW(TAG, "Timed out waiting for music playback to stop");
 }
 
 }  // namespace rodakos

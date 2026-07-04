@@ -1,9 +1,5 @@
 #include "phone_os/button_binding_service.h"
 
-#include "dev_button.h"
-#include "esp_board_device.h"
-#include "esp_board_manager.h"
-#include "esp_board_manager_defs.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_ui/phone_ui.h"
 #include "settings.h"
@@ -12,6 +8,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include <esp_log.h>
 #include <esp_lvgl_port.h>
@@ -25,12 +22,28 @@ constexpr TickType_t kSingleClickDelayTicks = pdMS_TO_TICKS(280);
 constexpr UBaseType_t kEventQueueDepth = 8;
 constexpr uint32_t kWorkerStackWords = 6144;
 
-extern "C" const esp_board_device_desc_t g_esp_board_devices[];
+bool IsSupportedEvent(ButtonEvent event) {
+    switch (event) {
+        case ButtonEvent::kSingleClick:
+        case ButtonEvent::kDoubleClick:
+        case ButtonEvent::kLongPressStart:
+            return true;
+        default:
+            return false;
+    }
+}
 
-bool IsSupportedEvent(button_event_t event) {
-    return event == BUTTON_SINGLE_CLICK ||
-           event == BUTTON_DOUBLE_CLICK ||
-           event == BUTTON_LONG_PRESS_START;
+ButtonEvent ToButtonEvent(BoardButtonEvent event) {
+    switch (event) {
+        case BoardButtonEvent::kSingleClick:
+            return ButtonEvent::kSingleClick;
+        case BoardButtonEvent::kDoubleClick:
+            return ButtonEvent::kDoubleClick;
+        case BoardButtonEvent::kLongPressStart:
+            return ButtonEvent::kLongPressStart;
+        default:
+            return ButtonEvent::kSingleClick;
+    }
 }
 
 std::string NormalizeId(std::string_view value) {
@@ -56,13 +69,13 @@ uint32_t Fnv1a(std::string_view value) {
     return hash;
 }
 
-char EventCode(button_event_t event) {
+char EventCode(ButtonEvent event) {
     switch (event) {
-        case BUTTON_SINGLE_CLICK:
+        case ButtonEvent::kSingleClick:
             return 's';
-        case BUTTON_DOUBLE_CLICK:
+        case ButtonEvent::kDoubleClick:
             return 'd';
-        case BUTTON_LONG_PRESS_START:
+        case ButtonEvent::kLongPressStart:
             return 'l';
         default:
             return 'x';
@@ -120,7 +133,7 @@ std::vector<ButtonBinding> ButtonBindingService::ListBindings() const {
     std::vector<ButtonBinding> result;
     result.reserve(buttons_.size() * 3);
     for (const auto& button : buttons_) {
-        for (button_event_t event : {BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START}) {
+        for (ButtonEvent event : kButtonEvents) {
             result.push_back(GetBinding(button.id, event));
         }
     }
@@ -131,7 +144,7 @@ const ButtonState* ButtonBindingService::GetButton(std::string_view button_id) c
     return FindButton(button_id);
 }
 
-ButtonBinding ButtonBindingService::GetBinding(std::string_view button_id, button_event_t event) const {
+ButtonBinding ButtonBindingService::GetBinding(std::string_view button_id, ButtonEvent event) const {
     const std::string normalized_id = NormalizeId(button_id);
     ButtonBinding binding;
     binding.button_id = normalized_id;
@@ -149,7 +162,7 @@ ButtonBinding ButtonBindingService::GetBinding(std::string_view button_id, butto
 }
 
 bool ButtonBindingService::SetBinding(std::string_view button_id,
-                                      button_event_t event,
+                                      ButtonEvent event,
                                       const ButtonAction& action) {
     const std::string normalized_id = NormalizeId(button_id);
     if (!IsSupportedEvent(event) || FindButton(normalized_id) == nullptr) {
@@ -164,7 +177,7 @@ bool ButtonBindingService::SetBinding(std::string_view button_id,
     return true;
 }
 
-bool ButtonBindingService::ResetBinding(std::string_view button_id, button_event_t event) {
+bool ButtonBindingService::ResetBinding(std::string_view button_id, ButtonEvent event) {
     const std::string normalized_id = NormalizeId(button_id);
     if (!IsSupportedEvent(event) || FindButton(normalized_id) == nullptr) {
         return false;
@@ -177,26 +190,26 @@ bool ButtonBindingService::ResetBinding(std::string_view button_id, button_event
     return true;
 }
 
-const char* ButtonBindingService::EventName(button_event_t event) {
+const char* ButtonBindingService::EventName(ButtonEvent event) {
     switch (event) {
-        case BUTTON_SINGLE_CLICK:
+        case ButtonEvent::kSingleClick:
             return "single";
-        case BUTTON_DOUBLE_CLICK:
+        case ButtonEvent::kDoubleClick:
             return "double";
-        case BUTTON_LONG_PRESS_START:
+        case ButtonEvent::kLongPressStart:
             return "long";
         default:
             return "unknown";
     }
 }
 
-const char* ButtonBindingService::EventLabel(button_event_t event) {
+const char* ButtonBindingService::EventLabel(ButtonEvent event) {
     switch (event) {
-        case BUTTON_SINGLE_CLICK:
+        case ButtonEvent::kSingleClick:
             return "Single";
-        case BUTTON_DOUBLE_CLICK:
+        case ButtonEvent::kDoubleClick:
             return "Double";
-        case BUTTON_LONG_PRESS_START:
+        case ButtonEvent::kLongPressStart:
             return "Long";
         default:
             return "Event";
@@ -241,84 +254,43 @@ std::string ButtonBindingService::ActionLabel(const ButtonAction& action) {
 }
 
 void ButtonBindingService::DiscoverButtons() {
-    const esp_board_device_desc_t* desc = g_esp_board_devices;
-    while (desc != nullptr && desc->name != nullptr) {
-        if (desc->type == nullptr ||
-            std::strcmp(desc->type, ESP_BOARD_DEVICE_TYPE_BUTTON) != 0) {
-            desc = desc->next;
-            continue;
-        }
-        void* device_handle = nullptr;
-        esp_err_t err = esp_board_manager_get_device_handle(desc->name, &device_handle);
-        auto* handles = static_cast<dev_button_handles_t*>(device_handle);
-        if (err != ESP_OK || handles == nullptr || handles->num_buttons == 0) {
-            ESP_LOGW(TAG, "Button device '%s' is unavailable: %s",
-                     desc->name, esp_err_to_name(err));
-            desc = desc->next;
+    for (const auto& device : DiscoverBoardButtons()) {
+        if (device.native_handle == nullptr) {
             continue;
         }
 
-        const auto* cfg = static_cast<const dev_button_config_t*>(desc->cfg);
-        for (uint8_t i = 0; i < handles->num_buttons; ++i) {
-            button_handle_t handle = handles->button_handles[i];
-            if (handle == nullptr) {
-                continue;
-            }
+        const std::string normalized_id = NormalizeId(device.id);
+        const std::string title = MakeTitle(normalized_id);
+        BoardButtonDevice board_button = device;
+        board_button.id = normalized_id;
+        board_buttons_.push_back(std::move(board_button));
 
-            std::string id = desc->name;
-            if (handles->num_buttons > 1) {
-                const char* label = nullptr;
-                if (cfg != nullptr &&
-                    cfg->sub_type != nullptr &&
-                    std::strcmp(cfg->sub_type, "adc_multi") == 0) {
-                    label = cfg->sub_cfg.adc.multi.button_labels[i];
-                }
-                id = (label != nullptr && label[0] != '\0')
-                         ? label
-                         : std::string(desc->name) + ":" + std::to_string(i);
-            }
-
-            const std::string normalized_id = NormalizeId(id);
-            const std::string title = MakeTitle(normalized_id);
-
-            buttons_.push_back(ButtonState{
-                .id = normalized_id,
-                .title = title,
-                .device_name = desc->name,
-                .physical_index = i,
-                .available = true,
-            });
-            registered_.push_back(RegisteredButton{
-                .button_id = normalized_id,
-                .title = title,
-                .device_name = desc->name,
-                .physical_index = i,
-                .handle = handle,
-            });
-        }
-
-        desc = desc->next;
+        buttons_.push_back(ButtonState{
+            .id = normalized_id,
+            .title = title,
+            .device_name = device.device_name,
+            .physical_index = device.physical_index,
+            .available = true,
+        });
+        registered_.push_back(RegisteredButton{
+            .button_id = normalized_id,
+            .title = title,
+            .device_name = device.device_name,
+            .physical_index = device.physical_index,
+        });
     }
 }
 
 void ButtonBindingService::RegisterCallbacks() {
-    for (const auto& button : registered_) {
-        for (button_event_t event : {BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START}) {
-            const esp_err_t err = iot_button_register_cb(
-                button.handle, event, nullptr, ButtonEventCallback, this);
-            if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
-                ESP_LOGI(TAG, "Listening for '%s' %s", button.button_id.c_str(), EventName(event));
-            } else {
-                ESP_LOGW(TAG, "Failed to register %s for '%s': %s",
-                         EventName(event), button.button_id.c_str(), esp_err_to_name(err));
-            }
-        }
+    if (!RegisterBoardButtonCallbacks(board_buttons_, ButtonEventCallback, this)) {
+        ESP_LOGW(TAG, "No board button callbacks were registered");
     }
 }
 
 void ButtonBindingService::ResetDiscoveredState() {
     buttons_.clear();
     registered_.clear();
+    board_buttons_.clear();
     click_generations_.clear();
     click_timers_.clear();
     initialized_ = false;
@@ -346,23 +318,22 @@ bool ButtonBindingService::StartWorker() {
     return true;
 }
 
-void ButtonBindingService::HandleButtonEvent(button_handle_t handle) {
-    if (handle == nullptr) {
+void ButtonBindingService::HandleButtonEvent(std::string_view button_id, ButtonEvent event) {
+    if (button_id.empty()) {
         return;
     }
 
-    const auto* button = FindRegistered(handle);
+    const auto* button = FindRegistered(button_id);
     if (button == nullptr) {
         return;
     }
 
-    const button_event_t event = iot_button_get_event(handle);
     if (!IsSupportedEvent(event)) {
         return;
     }
 
     ESP_LOGI(TAG, "Button '%s' event: %s", button->button_id.c_str(), EventName(event));
-    if (event == BUTTON_SINGLE_CLICK) {
+    if (event == ButtonEvent::kSingleClick) {
         ScheduleSingleClick(*button);
         return;
     }
@@ -371,7 +342,7 @@ void ButtonBindingService::HandleButtonEvent(button_handle_t handle) {
     QueueButtonEvent(button->button_id, event);
 }
 
-void ButtonBindingService::ExecuteBinding(const RegisteredButton& button, button_event_t event) {
+void ButtonBindingService::ExecuteBinding(const RegisteredButton& button, ButtonEvent event) {
     const ButtonBinding binding = GetBinding(button.button_id, event);
     if (binding.action.type == ButtonActionType::kNone) {
         ESP_LOGI(TAG, "Button '%s' %s has no action",
@@ -388,7 +359,7 @@ void ButtonBindingService::ExecuteBinding(const RegisteredButton& button, button
 void ButtonBindingService::ScheduleSingleClick(const RegisteredButton& button) {
     const auto it = std::find_if(registered_.begin(), registered_.end(),
                                  [&button](const RegisteredButton& candidate) {
-                                     return candidate.handle == button.handle;
+                                     return candidate.button_id == button.button_id;
                                  });
     if (it == registered_.end()) {
         return;
@@ -411,7 +382,7 @@ void ButtonBindingService::ScheduleSingleClick(const RegisteredButton& button) {
         if (click_timers_[index] == nullptr) {
             ESP_LOGW(TAG, "Failed to create single-click timer for '%s'", button.button_id.c_str());
             delete deferred;
-            QueueButtonEvent(button.button_id, BUTTON_SINGLE_CLICK);
+            QueueButtonEvent(button.button_id, ButtonEvent::kSingleClick);
             return;
         }
     } else {
@@ -425,14 +396,14 @@ void ButtonBindingService::ScheduleSingleClick(const RegisteredButton& button) {
 
     if (xTimerChangePeriod(click_timers_[index], kSingleClickDelayTicks, 0) != pdPASS) {
         ESP_LOGW(TAG, "Failed to arm single-click timer for '%s'", button.button_id.c_str());
-        QueueButtonEvent(button.button_id, BUTTON_SINGLE_CLICK);
+        QueueButtonEvent(button.button_id, ButtonEvent::kSingleClick);
     }
 }
 
 void ButtonBindingService::CancelSingleClick(const RegisteredButton& button) {
     const auto it = std::find_if(registered_.begin(), registered_.end(),
                                  [&button](const RegisteredButton& candidate) {
-                                     return candidate.handle == button.handle;
+                                     return candidate.button_id == button.button_id;
                                  });
     if (it == registered_.end()) {
         return;
@@ -451,11 +422,11 @@ void ButtonBindingService::CancelSingleClick(const RegisteredButton& button) {
 
 void ButtonBindingService::ExecuteDeferredSingleClick(std::string_view button_id,
                                                       uint32_t generation) {
-    QueueButtonEvent(button_id, BUTTON_SINGLE_CLICK, generation, true);
+    QueueButtonEvent(button_id, ButtonEvent::kSingleClick, generation, true);
 }
 
 bool ButtonBindingService::QueueButtonEvent(std::string_view button_id,
-                                            button_event_t event,
+                                            ButtonEvent event,
                                             uint32_t generation,
                                             bool check_generation) {
     if (event_queue_ == nullptr) {
@@ -487,7 +458,7 @@ void ButtonBindingService::ProcessQueuedEvent(const QueuedButtonEvent& event) {
     if (event.check_generation) {
         const auto it = std::find_if(registered_.begin(), registered_.end(),
                                      [button](const RegisteredButton& candidate) {
-                                         return candidate.handle == button->handle;
+                                         return candidate.button_id == button->button_id;
                                      });
         if (it == registered_.end()) {
             return;
@@ -523,38 +494,29 @@ void ButtonBindingService::ExecuteAction(const ButtonAction& action, const std::
 }
 
 ButtonAction ButtonBindingService::DefaultAction(std::string_view button_id,
-                                                 button_event_t event) const {
-    if (event == BUTTON_SINGLE_CLICK && button_id == "boot_button") {
+                                                 ButtonEvent event) const {
+    if (event == ButtonEvent::kSingleClick && button_id == "boot_button") {
         return ButtonAction{.type = ButtonActionType::kHome, .app_id = ""};
     }
     if (button_id == "io10_key_button") {
-        if (event == BUTTON_SINGLE_CLICK) {
+        if (event == ButtonEvent::kSingleClick) {
             return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "settings"};
         }
-        if (event == BUTTON_DOUBLE_CLICK) {
+        if (event == ButtonEvent::kDoubleClick) {
             return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "smart"};
         }
-        if (event == BUTTON_LONG_PRESS_START) {
+        if (event == ButtonEvent::kLongPressStart) {
             return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "assistant"};
         }
     }
     return ButtonAction{.type = ButtonActionType::kNone, .app_id = ""};
 }
 
-std::string ButtonBindingService::StorageKey(std::string_view button_id, button_event_t event) const {
+std::string ButtonBindingService::StorageKey(std::string_view button_id, ButtonEvent event) const {
     char key[16] = {};
     std::snprintf(key, sizeof(key), "b%08lx%c",
                   static_cast<unsigned long>(Fnv1a(button_id)), EventCode(event));
     return key;
-}
-
-const ButtonBindingService::RegisteredButton* ButtonBindingService::FindRegistered(
-    button_handle_t handle) const {
-    const auto it = std::find_if(registered_.begin(), registered_.end(),
-                                 [handle](const RegisteredButton& button) {
-                                     return button.handle == handle;
-                                 });
-    return it == registered_.end() ? nullptr : &(*it);
 }
 
 const ButtonBindingService::RegisteredButton* ButtonBindingService::FindRegistered(
@@ -576,10 +538,12 @@ const ButtonState* ButtonBindingService::FindButton(std::string_view button_id) 
     return it == buttons_.end() ? nullptr : &(*it);
 }
 
-void ButtonBindingService::ButtonEventCallback(void* button_handle, void* user_data) {
+void ButtonBindingService::ButtonEventCallback(const char* button_id,
+                                               BoardButtonEvent event,
+                                               void* user_data) {
     auto* service = static_cast<ButtonBindingService*>(user_data);
     if (service != nullptr) {
-        service->HandleButtonEvent(static_cast<button_handle_t>(button_handle));
+        service->HandleButtonEvent(button_id != nullptr ? button_id : "", ToButtonEvent(event));
     }
 }
 

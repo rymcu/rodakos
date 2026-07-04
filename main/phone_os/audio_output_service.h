@@ -5,6 +5,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "rodakos_adapters/audio_codec_output.h"
+
 namespace rodakos {
 
 class AudioOutputService {
@@ -28,9 +30,8 @@ public:
 private:
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
-    bool codec_open_ = false;
     int volume_ = 60;
-    void* dac_handle_ = nullptr;
+    AudioCodecOutput output_;
 };
 
 }  // namespace rodakos

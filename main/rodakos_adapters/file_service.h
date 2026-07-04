@@ -21,8 +21,7 @@ struct FileEntry {
 /**
  * @brief File service for SD card management
  *
- * Based on Brookesia HAL StorageFsIface design pattern.
- * Provides high-level file operations on top of mounted file systems.
+ * Provides high-level file operations on top of the Board Manager SD/FATFS device.
  */
 class FileService {
 public:
