@@ -9,9 +9,11 @@
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/image_library.h"
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <memory>
 #include <utility>
 
@@ -24,6 +26,10 @@ constexpr const char* kRodakosPhotosPath = "/photos";
 constexpr int kGridCols = 3;
 constexpr lv_coord_t kThumbnailSize = 84;
 constexpr lv_coord_t kThumbnailGap = 8;
+constexpr uint32_t kThumbnailTimerMs = 120;
+constexpr int kThumbnailLoadPerTick = 2;
+constexpr int32_t kThumbnailLoadMargin = 16;
+constexpr int32_t kThumbnailKeepMargin = 112;
 constexpr int32_t kPhotoAreaWidth = 300;
 constexpr int32_t kPhotoAreaHeight = 146;
 constexpr lv_coord_t kPhotoAreaTop = 42;
@@ -91,6 +97,25 @@ void ShowImageLoadError(lv_obj_t* image, lv_obj_t* label, const char* message) {
     }
 }
 
+bool AreaOverlaps(const lv_area_t& area, const lv_area_t& viewport, int32_t margin) {
+    return area.x2 >= viewport.x1 - margin &&
+           area.x1 <= viewport.x2 + margin &&
+           area.y2 >= viewport.y1 - margin &&
+           area.y1 <= viewport.y2 + margin;
+}
+
+void LogPhotoHeap(const char* phase, const char* reason) {
+    ESP_LOGI(TAG,
+             "Photo image memory %s (%s): internal_free=%u internal_largest=%u "
+             "spiram_free=%u spiram_largest=%u",
+             phase,
+             reason != nullptr ? reason : "unknown",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+}
+
 }  // namespace
 
 PhotosApp::~PhotosApp() {
@@ -130,6 +155,9 @@ void PhotosApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            StopThumbnailTimer();
+            ReleaseCurrentImage("destroy");
+            ReleaseAllThumbnails();
             if (root_ != nullptr && lv_obj_is_valid(root_)) {
                 lv_obj_delete(root_);
             }
@@ -143,8 +171,154 @@ void PhotosApp::OnDestroy() {
     photo_img_ = nullptr;
     filename_label_ = nullptr;
     current_image_.reset();
+    thumbnail_items_.clear();
     context_ = nullptr;
     ui_ = nullptr;
+}
+
+void PhotosApp::StopThumbnailTimer() {
+    if (thumbnail_timer_ != nullptr) {
+        lv_timer_delete(thumbnail_timer_);
+        thumbnail_timer_ = nullptr;
+    }
+}
+
+void PhotosApp::ReleaseCurrentImage(const char* reason) {
+    if (current_image_ == nullptr) {
+        return;
+    }
+
+    LogPhotoHeap("before release", reason);
+    const void* source = current_image_->GetImageSource();
+    if (photo_img_ != nullptr && lv_obj_is_valid(photo_img_)) {
+        lv_image_set_src(photo_img_, nullptr);
+    }
+    if (source != nullptr) {
+        lv_image_cache_drop(source);
+    }
+    current_image_.reset();
+    LogPhotoHeap("after release", reason);
+}
+
+void PhotosApp::ReleaseThumbnail(ThumbnailItem& item) {
+    item.thumbnail_unavailable = false;
+    if (item.thumbnail == nullptr) {
+        return;
+    }
+
+    const void* source = item.thumbnail->GetImageSource();
+    if (item.image != nullptr && lv_obj_is_valid(item.image)) {
+        lv_image_set_src(item.image, nullptr);
+    }
+    if (source != nullptr) {
+        lv_image_cache_drop(source);
+    }
+    item.thumbnail.reset();
+    if (item.label != nullptr && lv_obj_is_valid(item.label)) {
+        lv_obj_clear_flag(item.label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void PhotosApp::ReleaseAllThumbnails() {
+    for (auto& item : thumbnail_items_) {
+        ReleaseThumbnail(item);
+    }
+}
+
+void PhotosApp::ScheduleThumbnailUpdate() {
+    if (thumbnail_timer_ == nullptr) {
+        return;
+    }
+    lv_timer_resume(thumbnail_timer_);
+    lv_timer_ready(thumbnail_timer_);
+}
+
+void PhotosApp::ThumbnailTimerCallback(lv_timer_t* timer) {
+    auto* self = static_cast<PhotosApp*>(lv_timer_get_user_data(timer));
+    if (self != nullptr) {
+        self->UpdateVisibleThumbnails();
+    }
+}
+
+void PhotosApp::UpdateVisibleThumbnails() {
+    if (current_view_ != ViewMode::kGrid ||
+        grid_body_ == nullptr || grid_container_ == nullptr ||
+        !lv_obj_is_valid(grid_body_) || !lv_obj_is_valid(grid_container_) ||
+        lv_obj_has_flag(grid_body_, LV_OBJ_FLAG_HIDDEN)) {
+        if (thumbnail_timer_ != nullptr) {
+            lv_timer_pause(thumbnail_timer_);
+        }
+        return;
+    }
+
+    lv_obj_update_layout(grid_container_);
+
+    lv_area_t viewport = {};
+    lv_obj_get_coords(grid_container_, &viewport);
+
+    int loaded_this_tick = 0;
+    bool has_pending_visible = false;
+
+    for (size_t i = 0; i < thumbnail_items_.size(); ++i) {
+        auto& item = thumbnail_items_[i];
+        if (item.button == nullptr || !lv_obj_is_valid(item.button)) {
+            continue;
+        }
+
+        lv_area_t item_area = {};
+        lv_obj_get_coords(item.button, &item_area);
+        if (!AreaOverlaps(item_area, viewport, kThumbnailKeepMargin)) {
+            ReleaseThumbnail(item);
+            continue;
+        }
+
+        if (!AreaOverlaps(item_area, viewport, kThumbnailLoadMargin) ||
+            item.thumbnail != nullptr || item.thumbnail_unavailable) {
+            continue;
+        }
+
+        if (loaded_this_tick >= kThumbnailLoadPerTick) {
+            has_pending_visible = true;
+            continue;
+        }
+
+        auto thumbnail = rodakos::ImageLibrary::LoadThumbnail(
+            photos_[i].path, static_cast<int>(kThumbnailSize), static_cast<int>(kThumbnailSize));
+        if (thumbnail == nullptr) {
+            item.thumbnail_unavailable = true;
+            continue;
+        }
+
+        const void* source = thumbnail->GetImageSource();
+        lv_image_header_t header = {};
+        if (lv_image_decoder_get_info(source, &header) != LV_RESULT_OK ||
+            header.w == 0 || header.h == 0) {
+            item.thumbnail_unavailable = true;
+            continue;
+        }
+
+        if (item.image != nullptr && lv_obj_is_valid(item.image)) {
+            lv_image_set_src(item.image, nullptr);
+            item.thumbnail = std::move(thumbnail);
+            lv_obj_set_size(item.image, kThumbnailSize, kThumbnailSize);
+            lv_image_set_inner_align(item.image, LV_IMAGE_ALIGN_CENTER);
+            lv_image_set_scale(item.image, LV_SCALE_NONE);
+            lv_image_set_src(item.image, source);
+            lv_obj_center(item.image);
+        } else {
+            item.thumbnail_unavailable = true;
+            continue;
+        }
+
+        if (item.label != nullptr && lv_obj_is_valid(item.label)) {
+            lv_obj_add_flag(item.label, LV_OBJ_FLAG_HIDDEN);
+        }
+        loaded_this_tick++;
+    }
+
+    if (!has_pending_visible && thumbnail_timer_ != nullptr) {
+        lv_timer_pause(thumbnail_timer_);
+    }
 }
 
 void PhotosApp::ScanPhotos() {
@@ -205,6 +379,10 @@ void PhotosApp::ShowFullScreen(size_t index) {
     if (grid_body_ != nullptr) {
         lv_obj_add_flag(grid_body_, LV_OBJ_FLAG_HIDDEN);
     }
+    if (thumbnail_timer_ != nullptr) {
+        lv_timer_pause(thumbnail_timer_);
+    }
+    ReleaseAllThumbnails();
 
     // 创建或显示全屏视图
     if (fullscreen_body_ == nullptr) {
@@ -221,6 +399,7 @@ void PhotosApp::ShowFullScreen(size_t index) {
     lv_label_set_text(filename_label_, photo.filename.c_str());
 
     // 使用 ImageLibrary 加载图片
+    ReleaseCurrentImage("replace");
     current_image_ = rodakos::ImageLibrary::LoadImageForDisplay(photo.path);
     if (current_image_ != nullptr) {
         const void* image_source = current_image_->GetImageSource();
@@ -228,7 +407,7 @@ void PhotosApp::ShowFullScreen(size_t index) {
         if (lv_image_decoder_get_info(image_source, &header) != LV_RESULT_OK ||
             header.w == 0 || header.h == 0) {
             ESP_LOGW(TAG, "Unsupported image: %s", photo.path.c_str());
-            current_image_.reset();
+            ReleaseCurrentImage("unsupported");
             ShowImageLoadError(photo_img_, filename_label_, "Unsupported image");
             return;
         }
@@ -268,12 +447,14 @@ void PhotosApp::ShowGridView() {
     if (fullscreen_body_ != nullptr) {
         lv_obj_add_flag(fullscreen_body_, LV_OBJ_FLAG_HIDDEN);
     }
+    ReleaseCurrentImage("grid");
 
     // 创建或显示网格视图
     if (grid_body_ == nullptr) {
         CreateGridView();
     } else {
         lv_obj_clear_flag(grid_body_, LV_OBJ_FLAG_HIDDEN);
+        ScheduleThumbnailUpdate();
     }
 }
 
@@ -336,8 +517,16 @@ void PhotosApp::CreateGridView() {
     lv_obj_set_style_pad_column(grid_container_, kThumbnailGap, 0);
     lv_obj_set_scroll_dir(grid_container_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(grid_container_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(grid_container_, [](lv_event_t* e) {
+        auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
+        if (self != nullptr) {
+            self->ScheduleThumbnailUpdate();
+        }
+    }, LV_EVENT_SCROLL, this);
 
     // 创建缩略图网格
+    thumbnail_items_.clear();
+    thumbnail_items_.reserve(photos_.size());
     for (size_t i = 0; i < photos_.size(); ++i) {
         const auto& photo = photos_[i];
 
@@ -350,13 +539,13 @@ void PhotosApp::CreateGridView() {
         lv_obj_set_style_border_color(btn, rodakos_theme_bg_secondary(), 0);
         lv_obj_set_style_border_color(btn, rodakos_theme_primary(), LV_STATE_PRESSED);
         lv_obj_set_style_translate_y(btn, 1, LV_STATE_PRESSED);
+        lv_obj_set_style_clip_corner(btn, true, 0);
 
-        // TODO: 加载缩略图
-        // auto* img = lv_img_create(btn);
-        // lv_img_set_src(img, photo.path.c_str());
-        // lv_obj_center(img);
+        auto* img = lv_image_create(btn);
+        lv_obj_set_size(img, kThumbnailSize, kThumbnailSize);
+        lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+        lv_obj_center(img);
 
-        // 临时显示文件名
         auto* name_label = lv_label_create(btn);
         lv_label_set_text(name_label, photo.filename.c_str());
         lv_obj_set_width(name_label, kThumbnailSize - 8);
@@ -369,6 +558,12 @@ void PhotosApp::CreateGridView() {
         auto* payload = new PhotoButtonPayload{.app = this, .index = i};
         lv_obj_add_event_cb(btn, OnPhotoClicked, LV_EVENT_CLICKED, payload);
         lv_obj_add_event_cb(btn, OnPhotoButtonDelete, LV_EVENT_DELETE, payload);
+
+        ThumbnailItem item;
+        item.button = btn;
+        item.image = img;
+        item.label = name_label;
+        thumbnail_items_.push_back(std::move(item));
     }
 
     // 如果没有照片，显示提示
@@ -379,6 +574,12 @@ void PhotosApp::CreateGridView() {
         lv_obj_set_style_text_color(empty_label, rodakos_theme_text_secondary(), 0);
         lv_obj_set_style_text_font(empty_label, &phone_font_14, 0);
         lv_obj_center(empty_label);
+    }
+
+    if (!photos_.empty()) {
+        thumbnail_timer_ = lv_timer_create(ThumbnailTimerCallback, kThumbnailTimerMs, this);
+        lv_timer_pause(thumbnail_timer_);
+        ScheduleThumbnailUpdate();
     }
 }
 

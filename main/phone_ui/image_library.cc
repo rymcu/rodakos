@@ -241,6 +241,50 @@ bool IsFileRenderableImage(const std::string& filename) {
     return EndsWith(filename, ".bmp");
 }
 
+std::shared_ptr<LvglImage> DecodeJpegScaled(const std::string& path,
+                                            const uint8_t* data,
+                                            size_t data_size,
+                                            size_t target_width,
+                                            size_t target_height,
+                                            const char* log_label) {
+    uint8_t* decoded = nullptr;
+    size_t decoded_len = 0;
+    size_t decoded_width = 0;
+    size_t decoded_height = 0;
+    size_t decoded_stride = 0;
+    esp_err_t ret = jpeg_to_image_scaled(
+        data, data_size,
+        &decoded, &decoded_len, &decoded_width, &decoded_height, &decoded_stride,
+        target_width, target_height);
+
+    if (ret != ESP_OK || decoded == nullptr || decoded_len == 0 ||
+        decoded_width == 0 || decoded_height == 0 || decoded_stride == 0) {
+        if (decoded != nullptr) {
+            jpeg_free_align(decoded);
+        }
+        ESP_LOGW(TAG, "Failed to decode JPEG %s: %s (%s)",
+                 log_label, path.c_str(), esp_err_to_name(ret));
+        return nullptr;
+    }
+
+    ESP_LOGI(TAG, "Decoded JPEG %s: %s (%ux%u, stride=%u, %u bytes)",
+             log_label,
+             path.c_str(),
+             static_cast<unsigned>(decoded_width),
+             static_cast<unsigned>(decoded_height),
+             static_cast<unsigned>(decoded_stride),
+             static_cast<unsigned>(decoded_len));
+    try {
+        return std::make_shared<LvglAllocatedImage>(
+            decoded, decoded_len, static_cast<int>(decoded_width), static_cast<int>(decoded_height),
+            static_cast<int>(decoded_stride), LV_COLOR_FORMAT_RGB888, jpeg_free_align);
+    } catch (...) {
+        jpeg_free_align(decoded);
+        ESP_LOGW(TAG, "Failed to create decoded JPEG image: %s", path.c_str());
+        return nullptr;
+    }
+}
+
 std::vector<std::string> ScanImages(const std::string& directory, int max_depth) {
     // Note: This function needs FileService instance
     // For now, return empty vector - will be called from PhotosApp with context
@@ -295,41 +339,14 @@ std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
     }
 
     if (IsJpeg(path)) {
-        uint8_t* decoded = nullptr;
-        size_t decoded_len = 0;
-        size_t decoded_width = 0;
-        size_t decoded_height = 0;
-        size_t decoded_stride = 0;
-        esp_err_t ret = jpeg_to_image_scaled(
-            static_cast<const uint8_t*>(data), static_cast<size_t>(file_size),
-            &decoded, &decoded_len, &decoded_width, &decoded_height, &decoded_stride,
-            kDisplayWidth, kDisplayHeight);
+        auto image = DecodeJpegScaled(path,
+                                      static_cast<const uint8_t*>(data),
+                                      static_cast<size_t>(file_size),
+                                      kDisplayWidth,
+                                      kDisplayHeight,
+                                      "display");
         heap_caps_free(data);
-
-        if (ret != ESP_OK || decoded == nullptr || decoded_len == 0 ||
-            decoded_width == 0 || decoded_height == 0 || decoded_stride == 0) {
-            if (decoded != nullptr) {
-                jpeg_free_align(decoded);
-            }
-            ESP_LOGW(TAG, "Failed to decode JPEG: %s (%s)", path.c_str(), esp_err_to_name(ret));
-            return nullptr;
-        }
-
-        ESP_LOGI(TAG, "Decoded JPEG: %s (%ux%u, stride=%u, %u bytes)",
-                 path.c_str(),
-                 static_cast<unsigned>(decoded_width),
-                 static_cast<unsigned>(decoded_height),
-                 static_cast<unsigned>(decoded_stride),
-                 static_cast<unsigned>(decoded_len));
-        try {
-            return std::make_shared<LvglAllocatedImage>(
-                decoded, decoded_len, static_cast<int>(decoded_width), static_cast<int>(decoded_height),
-                static_cast<int>(decoded_stride), LV_COLOR_FORMAT_RGB888, jpeg_free_align);
-        } catch (...) {
-            jpeg_free_align(decoded);
-            ESP_LOGW(TAG, "Failed to create decoded JPEG image: %s", path.c_str());
-            return nullptr;
-        }
+        return image;
     }
 
     try {
@@ -354,6 +371,55 @@ std::shared_ptr<LvglImage> LoadImageForDisplay(const std::string& path) {
     }
 
     return LoadImage(path);
+}
+
+std::shared_ptr<LvglImage> LoadThumbnail(const std::string& path, int width, int height) {
+    if (!IsJpeg(path) || width <= 0 || height <= 0) {
+        return nullptr;
+    }
+
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        ESP_LOGW(TAG, "Failed to open thumbnail: %s", path.c_str());
+        return nullptr;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0) {
+        fclose(f);
+        return nullptr;
+    }
+
+    void* data = heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (data == nullptr) {
+        data = heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
+        if (data == nullptr) {
+            fclose(f);
+            ESP_LOGW(TAG, "Failed to allocate memory for thumbnail, size=%ld", file_size);
+            return nullptr;
+        }
+    }
+
+    size_t read_size = fread(data, 1, file_size, f);
+    fclose(f);
+
+    if (read_size != static_cast<size_t>(file_size)) {
+        heap_caps_free(data);
+        ESP_LOGW(TAG, "Failed to read thumbnail completely: %s", path.c_str());
+        return nullptr;
+    }
+
+    auto image = DecodeJpegScaled(path,
+                                  static_cast<const uint8_t*>(data),
+                                  static_cast<size_t>(file_size),
+                                  static_cast<size_t>(width),
+                                  static_cast<size_t>(height),
+                                  "thumbnail");
+    heap_caps_free(data);
+    return image;
 }
 
 std::vector<std::string> ScanImagesWithFileService(FileService* fs, const std::string& directory, int max_depth) {
