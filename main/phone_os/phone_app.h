@@ -28,6 +28,7 @@ enum class PhoneCapability : uint32_t {
     kAudioPlayback = 1 << 2,
     kCamera = 1 << 3,
     kBackgroundTick = 1 << 4,
+    kMotion = 1 << 5,
 };
 
 inline PhoneCapability operator|(PhoneCapability lhs, PhoneCapability rhs) {

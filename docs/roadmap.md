@@ -11,8 +11,8 @@ As of 2026-07-02:
 - LVGL 9.3 display pipeline, double buffering, xiaozhi fonts, theme/layout helpers.
 - ST7789 display, LEDC backlight, GT911 touch via cached polling, WiFi STA, SD FileService, USB MSC mode.
 - App registry/host/navigation model is in place and Home launches apps from descriptors.
-- Built-in apps: Home, Settings, Photos, Camera, Clock, File Manager, System Info, Music, Assistant, Smart.
-- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio output, music player, audio focus, voice assistant, voice wake, device cloud config, time, button binding, lights.
+- Built-in apps: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Assistant, Smart.
+- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio output, music player, audio focus, voice assistant, voice wake, device cloud config, time, button binding, lights, motion.
 - Current built app binary is about 3.7MB of the 8MB factory partition.
 
 ## Milestone 0: Hardware And Build Baseline
@@ -70,6 +70,7 @@ Next work:
 - Harden audio codec startup/shutdown and failure recovery.
 - Finish voice recorder/runtime integration beyond the current no-op/unavailable paths.
 - Add diagnostics for I2C bus health, SD card status, and memory pressure.
+- Consider moving QMI8658 metadata into the board definition once Board Manager has a first-class IMU device type.
 
 ## Milestone 4: App Model
 

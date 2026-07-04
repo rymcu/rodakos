@@ -17,7 +17,7 @@ flowchart TD
   "app_main" --> "PhoneServices"
   "PhoneServices" --> "Backlight/WiFi/FileService"
   "PhoneServices" --> "Audio/Music/Voice"
-  "PhoneServices" --> "Camera/WebFiles/Time/Buttons/Lights"
+  "PhoneServices" --> "Camera/WebFiles/Time/Buttons/Lights/Motion"
   "PhoneUi" --> "PhoneSystem"
   "PhoneSystem" --> "PhoneAppRegistry"
   "PhoneSystem" --> "PhoneAppHost"
@@ -70,6 +70,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Camera: opens camera service on demand, previews and captures to storage.
 - Clock: local display and network time sync entry points.
 - File Manager: browses and manages FileService-backed storage.
+- Gyro: motion capability surface for gyroscope/accelerometer samples.
 - System Info: firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services.
 - Assistant: voice assistant surface, wake-listening controls, cloud transport status.
@@ -80,6 +81,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
 - WiFi credentials are stored in NVS by `WiFiConfig`; auto-connect starts after PhoneSystem is up so UI boot is not blocked.
+- MotionService exposes a stable app-facing motion API. The BigSmart QMI8658 adapter samples over the shared Board Manager I2C peripheral in a background task so apps never perform I2C work in the LVGL thread.
 
 ## Related Docs
 

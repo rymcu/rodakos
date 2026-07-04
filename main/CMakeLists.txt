@@ -6,6 +6,7 @@ set(SOURCES
     "rodakos_adapters/board_device_adapter.cc"
     "rodakos_adapters/backlight_adapter.cc"
     "rodakos_adapters/camera_device.cc"
+    "rodakos_adapters/qmi8658_motion_sensor.cc"
     "rodakos_adapters/wifi_adapter.cc"
     "rodakos_adapters/wifi_config.cc"
     "rodakos_adapters/file_service.cc"
@@ -18,6 +19,7 @@ set(SOURCES
     "phone_os/audio_service.cc"
     "phone_os/music_player_service.cc"
     "phone_os/light_service.cc"
+    "phone_os/motion_service.cc"
     "phone_os/button_binding_service.cc"
     "phone_os/camera_service.cc"
     "phone_os/time_service.cc"
@@ -53,6 +55,7 @@ set(SOURCES
     "apps/camera/camera_app.cc"
     "apps/clock/clock_app.cc"
     "apps/file_manager/file_manager_app.cc"
+    "apps/gyro/gyro_app.cc"
     "apps/music/music_app.cc"
     "apps/assistant/assistant_app.cc"
     "apps/system_info/system_info_app.cc"
@@ -73,6 +76,7 @@ idf_component_register(
         lwip
         json
         esp_board_manager
+        esp_driver_i2c
         espressif__esp_websocket_client
         espressif__esp_codec_dev
         chmorgan__esp-libhelix-mp3

@@ -8,8 +8,8 @@ Last refreshed: 2026-07-02.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 5.4+ (current local config uses GCC on ESP-IDF 5.5.4), LVGL 9.3, `esp_lvgl_port` 2.6, local Board Manager and BigSmart board components.
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback scaffolding, camera service, and core Phone OS navigation are integrated.
-- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, File Manager, System Info, Music, Assistant, and Smart.
+- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback scaffolding, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated.
+- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Assistant, and Smart.
 - Current built artifact seen in `build/rodakos.bin`: about 3.7MB, fitting inside the 8MB factory partition.
 
 ## Build
