@@ -42,6 +42,7 @@ private:
     void NavigateBack();
     void NavigateHome();
     void RefreshDirectory();
+    void ReleaseCurrentImage();
 
     std::string ParentPath() const;
     std::string DisplayPath() const;

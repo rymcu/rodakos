@@ -146,6 +146,7 @@ void FileManagerApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            ReleaseCurrentImage();
             if (root_ != nullptr && lv_obj_is_valid(root_)) {
                 lv_obj_delete(root_);
             }
@@ -167,6 +168,21 @@ void FileManagerApp::OnDestroy() {
     context_ = nullptr;
     ui_ = nullptr;
     file_service_ = nullptr;
+}
+
+void FileManagerApp::ReleaseCurrentImage() {
+    if (current_image_ == nullptr) {
+        return;
+    }
+
+    const void* source = current_image_->GetImageSource();
+    if (preview_image_ != nullptr && lv_obj_is_valid(preview_image_)) {
+        lv_image_set_src(preview_image_, nullptr);
+    }
+    if (source != nullptr) {
+        lv_image_cache_drop(source);
+    }
+    current_image_.reset();
 }
 
 void FileManagerApp::CreateUi() {
@@ -232,7 +248,7 @@ void FileManagerApp::RebuildList() {
     }
 
     lv_obj_clean(list_container_);
-    current_image_.reset();
+    ReleaseCurrentImage();
     view_mode_ = ViewMode::kList;
 
     if (preview_body_ != nullptr) {
@@ -394,6 +410,7 @@ void FileManagerApp::ShowImagePreview(const rodakos::FileEntry& entry) {
     }
 
     view_mode_ = ViewMode::kPreview;
+    ReleaseCurrentImage();
     current_image_ = rodakos::ImageLibrary::LoadImageForDisplay(entry.path);
     if (current_image_ == nullptr) {
         lv_image_set_src(preview_image_, nullptr);
@@ -405,8 +422,7 @@ void FileManagerApp::ShowImagePreview(const rodakos::FileEntry& entry) {
     const void* source = current_image_->GetImageSource();
     lv_image_header_t header = {};
     if (lv_image_decoder_get_info(source, &header) != LV_RESULT_OK || header.w == 0 || header.h == 0) {
-        current_image_.reset();
-        lv_image_set_src(preview_image_, nullptr);
+        ReleaseCurrentImage();
         lv_label_set_text(preview_title_label_, "Unsupported image");
         ui_->ShowToastUnlocked("Unsupported image");
         return;
@@ -439,7 +455,7 @@ void FileManagerApp::ShowFileInfo(const rodakos::FileEntry& entry) {
     if (preview_body_ != nullptr) {
         lv_obj_add_flag(preview_body_, LV_OBJ_FLAG_HIDDEN);
     }
-    current_image_.reset();
+    ReleaseCurrentImage();
 
     if (info_body_ == nullptr) {
         info_body_ = lv_obj_create(root_);

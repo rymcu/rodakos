@@ -267,13 +267,15 @@ std::shared_ptr<LvglImage> DecodeJpegScaled(const std::string& path,
         return nullptr;
     }
 
-    ESP_LOGI(TAG, "Decoded JPEG %s: %s (%ux%u, stride=%u, %u bytes)",
-             log_label,
-             path.c_str(),
-             static_cast<unsigned>(decoded_width),
-             static_cast<unsigned>(decoded_height),
-             static_cast<unsigned>(decoded_stride),
-             static_cast<unsigned>(decoded_len));
+    const bool is_thumbnail = std::strcmp(log_label, "thumbnail") == 0;
+    ESP_LOG_LEVEL(is_thumbnail ? ESP_LOG_DEBUG : ESP_LOG_INFO, TAG,
+                  "Decoded JPEG %s: %s (%ux%u, stride=%u, %u bytes)",
+                  log_label,
+                  path.c_str(),
+                  static_cast<unsigned>(decoded_width),
+                  static_cast<unsigned>(decoded_height),
+                  static_cast<unsigned>(decoded_stride),
+                  static_cast<unsigned>(decoded_len));
     try {
         return std::make_shared<LvglAllocatedImage>(
             decoded, decoded_len, static_cast<int>(decoded_width), static_cast<int>(decoded_height),

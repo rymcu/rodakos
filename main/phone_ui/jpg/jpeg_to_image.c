@@ -139,7 +139,7 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
     if (config.scale.width != 0 && config.scale.height != 0) {
         jpeg_dec_close(jpeg_dec);
         jpeg_dec = NULL;
-        ESP_LOGI(TAG, "Scale JPEG from %dx%d to %dx%d", original_info.width, original_info.height, config.scale.width,
+        ESP_LOGD(TAG, "Scale JPEG from %dx%d to %dx%d", original_info.width, original_info.height, config.scale.width,
                  config.scale.height);
         jpeg_ret = jpeg_dec_open(&config, &jpeg_dec);
         if (jpeg_ret != JPEG_ERR_OK) {
