@@ -2,6 +2,7 @@
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include "rodakos_adapters/file_service.h"
+#include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/audio_focus_service.h"
@@ -9,6 +10,7 @@
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
 #include "phone_os/light_service.h"
+#include "phone_os/motion_service.h"
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
@@ -356,6 +358,8 @@ extern "C" void app_main(void) {
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::LightService light_service;
     light_service.Init();
+    static rodakos::Qmi8658MotionSensor qmi8658_motion_sensor;
+    static rodakos::MotionService motion_service(&qmi8658_motion_sensor);
     static rodakos::ButtonBindingService button_binding_service;
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
@@ -383,6 +387,7 @@ extern "C" void app_main(void) {
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
     services.SetLights(&light_service);
+    services.SetMotion(&motion_service);
     services.SetButtons(&button_binding_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
