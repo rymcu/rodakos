@@ -4,9 +4,19 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 class PhoneAppContext;
 class PhoneAppRegistry;
+
+struct PhoneAppHostState {
+    std::string current_app_id;
+    std::string background_app_id;
+    PhoneCapability current_capabilities = PhoneCapability::kNone;
+    PhoneCapability background_capabilities = PhoneCapability::kNone;
+    bool has_current = false;
+    bool has_background = false;
+};
 
 class PhoneAppHost {
 public:
@@ -16,6 +26,7 @@ public:
     void CloseCurrent();
     PhoneApp* current_app() { return current_.get(); }
     const std::string& current_app_id() const { return current_app_id_; }
+    PhoneAppHostState GetState() const;
 
 private:
     bool RefreshThemeIfNeeded(PhoneApp& app, PhoneAppContext& context, uint32_t& app_theme_revision);

@@ -26,6 +26,7 @@ public:
     PhoneNavigation& navigation() { return navigation_; }
     PhoneUi& ui() { return ui_; }
     Settings& settings() { return settings_; }
+    PhoneAppHostState GetAppHostState() const { return host_.GetState(); }
 
 private:
     PhoneUi& ui_;
