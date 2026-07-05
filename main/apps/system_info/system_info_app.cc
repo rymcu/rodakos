@@ -33,7 +33,6 @@
 #include <cstdio>
 #include <memory>
 #include <string>
-#include <string_view>
 
 namespace {
 constexpr const char* TAG = "SystemInfoApp";
@@ -482,7 +481,7 @@ void SystemInfoApp::RefreshRuntime() {
     const std::string current = host.has_current ? ShortAppLabel(host.current_app_id) : "none";
     const std::string background = host.has_background ? ShortAppLabel(host.background_app_id) : "none";
     lv_label_set_text_fmt(runtime_.value, "Current %s", current.c_str());
-    lv_label_set_text_fmt(runtime_.detail, "Background %s, cap 0x%02x/0x%02x",
+    lv_label_set_text_fmt(runtime_.detail, "Background %s, cap 0x%08x/0x%08x",
                           background.c_str(),
                           static_cast<unsigned>(CapabilityBits(host.current_capabilities)),
                           static_cast<unsigned>(CapabilityBits(host.background_capabilities)));
