@@ -13,3 +13,7 @@ bool PhoneNavigation::RefreshTheme() {
 bool PhoneNavigation::ReturnHome() {
     return system_.ReturnHome();
 }
+
+PhoneAppHostState PhoneNavigation::GetAppHostState() const {
+    return system_.GetAppHostState();
+}

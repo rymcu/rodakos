@@ -108,6 +108,17 @@ bool PhoneAppHost::RecreateCurrent(const PhoneAppDescriptor& descriptor, PhoneAp
     return Launch(descriptor, context);
 }
 
+PhoneAppHostState PhoneAppHost::GetState() const {
+    PhoneAppHostState state;
+    state.current_app_id = current_app_id_;
+    state.background_app_id = background_app_id_;
+    state.current_capabilities = current_capabilities_;
+    state.background_capabilities = background_capabilities_;
+    state.has_current = current_ != nullptr;
+    state.has_background = background_ != nullptr;
+    return state;
+}
+
 void PhoneAppHost::CloseCurrent() {
     CloseCurrent(false);
 }

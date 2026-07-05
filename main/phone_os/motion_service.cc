@@ -96,6 +96,16 @@ bool MotionService::ReadSample(MotionSample& sample) {
     return false;
 }
 
+MotionServiceState MotionService::GetState() const {
+    MotionServiceState state;
+    state.backend_configured = backend_ != nullptr;
+    state.active_clients = active_clients_;
+    state.active = backend_ != nullptr && active_clients_ > 0;
+    state.sensor_name = sensor_name();
+    state.last_error = last_error_;
+    return state;
+}
+
 const char* MotionService::sensor_name() const {
     if (backend_ == nullptr) {
         return "Not configured";

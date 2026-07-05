@@ -29,6 +29,14 @@ struct MotionSample {
     std::string message;
 };
 
+struct MotionServiceState {
+    bool backend_configured = false;
+    bool active = false;
+    uint32_t active_clients = 0;
+    std::string sensor_name;
+    std::string last_error;
+};
+
 class MotionSensorBackend {
 public:
     virtual ~MotionSensorBackend() = default;
@@ -48,6 +56,7 @@ public:
     void Stop();
     bool IsAvailable() const;
     bool ReadSample(MotionSample& sample);
+    MotionServiceState GetState() const;
     const char* sensor_name() const;
     const std::string& last_error() const { return last_error_; }
 

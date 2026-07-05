@@ -1,9 +1,19 @@
 #include "apps/system_info/system_info_app.h"
 
+#include "phone_os/audio_focus_service.h"
+#include "phone_os/audio_output_service.h"
+#include "phone_os/audio_service.h"
+#include "phone_os/button_binding_service.h"
+#include "phone_os/camera_service.h"
+#include "phone_os/motion_service.h"
+#include "phone_os/music_player_service.h"
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/voice_assistant_service.h"
+#include "phone_os/voice_wake_service.h"
+#include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_components.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
@@ -11,6 +21,8 @@
 #include "rodakos_adapters/wifi_adapter.h"
 
 #include <esp_app_desc.h>
+#include <esp_board_manager.h>
+#include <esp_board_manager_defs.h>
 #include <esp_chip_info.h>
 #include <esp_flash.h>
 #include <esp_heap_caps.h>
@@ -20,6 +32,8 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace {
 constexpr const char* TAG = "SystemInfoApp";
@@ -106,6 +120,83 @@ const char* WiFiStatusText(WiFiStatus status) {
     }
 }
 
+const char* AudioPlaybackStatusText(rodakos::AudioPlaybackStatus status) {
+    switch (status) {
+        case rodakos::AudioPlaybackStatus::kLoading:
+            return "Loading";
+        case rodakos::AudioPlaybackStatus::kPlaying:
+            return "Playing";
+        case rodakos::AudioPlaybackStatus::kPaused:
+            return "Paused";
+        case rodakos::AudioPlaybackStatus::kStopped:
+            return "Stopped";
+        case rodakos::AudioPlaybackStatus::kCompleted:
+            return "Completed";
+        case rodakos::AudioPlaybackStatus::kError:
+            return "Error";
+        case rodakos::AudioPlaybackStatus::kIdle:
+        default:
+            return "Idle";
+    }
+}
+
+const char* AudioFocusGainText(rodakos::AudioFocusGain gain) {
+    switch (gain) {
+        case rodakos::AudioFocusGain::kDuck:
+            return "duck";
+        case rodakos::AudioFocusGain::kPause:
+            return "pause";
+        case rodakos::AudioFocusGain::kExclusive:
+            return "exclusive";
+        default:
+            return "unknown";
+    }
+}
+
+const char* VoicePhaseText(rodakos::VoiceAssistantPhase phase) {
+    switch (phase) {
+        case rodakos::VoiceAssistantPhase::kConnecting:
+            return "Connecting";
+        case rodakos::VoiceAssistantPhase::kListening:
+            return "Listening";
+        case rodakos::VoiceAssistantPhase::kSpeaking:
+            return "Speaking";
+        case rodakos::VoiceAssistantPhase::kError:
+            return "Error";
+        case rodakos::VoiceAssistantPhase::kIdle:
+        default:
+            return "Idle";
+    }
+}
+
+const char* VoiceWakeStatusText(rodakos::VoiceWakeStatus status) {
+    switch (status) {
+        case rodakos::VoiceWakeStatus::kListening:
+            return "Listening";
+        case rodakos::VoiceWakeStatus::kAssistantActive:
+            return "Assistant";
+        case rodakos::VoiceWakeStatus::kUnavailable:
+            return "Unavailable";
+        case rodakos::VoiceWakeStatus::kError:
+            return "Error";
+        case rodakos::VoiceWakeStatus::kDisabled:
+        default:
+            return "Disabled";
+    }
+}
+
+std::string ShortAppLabel(const std::string& id) {
+    return id.empty() ? std::string("none") : id;
+}
+
+const char* YesNo(bool value) {
+    return value ? "yes" : "no";
+}
+
+uint32_t CapabilityBits(PhoneCapability capabilities) {
+    return static_cast<uint32_t>(capabilities);
+}
+
 }  // namespace
 
 SystemInfoApp::~SystemInfoApp() {
@@ -113,9 +204,7 @@ SystemInfoApp::~SystemInfoApp() {
 }
 
 bool SystemInfoApp::OnCreate(PhoneAppContext& context) {
-    context_ = &context;
-    ui_ = &context.ui();
-    file_service_ = context.services().file_service();
+    BindServices(context);
 
     ProbeStorage(true);
 
@@ -143,12 +232,20 @@ void SystemInfoApp::OnDestroy() {
     context_ = nullptr;
     ui_ = nullptr;
     file_service_ = nullptr;
+    audio_focus_service_ = nullptr;
+    audio_output_service_ = nullptr;
+    audio_service_ = nullptr;
+    button_service_ = nullptr;
+    camera_service_ = nullptr;
+    motion_service_ = nullptr;
+    music_player_service_ = nullptr;
+    voice_assistant_service_ = nullptr;
+    voice_wake_service_ = nullptr;
+    web_files_service_ = nullptr;
 }
 
 bool SystemInfoApp::OnThemeChanged(PhoneAppContext& context) {
-    context_ = &context;
-    ui_ = &context.ui();
-    file_service_ = context.services().file_service();
+    BindServices(context);
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -165,6 +262,23 @@ bool SystemInfoApp::OnThemeChanged(PhoneAppContext& context) {
     }
     refresh_timer_ = lv_timer_create(RefreshTimerCallback, 2000, this);
     return true;
+}
+
+void SystemInfoApp::BindServices(PhoneAppContext& context) {
+    context_ = &context;
+    ui_ = &context.ui();
+    auto& services = context.services();
+    file_service_ = services.file_service();
+    audio_focus_service_ = services.audio_focus();
+    audio_output_service_ = services.audio_output();
+    audio_service_ = services.audio();
+    button_service_ = services.buttons();
+    camera_service_ = services.camera();
+    motion_service_ = services.motion();
+    music_player_service_ = services.music_player();
+    voice_assistant_service_ = services.voice_assistant();
+    voice_wake_service_ = services.voice_wake();
+    web_files_service_ = services.web_files();
 }
 
 void SystemInfoApp::DestroyUi() {
@@ -188,6 +302,14 @@ void SystemInfoApp::ResetUiPointers() {
     firmware_ = {};
     chip_ = {};
     heap_detail_ = {};
+    runtime_ = {};
+    buses_ = {};
+    camera_ = {};
+    audio_ = {};
+    motion_ = {};
+    web_ = {};
+    voice_ = {};
+    buttons_ = {};
 }
 
 void SystemInfoApp::CreateUi() {
@@ -223,6 +345,14 @@ void SystemInfoApp::CreateUi() {
     firmware_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Firmware");
     chip_ = CreateInfoCard(body_, FONT_AWESOME_SIGNAL, "Hardware");
     heap_detail_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Largest block");
+    runtime_ = CreateInfoCard(body_, FONT_AWESOME_MICROCHIP_AI, "Runtime");
+    buses_ = CreateInfoCard(body_, FONT_AWESOME_LINK, "Buses");
+    camera_ = CreateInfoCard(body_, FONT_AWESOME_CAMERA, "Camera");
+    audio_ = CreateInfoCard(body_, FONT_AWESOME_VOLUME_HIGH, "Audio");
+    motion_ = CreateInfoCard(body_, FONT_AWESOME_COMPASS, "Motion");
+    web_ = CreateInfoCard(body_, FONT_AWESOME_CLOUD, "Web files");
+    voice_ = CreateInfoCard(body_, FONT_AWESOME_MICROPHONE, "Voice");
+    buttons_ = CreateInfoCard(body_, FONT_AWESOME_KEY, "Buttons");
 }
 
 SystemInfoApp::InfoLabels SystemInfoApp::CreateInfoCard(lv_obj_t* parent,
@@ -261,6 +391,16 @@ void SystemInfoApp::Refresh() {
         return;
     }
 
+    RefreshWiFi();
+    RefreshMemory();
+    RefreshStorage();
+    RefreshRuntime();
+    RefreshHardware();
+    RefreshVoice();
+    RefreshFirmware();
+}
+
+void SystemInfoApp::RefreshWiFi() {
     auto* wifi = context_->services().wifi();
     if (wifi == nullptr) {
         lv_label_set_text(wifi_.value, "Unavailable");
@@ -277,7 +417,9 @@ void SystemInfoApp::Refresh() {
             lv_label_set_text(wifi_.detail, "No active IP address");
         }
     }
+}
 
+void SystemInfoApp::RefreshMemory() {
     const size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -311,8 +453,12 @@ void SystemInfoApp::Refresh() {
     std::snprintf(detail_text, sizeof(detail_text), "PSRAM block %s; chip 8 MB", psram_largest_text);
     lv_label_set_text(heap_detail_.value, value_text);
     lv_label_set_text(heap_detail_.detail, detail_text);
+}
 
+void SystemInfoApp::RefreshStorage() {
     ProbeStorage(false);
+    char value_text[80] = {};
+    char detail_text[96] = {};
     if (storage_mounted_) {
         char storage_free_text[24] = {};
         char storage_total_text[24] = {};
@@ -329,7 +475,119 @@ void SystemInfoApp::Refresh() {
         lv_label_set_text(storage_.value, "Unavailable");
         lv_label_set_text(storage_.detail, "File service not ready");
     }
+}
 
+void SystemInfoApp::RefreshRuntime() {
+    const auto host = context_->navigation().GetAppHostState();
+    const std::string current = host.has_current ? ShortAppLabel(host.current_app_id) : "none";
+    const std::string background = host.has_background ? ShortAppLabel(host.background_app_id) : "none";
+    lv_label_set_text_fmt(runtime_.value, "Current %s", current.c_str());
+    lv_label_set_text_fmt(runtime_.detail, "Background %s, cap 0x%02x/0x%02x",
+                          background.c_str(),
+                          static_cast<unsigned>(CapabilityBits(host.current_capabilities)),
+                          static_cast<unsigned>(CapabilityBits(host.background_capabilities)));
+}
+
+void SystemInfoApp::RefreshHardware() {
+    const bool has_i2c_config = esp_board_manager_check_name(ESP_BOARD_PERIPH_NAME_I2C_MASTER);
+    lv_label_set_text_fmt(buses_.value, "I2C %s", has_i2c_config ? "declared" : "missing");
+    lv_label_set_text_fmt(buses_.detail, "SD %s, diagnostics read-only",
+                          storage_mounted_ ? "mounted" : "not mounted");
+
+    if (camera_service_ == nullptr) {
+        lv_label_set_text(camera_.value, "Unavailable");
+        lv_label_set_text(camera_.detail, "Camera service not ready");
+    } else {
+        const auto state = camera_service_->GetState();
+        lv_label_set_text_fmt(camera_.value, "%s%s",
+                              state.available ? "Configured" : "Unavailable",
+                              state.preview_running ? ", preview" : "");
+        lv_label_set_text_fmt(camera_.detail, "%ux%u frames=%u %s",
+                              static_cast<unsigned>(state.width),
+                              static_cast<unsigned>(state.height),
+                              static_cast<unsigned>(state.frame_count),
+                              state.last_error.empty() ? "" : state.last_error.c_str());
+    }
+
+    const auto audio_state =
+        audio_service_ != nullptr ? audio_service_->GetState() : rodakos::AudioPlaybackState{};
+    const auto focus_state = audio_focus_service_ != nullptr ? audio_focus_service_->GetState()
+                                                             : rodakos::AudioFocusState{};
+    lv_label_set_text_fmt(audio_.value, "%s, out %s",
+                          audio_service_ != nullptr ? AudioPlaybackStatusText(audio_state.status)
+                                                    : "Unavailable",
+                          audio_output_service_ != nullptr && audio_output_service_->IsOpen() ? "open"
+                                                                                               : "closed");
+    if (focus_state.active) {
+        lv_label_set_text_fmt(audio_.detail, "focus %s:%s vol=%d",
+                              focus_state.owner.c_str(),
+                              AudioFocusGainText(focus_state.gain),
+                              audio_state.volume);
+    } else {
+        lv_label_set_text_fmt(audio_.detail, "focus none, tracks %u, vol=%d",
+                              static_cast<unsigned>(music_player_service_ != nullptr
+                                                        ? music_player_service_->track_count()
+                                                        : 0),
+                              audio_state.volume);
+    }
+
+    if (motion_service_ == nullptr) {
+        lv_label_set_text(motion_.value, "Unavailable");
+        lv_label_set_text(motion_.detail, "Motion service not ready");
+    } else {
+        const auto state = motion_service_->GetState();
+        lv_label_set_text_fmt(motion_.value, "%s %s",
+                              state.sensor_name.c_str(),
+                              state.active ? "active" : "idle");
+        lv_label_set_text_fmt(motion_.detail, "clients=%u %s",
+                              static_cast<unsigned>(state.active_clients),
+                              state.last_error.empty() ? "" : state.last_error.c_str());
+    }
+
+    if (button_service_ == nullptr) {
+        lv_label_set_text(buttons_.value, "Unavailable");
+        lv_label_set_text(buttons_.detail, "Button service not ready");
+    } else {
+        const auto& buttons = button_service_->ListButtons();
+        lv_label_set_text_fmt(buttons_.value, "%u board buttons",
+                              static_cast<unsigned>(buttons.size()));
+        if (buttons.empty()) {
+            lv_label_set_text(buttons_.detail, "No board buttons discovered");
+        } else {
+            lv_label_set_text_fmt(buttons_.detail, "%s=%s",
+                                  buttons[0].id.c_str(),
+                                  YesNo(buttons[0].available));
+        }
+    }
+}
+
+void SystemInfoApp::RefreshVoice() {
+    if (web_files_service_ == nullptr) {
+        lv_label_set_text(web_.value, "Unavailable");
+        lv_label_set_text(web_.detail, "Web file service not ready");
+    } else {
+        const auto state = web_files_service_->GetState();
+        lv_label_set_text(web_.value, state.running ? "Running" : "Stopped");
+        lv_label_set_text_fmt(web_.detail, "%s %s",
+                              state.busy ? "busy" : "idle",
+                              state.url.empty() ? state.message.c_str() : state.url.c_str());
+    }
+
+    const auto assistant_state = voice_assistant_service_ != nullptr
+                                     ? voice_assistant_service_->GetState()
+                                     : rodakos::VoiceAssistantState{};
+    const auto wake_state = voice_wake_service_ != nullptr
+                                ? voice_wake_service_->GetState()
+                                : rodakos::VoiceWakeState{};
+    lv_label_set_text_fmt(voice_.value, "Assistant %s", VoicePhaseText(assistant_state.phase));
+    lv_label_set_text_fmt(voice_.detail, "wake %s, rec %s, tx %s",
+                          VoiceWakeStatusText(wake_state.status),
+                          assistant_state.recorder_name.empty() ? "n/a" : assistant_state.recorder_name.c_str(),
+                          assistant_state.transport_name.empty() ? "n/a" : assistant_state.transport_name.c_str());
+}
+
+void SystemInfoApp::RefreshFirmware() {
+    char value_text[80] = {};
     const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time() / 1000000LL);
     FormatDuration(uptime_seconds, value_text, sizeof(value_text));
     lv_label_set_text(uptime_.value, value_text);
