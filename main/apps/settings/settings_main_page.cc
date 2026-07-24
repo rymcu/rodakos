@@ -199,8 +199,28 @@ void SettingsApp::CreateMainPage() {
         self->ShowPage(SettingsPage::kDateTime);
     }, LV_EVENT_CLICKED, this);
 
+    // ===== 系统壳入口 =====
+    auto* shell_card = CreateSettingCard(main_body_, 316);
+    lv_obj_add_flag(shell_card, LV_OBJ_FLAG_CLICKABLE);
+
+    CreateSettingIcon(shell_card, FONT_AWESOME_LOCK);
+
+    auto* shell_title = CreateSettingLabel(shell_card, "System Shell");
+    lv_obj_align(shell_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* shell_arrow = lv_label_create(shell_card);
+    lv_label_set_text(shell_arrow, ">");
+    lv_obj_set_style_text_color(shell_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(shell_arrow, &phone_font_18, 0);
+    lv_obj_align(shell_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(shell_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kSystemShell);
+    }, LV_EVENT_CLICKED, this);
+
     // ===== 按键绑定入口 =====
-    auto* buttons_card = CreateSettingCard(main_body_, 316);
+    auto* buttons_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(buttons_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(buttons_card, FONT_AWESOME_KEY);
@@ -220,7 +240,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== 设备服务入口 =====
-    auto* cloud_card = CreateSettingCard(main_body_, 374);
+    auto* cloud_card = CreateSettingCard(main_body_, 432);
     lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
@@ -240,7 +260,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== Web 上传入口 =====
-    auto* upload_card = CreateSettingCard(main_body_, 432);
+    auto* upload_card = CreateSettingCard(main_body_, 490);
     lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(upload_card, FONT_AWESOME_CLOUD);
@@ -260,7 +280,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== USB 磁盘模式入口 =====
-    auto* usb_card = CreateSettingCard(main_body_, 490);
+    auto* usb_card = CreateSettingCard(main_body_, 548);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(usb_card, FONT_AWESOME_SD_CARD);

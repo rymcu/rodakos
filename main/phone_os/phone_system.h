@@ -5,6 +5,7 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/phone_shell.h"
 
 #include "settings.h"
 
@@ -21,6 +22,13 @@ public:
     bool LaunchApp(std::string_view app_id);
     bool RefreshTheme();
     bool ReturnHome();
+    bool Lock();
+    bool ToggleControlCenter();
+    PhoneShellPreferences GetShellPreferences() const { return shell_.preferences(); }
+    bool SetLockOnBoot(bool enabled) { return shell_.SetLockOnBoot(enabled); }
+    bool SetControlCenterGestureEnabled(bool enabled) {
+        return shell_.SetControlCenterGestureEnabled(enabled);
+    }
 
     PhoneAppRegistry& registry() { return registry_; }
     PhoneNavigation& navigation() { return navigation_; }
@@ -34,6 +42,7 @@ private:
     PhoneAppHost host_;
     PhoneNavigation navigation_;
     PhoneServices& services_;
+    PhoneShell shell_;
     Settings settings_;
     PhoneAppContext context_;
 };

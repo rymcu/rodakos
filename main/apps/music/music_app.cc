@@ -84,10 +84,6 @@ std::string FormatTrackSize(size_t bytes) {
 
 }  // namespace
 
-MusicApp::~MusicApp() {
-    OnDestroy();
-}
-
 bool MusicApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -112,7 +108,7 @@ bool MusicApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
-void MusicApp::OnShow() {
+void MusicApp::OnResume() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -123,7 +119,7 @@ void MusicApp::OnShow() {
     }
 }
 
-void MusicApp::OnHide() {
+void MusicApp::OnPause() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -711,8 +707,7 @@ void RegisterMusicApp(PhoneAppRegistry& registry) {
     descriptor.icon = FONT_AWESOME_MUSIC;
     descriptor.category = PhoneAppCategory::kMedia;
     descriptor.capabilities = PhoneCapability::kStorage |
-                              PhoneCapability::kAudioPlayback |
-                              PhoneCapability::kBackgroundTick;
+                              PhoneCapability::kAudioPlayback;
     descriptor.create = []() -> std::unique_ptr<PhoneApp> {
         return std::make_unique<MusicApp>();
     };

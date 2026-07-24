@@ -113,10 +113,6 @@ lv_color_t EntryBadgeColor(const rodakos::FileEntry& entry) {
 
 }  // namespace
 
-FileManagerApp::~FileManagerApp() {
-    OnDestroy();
-}
-
 bool FileManagerApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -545,7 +541,6 @@ void RegisterFileManagerApp(PhoneAppRegistry& registry) {
         .title = "Files",
         .icon = FONT_AWESOME_SD_CARD,
         .category = PhoneAppCategory::kTools,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kStorage,
         .show_on_home = true,
         .aliases = {"file", "files", "manager", "sd", "文件", "文件管理"},

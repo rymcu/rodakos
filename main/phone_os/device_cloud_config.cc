@@ -30,6 +30,7 @@ constexpr const char* kCloudNamespace = "device_cloud";
 constexpr const char* kLegacyVoiceNamespace = "voice_cloud";
 constexpr const char* kLegacyXiaozhiNamespace = "xiaozhi";
 constexpr const char* kWebsocketNamespace = "websocket";
+constexpr const char* kMqttNamespace = "unified_mqtt";
 constexpr const char* kBoardNamespace = "board";
 constexpr const char* kProvisioningUrlKey = "prov_url";
 constexpr const char* kLegacyOtaUrlKey = "ota_url";
@@ -37,7 +38,25 @@ constexpr const char* kUrlKey = "url";
 constexpr const char* kTokenKey = "token";
 constexpr const char* kVersionKey = "version";
 constexpr const char* kUuidKey = "uuid";
+constexpr const char* kMqttProtocolVersionKey = "protocol_ver";
+constexpr const char* kMqttBrokerAddressKey = "broker_address";
+constexpr const char* kMqttBrokerPortKey = "broker_port";
+constexpr const char* kMqttUsernameKey = "username";
+constexpr const char* kMqttPasswordKey = "password";
+constexpr const char* kMqttKeepaliveKey = "keepalive";
+constexpr const char* kMqttDeviceKey = "device_key";
+constexpr const char* kMqttHomeEnabledKey = "home_enabled";
+constexpr const char* kMqttHttpBaseUrlKey = "http_base_url";
+constexpr const char* kMqttTelemetryTopicKey = "telemetry";
+constexpr const char* kMqttShadowReportTopicKey = "shadow_report";
+constexpr const char* kMqttShadowDesiredTopicKey = "shadow_desired";
+constexpr const char* kMqttOtaNotifyTopicKey = "ota_notify";
+constexpr const char* kMqttOtaProgressTopicKey = "ota_progress";
+constexpr const char* kMqttPcStatusTopicKey = "pc_status";
+constexpr const char* kMqttHomePrefixTopicKey = "home_prefix";
 constexpr const char* kDefaultProvisioningUrl = "https://api.tenclass.net/xiaozhi/ota/";
+constexpr int kDefaultMqttBrokerPort = 1883;
+constexpr int kDefaultMqttKeepalive = 240;
 constexpr int kProvisioningTimeoutMs = 10000;
 constexpr size_t kMaxProvisioningResponseBytes = 8192;
 
@@ -90,6 +109,77 @@ void AddIntIfPresent(cJSON* root, const char* key, int& output) {
     }
 }
 
+void AddBoolIfPresent(cJSON* root, const char* key, bool& output) {
+    cJSON* item = cJSON_GetObjectItem(root, key);
+    if (cJSON_IsBool(item)) {
+        output = cJSON_IsTrue(item);
+    } else if (cJSON_IsNumber(item)) {
+        output = item->valueint != 0;
+    }
+}
+
+void ResetMqttConfig(DeviceCloudConfig& config) {
+    config.mqtt_protocol_version = 1;
+    config.mqtt_broker_address.clear();
+    config.mqtt_broker_port = kDefaultMqttBrokerPort;
+    config.mqtt_username.clear();
+    config.mqtt_password.clear();
+    config.mqtt_keepalive = kDefaultMqttKeepalive;
+    config.mqtt_device_key.clear();
+    config.mqtt_home_enabled = false;
+    config.mqtt_http_base_url.clear();
+    config.mqtt_topic_telemetry.clear();
+    config.mqtt_topic_shadow_report.clear();
+    config.mqtt_topic_shadow_desired.clear();
+    config.mqtt_topic_ota_notify.clear();
+    config.mqtt_topic_ota_progress.clear();
+    config.mqtt_topic_pc_status.clear();
+    config.mqtt_topic_home_prefix.clear();
+    config.has_mqtt_config = false;
+}
+
+void FillMqttTopicFallbacks(DeviceCloudConfig& config) {
+    if (config.mqtt_device_key.empty()) {
+        return;
+    }
+    const std::string prefix = "devices/" + config.mqtt_device_key;
+    if (config.mqtt_topic_telemetry.empty()) {
+        config.mqtt_topic_telemetry = prefix + "/telemetry";
+    }
+    if (config.mqtt_topic_shadow_report.empty()) {
+        config.mqtt_topic_shadow_report = prefix + "/shadow/report";
+    }
+    if (config.mqtt_topic_shadow_desired.empty()) {
+        config.mqtt_topic_shadow_desired = prefix + "/shadow/desired";
+    }
+    if (config.mqtt_topic_ota_notify.empty()) {
+        config.mqtt_topic_ota_notify = prefix + "/ota/notify";
+    }
+    if (config.mqtt_topic_ota_progress.empty()) {
+        config.mqtt_topic_ota_progress = prefix + "/ota/progress";
+    }
+    if (config.mqtt_topic_pc_status.empty()) {
+        config.mqtt_topic_pc_status = prefix + "/pc_status";
+    }
+}
+
+void FinalizeMqttConfig(DeviceCloudConfig& config) {
+    if (config.mqtt_protocol_version <= 0) {
+        config.mqtt_protocol_version = 1;
+    }
+    if (config.mqtt_broker_port <= 0 || config.mqtt_broker_port > 65535) {
+        config.mqtt_broker_port = kDefaultMqttBrokerPort;
+    }
+    if (config.mqtt_keepalive <= 0) {
+        config.mqtt_keepalive = kDefaultMqttKeepalive;
+    }
+    FillMqttTopicFallbacks(config);
+    config.has_mqtt_config = !config.mqtt_broker_address.empty() &&
+                             !config.mqtt_username.empty() &&
+                             !config.mqtt_password.empty() &&
+                             !config.mqtt_device_key.empty();
+}
+
 }  // namespace
 
 const char* DeviceCloudConfigService::DefaultProvisioningUrl() {
@@ -97,6 +187,7 @@ const char* DeviceCloudConfigService::DefaultProvisioningUrl() {
 }
 
 bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     Settings cloud_settings(kCloudNamespace, false);
     config.provisioning_url = cloud_settings.GetString(kProvisioningUrlKey, "");
     bool should_migrate_provisioning_url = false;
@@ -129,11 +220,37 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
         config.websocket_version = 1;
     }
     config.has_websocket_config = !config.websocket_url.empty();
+
+    ResetMqttConfig(config);
+    Settings mqtt_settings(kMqttNamespace, false);
+    config.mqtt_protocol_version = mqtt_settings.GetInt(kMqttProtocolVersionKey, 1);
+    config.mqtt_broker_address = mqtt_settings.GetString(kMqttBrokerAddressKey, "");
+    config.mqtt_broker_port = mqtt_settings.GetInt(kMqttBrokerPortKey, kDefaultMqttBrokerPort);
+    config.mqtt_username = mqtt_settings.GetString(kMqttUsernameKey, "");
+    config.mqtt_password = mqtt_settings.GetString(kMqttPasswordKey, "");
+    config.mqtt_keepalive = mqtt_settings.GetInt(kMqttKeepaliveKey, kDefaultMqttKeepalive);
+    config.mqtt_device_key = mqtt_settings.GetString(kMqttDeviceKey, "");
+    config.mqtt_home_enabled = mqtt_settings.GetBool(kMqttHomeEnabledKey, false);
+    config.mqtt_http_base_url = mqtt_settings.GetString(kMqttHttpBaseUrlKey, "");
+    config.mqtt_topic_telemetry = mqtt_settings.GetString(kMqttTelemetryTopicKey, "");
+    config.mqtt_topic_shadow_report = mqtt_settings.GetString(kMqttShadowReportTopicKey, "");
+    config.mqtt_topic_shadow_desired = mqtt_settings.GetString(kMqttShadowDesiredTopicKey, "");
+    config.mqtt_topic_ota_notify = mqtt_settings.GetString(kMqttOtaNotifyTopicKey, "");
+    config.mqtt_topic_ota_progress = mqtt_settings.GetString(kMqttOtaProgressTopicKey, "");
+    config.mqtt_topic_pc_status = mqtt_settings.GetString(kMqttPcStatusTopicKey, "");
+    config.mqtt_topic_home_prefix = mqtt_settings.GetString(kMqttHomePrefixTopicKey, "");
+    FinalizeMqttConfig(config);
     return config.has_websocket_config;
 }
 
 bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
-    Load(config);
+    std::lock_guard<std::mutex> refresh_lock(refresh_mutex_);
+    uint32_t config_generation = 0;
+    {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        Load(config);
+        config_generation = config_generation_;
+    }
     if (config.provisioning_url.empty()) {
         config.provisioning_url = kDefaultProvisioningUrl;
     }
@@ -209,25 +326,47 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     response[std::min(static_cast<size_t>(read_len), kMaxProvisioningResponseBytes)] = '\0';
 
     if (!ParseProvisioningResponse(std::string(response.data(), read_len), config)) {
-        ClearWebsocketConfig();
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        if (config_generation == config_generation_) {
+            ClearWebsocketConfig();
+            ClearMqttConfig();
+        }
         return false;
     }
-
-    if (config.has_websocket_config) {
-        SaveWebsocketConfig(config);
+    {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        if (config_generation != config_generation_) {
+            last_error_ = "Provisioning endpoint changed while refresh was in progress";
+            return false;
+        }
+        if (config.has_websocket_config) {
+            SaveWebsocketConfig(config);
+        }
+        if (config.has_mqtt_config) {
+            SaveMqttConfig(config);
+        } else {
+            ClearMqttConfig();
+        }
     }
     return config.has_websocket_config;
 }
 
 bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     Settings settings(kCloudNamespace, true);
     settings.SetString(kProvisioningUrlKey, url.empty() ? kDefaultProvisioningUrl : url);
+    ++config_generation_;
     ClearWebsocketConfig();
-    last_error_.clear();
+    ClearMqttConfig();
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        last_error_.clear();
+    }
     return true;
 }
 
 std::string DeviceCloudConfigService::GetClientId() {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     Settings settings(kBoardNamespace, true);
     std::string uuid = settings.GetString(kUuidKey, "");
     if (uuid.empty()) {
@@ -235,6 +374,11 @@ std::string DeviceCloudConfigService::GetClientId() {
         settings.SetString(kUuidKey, uuid);
     }
     return uuid;
+}
+
+std::string DeviceCloudConfigService::last_error() const {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+    return last_error_;
 }
 
 bool DeviceCloudConfigService::SaveWebsocketConfig(const DeviceCloudConfig& config) {
@@ -245,11 +389,38 @@ bool DeviceCloudConfigService::SaveWebsocketConfig(const DeviceCloudConfig& conf
     return true;
 }
 
+bool DeviceCloudConfigService::SaveMqttConfig(const DeviceCloudConfig& config) {
+    Settings settings(kMqttNamespace, true);
+    settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version);
+    settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address);
+    settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port);
+    settings.SetString(kMqttUsernameKey, config.mqtt_username);
+    settings.SetString(kMqttPasswordKey, config.mqtt_password);
+    settings.SetInt(kMqttKeepaliveKey, config.mqtt_keepalive);
+    settings.SetString(kMqttDeviceKey, config.mqtt_device_key);
+    settings.SetBool(kMqttHomeEnabledKey, config.mqtt_home_enabled);
+    settings.SetString(kMqttHttpBaseUrlKey, config.mqtt_http_base_url);
+    settings.SetString(kMqttTelemetryTopicKey, config.mqtt_topic_telemetry);
+    settings.SetString(kMqttShadowReportTopicKey, config.mqtt_topic_shadow_report);
+    settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired);
+    settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify);
+    settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress);
+    settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
+    settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
+    return true;
+}
+
 void DeviceCloudConfigService::ClearWebsocketConfig() {
     Settings settings(kWebsocketNamespace, true);
     settings.SetString(kUrlKey, "");
     settings.SetString(kTokenKey, "");
     settings.SetInt(kVersionKey, 1);
+}
+
+void DeviceCloudConfigService::ClearMqttConfig() {
+    DeviceCloudConfig config;
+    ResetMqttConfig(config);
+    SaveMqttConfig(config);
 }
 
 bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& response,
@@ -266,6 +437,7 @@ bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& resp
     config.activation_code.clear();
     config.activation_message.clear();
     config.has_websocket_config = false;
+    ResetMqttConfig(config);
     config.has_activation_code = false;
 
     cJSON* websocket = cJSON_GetObjectItem(root, "websocket");
@@ -274,6 +446,31 @@ bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& resp
         AddStringIfPresent(websocket, kTokenKey, config.websocket_token);
         AddIntIfPresent(websocket, kVersionKey, config.websocket_version);
         config.has_websocket_config = !config.websocket_url.empty();
+    }
+
+    cJSON* unified_mqtt = cJSON_GetObjectItem(root, "unifiedMqtt");
+    if (cJSON_IsObject(unified_mqtt)) {
+        AddIntIfPresent(unified_mqtt, "protocol_version", config.mqtt_protocol_version);
+        AddStringIfPresent(unified_mqtt, "broker_address", config.mqtt_broker_address);
+        AddIntIfPresent(unified_mqtt, "broker_port", config.mqtt_broker_port);
+        AddStringIfPresent(unified_mqtt, "username", config.mqtt_username);
+        AddStringIfPresent(unified_mqtt, "password", config.mqtt_password);
+        AddIntIfPresent(unified_mqtt, "keepalive", config.mqtt_keepalive);
+        AddStringIfPresent(unified_mqtt, "device_key", config.mqtt_device_key);
+        AddBoolIfPresent(unified_mqtt, "home_enabled", config.mqtt_home_enabled);
+        AddStringIfPresent(unified_mqtt, "http_base_url", config.mqtt_http_base_url);
+
+        cJSON* topics = cJSON_GetObjectItem(unified_mqtt, "topics");
+        if (cJSON_IsObject(topics)) {
+            AddStringIfPresent(topics, "telemetry", config.mqtt_topic_telemetry);
+            AddStringIfPresent(topics, "shadow_report", config.mqtt_topic_shadow_report);
+            AddStringIfPresent(topics, "shadow_desired", config.mqtt_topic_shadow_desired);
+            AddStringIfPresent(topics, "ota_notify", config.mqtt_topic_ota_notify);
+            AddStringIfPresent(topics, "ota_progress", config.mqtt_topic_ota_progress);
+            AddStringIfPresent(topics, "pc_status", config.mqtt_topic_pc_status);
+            AddStringIfPresent(topics, "home_prefix", config.mqtt_topic_home_prefix);
+        }
+        FinalizeMqttConfig(config);
     }
 
     cJSON* activation = cJSON_GetObjectItem(root, "activation");
@@ -291,9 +488,17 @@ bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& resp
     if (config.websocket_version <= 0) {
         config.websocket_version = 1;
     }
-    last_error_.clear();
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        last_error_.clear();
+    }
     ESP_LOGI(TAG, "Device cloud websocket config ready: version=%d url=%s",
              config.websocket_version, config.websocket_url.c_str());
+    if (config.has_mqtt_config) {
+        ESP_LOGI(TAG, "Device cloud MQTT config ready: protocol=%d broker=%s:%d",
+                 config.mqtt_protocol_version, config.mqtt_broker_address.c_str(),
+                 config.mqtt_broker_port);
+    }
     return true;
 }
 
@@ -350,6 +555,7 @@ std::string DeviceCloudConfigService::BuildBoardJson() {
 }
 
 void DeviceCloudConfigService::SetError(const std::string& message) {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     last_error_ = message;
     ESP_LOGW(TAG, "%s", last_error_.c_str());
 }

@@ -83,10 +83,6 @@ lv_color_t ToLvColor(rodakos::RgbColor color) {
 
 }  // namespace
 
-SmartApp::~SmartApp() {
-    OnDestroy();
-}
-
 bool SmartApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -108,7 +104,7 @@ bool SmartApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
-void SmartApp::OnShow() {
+void SmartApp::OnResume() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -119,7 +115,7 @@ void SmartApp::OnShow() {
     }
 }
 
-void SmartApp::OnHide() {
+void SmartApp::OnPause() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -503,7 +499,6 @@ void RegisterSmartApp(PhoneAppRegistry& registry) {
         .title = "Smart",
         .icon = FONT_AWESOME_POWER_OFF,
         .category = PhoneAppCategory::kTools,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kNone,
         .show_on_home = true,
         .aliases = {"light", "rgb", "lamp", "smart home", "灯", "灯光", "智能"},

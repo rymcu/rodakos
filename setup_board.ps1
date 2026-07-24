@@ -33,5 +33,6 @@ Write-Host "✅ Board configuration setup completed successfully!" -ForegroundCo
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Run: idf.py build" -ForegroundColor White
-Write-Host "  2. Flash: idf.py -p COM3 flash monitor" -ForegroundColor White
+Write-Host "  2. Package: .\build_ota_bundle.ps1" -ForegroundColor White
+Write-Host "  3. First migration: .\flash_and_test.ps1 -Port COM3 -Erase" -ForegroundColor White
 Write-Host ""

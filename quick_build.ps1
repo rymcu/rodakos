@@ -43,16 +43,17 @@ if (Test-Path "build\rodakos.bin") {
     Write-Host "📦 Firmware size: $sizeMB MB ($sizeKB KB)" -ForegroundColor Cyan
 }
 
-# 烧录
+# Recovery 布局下根项目的 flash target 会把主应用写入较小的 factory 分区。
 if ($Flash) {
     Write-Host ""
-    Write-Host "⚡ Flashing to $Port..." -ForegroundColor Yellow
-    idf.py -p $Port flash monitor
+    Write-Host "❌ 已禁用 quick_build 的直接烧录" -ForegroundColor Red
+    Write-Host "请先运行 .\build_ota_bundle.ps1，再使用 .\flash_and_test.ps1 -Port $Port -Erase 完成首次迁移。" -ForegroundColor Yellow
+    Write-Host "日常 Rodak OTA 仅上传 build\rodakos.bin。" -ForegroundColor Yellow
+    exit 1
 } else {
     Write-Host ""
-    Write-Host "To flash:" -ForegroundColor White
-    Write-Host "  .\quick_build.ps1 -Flash -Port COM3" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Or manually:" -ForegroundColor White
-    Write-Host "  idf.py -p COM3 flash monitor" -ForegroundColor Gray
+    Write-Host "首次迁移/工厂维护：" -ForegroundColor White
+    Write-Host "  .\build_ota_bundle.ps1" -ForegroundColor Gray
+    Write-Host "  .\flash_and_test.ps1 -Port COM3 -Erase" -ForegroundColor Gray
+    Write-Host "日常 OTA：仅上传 build\rodakos.bin" -ForegroundColor White
 }

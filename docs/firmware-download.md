@@ -63,12 +63,35 @@ cd D:\workspace\rodakos
 idf.py build
 ```
 
-For a quick build with optional flash:
+This builds the main `ota_0` application. It is not a safe first-flash command for the Recovery
+partition layout.
+
+## Recovery And OTA Package
+
+Build both images and create the handoff package with:
+
+```powershell
+. .\activate_idf.ps1 -Version v5.5.4
+.\build_ota_bundle.ps1
+```
+
+Pass `-RegenerateBoardConfig` when board YAML/defaults changed. Otherwise the packaging script reuses
+the existing generated Board Manager component to avoid an unnecessary full rebuild.
+
+Use the generated merged image for the first wired migration. Normal Rodak OTA releases upload only
+the generated `rodakos.bin`, never the merged flash image.
+
+Root `idf.py flash` and `idf.py app-flash` are unsafe for this layout because they select the small
+factory partition. See [Rodak MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md).
+
+For a quick incremental build:
 
 ```powershell
 .\quick_build.ps1
-.\quick_build.ps1 -Flash -Port COM3
 ```
+
+The former `quick_build.ps1 -Flash` path is intentionally disabled because ESP-IDF selects the
+factory partition for this project layout.
 
 ## Flash And Monitor
 
@@ -78,17 +101,40 @@ cd D:\workspace\rodakos
 .\flash_and_test.ps1
 ```
 
+The default path is for a device that already has the current Recovery layout. It reads back and
+verifies the installed partition table and immutable Recovery, then writes only the packaged
+`ota_data_initial.bin` at `0xF000` and `rodakos.bin` at `0x2A0000`. Default NVS, the isolated OTA
+journal, Recovery, and coredump are not touched.
+
+For the first Recovery-layout migration, explicitly erase and write the complete 16 MiB image:
+
+```powershell
+.\flash_and_test.ps1 -Port COM3 -Erase -NoMonitor
+```
+
+Both paths flash with `--after no_reset`, open one serial connection before releasing reset, and
+validate the Recovery-to-main handoff. The script starts the interactive monitor only after all boot
+health markers and the local OTA confirmation marker are present. A failure or timeout exits
+nonzero without causing a second reset.
+
+For automated validation without an interactive monitor:
+
+```powershell
+.\flash_and_test.ps1 -Port COM3 -NoMonitor
+```
+
+`-CaptureSeconds` changes the first-boot timeout; its default is 45 seconds.
+
 Choose another port:
 
 ```powershell
 .\flash_and_test.ps1 -Port COM5
 ```
 
-Manual commands:
+After a verified boot, attach the ESP-IDF monitor without resetting the device:
 
 ```powershell
-idf.py -p COM3 flash
-idf.py -p COM3 monitor
+idf.py -p COM3 monitor --no-reset
 ```
 
 Exit monitor with:
@@ -112,6 +158,7 @@ Web file system ready - start from Settings when needed
 Camera service ready - camera opens on demand
 PhoneSystem: Starting Phone OS
 HomeApp: Phone desktop ready with N apps
+OtaUpdate: Local boot confirmation complete
 RodakOS: RodakOS started successfully
 ```
 
@@ -126,27 +173,31 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-Current observed `build\rodakos.bin` size is about 3.7MB. The factory partition is 8MB.
+Current observed `build\rodakos.bin` size is about 3.2 MiB. The main `ota_0` partition is
+13.3125 MiB; the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash
 
-Prefer `idf.py -p COM3 flash`. If a production script needs raw offsets, use the generated `build\flasher_args.json`. Current offsets are:
+For the legacy single-image layout, `idf.py -p COM3 flash` was sufficient. The first Recovery-layout
+migration uses the merged package generated above:
 
 ```powershell
-esptool.py --chip esp32s3 -p COM3 --before default_reset --after hard_reset write_flash `
-  --flash_mode dio --flash_freq 80m --flash_size 16MB `
-  0x0 build\bootloader\bootloader.bin `
-  0x8000 build\partition_table\partition-table.bin `
-  0x10000 build\rodakos.bin
+python -m esptool --chip esp32s3 -p COM3 -b 460800 `
+  --before default_reset --after hard_reset write_flash `
+  0x0 build\packages\ota\<timestamp>\rodakos_sd_recovery_merged.bin
 ```
+
+On an already migrated device, the equivalent settings-preserving refresh writes only the OTA
+selector and main slot after verifying the installed partition table and Recovery. Prefer
+`flash_and_test.ps1` because it performs those checks and captures the complete first boot.
 
 ## Resetting Device State
 
-To clear NVS settings, WiFi credentials, and internal data:
+To clear NVS settings, WiFi credentials, and OTA state, erase and restore the complete merged
+image:
 
 ```powershell
-idf.py -p COM3 erase-flash
-idf.py -p COM3 flash monitor
+.\flash_and_test.ps1 -Port COM3 -Erase
 ```
 
 Use this only when you intentionally want to reset device state.

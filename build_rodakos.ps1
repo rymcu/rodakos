@@ -77,6 +77,8 @@ Write-Host "  ✅ 构建成功！" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "构建完成！可以烧录了：" -ForegroundColor Cyan
-Write-Host "  idf.py -p COM3 flash monitor" -ForegroundColor White
+Write-Host "构建完成！首次迁移请生成并烧录 merged 镜像：" -ForegroundColor Cyan
+Write-Host "  .\build_ota_bundle.ps1" -ForegroundColor White
+Write-Host "  .\flash_and_test.ps1 -Port COM3 -Erase" -ForegroundColor White
+Write-Host "日常 Rodak OTA 仅上传 build\rodakos.bin。" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan

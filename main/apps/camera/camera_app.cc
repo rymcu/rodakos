@@ -121,10 +121,6 @@ void LogCaptureTaskCreateFailure() {
 
 }  // namespace
 
-CameraApp::~CameraApp() {
-    OnDestroy();
-}
-
 bool CameraApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();

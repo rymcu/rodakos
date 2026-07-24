@@ -2,6 +2,7 @@ set(SOURCES
     "main.cc"
     "settings.cc"
     "usb_msc_mode.cc"
+    "rodakos_adapters/audio_codec_input.cc"
     "rodakos_adapters/audio_codec_output.cc"
     "rodakos_adapters/board_device_adapter.cc"
     "rodakos_adapters/backlight_adapter.cc"
@@ -14,10 +15,12 @@ set(SOURCES
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"
     "phone_os/phone_system.cc"
+    "phone_os/phone_shell.cc"
     "phone_os/audio_focus_service.cc"
     "phone_os/audio_output_service.cc"
     "phone_os/audio_service.cc"
     "phone_os/music_player_service.cc"
+    "phone_os/recording_service.cc"
     "phone_os/light_service.cc"
     "phone_os/motion_service.cc"
     "phone_os/button_binding_service.cc"
@@ -28,6 +31,8 @@ set(SOURCES
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_service.cc"
     "phone_os/device_cloud_config.cc"
+    "phone_os/ota_update_service.cc"
+    "phone_os/unified_mqtt_service.cc"
     "phone_os/voice_cloud_websocket_transport.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
@@ -41,6 +46,9 @@ set(SOURCES
     "phone_ui/image_library.cc"
     "phone_ui/jpg/jpeg_to_image.c"
     "apps/built_in_apps.cc"
+    "apps/home/home_layout_model.cc"
+    "apps/home/home_layout_codec.cc"
+    "apps/home/home_layout_store.cc"
     "apps/home/home_app.cc"
     "apps/settings/settings_app.cc"
     "apps/settings/settings_app_internal.cc"
@@ -48,6 +56,7 @@ set(SOURCES
     "apps/settings/settings_datetime_page.cc"
     "apps/settings/settings_device_cloud_page.cc"
     "apps/settings/settings_main_page.cc"
+    "apps/settings/settings_system_shell_page.cc"
     "apps/settings/settings_usb_disk.cc"
     "apps/settings/settings_web_files_page.cc"
     "apps/settings/settings_wifi_page.cc"
@@ -57,6 +66,7 @@ set(SOURCES
     "apps/file_manager/file_manager_app.cc"
     "apps/gyro/gyro_app.cc"
     "apps/music/music_app.cc"
+    "apps/recorder/recorder_app.cc"
     "apps/assistant/assistant_app.cc"
     "apps/system_info/system_info_app.cc"
     "apps/smart/smart_app.cc"
@@ -72,6 +82,7 @@ idf_component_register(
         esp_wifi
         esp_http_server
         esp_http_client
+        mqtt
         esp_netif
         lwip
         json
@@ -81,9 +92,12 @@ idf_component_register(
         espressif__esp_codec_dev
         chmorgan__esp-libhelix-mp3
         app_update
+        bootloader_support
         esp_app_format
         esp_timer
         heap
+        mbedtls
+        rodak_ota_state
         led_strip
         spi_flash
         fatfs

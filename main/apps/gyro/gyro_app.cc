@@ -131,10 +131,6 @@ void DrawCanvasTriangle(lv_layer_t* layer,
 
 }  // namespace
 
-GyroApp::~GyroApp() {
-    OnDestroy();
-}
-
 bool GyroApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -154,14 +150,14 @@ bool GyroApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
-void GyroApp::OnShow() {
+void GyroApp::OnResume() {
     if (refresh_timer_ != nullptr) {
         lv_timer_resume(refresh_timer_);
         lv_timer_reset(refresh_timer_);
     }
 }
 
-void GyroApp::OnHide() {
+void GyroApp::OnPause() {
     if (refresh_timer_ != nullptr) {
         lv_timer_pause(refresh_timer_);
     }
@@ -475,7 +471,6 @@ void RegisterGyroApp(PhoneAppRegistry& registry) {
         .title = "Gyro",
         .icon = FONT_AWESOME_COMPASS,
         .category = PhoneAppCategory::kTools,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kMotion,
         .show_on_home = true,
         .aliases = {"gyro", "gyroscope", "imu", "motion", "orientation", "陀螺仪"},

@@ -23,12 +23,9 @@ class PhoneAppRegistry;
  */
 class PhotosApp : public PhoneApp {
 public:
-    ~PhotosApp() override;
-
-    const char* id() const override { return "photos"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnResume() override {}
+    void OnPause() override {}
     void OnDestroy() override;
 
     // Public for event callbacks

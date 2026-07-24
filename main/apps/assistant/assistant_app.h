@@ -15,14 +15,10 @@ class VoiceWakeService;
 
 class AssistantApp final : public PhoneApp {
 public:
-    ~AssistantApp() override;
-
-    const char* id() const override { return "assistant"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override;
-    void OnHide() override;
+    void OnResume() override;
+    void OnPause() override;
     void OnDestroy() override;
-    void OnTick() override {}
 
     void RefreshState();
 

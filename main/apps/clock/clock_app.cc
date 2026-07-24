@@ -66,10 +66,6 @@ lv_obj_t* CreateCard(lv_obj_t* parent, lv_coord_t y, lv_coord_t height) {
 
 }  // namespace
 
-ClockApp::~ClockApp() {
-    OnDestroy();
-}
-
 bool ClockApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -382,8 +378,7 @@ void RegisterClockApp(PhoneAppRegistry& registry) {
         .title = "Clock",
         .icon = FONT_AWESOME_CLOCK,
         .category = PhoneAppCategory::kTools,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
-        .capabilities = PhoneCapability::kNetwork | PhoneCapability::kBackgroundTick,
+        .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"time", "ntp", "时钟", "时间"},
         .create = []() { return std::make_unique<ClockApp>(); },

@@ -145,6 +145,31 @@ bool GetFileSize(FILE* fp, size_t& size) {
     return true;
 }
 
+uint8_t* AllocateAudioBuffer(size_t size) {
+    auto* buffer = static_cast<uint8_t*>(
+        heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buffer == nullptr) {
+        buffer = static_cast<uint8_t*>(
+            heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    }
+    return buffer;
+}
+
+uint16_t PeakAbs16(const uint8_t* data, size_t bytes) {
+    const auto* samples = reinterpret_cast<const int16_t*>(data);
+    const size_t count = bytes / sizeof(int16_t);
+    uint16_t peak = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t value = samples[i];
+        const uint16_t abs_value = static_cast<uint16_t>(
+            value == INT16_MIN ? INT16_MAX : (value < 0 ? -value : value));
+        if (abs_value > peak) {
+            peak = abs_value;
+        }
+    }
+    return peak;
+}
+
 }  // namespace
 
 AudioService::AudioService(AudioOutputService& output)
@@ -404,10 +429,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         xSemaphoreGive(mutex_);
     }
 
-    uint8_t* buffer = static_cast<uint8_t*>(heap_caps_malloc(kPlaybackBufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (buffer == nullptr) {
-        buffer = static_cast<uint8_t*>(heap_caps_malloc(kPlaybackBufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    }
+    uint8_t* buffer = AllocateAudioBuffer(kPlaybackBufferSize);
     if (buffer == nullptr) {
         output_.Close();
         SetState(AudioPlaybackStatus::kError, "No audio buffer");
@@ -418,6 +440,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
              path.c_str(), wav.sample_rate, wav.channels, wav.bits_per_sample, wav.data_size);
 
     size_t played = 0;
+    uint16_t peak = 0;
     bool failed = false;
 
     while (played < wav.data_size) {
@@ -442,6 +465,10 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
             break;
         }
 
+        if ((bytes_read % sizeof(int16_t)) == 0) {
+            peak = std::max(peak, PeakAbs16(buffer, bytes_read));
+        }
+
         if (!output_.Write(buffer, static_cast<int>(bytes_read))) {
             failed = true;
             break;
@@ -458,6 +485,8 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
     if (!failed && !stopped) {
         UpdateProgress(wav.data_size, wav.data_size);
     }
+    ESP_LOGI(TAG, "WAV playback peak: %u/%u", static_cast<unsigned>(peak),
+             static_cast<unsigned>(INT16_MAX));
 
     return !failed;
 }

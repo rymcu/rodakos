@@ -14,6 +14,26 @@ bool PhoneNavigation::ReturnHome() {
     return system_.ReturnHome();
 }
 
+bool PhoneNavigation::Lock() {
+    return system_.Lock();
+}
+
+bool PhoneNavigation::ToggleControlCenter() {
+    return system_.ToggleControlCenter();
+}
+
+PhoneShellPreferences PhoneNavigation::GetShellPreferences() const {
+    return system_.GetShellPreferences();
+}
+
+bool PhoneNavigation::SetLockOnBoot(bool enabled) {
+    return system_.SetLockOnBoot(enabled);
+}
+
+bool PhoneNavigation::SetControlCenterGestureEnabled(bool enabled) {
+    return system_.SetControlCenterGestureEnabled(enabled);
+}
+
 PhoneAppHostState PhoneNavigation::GetAppHostState() const {
     return system_.GetAppHostState();
 }

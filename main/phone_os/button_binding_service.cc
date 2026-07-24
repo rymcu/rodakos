@@ -170,7 +170,12 @@ bool ButtonBindingService::SetBinding(std::string_view button_id,
     }
 
     Settings settings(kSettingsNamespace, true);
-    settings.SetString(StorageKey(normalized_id, event), EncodeAction(action));
+    if (!settings.SetString(StorageKey(normalized_id, event), EncodeAction(action)) ||
+        !settings.Commit()) {
+        ESP_LOGE(TAG, "Failed to persist binding for %.*s %s",
+                 static_cast<int>(normalized_id.size()), normalized_id.data(), EventName(event));
+        return false;
+    }
     ESP_LOGI(TAG, "Binding saved: %.*s %s -> %s",
              static_cast<int>(normalized_id.size()), normalized_id.data(),
              EventName(event), EncodeAction(action).c_str());
@@ -184,7 +189,11 @@ bool ButtonBindingService::ResetBinding(std::string_view button_id, ButtonEvent 
     }
 
     Settings settings(kSettingsNamespace, true);
-    settings.SetString(StorageKey(normalized_id, event), "");
+    if (!settings.SetString(StorageKey(normalized_id, event), "") || !settings.Commit()) {
+        ESP_LOGE(TAG, "Failed to reset binding for %.*s %s",
+                 static_cast<int>(normalized_id.size()), normalized_id.data(), EventName(event));
+        return false;
+    }
     ESP_LOGI(TAG, "Binding reset: %.*s %s",
              static_cast<int>(normalized_id.size()), normalized_id.data(), EventName(event));
     return true;
@@ -220,6 +229,10 @@ std::string ButtonBindingService::EncodeAction(const ButtonAction& action) {
     switch (action.type) {
         case ButtonActionType::kHome:
             return "home";
+        case ButtonActionType::kLock:
+            return "lock";
+        case ButtonActionType::kToggleControlCenter:
+            return "control_center";
         case ButtonActionType::kLaunchApp:
             return std::string(kLaunchPrefix) + action.app_id;
         case ButtonActionType::kNone:
@@ -231,6 +244,12 @@ std::string ButtonBindingService::EncodeAction(const ButtonAction& action) {
 ButtonAction ButtonBindingService::DecodeAction(std::string_view encoded) {
     if (encoded == "home") {
         return ButtonAction{.type = ButtonActionType::kHome, .app_id = ""};
+    }
+    if (encoded == "lock") {
+        return ButtonAction{.type = ButtonActionType::kLock, .app_id = ""};
+    }
+    if (encoded == "control_center") {
+        return ButtonAction{.type = ButtonActionType::kToggleControlCenter, .app_id = ""};
     }
     if (encoded.rfind(kLaunchPrefix, 0) == 0) {
         return ButtonAction{
@@ -245,6 +264,10 @@ std::string ButtonBindingService::ActionLabel(const ButtonAction& action) {
     switch (action.type) {
         case ButtonActionType::kHome:
             return "Home";
+        case ButtonActionType::kLock:
+            return "Lock";
+        case ButtonActionType::kToggleControlCenter:
+            return "Control Center";
         case ButtonActionType::kLaunchApp:
             return "Open " + TitleCase(action.app_id);
         case ButtonActionType::kNone:
@@ -500,13 +523,13 @@ ButtonAction ButtonBindingService::DefaultAction(std::string_view button_id,
     }
     if (button_id == "io10_key_button") {
         if (event == ButtonEvent::kSingleClick) {
-            return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "settings"};
+            return ButtonAction{.type = ButtonActionType::kToggleControlCenter, .app_id = ""};
         }
         if (event == ButtonEvent::kDoubleClick) {
             return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "smart"};
         }
         if (event == ButtonEvent::kLongPressStart) {
-            return ButtonAction{.type = ButtonActionType::kLaunchApp, .app_id = "assistant"};
+            return ButtonAction{.type = ButtonActionType::kLock, .app_id = ""};
         }
     }
     return ButtonAction{.type = ButtonActionType::kNone, .app_id = ""};
@@ -581,6 +604,12 @@ void ButtonBindingService::RunPendingAction(void* user_data) {
         switch (pending->action.type) {
             case ButtonActionType::kHome:
                 ok = service->navigation_->ReturnHome();
+                break;
+            case ButtonActionType::kLock:
+                ok = service->navigation_->Lock();
+                break;
+            case ButtonActionType::kToggleControlCenter:
+                ok = service->navigation_->ToggleControlCenter();
                 break;
             case ButtonActionType::kLaunchApp:
                 ok = service->navigation_->Launch(pending->action.app_id);

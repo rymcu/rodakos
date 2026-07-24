@@ -198,10 +198,6 @@ uint32_t CapabilityBits(PhoneCapability capabilities) {
 
 }  // namespace
 
-SystemInfoApp::~SystemInfoApp() {
-    OnDestroy();
-}
-
 bool SystemInfoApp::OnCreate(PhoneAppContext& context) {
     BindServices(context);
 
@@ -479,12 +475,10 @@ void SystemInfoApp::RefreshStorage() {
 void SystemInfoApp::RefreshRuntime() {
     const auto host = context_->navigation().GetAppHostState();
     const std::string current = host.has_current ? ShortAppLabel(host.current_app_id) : "none";
-    const std::string background = host.has_background ? ShortAppLabel(host.background_app_id) : "none";
     lv_label_set_text_fmt(runtime_.value, "Current %s", current.c_str());
-    lv_label_set_text_fmt(runtime_.detail, "Background %s, cap 0x%08x/0x%08x",
-                          background.c_str(),
+    lv_label_set_text_fmt(runtime_.detail, "Capabilities 0x%08x, transition %s",
                           static_cast<unsigned>(CapabilityBits(host.current_capabilities)),
-                          static_cast<unsigned>(CapabilityBits(host.background_capabilities)));
+                          host.transition_in_progress ? "active" : "idle");
 }
 
 void SystemInfoApp::RefreshHardware() {
@@ -645,8 +639,7 @@ void RegisterSystemInfoApp(PhoneAppRegistry& registry) {
         .title = "System",
         .icon = FONT_AWESOME_CIRCLE_INFO,
         .category = PhoneAppCategory::kSystem,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
-        .capabilities = PhoneCapability::kStorage | PhoneCapability::kNetwork | PhoneCapability::kBackgroundTick,
+        .capabilities = PhoneCapability::kStorage | PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"info", "status", "device", "系统", "状态"},
         .create = []() { return std::make_unique<SystemInfoApp>(); },

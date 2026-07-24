@@ -2,6 +2,7 @@
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include "rodakos_adapters/file_service.h"
+#include "rodakos_adapters/audio_codec_input.h"
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_services.h"
@@ -9,11 +10,14 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
+#include "phone_os/recording_service.h"
 #include "phone_os/light_service.h"
 #include "phone_os/motion_service.h"
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/ota_update_service.h"
+#include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
@@ -190,18 +194,18 @@ void TouchPollTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-void InitTouchInput(lv_display_t* disp) {
+lv_indev_t* InitTouchInput(lv_display_t* disp) {
     void* touch_handle = nullptr;
     esp_err_t ret = esp_board_manager_get_device_handle("lcd_touch", &touch_handle);
     if (ret != ESP_OK || touch_handle == nullptr) {
         ESP_LOGW(TAG, "Touch device not available: %s", esp_err_to_name(ret));
-        return;
+        return nullptr;
     }
 
     auto* touch_handles = static_cast<dev_lcd_touch_handles_t*>(touch_handle);
     if (touch_handles->touch_handle == nullptr) {
         ESP_LOGW(TAG, "Touch driver handle is NULL");
-        return;
+        return nullptr;
     }
 
     g_touch_input.handle = touch_handles->touch_handle;
@@ -210,7 +214,7 @@ void InitTouchInput(lv_display_t* disp) {
     if (!lvgl_port_lock(1000)) {
         ESP_LOGW(TAG, "Failed to lock LVGL for touch input registration");
         g_touch_input.running = false;
-        return;
+        return nullptr;
     }
 
     lv_indev_t* indev = lv_indev_create();
@@ -226,7 +230,7 @@ void InitTouchInput(lv_display_t* disp) {
     if (indev == nullptr) {
         ESP_LOGW(TAG, "Failed to create LVGL touch input device");
         g_touch_input.running = false;
-        return;
+        return nullptr;
     }
 
 #if CONFIG_SOC_CPU_CORES_NUM > 1
@@ -240,10 +244,11 @@ void InitTouchInput(lv_display_t* disp) {
         ESP_LOGW(TAG, "Failed to start touch polling task");
         g_touch_input.running = false;
         g_touch_input.indev = nullptr;
-        return;
+        return nullptr;
     }
 
     ESP_LOGI(TAG, "Touch input registered with cached polling");
+    return indev;
 }
 }
 
@@ -326,7 +331,8 @@ extern "C" void app_main(void) {
         return;
     }
 
-    InitTouchInput(disp);
+    lv_indev_t* touch_indev = InitTouchInput(disp);
+    ui.SetPrimaryInput(touch_indev);
     ui.SetInputResetCallback(ResetTouchInputBridge, &g_touch_input);
 
     ESP_LOGI(TAG, "LVGL port initialized");
@@ -362,7 +368,13 @@ extern "C" void app_main(void) {
     static rodakos::MotionService motion_service(&qmi8658_motion_sensor);
     static rodakos::ButtonBindingService button_binding_service;
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
+    static rodakos::AudioCodecInput audio_input;
+    static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
+    static rodakos::OtaUpdateService ota_update_service(
+        device_cloud_config_service, file_service);
+    static rodakos::UnifiedMqttService unified_mqtt_service(
+        device_cloud_config_service, ota_update_service, &audio_output_service);
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::NoopVoiceRecorderService voice_recorder_service;
@@ -372,6 +384,7 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_wake_runtime);
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
+    ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
 
     static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
@@ -386,6 +399,7 @@ extern "C" void app_main(void) {
     services.SetAudio(&audio_service);
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
+    services.SetRecording(&recording_service);
     services.SetLights(&light_service);
     services.SetMotion(&motion_service);
     services.SetButtons(&button_binding_service);
@@ -405,6 +419,14 @@ extern "C" void app_main(void) {
     button_binding_service.Init(system.navigation(), ui);
 
     voice_wake_service.Start();
+    // 到达此处即通过本地启动健康门槛；先持久化，再允许 MQTT connected 回调上报。
+    if (!ota_update_service.ConfirmRunningImage()) {
+        ESP_LOGW(TAG, "Local boot confirmation did not complete");
+    }
+    const bool mqtt_started = unified_mqtt_service.Start();
+    if (!mqtt_started) {
+        ESP_LOGW(TAG, "Unified MQTT service failed to start");
+    }
 
     // WiFi 自动连接放在系统启动后，避免阻塞 UI
     if (wifi != nullptr) {

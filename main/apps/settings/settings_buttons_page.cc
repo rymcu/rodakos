@@ -34,6 +34,12 @@ std::vector<ButtonActionOption> BuildButtonActionOptions(const PhoneAppRegistry&
     options.push_back(ButtonActionOption{
         .action = {.type = rodakos::ButtonActionType::kHome, .app_id = ""},
     });
+    options.push_back(ButtonActionOption{
+        .action = {.type = rodakos::ButtonActionType::kToggleControlCenter, .app_id = ""},
+    });
+    options.push_back(ButtonActionOption{
+        .action = {.type = rodakos::ButtonActionType::kLock, .app_id = ""},
+    });
 
     for (const auto& app : registry.apps()) {
         options.push_back(ButtonActionOption{

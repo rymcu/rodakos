@@ -1,6 +1,9 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-# 16MB Flash 分区表（优化版）
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x800000,
-storage,  data, fat,     ,        0x7E0000,
+# Name,    Type, SubType, Offset,   Size,     Flags
+# 16 MiB: immutable recovery + one large app slot. OTA payloads are staged on SD.
+nvs,       data, nvs,     0x9000,   0x6000,
+otadata,   data, ota,     0xf000,   0x2000,
+phy_init,  data, phy,     0x11000,  0x1000,
+ota_state, data, nvs,     0x12000,  0x6000,
+recovery,  app,  factory, 0x20000,  0x280000,
+app,       app,  ota_0,   0x2a0000, 0xd50000,
+coredump,  data, coredump,0xff0000, 0x10000,
