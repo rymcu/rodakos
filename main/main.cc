@@ -16,6 +16,8 @@
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/ota_update_service.h"
+#include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
@@ -369,6 +371,10 @@ extern "C" void app_main(void) {
     static rodakos::AudioCodecInput audio_input;
     static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
+    static rodakos::OtaUpdateService ota_update_service(
+        device_cloud_config_service, file_service);
+    static rodakos::UnifiedMqttService unified_mqtt_service(
+        device_cloud_config_service, ota_update_service, &audio_output_service);
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::NoopVoiceRecorderService voice_recorder_service;
@@ -413,6 +419,14 @@ extern "C" void app_main(void) {
     button_binding_service.Init(system.navigation(), ui);
 
     voice_wake_service.Start();
+    // 到达此处即通过本地启动健康门槛；先持久化，再允许 MQTT connected 回调上报。
+    if (!ota_update_service.ConfirmRunningImage()) {
+        ESP_LOGW(TAG, "Local boot confirmation did not complete");
+    }
+    const bool mqtt_started = unified_mqtt_service.Start();
+    if (!mqtt_started) {
+        ESP_LOGW(TAG, "Unified MQTT service failed to start");
+    }
 
     // WiFi 自动连接放在系统启动后，避免阻塞 UI
     if (wifi != nullptr) {

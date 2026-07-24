@@ -31,6 +31,8 @@ set(SOURCES
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_service.cc"
     "phone_os/device_cloud_config.cc"
+    "phone_os/ota_update_service.cc"
+    "phone_os/unified_mqtt_service.cc"
     "phone_os/voice_cloud_websocket_transport.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
@@ -80,6 +82,7 @@ idf_component_register(
         esp_wifi
         esp_http_server
         esp_http_client
+        mqtt
         esp_netif
         lwip
         json
@@ -89,9 +92,12 @@ idf_component_register(
         espressif__esp_codec_dev
         chmorgan__esp-libhelix-mp3
         app_update
+        bootloader_support
         esp_app_format
         esp_timer
         heap
+        mbedtls
+        rodak_ota_state
         led_strip
         spi_flash
         fatfs
