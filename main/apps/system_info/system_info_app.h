@@ -24,15 +24,11 @@ class WebFileSystemService;
 
 class SystemInfoApp final : public PhoneApp {
 public:
-    ~SystemInfoApp() override;
-
-    const char* id() const override { return "system"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnResume() override {}
+    void OnPause() override {}
     void OnDestroy() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
-    void OnTick() override {}
 
     void Refresh();
 

@@ -17,15 +17,11 @@ class MusicPlayerService;
 
 class MusicApp : public PhoneApp {
 public:
-    ~MusicApp() override;
-
-    const char* id() const override { return "music"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override;
-    void OnHide() override;
+    void OnResume() override;
+    void OnPause() override;
     void OnDestroy() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
-    void OnTick() override {}
     void RefreshState();
 
 private:

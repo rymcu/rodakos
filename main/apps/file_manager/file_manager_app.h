@@ -16,12 +16,9 @@ class PhoneUi;
 
 class FileManagerApp final : public PhoneApp {
 public:
-    ~FileManagerApp() override;
-
-    const char* id() const override { return "files"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnResume() override {}
+    void OnPause() override {}
     void OnDestroy() override;
 
     void OpenEntry(size_t index);

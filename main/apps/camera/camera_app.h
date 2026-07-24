@@ -21,12 +21,9 @@ struct CameraCaptureGuard;
 
 class CameraApp : public PhoneApp {
 public:
-    ~CameraApp() override;
-
-    const char* id() const override { return "camera"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnResume() override {}
+    void OnPause() override {}
     void OnDestroy() override;
 
     void CapturePhoto();

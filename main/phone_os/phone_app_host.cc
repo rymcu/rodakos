@@ -24,70 +24,25 @@ bool PhoneAppHost::RefreshThemeIfNeeded(PhoneApp& app,
 }
 
 bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext& context) {
+    if (transition_in_progress_) {
+        ESP_LOGW(TAG, "Ignoring re-entrant launch: %s", descriptor.id.c_str());
+        return false;
+    }
+
+    transition_in_progress_ = true;
     ESP_LOGI(TAG, "Launching app: %s", descriptor.id.c_str());
-    const uint32_t theme_revision = context.ui().theme_revision();
-    if (current_app_id_ == descriptor.id) {
-        if (RefreshThemeIfNeeded(*current_, context, current_theme_revision_)) {
+    const bool launched = [&]() {
+        if (current_ != nullptr && current_app_id_ == descriptor.id &&
+            RefreshThemeIfNeeded(*current_, context, current_theme_revision_)) {
             context.ui().ResetInputState();
             ESP_LOGI(TAG, "App already active: %s", descriptor.id.c_str());
             return true;
         }
-        ESP_LOGI(TAG, "Recreating active app for theme update: %s", descriptor.id.c_str());
-        context.ui().ResetInputState();
-        CloseCurrent(false);
-    }
 
-    context.ui().ResetInputState();
-    CloseCurrent(true);
-
-    if (background_ && background_app_id_ == descriptor.id) {
-        if (!RefreshThemeIfNeeded(*background_, context, background_theme_revision_)) {
-            ESP_LOGI(TAG, "Recreating stale background app for theme update: %s", background_app_id_.c_str());
-            background_->OnDestroy();
-            background_.reset();
-            background_app_id_.clear();
-            background_capabilities_ = PhoneCapability::kNone;
-            background_theme_revision_ = 0;
-        } else {
-            current_ = std::move(background_);
-            current_app_id_ = background_app_id_;
-            current_capabilities_ = background_capabilities_;
-            current_theme_revision_ = background_theme_revision_;
-            background_app_id_.clear();
-            background_capabilities_ = PhoneCapability::kNone;
-            background_theme_revision_ = 0;
-            current_->OnShow();
-            context.ui().ResetInputState();
-            ESP_LOGI(TAG, "Restored background app: %s", current_app_id_.c_str());
-            return true;
-        }
-    }
-
-    if (!descriptor.create) {
-        ESP_LOGE(TAG, "App %s has no factory", descriptor.id.c_str());
-        return false;
-    }
-
-    current_ = descriptor.create();
-    if (!current_) {
-        ESP_LOGE(TAG, "App %s factory returned null", descriptor.id.c_str());
-        return false;
-    }
-
-    if (!current_->OnCreate(context)) {
-        current_.reset();
-        current_app_id_.clear();
-        ESP_LOGE(TAG, "App %s OnCreate failed", descriptor.id.c_str());
-        return false;
-    }
-
-    current_app_id_ = descriptor.id;
-    current_capabilities_ = descriptor.capabilities;
-    current_theme_revision_ = theme_revision;
-    current_->OnShow();
-    context.ui().ResetInputState();
-    ESP_LOGI(TAG, "App launched: %s", current_app_id_.c_str());
-    return true;
+        return CreateAndReplace(descriptor, context);
+    }();
+    transition_in_progress_ = false;
+    return launched;
 }
 
 bool PhoneAppHost::RefreshCurrentTheme(PhoneAppContext& context) {
@@ -103,27 +58,78 @@ bool PhoneAppHost::RefreshCurrentTheme(PhoneAppContext& context) {
 }
 
 bool PhoneAppHost::RecreateCurrent(const PhoneAppDescriptor& descriptor, PhoneAppContext& context) {
+    if (transition_in_progress_) {
+        ESP_LOGW(TAG, "Ignoring re-entrant recreate: %s", descriptor.id.c_str());
+        return false;
+    }
+
+    transition_in_progress_ = true;
     ESP_LOGI(TAG, "Recreating current app: %s", descriptor.id.c_str());
-    CloseCurrent(false);
-    return Launch(descriptor, context);
+    const bool recreated = CreateAndReplace(descriptor, context);
+    transition_in_progress_ = false;
+    return recreated;
+}
+
+bool PhoneAppHost::HandleHomeRequest() {
+    if (transition_in_progress_ || current_ == nullptr) {
+        return false;
+    }
+    transition_in_progress_ = true;
+    const bool handled = current_->OnHomeRequested();
+    transition_in_progress_ = false;
+    return handled;
+}
+
+bool PhoneAppHost::CreateAndReplace(const PhoneAppDescriptor& descriptor,
+                                    PhoneAppContext& context) {
+    if (!descriptor.create) {
+        ESP_LOGE(TAG, "App %s has no factory", descriptor.id.c_str());
+        return false;
+    }
+
+    std::unique_ptr<PhoneApp> next = descriptor.create();
+    if (!next) {
+        ESP_LOGE(TAG, "App %s factory returned null", descriptor.id.c_str());
+        return false;
+    }
+
+    if (!next->OnCreate(context)) {
+        next->OnDestroy();
+        ESP_LOGE(TAG, "App %s OnCreate failed; keeping current app", descriptor.id.c_str());
+        return false;
+    }
+
+    context.ui().ResetInputState();
+    DestroyCurrent();
+    current_ = std::move(next);
+    current_app_id_ = descriptor.id;
+    current_capabilities_ = descriptor.capabilities;
+    current_theme_revision_ = context.ui().theme_revision();
+    current_->OnResume();
+    context.ui().ResetInputState();
+    ESP_LOGI(TAG, "App launched: %s", current_app_id_.c_str());
+    return true;
 }
 
 PhoneAppHostState PhoneAppHost::GetState() const {
     PhoneAppHostState state;
     state.current_app_id = current_app_id_;
-    state.background_app_id = background_app_id_;
     state.current_capabilities = current_capabilities_;
-    state.background_capabilities = background_capabilities_;
     state.has_current = current_ != nullptr;
-    state.has_background = background_ != nullptr;
+    state.transition_in_progress = transition_in_progress_;
     return state;
 }
 
 void PhoneAppHost::CloseCurrent() {
-    CloseCurrent(false);
+    if (transition_in_progress_) {
+        return;
+    }
+    transition_in_progress_ = true;
+    DestroyCurrent();
+    transition_in_progress_ = false;
 }
 
-void PhoneAppHost::CloseCurrent(bool allow_background) {
+void PhoneAppHost::DestroyCurrent() {
     if (!current_) {
         current_app_id_.clear();
         current_capabilities_ = PhoneCapability::kNone;
@@ -131,25 +137,7 @@ void PhoneAppHost::CloseCurrent(bool allow_background) {
         return;
     }
     ESP_LOGI(TAG, "Closing app: %s", current_app_id_.c_str());
-    current_->OnHide();
-
-    if (allow_background && HasCapability(current_capabilities_, PhoneCapability::kBackgroundTick)) {
-        if (background_) {
-            ESP_LOGI(TAG, "Destroying previous background app: %s", background_app_id_.c_str());
-            background_->OnDestroy();
-            background_theme_revision_ = 0;
-        }
-        background_ = std::move(current_);
-        background_app_id_ = current_app_id_;
-        background_capabilities_ = current_capabilities_;
-        background_theme_revision_ = current_theme_revision_;
-        current_app_id_.clear();
-        current_capabilities_ = PhoneCapability::kNone;
-        current_theme_revision_ = 0;
-        ESP_LOGI(TAG, "Backgrounded app: %s", background_app_id_.c_str());
-        return;
-    }
-
+    current_->OnPause();
     current_->OnDestroy();
     current_.reset();
     current_app_id_.clear();

@@ -118,10 +118,6 @@ void LogPhotoHeap(const char* phase, const char* reason) {
 
 }  // namespace
 
-PhotosApp::~PhotosApp() {
-    OnDestroy();
-}
-
 bool PhotosApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();

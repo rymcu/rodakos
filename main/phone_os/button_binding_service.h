@@ -33,6 +33,8 @@ inline constexpr std::array<ButtonEvent, 3> kButtonEvents = {
 enum class ButtonActionType {
     kNone,
     kHome,
+    kLock,
+    kToggleControlCenter,
     kLaunchApp,
 };
 

@@ -20,10 +20,6 @@ constexpr const char* TAG = "SettingsApp";
 
 using namespace rodakos_settings;
 
-SettingsApp::~SettingsApp() {
-    OnDestroy();
-}
-
 bool SettingsApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -156,6 +152,7 @@ void SettingsApp::ResetUiPointers() {
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
     datetime_body_ = nullptr;
+    system_shell_body_ = nullptr;
     buttons_body_ = nullptr;
     device_cloud_body_ = nullptr;
     brightness_label_ = nullptr;
@@ -214,6 +211,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
     if (datetime_body_ != nullptr) {
         lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
     }
+    if (system_shell_body_ != nullptr) {
+        lv_obj_add_flag(system_shell_body_, LV_OBJ_FLAG_HIDDEN);
+    }
     if (buttons_body_ != nullptr) {
         lv_obj_add_flag(buttons_body_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -265,6 +265,16 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             break;
 
+        case SettingsPage::kSystemShell:
+            if (system_shell_body_ == nullptr) {
+                CreateSystemShellPage();
+            }
+            lv_obj_clear_flag(system_shell_body_, LV_OBJ_FLAG_HIDDEN);
+            if (header_title_label_ != nullptr) {
+                lv_label_set_text(header_title_label_, "System Shell");
+            }
+            break;
+
         case SettingsPage::kButtons:
             if (buttons_body_ == nullptr) {
                 CreateButtonBindingsPage();
@@ -305,6 +315,7 @@ void SettingsApp::NavigateBack() {
     }
     if (current_page_ == SettingsPage::kWiFiList ||
         current_page_ == SettingsPage::kDateTime ||
+        current_page_ == SettingsPage::kSystemShell ||
         current_page_ == SettingsPage::kButtons ||
         current_page_ == SettingsPage::kDeviceCloud ||
         current_page_ == SettingsPage::kWebFiles) {
@@ -325,7 +336,6 @@ void RegisterSettingsApp(PhoneAppRegistry& registry) {
         .title = "Settings",
         .icon = FONT_AWESOME_GEAR,
         .category = PhoneAppCategory::kSystem,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kNone,
         .show_on_home = true,
         .aliases = {"config", "preferences", "设置"},

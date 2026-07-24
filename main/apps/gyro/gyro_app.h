@@ -15,12 +15,9 @@ struct MotionSample;
 
 class GyroApp final : public PhoneApp {
 public:
-    ~GyroApp() override;
-
-    const char* id() const override { return "gyro"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override;
-    void OnHide() override;
+    void OnResume() override;
+    void OnPause() override;
     void OnDestroy() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
 

@@ -190,18 +190,18 @@ void TouchPollTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-void InitTouchInput(lv_display_t* disp) {
+lv_indev_t* InitTouchInput(lv_display_t* disp) {
     void* touch_handle = nullptr;
     esp_err_t ret = esp_board_manager_get_device_handle("lcd_touch", &touch_handle);
     if (ret != ESP_OK || touch_handle == nullptr) {
         ESP_LOGW(TAG, "Touch device not available: %s", esp_err_to_name(ret));
-        return;
+        return nullptr;
     }
 
     auto* touch_handles = static_cast<dev_lcd_touch_handles_t*>(touch_handle);
     if (touch_handles->touch_handle == nullptr) {
         ESP_LOGW(TAG, "Touch driver handle is NULL");
-        return;
+        return nullptr;
     }
 
     g_touch_input.handle = touch_handles->touch_handle;
@@ -210,7 +210,7 @@ void InitTouchInput(lv_display_t* disp) {
     if (!lvgl_port_lock(1000)) {
         ESP_LOGW(TAG, "Failed to lock LVGL for touch input registration");
         g_touch_input.running = false;
-        return;
+        return nullptr;
     }
 
     lv_indev_t* indev = lv_indev_create();
@@ -226,7 +226,7 @@ void InitTouchInput(lv_display_t* disp) {
     if (indev == nullptr) {
         ESP_LOGW(TAG, "Failed to create LVGL touch input device");
         g_touch_input.running = false;
-        return;
+        return nullptr;
     }
 
 #if CONFIG_SOC_CPU_CORES_NUM > 1
@@ -240,10 +240,11 @@ void InitTouchInput(lv_display_t* disp) {
         ESP_LOGW(TAG, "Failed to start touch polling task");
         g_touch_input.running = false;
         g_touch_input.indev = nullptr;
-        return;
+        return nullptr;
     }
 
     ESP_LOGI(TAG, "Touch input registered with cached polling");
+    return indev;
 }
 }
 
@@ -326,7 +327,8 @@ extern "C" void app_main(void) {
         return;
     }
 
-    InitTouchInput(disp);
+    lv_indev_t* touch_indev = InitTouchInput(disp);
+    ui.SetPrimaryInput(touch_indev);
     ui.SetInputResetCallback(ResetTouchInputBridge, &g_touch_input);
 
     ESP_LOGI(TAG, "LVGL port initialized");

@@ -14,14 +14,10 @@ class PhoneUi;
 
 class SmartApp final : public PhoneApp {
 public:
-    ~SmartApp() override;
-
-    const char* id() const override { return "smart"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override;
-    void OnHide() override;
+    void OnResume() override;
+    void OnPause() override;
     void OnDestroy() override;
-    void OnTick() override {}
 
     void Refresh();
 

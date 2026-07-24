@@ -39,6 +39,7 @@ enum class SettingsPage {
     kWiFiList,    // WiFi 列表页面
     kWiFiDetail,  // WiFi 详情页面
     kDateTime,    // 日期与时间页面
+    kSystemShell, // 系统壳页面
     kButtons,     // 按键绑定页面
     kDeviceCloud, // 设备云配置页面
     kWebFiles,    // Web 文件管理页面
@@ -46,12 +47,9 @@ enum class SettingsPage {
 
 class SettingsApp final : public PhoneApp {
 public:
-    ~SettingsApp() override;
-
-    const char* id() const override { return "settings"; }
     bool OnCreate(PhoneAppContext& context) override;
-    void OnShow() override {}
-    void OnHide() override {}
+    void OnResume() override {}
+    void OnPause() override {}
     void OnDestroy() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
     void OnDeviceCloudRefreshComplete(bool ok,
@@ -74,6 +72,7 @@ private:
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
+    void CreateSystemShellPage();
     void CreateButtonBindingsPage();
     void UpdateButtonBindingsPage();
     void ShowButtonActionDialog(const rodakos::ButtonBinding& binding);
@@ -136,6 +135,9 @@ private:
     lv_timer_t* time_sync_timer_ = nullptr;
     bool time_sync_in_progress_ = false;
     uint32_t time_sync_poll_count_ = 0;
+
+    // 系统壳页面控件
+    lv_obj_t* system_shell_body_ = nullptr;
 
     // 按键绑定页面控件
     lv_obj_t* buttons_body_ = nullptr;

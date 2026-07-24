@@ -93,10 +93,6 @@ void StyleSwitch(lv_obj_t* sw) {
 
 }  // namespace
 
-AssistantApp::~AssistantApp() {
-    OnDestroy();
-}
-
 bool AssistantApp::OnCreate(PhoneAppContext& context) {
     context_ = &context;
     ui_ = &context.ui();
@@ -123,7 +119,7 @@ bool AssistantApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
-void AssistantApp::OnShow() {
+void AssistantApp::OnResume() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -134,7 +130,7 @@ void AssistantApp::OnShow() {
     }
 }
 
-void AssistantApp::OnHide() {
+void AssistantApp::OnPause() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked() && root_ != nullptr && lv_obj_is_valid(root_)) {
@@ -313,7 +309,6 @@ void RegisterAssistantApp(PhoneAppRegistry& registry) {
         .title = "Assistant",
         .icon = FONT_AWESOME_USER_ROBOT,
         .category = PhoneAppCategory::kTools,
-        .launch_mode = PhoneAppLaunchMode::kReplaceCurrent,
         .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"voice", "assistant", "siri", "语音", "助手"},

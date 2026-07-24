@@ -16,8 +16,8 @@ enum class PhoneAppCategory {
     kGames,
 };
 
-enum class PhoneAppLaunchMode {
-    kReplaceCurrent,
+enum class PhoneAppRole {
+    kRegular,
     kHome,
 };
 
@@ -27,8 +27,8 @@ enum class PhoneCapability : uint32_t {
     kNetwork = 1 << 1,
     kAudioPlayback = 1 << 2,
     kCamera = 1 << 3,
-    kBackgroundTick = 1 << 4,
     kMotion = 1 << 5,
+    kAudioRecording = 1 << 6,
 };
 
 inline PhoneCapability operator|(PhoneCapability lhs, PhoneCapability rhs) {
@@ -44,13 +44,12 @@ class PhoneApp {
 public:
     virtual ~PhoneApp() = default;
 
-    virtual const char* id() const = 0;
     virtual bool OnCreate(PhoneAppContext& context) = 0;
-    virtual void OnShow() = 0;
-    virtual void OnHide() = 0;
+    virtual void OnResume() = 0;
+    virtual void OnPause() = 0;
     virtual void OnDestroy() = 0;
     virtual bool OnThemeChanged(PhoneAppContext&) { return false; }
-    virtual void OnTick() {}
+    virtual bool OnHomeRequested() { return false; }
 };
 
 struct PhoneAppDescriptor {
@@ -58,7 +57,8 @@ struct PhoneAppDescriptor {
     std::string title;
     std::string icon;
     PhoneAppCategory category = PhoneAppCategory::kTools;
-    PhoneAppLaunchMode launch_mode = PhoneAppLaunchMode::kReplaceCurrent;
+    PhoneAppRole role = PhoneAppRole::kRegular;
+    // Native app requirements are descriptive metadata, not a security boundary.
     PhoneCapability capabilities = PhoneCapability::kNone;
     bool show_on_home = true;
     std::vector<std::string> aliases;
