@@ -41,10 +41,10 @@ idf.py build
 idf.py build
 ```
 
-Or with optional flash:
+Quick builds are build-only under the Recovery layout:
 
 ```powershell
-.\quick_build.ps1 -Flash -Port COM3
+.\quick_build.ps1
 ```
 
 ### Flash and Monitor
@@ -69,8 +69,8 @@ idf.py build
 ### Reset Device State
 
 ```powershell
-idf.py -p COM3 erase-flash
-idf.py -p COM3 flash monitor
+.\build_ota_bundle.ps1
+.\flash_and_test.ps1 -Port COM3 -Erase
 ```
 
 ## Architecture
@@ -163,12 +163,16 @@ docs/
 
 ```csv
 nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x800000,
-storage,  data, fat,     ,        0x7E0000,
+otadata,  data, ota,     0xf000,  0x2000,
+phy_init, data, phy,     0x11000, 0x1000,
+ota_state,data, nvs,     0x12000, 0x6000,
+recovery, app,  factory, 0x20000, 0x280000,
+app,      app,  ota_0,   0x2a0000,0xd50000,
+coredump, data, coredump,0xff0000,0x10000,
 ```
 
-Use exact hex sizes. Shorthand like `1M`/`15M` causes capacity errors. `rodakos.bin` is currently ~3.7MB (factory is 8MB).
+Use exact hex sizes. Shorthand like `1M`/`15M` causes capacity errors. `rodakos.bin` is currently
+about 3.2 MiB; it belongs in the 13.3125 MiB `ota_0` slot, not the 2.5 MiB factory Recovery slot.
 
 ## Code Style
 

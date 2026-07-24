@@ -86,11 +86,14 @@ FileNotFoundError: partitions_16m.csv
 Fix: keep `partitions_16m.csv` in the project root. The current 16MB layout is:
 
 ```csv
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x800000,
-storage,  data, fat,     ,        0x7E0000,
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x6000,
+otadata,   data, ota,     0xf000,   0x2000,
+phy_init,  data, phy,     0x11000,  0x1000,
+ota_state, data, nvs,     0x12000,  0x6000,
+recovery,  app,  factory, 0x20000,  0x280000,
+app,       app,  ota_0,   0x2a0000, 0xd50000,
+coredump,  data, coredump,0xff0000, 0x10000,
 ```
 
 ## Partition Table Exceeds 16MB
@@ -101,7 +104,53 @@ Symptom:
 Partitions table occupies ... which does not fit in configured flash size 16MB
 ```
 
-Fix: use exact hexadecimal sizes, not shorthand `1M`/`15M`. The current `factory` partition is 8MB and `storage` is about 8MB with margin.
+Fix: use exact hexadecimal sizes, not shorthand `1M`/`15M`. The current Recovery partition is
+2.5 MiB and the main `ota_0` partition is 13.3125 MiB.
+
+## Recovery Rejects The Main Image Or The Screen Stays Blank
+
+Symptoms include:
+
+```text
+RodakRecovery: Bootloader rejected the main image; refusing an automatic retry
+PhoneAppRegistry: App identity 'voice' conflicts between 'recorder' and 'assistant'
+PhoneSystem: App registry validation failed
+RodakOS: PhoneSystem start failed
+```
+
+An `ESP_OTA_IMG_ABORTED` entry means the main image reached its first
+`PENDING_VERIFY` boot but reset again before `OtaUpdateService::ConfirmRunningImage()` completed.
+It does not by itself prove that the bytes in `ota_0` are corrupt. A blank screen can also mean LVGL
+started but Registry, Shell, or Home initialization failed before the desktop was created.
+
+When Registry validation fails, inspect the preceding `PhoneAppRegistry` message. App IDs, titles,
+and aliases are normalized and checked globally; a collision prevents Home from being created. The
+Recorder/Assistant blank-screen regression was caused by both descriptors claiming the `voice`
+alias. Recorder now uses recording-specific aliases and Assistant retains `voice`. This is a
+compile-time descriptor conflict, so erasing NVS does not fix it; rebuild and flash corrected
+firmware.
+
+Build the latest package and use the guarded refresh flow on a device that already has the Recovery
+layout:
+
+```powershell
+. .\activate_idf.ps1 -Version v5.5.4
+.\build_ota_bundle.ps1
+.\flash_and_test.ps1 -Port COM3 -NoMonitor
+```
+
+The default refresh first verifies the installed partition table and Recovery, then updates only
+`otadata` and `ota_0`, preserving NVS and the isolated OTA journal. Use `-Erase` only for the first
+Recovery-layout migration or when clearing all device state is intentional. The script captures the
+first boot without a log gap, requires the OTA confirmation marker, and will not open a monitor after
+a failed or incomplete boot. Do not use a default `idf.py monitor` while an image may still be
+pending verification; it resets the target on startup. Use `idf.py -p COM3 monitor --no-reset` only
+after a healthy boot.
+
+When diagnosing an existing aborted image, read back and hash the installed image before rewriting
+it. If it matches the package, restore only the package's `ota_data_initial.bin`, then capture the
+entire Recovery-to-main sequence. Preserve the first failure log; a later reset replaces the useful
+startup error with the generic Recovery rejection.
 
 ## Bootloader Clang Response-File Error On Windows
 

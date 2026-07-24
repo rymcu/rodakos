@@ -4,13 +4,35 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-07-02.
+Last refreshed: 2026-07-22.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 5.4+ (current local config uses GCC on ESP-IDF 5.5.4), LVGL 9.3, `esp_lvgl_port` 2.6, local Board Manager and BigSmart board components.
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback scaffolding, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated.
-- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Assistant, and Smart.
-- Current built artifact seen in `build/rodakos.bin`: about 3.7MB, fitting inside the 8MB factory partition.
+- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated.
+- The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
+- Home resolves a versioned exact-ID layout from `home/layout`, reconciles it against the Registry in
+  RAM, and supports folder browsing plus draft-only reorder/create/rename/move/dissolve commands with
+  one guarded save on Done. It restores its runtime page anchor and caps the managed desktop at eight
+  pages with a read-only `All Apps` slot. Stable tile shells remain allocated, while only the active
+  page and its immediate neighbors retain grids and buttons. Scroll-end refreshes release far-page
+  child trees asynchronously and populate in active, previous, next order; a direction is enabled
+  only after its adjacent page is ready. Pending refreshes are canceled before theme rebuild or
+  navigation teardown, and Home logs final internal-SRAM free space and largest free block.
+- `tests/home_ui` compiles the production Home UI against LVGL 9.3's in-memory display and test
+  pointer. Its thirteen tests cover tap-versus-drag suppression on one-page boundaries and real
+  multi-page swipes, long press, Cancel/Done, repeated Home, theme rebuild, keyboard geometry, the
+  96/97-app `All Apps` boundary, and asynchronous active-plus-neighbors residency. The suite reports
+  13 tests and 0 failures, including 20 repeated normal runs and an ASan/UBSan run
+  with leak detection.
+- The latest protected COM3 refresh reached Home with 11 visible apps and one resident page; final
+  internal SRAM was 65,387 bytes free with a 43,008-byte largest block. This is only a single-page baseline:
+  multi-page swiping is not hardware-verified, GT911/ST7789 interaction and readability still need
+  manual or fixture validation, and true out-of-memory recovery remains unproven while LVGL uses
+  CLIB allocation with malloc assertions enabled.
+- IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
+- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Recorder, Assistant, and Smart.
+- Current built artifact seen in `build/rodakos.bin`: about 3.2 MiB. The main application slot is
+  13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
 
@@ -22,7 +44,7 @@ Activate the local ESP-IDF environment, then run any project script directly. Th
 
 # Or pick a version, or list what's installed
 . .\activate_idf.ps1 -List
-. .\activate_idf.ps1 -Version v5.4.2
+. .\activate_idf.ps1 -Version v5.5.4
 
 # First build, board changes, or after deleting generated board files
 .\build_rodakos.ps1
@@ -30,12 +52,28 @@ Activate the local ESP-IDF environment, then run any project script directly. Th
 # Daily incremental build
 idf.py build
 
-# Flash and monitor, default COM3
+# Build the first-flash Recovery bundle and the normal Rodak OTA artifact
+.\build_ota_bundle.ps1
+
+# Refresh an existing Recovery-layout device, preserving NVS and OTA journal
 .\flash_and_test.ps1
+
+# Refresh, verify the complete boot handoff, and leave the device running
+.\flash_and_test.ps1 -NoMonitor
+
+# First Recovery-layout migration; intentionally clears all device state
+.\flash_and_test.ps1 -Erase -NoMonitor
 
 # Or choose a port
 .\flash_and_test.ps1 -Port COM5
 ```
+
+Without `-Erase`, the flash script first verifies that the installed partition table and immutable
+Recovery match the package, then writes only `otadata` and `ota_0`; default NVS and the isolated OTA
+journal are preserved. `-Erase` is the explicit first-migration path and writes the complete 16 MiB
+image. Both paths keep the device in download mode until serial capture is ready, then verify
+Recovery handoff, main-image confirmation, and Home startup. The monitor attaches with `--no-reset`,
+so it cannot turn a still-unconfirmed image into an aborted rollback candidate.
 
 Manual board regeneration is:
 
@@ -48,6 +86,31 @@ idf.py build
 ```
 
 `components/gen_bmgr_codes/` is generated by Board Manager and intentionally gitignored. Always run `.\fix_gen_paths.ps1` after `idf.py bmgr`.
+
+App-model host tests run outside the firmware build and do not change the device partition layout.
+They compile a test-only copy of the same cJSON 1.7.19 used by the ESP-IDF 5.5.4 baseline, so no host
+JSON package or active IDF shell is required:
+
+```powershell
+wsl -d Debian -- bash -lc '
+  cmake -S /mnt/d/workspace/rodakos/tests/app_model \
+        -B /tmp/rodakos-app-model -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+  cmake --build /tmp/rodakos-app-model &&
+  ctest --test-dir /tmp/rodakos-app-model --output-on-failure
+'
+```
+
+The Home UI host target compiles the real `HomeApp`, `PhoneUi`, layout, theme, components, and
+`SoftKeyboard` against LVGL 9.3 with an in-memory 320x240 display and LVGL test pointer:
+
+```powershell
+wsl -d Debian -- bash -lc '
+  cmake -S /mnt/d/workspace/rodakos/tests/home_ui \
+        -B /tmp/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+  cmake --build /tmp/rodakos-home-ui &&
+  ctest --test-dir /tmp/rodakos-home-ui --output-on-failure
+'
+```
 
 ## Project Layout
 
@@ -67,7 +130,13 @@ components/
 docs/
 ├── architecture.md        # Layering and service/app model
 ├── firmware-download.md   # Build, flash, monitor, and esptool details
+├── home-layout-design.md  # ID-based Home ordering and folder design
+├── openos-comparison.md   # OpenOS research and RodakOS design decisions
 └── roadmap.md             # Current baseline and near-term plan
+
+tests/
+├── app_model/             # Host-side Home model/store, Registry, Host, and Navigation tests
+└── home_ui/               # Production HomeApp exercised against host LVGL 9.3
 ```
 
 ## Hardware Configuration
@@ -84,14 +153,18 @@ Key files:
 - `board_peripherals.yaml`: GPIO, I2C, SPI, SDMMC, ADC, DVP, LEDC/RMT-level pins.
 - `setup_device.c`: board-specific initialization hooks.
 
-The project uses `partitions_16m.csv`:
+The project uses `partitions_16m.csv`. OTA payloads are staged on SD, so internal flash reserves an
+immutable Recovery and one large main application slot:
 
 ```csv
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x800000,
-storage,  data, fat,     ,        0x7E0000,
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x6000,
+otadata,   data, ota,     0xf000,   0x2000,
+phy_init,  data, phy,     0x11000,  0x1000,
+ota_state, data, nvs,     0x12000,  0x6000,
+recovery,  app,  factory, 0x20000,  0x280000,
+app,       app,  ota_0,   0x2a0000, 0xd50000,
+coredump,  data, coredump,0xff0000, 0x10000,
 ```
 
 Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously caused capacity errors.
@@ -101,6 +174,9 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
+- [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
+- [OpenOS comparison and design decisions](docs/openos-comparison.md)
+- [Home layout and folder design](docs/home-layout-design.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Agent/developer notes](AGENTS.md)
 
