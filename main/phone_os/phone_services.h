@@ -14,6 +14,7 @@ class FileService;
 class LightService;
 class MotionService;
 class MusicPlayerService;
+class RecordingService;
 class VoiceAssistantService;
 class VoiceWakeService;
 class WebFileSystemService;
@@ -38,6 +39,9 @@ public:
 
     void SetMusicPlayer(rodakos::MusicPlayerService* music_player) { music_player_ = music_player; }
     rodakos::MusicPlayerService* music_player() { return music_player_; }
+
+    void SetRecording(rodakos::RecordingService* recording) { recording_ = recording; }
+    rodakos::RecordingService* recording() { return recording_; }
 
     void SetLights(rodakos::LightService* lights) { lights_ = lights; }
     rodakos::LightService* lights() { return lights_; }
@@ -73,6 +77,7 @@ private:
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::MusicPlayerService* music_player_ = nullptr;
+    rodakos::RecordingService* recording_ = nullptr;
     rodakos::LightService* lights_ = nullptr;
     rodakos::MotionService* motion_ = nullptr;
     rodakos::ButtonBindingService* buttons_ = nullptr;

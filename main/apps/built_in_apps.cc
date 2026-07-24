@@ -8,6 +8,7 @@
 #include "apps/file_manager/file_manager_app.h"
 #include "apps/gyro/gyro_app.h"
 #include "apps/music/music_app.h"
+#include "apps/recorder/recorder_app.h"
 #include "apps/assistant/assistant_app.h"
 #include "apps/system_info/system_info_app.h"
 #include "apps/smart/smart_app.h"
@@ -23,6 +24,7 @@ void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterGyroApp(registry);
     RegisterSystemInfoApp(registry);
     RegisterMusicApp(registry);
+    RegisterRecorderApp(registry);
     RegisterAssistantApp(registry);
     RegisterSmartApp(registry);
 }

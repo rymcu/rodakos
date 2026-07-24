@@ -2,6 +2,7 @@
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include "rodakos_adapters/file_service.h"
+#include "rodakos_adapters/audio_codec_input.h"
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_services.h"
@@ -9,6 +10,7 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
 #include "phone_os/music_player_service.h"
+#include "phone_os/recording_service.h"
 #include "phone_os/light_service.h"
 #include "phone_os/motion_service.h"
 #include "phone_os/button_binding_service.h"
@@ -364,6 +366,8 @@ extern "C" void app_main(void) {
     static rodakos::MotionService motion_service(&qmi8658_motion_sensor);
     static rodakos::ButtonBindingService button_binding_service;
     static rodakos::AudioFocusService audio_focus_service(music_player_service);
+    static rodakos::AudioCodecInput audio_input;
+    static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
@@ -374,6 +378,7 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_wake_runtime);
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
+    ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
 
     static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
@@ -388,6 +393,7 @@ extern "C" void app_main(void) {
     services.SetAudio(&audio_service);
     services.SetAudioOutput(&audio_output_service);
     services.SetMusicPlayer(&music_player_service);
+    services.SetRecording(&recording_service);
     services.SetLights(&light_service);
     services.SetMotion(&motion_service);
     services.SetButtons(&button_binding_service);
