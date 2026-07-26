@@ -35,8 +35,8 @@ flowchart TD
 The board layer is esp-brookesia plus Board Manager generated code. RodakOS does not keep a hand-written `main/board/` implementation anymore.
 
 - Board YAML lives under `components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/`.
-- `idf.py bmgr -b rymcu_bigsmart` regenerates `components/gen_bmgr_codes/`.
-- `fix_gen_paths.ps1` rewrites generated paths so the local `components/` copy is used instead of old `managed_components` paths.
+- `generate_board_config.ps1` owns Board Manager generation, including cold-bootstrap passes,
+  generated-path normalization, and reconfiguration.
 - Device handles are acquired through `esp_board_manager_get_device_handle()` and adapted by RodakOS services.
 
 ## Phone OS

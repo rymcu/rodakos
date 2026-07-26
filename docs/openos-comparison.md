@@ -23,7 +23,7 @@ install transaction design, not implementation architecture.
 | Area | OpenOS at reviewed revision | RodakOS direction |
 | --- | --- | --- |
 | Target | Classic ESP32 CYD / ESP32-2432S028R | ESP32-S3 RYMCU BigSmart |
-| Framework | Arduino with PlatformIO | ESP-IDF 5.5.4 |
+| Framework | Arduino with PlatformIO | ESP-IDF 6.0.2 |
 | Display/input | ILI9341, TFT_eSPI, XPT2046 | ST7789, LVGL 9.3, cached GT911 bridge |
 | Memory assumption | No PSRAM required | 8 MiB PSRAM available |
 | App delivery | SD-hosted OSA scripts and bytecode | Statically linked native apps; future MiniApps separate |

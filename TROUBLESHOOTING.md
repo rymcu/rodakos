@@ -25,7 +25,7 @@ If more than one ESP-IDF version is installed, list and select one explicitly:
 
 ```powershell
 . .\activate_idf.ps1 -List
-. .\activate_idf.ps1 -Version v5.5.4
+. .\activate_idf.ps1 -Version v6.0.2
 ```
 
 ## Board "rymcu_bigsmart" Not Found
@@ -36,35 +36,27 @@ Symptom:
 Board "rymcu_bigsmart" not found
 ```
 
-Cause: `brookesia_hal_boards` keeps BigSmart under `boards/rymcu/rymcu_bigsmart`, while Board Manager may scan `components/esp_board_manager/boards/` directly.
+Cause: Board Manager generation is missing, stale, or was invoked without the project extension path.
 
 Fix:
 
 ```powershell
-.\setup_board.ps1
-idf.py bmgr -b rymcu_bigsmart
-.\fix_gen_paths.ps1
+. .\activate_idf.ps1 -Version v6.0.2
+.\generate_board_config.ps1
 idf.py build
-```
-
-Manual junction:
-
-```powershell
-cd D:\workspace\rodakos\components\esp_board_manager\boards
-New-Item -ItemType Junction -Path "rymcu_bigsmart" -Target "..\..\brookesia_hal_boards\boards\rymcu\rymcu_bigsmart"
 ```
 
 ## Generated Paths Point To managed_components
 
 Symptoms include `override_path` errors or CMake failing to find `setup_device.c`.
 
-Cause: `idf.py bmgr` can generate paths that refer to the old `managed_components` location.
+Cause: the gitignored generated component predates the current local Board Manager or IDF baseline.
 
 Fix:
 
 ```powershell
-idf.py bmgr -b rymcu_bigsmart
-.\fix_gen_paths.ps1
+. .\activate_idf.ps1 -Version v6.0.2
+.\generate_board_config.ps1
 idf.py build
 ```
 
@@ -134,12 +126,14 @@ Build the latest package and use the guarded refresh flow on a device that alrea
 layout:
 
 ```powershell
-. .\activate_idf.ps1 -Version v5.5.4
+. .\activate_idf.ps1 -Version v6.0.2
 .\build_ota_bundle.ps1
+.\flash_and_test.ps1 -Port COM3 -VerifyOnly
 .\flash_and_test.ps1 -Port COM3 -NoMonitor
 ```
 
-The default refresh first verifies the installed partition table and Recovery, then updates only
+`-VerifyOnly` performs the same partition-table and Recovery hash gate without writing Flash. The
+default refresh first verifies those regions again, then updates only
 `otadata` and `ota_0`, preserving NVS and the isolated OTA journal. Use `-Erase` only for the first
 Recovery-layout migration or when clearing all device state is intentional. The script captures the
 first boot without a log gap, requires the OTA confirmation marker, and will not open a monitor after
@@ -152,37 +146,25 @@ it. If it matches the package, restore only the package's `ota_data_initial.bin`
 entire Recovery-to-main sequence. Preserve the first failure log; a later reset replaces the useful
 startup error with the generic Recovery rejection.
 
-## Bootloader Clang Response-File Error On Windows
+## Wrong ESP-IDF Or GCC Toolchain
 
 Symptom:
 
-```text
-clang: error: no such file or directory: '@D:/workspace/rodakos/build/bootloader/toolchain/cflags'
-```
+Symptoms include an environment-gate failure, an unexpected compiler path, or errors caused by
+building with an IDF version other than the locked 6.0.2 baseline.
 
-Cause: ESP-IDF 5.5.4 with Clang on Windows can mishandle response files.
-
-Preferred fixes:
-
-1. Use GCC. Current `sdkconfig` sets:
-
-```ini
-CONFIG_IDF_TOOLCHAIN="gcc"
-CONFIG_IDF_TOOLCHAIN_GCC=y
-```
-
-2. Clean and regenerate:
+Fix:
 
 ```powershell
-idf.py fullclean
-Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force components/gen_bmgr_codes -ErrorAction SilentlyContinue
-idf.py bmgr -b rymcu_bigsmart
-.\fix_gen_paths.ps1
+. .\activate_idf.ps1 -Version v6.0.2
+.\assert_idf6_environment.ps1
+.\generate_board_config.ps1
 idf.py build
 ```
 
-3. If command-line builds remain broken, use the VSCode ESP-IDF extension.
+The gate verifies the exact IDF version and the recommended Xtensa GCC from that installation's
+`tools/tools.json`. The old ESP-IDF 5.5.4 Clang response-file workaround is no longer part of the
+current build path.
 
 ## LCD Config Field Errors
 

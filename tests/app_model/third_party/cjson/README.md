@@ -1,6 +1,6 @@
 # cJSON host-test copy
 
-These files are cJSON 1.7.19 from ESP-IDF 5.5.4
+These files are cJSON 1.7.19, matching the ESP-IDF 6.0.2 project baseline.
 (`components/json/cJSON`). They are compiled only by the host app-model tests so the tests use the
 same parser version as the firmware without requiring an ESP-IDF checkout on the host.
 
