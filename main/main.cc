@@ -310,8 +310,10 @@ extern "C" void app_main(void) {
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = lcd_handles->io_handle,
         .panel_handle = lcd_handles->panel_handle,
+        .control_handle = nullptr,
         .buffer_size = static_cast<uint32_t>(lcd_cfg->lcd_width) * 40,
         .double_buffer = true,
+        .trans_size = 0,
         .hres = lcd_cfg->lcd_width,
         .vres = lcd_cfg->lcd_height,
         .monochrome = false,
@@ -320,10 +322,16 @@ extern "C" void app_main(void) {
             .mirror_x = static_cast<bool>(lcd_cfg->mirror_x),
             .mirror_y = static_cast<bool>(lcd_cfg->mirror_y),
         },
+        .rounder_cb = nullptr,
+        .color_format = LV_COLOR_FORMAT_RGB565,
         .flags = {
             .buff_dma = true,
+            .buff_spiram = false,
+            .sw_rotate = false,
             .swap_bytes = true,  // RGB565 字节序交换
-        }
+            .full_refresh = false,
+            .direct_mode = false,
+        },
     };
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
     if (disp == nullptr) {

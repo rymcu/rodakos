@@ -94,12 +94,12 @@ required `otaJournalSchemaVersion`.
 Activate ESP-IDF, then run:
 
 ```powershell
-. .\activate_idf.ps1 -Version v5.5.4
+. .\activate_idf.ps1 -Version v6.0.2
 .\build_ota_bundle.ps1
 ```
 
-The script reuses an existing Board Manager generation. Pass `-RegenerateBoardConfig` after changing
-board YAML/defaults or when the generated component is missing.
+The script regenerates the Board Manager component before every package build so stale generated
+code cannot enter the Recovery or OTA artifacts.
 
 The package contains:
 

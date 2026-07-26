@@ -8,17 +8,17 @@ This guide covers building RodakOS, flashing it to an ESP32-S3 RYMCU BigSmart, a
 - Target: `esp32s3`
 - Flash: 16MB
 - Default port: `COM3`
-- Current local toolchain config: GCC on ESP-IDF 5.5.4
+- Current baseline: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain
 
 Activate the project-local script once per PowerShell session:
 
 ```powershell
-. .\activate_idf.ps1                 # auto-detect installed ESP-IDF
-. .\activate_idf.ps1 -Version v5.4.2 # pin a specific version
+. .\activate_idf.ps1                 # prefer the installed 6.0.2 baseline
+. .\activate_idf.ps1 -Version v6.0.2 # pin the baseline explicitly
 . .\activate_idf.ps1 -List           # show what's installed
 ```
 
-The activator scans `C:\esp\<vX.Y.Z>\esp-idf\`, reads `C:\Espressif\tools\eim_idf.json`, and falls back to `$env:IDF_PATH`. After activation, `idf.py` is on PATH and `$env:IDF_PATH` is set, so the project scripts (`build_rodakos.ps1`, `flash_and_test.ps1`, etc.) work directly without the official Microsoft `*PowerShell_profile.ps1`.
+The activator scans `C:\esp\<vX.Y.Z>\esp-idf\`, reads `C:\Espressif\tools\eim_idf.json`, and falls back to `$env:IDF_PATH`. It selects tool versions from the chosen IDF's `tools/tools.json`. After activation, `idf.py` is on PATH and `$env:IDF_PATH` is set, so the project scripts (`build_rodakos.ps1`, `flash_and_test.ps1`, etc.) work directly without the official Microsoft `*PowerShell_profile.ps1`.
 
 Verify the environment:
 
@@ -37,19 +37,17 @@ cd D:\workspace\rodakos
 
 The script:
 
-1. Checks required files such as `partitions_16m.csv`.
-2. Runs `idf.py bmgr -b rymcu_bigsmart`.
-3. Runs the generated-path fix.
-4. Reconfigures and builds the project.
+1. Verifies the ESP-IDF 6.0.2 environment and required files.
+2. Clears the main build directory.
+3. Calls `generate_board_config.ps1` for cold bootstrap, path normalization, and reconfiguration.
+4. Verifies the generated component and builds the project.
 
 Manual equivalent:
 
 ```powershell
 cd D:\workspace\rodakos
 . .\activate_idf.ps1
-idf.py set-target esp32s3
-idf.py bmgr -b rymcu_bigsmart
-.\fix_gen_paths.ps1
+.\generate_board_config.ps1
 idf.py build
 ```
 
@@ -71,12 +69,12 @@ partition layout.
 Build both images and create the handoff package with:
 
 ```powershell
-. .\activate_idf.ps1 -Version v5.5.4
+. .\activate_idf.ps1 -Version v6.0.2
 .\build_ota_bundle.ps1
 ```
 
-Pass `-RegenerateBoardConfig` when board YAML/defaults changed. Otherwise the packaging script reuses
-the existing generated Board Manager component to avoid an unnecessary full rebuild.
+The packaging script always regenerates the Board Manager component before building so a stale,
+gitignored IDF 5 artifact cannot enter a release package.
 
 Use the generated merged image for the first wired migration. Normal Rodak OTA releases upload only
 the generated `rodakos.bin`, never the merged flash image.
@@ -95,6 +93,16 @@ factory partition for this project layout.
 
 ## Flash And Monitor
 
+Before changing device state, verify whether the installed partition table and immutable Recovery
+match the latest package:
+
+```powershell
+.\flash_and_test.ps1 -Port COM3 -VerifyOnly
+```
+
+This mode reads and hashes both regions, writes nothing, resets the device, and exits. A mismatch
+requires the explicit first-migration `-Erase` path below.
+
 ```powershell
 cd D:\workspace\rodakos
 . .\activate_idf.ps1
@@ -112,7 +120,7 @@ For the first Recovery-layout migration, explicitly erase and write the complete
 .\flash_and_test.ps1 -Port COM3 -Erase -NoMonitor
 ```
 
-Both paths flash with `--after no_reset`, open one serial connection before releasing reset, and
+Both paths flash with `--after no-reset`, open one serial connection before releasing reset, and
 validate the Recovery-to-main handoff. The script starts the interactive monitor only after all boot
 health markers and the local OTA confirmation marker are present. A failure or timeout exits
 nonzero without causing a second reset.
@@ -173,7 +181,7 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-Current observed `build\rodakos.bin` size is about 3.2 MiB. The main `ota_0` partition is
+Current observed IDF 6 `build\rodakos.bin` size is about 3.30 MiB. The main `ota_0` partition is
 13.3125 MiB; the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash
@@ -183,7 +191,7 @@ migration uses the merged package generated above:
 
 ```powershell
 python -m esptool --chip esp32s3 -p COM3 -b 460800 `
-  --before default_reset --after hard_reset write_flash `
+  --before default-reset --after hard-reset write-flash `
   0x0 build\packages\ota\<timestamp>\rodakos_sd_recovery_merged.bin
 ```
 
@@ -204,4 +212,5 @@ Use this only when you intentionally want to reset device state.
 
 ## Common Problems
 
-See [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) for Board Manager path fixes, Clang response-file issues, partition errors, touch polling notes, SD card errors, and runtime diagnostics.
+See [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) for Board Manager recovery, toolchain checks,
+partition errors, touch polling notes, SD card errors, and runtime diagnostics.

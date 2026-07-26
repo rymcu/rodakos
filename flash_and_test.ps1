@@ -7,6 +7,7 @@ param(
     [string]$Port = "COM3",
     [string]$MergedImage = "",
     [switch]$Erase,
+    [switch]$VerifyOnly,
     [ValidateRange(5, 120)]
     [int]$CaptureSeconds = 45,
     [switch]$NoMonitor
@@ -22,6 +23,11 @@ if (-not $env:IDF_PATH) {
 }
 
 $ErrorActionPreference = "Stop"
+if ($Erase -and $VerifyOnly) {
+    Write-Host "❌ -Erase 与 -VerifyOnly 不能同时使用" -ForegroundColor Red
+    exit 1
+}
+& (Join-Path $PSScriptRoot "assert_idf6_environment.ps1") -SkipCompiler
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RodakOS 烧录和测试" -ForegroundColor Cyan
@@ -85,6 +91,7 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $imageMetadata = $manifest.firstFlashImage
 $mainMetadata = $manifest
+$bootloaderMetadata = $manifest.bootloaderImage
 $recoveryMetadata = $manifest.recoveryImage
 $otaDataMetadata = $manifest.otaDataImage
 $appPartitionMetadata = $manifest.appPartition
@@ -92,7 +99,8 @@ $recoveryPartitionMetadata = $manifest.recoveryPartition
 $otaDataPartitionMetadata = $manifest.otaDataPartition
 $partitionTableMetadata = $manifest.partitionTableChecksum
 if ($manifest.protocolVersion -ne 2 -or $manifest.otaJournalSchemaVersion -ne 1 -or
-    $null -eq $imageMetadata -or $null -eq $recoveryMetadata -or
+    $null -eq $imageMetadata -or $null -eq $bootloaderMetadata -or
+    $null -eq $recoveryMetadata -or
     $null -eq $otaDataMetadata -or $null -eq $appPartitionMetadata -or
     $null -eq $recoveryPartitionMetadata -or $null -eq $otaDataPartitionMetadata -or
     $null -eq $partitionTableMetadata) {
@@ -101,10 +109,12 @@ if ($manifest.protocolVersion -ne 2 -or $manifest.otaJournalSchemaVersion -ne 1 
 }
 
 $mainImage = Join-Path $packageDirectory ([string]$mainMetadata.fileName)
+$bootloaderImage = Join-Path $packageDirectory ([string]$bootloaderMetadata.fileName)
 $recoveryImage = Join-Path $packageDirectory ([string]$recoveryMetadata.fileName)
 $otaDataImage = Join-Path $packageDirectory ([string]$otaDataMetadata.fileName)
 $partitionTableImage = Join-Path $packageDirectory "partition-table.bin"
-foreach ($artifact in @($mainImage, $recoveryImage, $otaDataImage, $partitionTableImage)) {
+foreach ($artifact in @($mainImage, $bootloaderImage, $recoveryImage, $otaDataImage,
+                         $partitionTableImage)) {
     if (-not (Test-Path -LiteralPath $artifact)) {
         Write-Host "  ❌ 缺少包内刷写产物：$artifact" -ForegroundColor Red
         exit 1
@@ -124,6 +134,9 @@ if ([string]$imageMetadata.fileName -ne (Split-Path -Leaf $MergedImage) -or
 
 $mainSize = (Get-Item -LiteralPath $mainImage).Length
 $mainHash = (Get-FileHash -LiteralPath $mainImage -Algorithm SHA256).Hash.ToLowerInvariant()
+$bootloaderSize = (Get-Item -LiteralPath $bootloaderImage).Length
+$bootloaderHash =
+    (Get-FileHash -LiteralPath $bootloaderImage -Algorithm SHA256).Hash.ToLowerInvariant()
 $recoverySize = (Get-Item -LiteralPath $recoveryImage).Length
 $recoveryHash = (Get-FileHash -LiteralPath $recoveryImage -Algorithm SHA256).Hash.ToLowerInvariant()
 $otaDataSize = (Get-Item -LiteralPath $otaDataImage).Length
@@ -131,6 +144,9 @@ $otaDataHash = (Get-FileHash -LiteralPath $otaDataImage -Algorithm SHA256).Hash.
 $partitionTableHash = (Get-FileHash -LiteralPath $partitionTableImage -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($mainSize -ne [long]$mainMetadata.fileSize -or
     $mainHash -ne ([string]$mainMetadata.checksumValue).ToLowerInvariant() -or
+    $bootloaderSize -ne [long]$bootloaderMetadata.fileSize -or
+    [string]$bootloaderMetadata.checksumType -ne "sha256" -or
+    $bootloaderHash -ne ([string]$bootloaderMetadata.checksumValue).ToLowerInvariant() -or
     $recoverySize -ne [long]$recoveryMetadata.fileSize -or
     $recoveryHash -ne ([string]$recoveryMetadata.checksumValue).ToLowerInvariant() -or
     $otaDataSize -ne [long]$otaDataMetadata.fileSize -or
@@ -142,11 +158,13 @@ if ($mainSize -ne [long]$mainMetadata.fileSize -or
 
 $appOffset = [string]$appPartitionMetadata.offset
 $appSizeText = [string]$appPartitionMetadata.size
+$bootloaderOffset = [string]$bootloaderMetadata.offset
 $recoveryOffset = [string]$recoveryPartitionMetadata.offset
 $recoverySizeText = [string]$recoveryPartitionMetadata.size
 $otaDataOffset = [string]$otaDataPartitionMetadata.offset
 $otaDataSizeText = [string]$otaDataPartitionMetadata.size
-foreach ($hexValue in @($appOffset, $appSizeText, $recoveryOffset, $recoverySizeText,
+foreach ($hexValue in @($appOffset, $appSizeText, $bootloaderOffset,
+                         $recoveryOffset, $recoverySizeText,
                          $otaDataOffset, $otaDataSizeText)) {
     if ($hexValue -notmatch '^0x[0-9a-fA-F]+$') {
         Write-Host "  ❌ manifest 包含无效的分区值：$hexValue" -ForegroundColor Red
@@ -158,6 +176,7 @@ $otaDataPartitionSize = [Convert]::ToInt64($otaDataSizeText.Substring(2), 16)
 if ([string]$appPartitionMetadata.label -ne "app" -or
     [string]$recoveryPartitionMetadata.label -ne "recovery" -or
     [string]$otaDataPartitionMetadata.label -ne "otadata" -or
+    $bootloaderOffset -ne "0x0" -or
     $appOffset -ne "0x2a0000" -or $appSizeText -ne "0xd50000" -or
     $recoveryOffset -ne "0x20000" -or $recoverySizeText -ne "0x280000" -or
     $otaDataOffset -ne "0xf000" -or $otaDataSizeText -ne "0x2000" -or
@@ -181,75 +200,81 @@ Write-Host "  合并镜像 SHA-256: $actualHash" -ForegroundColor White
 Write-Host "  主应用 SHA-256: $mainHash" -ForegroundColor White
 Write-Host ""
 
-Write-Host "[2/4] 烧录到设备 ($Port)..." -ForegroundColor Yellow
-Write-Host "  按 Ctrl+C 可中断烧录" -ForegroundColor Gray
+if ($VerifyOnly) {
+    Write-Host "[2/4] 只读验证设备 ($Port)..." -ForegroundColor Yellow
+} else {
+    Write-Host "[2/4] 烧录到设备 ($Port)..." -ForegroundColor Yellow
+    Write-Host "  按 Ctrl+C 可中断烧录" -ForegroundColor Gray
+}
 Write-Host ""
 
 if ($Erase) {
     Write-Host "  首次分区迁移：擦除整片 Flash，设备设置和 OTA 状态将被清空" -ForegroundColor Yellow
-    python -m esptool --chip esp32s3 -p $Port --after no_reset erase_flash
+    python -m esptool --chip esp32s3 -p $Port --after no-reset erase-flash
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  ❌ 擦除失败" -ForegroundColor Red
         exit 1
     }
     python -m esptool --chip esp32s3 -p $Port -b 460800 `
-        --before no_reset --after no_reset write_flash 0x0 $MergedImage
+        --before no-reset --after no-reset write-flash 0x0 $MergedImage
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  ❌ 烧录失败" -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "  增量刷新：保留默认 NVS、OTA journal、Recovery 和 coredump" -ForegroundColor Yellow
-    Write-Host "  仅写入 $otaDataOffset (otadata) 与 $appOffset (ota_0)" -ForegroundColor White
+    if ($VerifyOnly) {
+        Write-Host "  只读检查：不会写入 Flash" -ForegroundColor Yellow
+        Write-Host "  核对 $bootloaderOffset Bootloader、0x8000 分区表与 $recoveryOffset Recovery" -ForegroundColor White
+    } else {
+        Write-Host "  增量刷新：保留默认 NVS、OTA journal、Recovery 和 coredump" -ForegroundColor Yellow
+        Write-Host "  仅写入 $otaDataOffset (otadata) 与 $appOffset (ota_0)" -ForegroundColor White
+    }
 
-    $devicePartitionDump = Join-Path $bootLogDirectory (".partition-{0}.bin" -f $PID)
-    $deviceRecoveryDump = Join-Path $bootLogDirectory (".recovery-{0}.bin" -f $PID)
     $writeStarted = $false
+    $verificationOnlyComplete = $false
     $incrementalError = $null
     try {
-        $partitionTableSize = (Get-Item -LiteralPath $partitionTableImage).Length
         python -m esptool --chip esp32s3 -p $Port -b 460800 `
-            --before default_reset --after no_reset read_flash `
-            0x8000 $partitionTableSize $devicePartitionDump
+            --before default-reset --after no-reset verify-flash `
+            $bootloaderOffset $bootloaderImage `
+            0x8000 $partitionTableImage $recoveryOffset $recoveryImage
         if ($LASTEXITCODE -ne 0) {
-            throw "无法读取设备分区表"
+            throw "设备分区表或 Recovery 校验失败；digest mismatch 时首次迁移请显式使用 -Erase"
         }
 
-        python -m esptool --chip esp32s3 -p $Port -b 460800 `
-            --before no_reset --after no_reset read_flash `
-            $recoveryOffset $recoverySize $deviceRecoveryDump
-        if ($LASTEXITCODE -ne 0) {
-            throw "无法读取设备 Recovery"
-        }
-
-        $devicePartitionHash = (Get-FileHash -LiteralPath $devicePartitionDump -Algorithm SHA256).Hash.ToLowerInvariant()
-        $deviceRecoveryHash = (Get-FileHash -LiteralPath $deviceRecoveryDump -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($devicePartitionHash -ne $partitionTableHash -or
-            $deviceRecoveryHash -ne $recoveryHash) {
-            throw "设备分区表或 Recovery 与当前包不一致；首次迁移请显式使用 -Erase"
-        }
-
-        $writeStarted = $true
-        python -m esptool --chip esp32s3 -p $Port -b 460800 `
-            --before no_reset --after no_reset write_flash `
-            $otaDataOffset $otaDataImage $appOffset $mainImage
-        if ($LASTEXITCODE -ne 0) {
-            throw "增量烧录失败"
+        if ($VerifyOnly) {
+            $verificationOnlyComplete = $true
+        } else {
+            $writeStarted = $true
+            python -m esptool --chip esp32s3 -p $Port -b 460800 `
+                --before no-reset --after no-reset write-flash `
+                $otaDataOffset $otaDataImage $appOffset $mainImage
+            if ($LASTEXITCODE -ne 0) {
+                throw "增量烧录失败"
+            }
         }
     } catch {
         $incrementalError = $_
-    } finally {
-        Remove-Item -LiteralPath $devicePartitionDump, $deviceRecoveryDump `
-            -Force -ErrorAction SilentlyContinue
     }
 
     if ($null -ne $incrementalError) {
         Write-Host "  ❌ $($incrementalError.Exception.Message)" -ForegroundColor Red
         if (-not $writeStarted) {
             python -m esptool --chip esp32s3 -p $Port `
-                --before no_reset --after hard_reset flash_id | Out-Null
+                --before no-reset --after hard-reset flash-id | Out-Null
         }
         exit 1
+    }
+
+    if ($VerifyOnly -and $verificationOnlyComplete) {
+        python -m esptool --chip esp32s3 -p $Port `
+            --before no-reset --after hard-reset flash-id | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ❌ 只读验证完成，但设备复位失败" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "  ✅ 分区表与 Recovery 均匹配；未写入 Flash" -ForegroundColor Green
+        exit 0
     }
 }
 Write-Host "  ✅ 烧录完成" -ForegroundColor Green

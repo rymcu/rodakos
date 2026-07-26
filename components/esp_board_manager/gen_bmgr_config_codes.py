@@ -1970,12 +1970,15 @@ idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)
             #   amend dir-item (deduplicated).
             board_src_dirs: List[str] = []
             if board_path and os.path.exists(board_path):
-                # Calculate relative path from gen_bmgr_codes to board directory
-                board_relative_path = os.path.relpath(board_path, gen_bmgr_codes_dir)
-                board_relative_path = Path(board_relative_path).as_posix()
                 board_path = Path(board_path).as_posix()
-                board_src_dirs.append(f'"{board_relative_path}"')
-                self.logger.info(f'   Added board source directory: {board_relative_path}')
+                if selected_board == 'rymcu_bigsmart':
+                    self.logger.info('   Board source is owned by brookesia_hal_boards')
+                else:
+                    # Calculate relative path from gen_bmgr_codes to board directory
+                    board_relative_path = os.path.relpath(board_path, gen_bmgr_codes_dir)
+                    board_relative_path = Path(board_relative_path).as_posix()
+                    board_src_dirs.append(f'"{board_relative_path}"')
+                    self.logger.info(f'   Added board source directory: {board_relative_path}')
 
             amend_srcs: List[str] = []
             amend_include_dirs: List[str] = []
@@ -2032,7 +2035,7 @@ message(STATUS "Board Path: {board_path if board_path else 'Not specified'}")
             cmakelists_content = f"""{board_info_output}idf_component_register(
     SRC_DIRS {src_dirs_str}
     INCLUDE_DIRS {include_dirs_str}
-    REQUIRES esp_board_manager
+    REQUIRES brookesia_hal_boards esp_board_manager
 )
 
 # This is equivalent to adding WHOLE_ARCHIVE option to the idf_component_register call above:

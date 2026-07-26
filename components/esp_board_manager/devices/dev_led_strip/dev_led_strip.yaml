@@ -14,10 +14,10 @@
     # - LED_MODEL_SK6812
     # - LED_MODEL_WS2811
     # - LED_MODEL_WS2816
-    led_pixel_format: LED_PIXEL_FORMAT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
+    color_component_format: LED_STRIP_COLOR_COMPONENT_FMT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
     # Common values include:
-    # - LED_PIXEL_FORMAT_GRB
-    # - LED_PIXEL_FORMAT_GRBW
+    # - LED_STRIP_COLOR_COMPONENT_FMT_GRB
+    # - LED_STRIP_COLOR_COMPONENT_FMT_GRBW
     invert_out: false                  # Invert output signal level (default: false)
     # Optional logical lights. Omit this section to expose one logical light per LED.
     logical_lights:
@@ -46,10 +46,10 @@
     # - LED_MODEL_SK6812
     # - LED_MODEL_WS2811
     # - LED_MODEL_WS2816
-    led_pixel_format: LED_PIXEL_FORMAT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
+    color_component_format: LED_STRIP_COLOR_COMPONENT_FMT_GRB  # [TO_BE_CONFIRMED] Per-pixel color component order
     # Common values include:
-    # - LED_PIXEL_FORMAT_GRB
-    # - LED_PIXEL_FORMAT_GRBW
+    # - LED_STRIP_COLOR_COMPONENT_FMT_GRB
+    # - LED_STRIP_COLOR_COMPONENT_FMT_GRBW
     invert_out: false                  # Invert output signal level (default: false)
     # Optional: group physical pixels into named logical lights.
     logical_lights:

@@ -149,6 +149,10 @@ esp_err_t Qmi8658MotionSensor::InitializeHardware() {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = kQmi8658Address,
         .scl_speed_hz = 100000,
+        .scl_wait_us = 0,
+        .flags = {
+            .disable_ack_check = false,
+        },
     };
     ret = i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &i2c_dev_);
     if (ret != ESP_OK) {

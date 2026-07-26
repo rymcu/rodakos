@@ -25,6 +25,7 @@ struct DeviceCloudConfig {
     std::string mqtt_topic_shadow_desired;
     std::string mqtt_topic_ota_notify;
     std::string mqtt_topic_ota_progress;
+    std::string mqtt_topic_commands;
     std::string mqtt_topic_pc_status;
     std::string mqtt_topic_home_prefix;
     std::string activation_code;

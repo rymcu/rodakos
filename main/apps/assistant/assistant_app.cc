@@ -87,7 +87,9 @@ lv_obj_t* CreateCard(lv_obj_t* parent, lv_coord_t y, lv_coord_t height) {
 void StyleSwitch(lv_obj_t* sw) {
     lv_obj_set_size(sw, 48, 26);
     lv_obj_set_style_bg_color(sw, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sw, rodakos_theme_primary(), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    const auto checked_indicator = static_cast<lv_style_selector_t>(
+        static_cast<uint32_t>(LV_PART_INDICATOR) | static_cast<uint32_t>(LV_STATE_CHECKED));
+    lv_obj_set_style_bg_color(sw, rodakos_theme_primary(), checked_indicator);
     lv_obj_set_style_bg_color(sw, lv_color_white(), LV_PART_KNOB);
 }
 

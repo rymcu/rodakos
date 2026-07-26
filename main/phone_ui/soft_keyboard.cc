@@ -33,8 +33,10 @@ void SoftKeyboard::Show(lv_obj_t* textarea, std::function<void()> on_close) {
     lv_obj_set_style_text_color(keyboard_, rodakos_theme_text_primary(), LV_PART_ITEMS);
 
     // 按键按下效果
-    lv_obj_set_style_bg_color(keyboard_, rodakos_theme_primary(), LV_PART_ITEMS | LV_STATE_PRESSED);
-    lv_obj_set_style_text_color(keyboard_, rodakos_theme_bg_primary(), LV_PART_ITEMS | LV_STATE_PRESSED);
+    const auto pressed_items = static_cast<lv_style_selector_t>(
+        static_cast<uint32_t>(LV_PART_ITEMS) | static_cast<uint32_t>(LV_STATE_PRESSED));
+    lv_obj_set_style_bg_color(keyboard_, rodakos_theme_primary(), pressed_items);
+    lv_obj_set_style_text_color(keyboard_, rodakos_theme_bg_primary(), pressed_items);
 
     // 设置键盘模式
     lv_keyboard_set_mode(keyboard_, LV_KEYBOARD_MODE_TEXT_LOWER);

@@ -4,11 +4,13 @@ RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web pro
 
 ## Current Baseline
 
-As of 2026-07-22:
+As of 2026-07-24:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
+- ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
 - Local Board Manager configuration and BigSmart board definition for `rymcu_bigsmart`.
-- LVGL 9.3 display pipeline, double buffering, xiaozhi fonts, theme/layout helpers.
+- LVGL 9.3 with `esp_lvgl_port` 2.8, double buffering, xiaozhi fonts, theme/layout helpers.
+- IDF 6 managed MQTT 1.0.0 and cJSON 1.7.19 dependencies.
 - ST7789 display, LEDC backlight, GT911 touch via cached polling, WiFi STA, SD FileService, USB MSC mode.
 - App registry/host/navigation model is in place, validates a unique Home role, and gives the host sole ownership of app lifecycle.
 - Native Lock Screen and Control Center overlays are owned by PhoneSystem rather than modeled as apps.
@@ -17,14 +19,15 @@ As of 2026-07-22:
   multi-page hardware validation remains open.
 - Built-in apps: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Recorder, Assistant, Smart.
 - Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, voice assistant, voice wake, device cloud config, time, button binding, lights, motion, unified MQTT, and SD-staged OTA.
-- Current built app binary is about 3.2 MiB of the 13.3125 MiB main application partition.
+- Current IDF 6 app binary is about 3.30 MiB of the 13.3125 MiB main application partition.
 
 ## Milestone 0: Hardware And Build Baseline
 
 Status: done, with ongoing maintenance.
 
-- Keep `idf.py build` working from ESP-IDF PowerShell.
-- Keep `build_rodakos.ps1`, `fix_gen_paths.ps1`, and `flash_and_test.ps1` aligned with the board-manager workflow.
+- Keep `idf.py build` working behind the ESP-IDF 6.0.2 environment gate.
+- Keep `generate_board_config.ps1` cold bootstrap and its internal path normalization aligned with Board Manager.
+- Keep `build_rodakos.ps1`, `build_ota_bundle.ps1`, and `flash_and_test.ps1` aligned with that workflow.
 - Keep the 16 MiB Recovery/ota_0 partition table stable after the wired OTA migration.
 - Keep the guarded first-boot capture green before allowing an interactive monitor to attach.
 - Keep generated `components/gen_bmgr_codes/` out of git.
