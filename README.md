@@ -88,8 +88,8 @@ idf.py build
 normalization, and reconfiguration.
 
 App-model host tests run outside the firmware build and do not change the device partition layout.
-They compile a test-only copy of the same cJSON 1.7.19 used by the ESP-IDF 6.0.2 baseline, so no host
-JSON package or active IDF shell is required:
+They compile a test-only copy of the resolved `espressif/cjson` managed component used by the
+ESP-IDF 6.0.2 baseline, so no host JSON package or active IDF shell is required:
 
 ```powershell
 wsl -d Debian -- bash -lc '

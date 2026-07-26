@@ -19,37 +19,37 @@ if (-not (Test-Path $genDir)) {
     exit 1
 }
 
-# 1. 修正 idf_component.yml
-if (Test-Path (Join-Path $genDir "idf_component.yml")) {
-    $componentManifest = Join-Path $genDir "idf_component.yml"
-    $content = Get-Content -Raw -LiteralPath $componentManifest
-    $content = $content.Replace($managedForward, '../../components/brookesia_hal_boards')
-    $content = $content.Replace($managedBackward, '..\..\components\brookesia_hal_boards')
-    $content = $content.Replace($boardForward, '../../components/brookesia_hal_boards')
-    $content = $content.Replace($boardBackward, '..\..\components\brookesia_hal_boards')
-    Set-Content -LiteralPath $componentManifest -Value $content -Encoding utf8 -NoNewline
-    Write-Host "  ✅ idf_component.yml 路径已修正" -ForegroundColor Green
+$componentManifest = Join-Path $genDir "idf_component.yml"
+$generatedCmake = Join-Path $genDir "CMakeLists.txt"
+$portableFiles = @($componentManifest, $generatedCmake)
+$missingPortableFiles = @(
+    $portableFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+)
+if ($missingPortableFiles.Count -gt 0) {
+    throw "Board Manager 生成配置不完整，缺少文件：$($missingPortableFiles -join ', ')"
 }
+
+# 1. 修正 idf_component.yml
+$content = Get-Content -Raw -LiteralPath $componentManifest
+$content = $content.Replace($managedForward, '../../components/brookesia_hal_boards')
+$content = $content.Replace($managedBackward, '..\..\components\brookesia_hal_boards')
+$content = $content.Replace($boardForward, '../../components/brookesia_hal_boards')
+$content = $content.Replace($boardBackward, '..\..\components\brookesia_hal_boards')
+Set-Content -LiteralPath $componentManifest -Value $content -Encoding utf8 -NoNewline
+Write-Host "  ✅ idf_component.yml 路径已修正" -ForegroundColor Green
 
 # 2. 修正 CMakeLists.txt
-if (Test-Path (Join-Path $genDir "CMakeLists.txt")) {
-    $generatedCmake = Join-Path $genDir "CMakeLists.txt"
-    $content = Get-Content -Raw -LiteralPath $generatedCmake
-    $content = $content.Replace('../../managed_components/espressif__brookesia_hal_boards',
-                                '../../components/brookesia_hal_boards')
-    $content = $content.Replace($managedForward,
-                                '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
-    $content = $content.Replace($boardForward,
-                                '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
-    Set-Content -LiteralPath $generatedCmake -Value $content -Encoding utf8 -NoNewline
-    Write-Host "  ✅ CMakeLists.txt 路径已修正" -ForegroundColor Green
-}
+$content = Get-Content -Raw -LiteralPath $generatedCmake
+$content = $content.Replace('../../managed_components/espressif__brookesia_hal_boards',
+                            '../../components/brookesia_hal_boards')
+$content = $content.Replace($managedForward,
+                            '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
+$content = $content.Replace($boardForward,
+                            '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
+Set-Content -LiteralPath $generatedCmake -Value $content -Encoding utf8 -NoNewline
+Write-Host "  ✅ CMakeLists.txt 路径已修正" -ForegroundColor Green
 
 $absolutePathPatterns = @([regex]::Escape($repoRoot), [regex]::Escape($repoForward))
-$portableFiles = @(
-    (Join-Path $genDir "idf_component.yml"),
-    (Join-Path $genDir "CMakeLists.txt")
-)
 $remainingAbsolutePath = Select-String -LiteralPath $portableFiles `
     -Pattern $absolutePathPatterns | Select-Object -First 1
 if ($remainingAbsolutePath) {
