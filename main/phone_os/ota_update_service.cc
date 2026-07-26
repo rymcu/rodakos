@@ -1,9 +1,11 @@
 #include "phone_os/ota_update_service.h"
 
 #include "phone_os/device_cloud_config.h"
+#include "rodak_sha256.h"
 #include "rodakos_adapters/file_service.h"
 
 #include <cJSON.h>
+#include <esp_app_desc.h>
 #include <esp_crt_bundle.h>
 #include <esp_err.h>
 #include <esp_http_client.h>
@@ -14,7 +16,6 @@
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <mbedtls/sha256.h>
 
 #include <algorithm>
 #include <array>
@@ -88,6 +89,11 @@ std::string TrimTrailingSlash(std::string value) {
     return value;
 }
 
+std::string RedactUrlQuery(const std::string& url) {
+    const size_t query = url.find('?');
+    return query == std::string::npos ? url : url.substr(0, query) + "?<redacted>";
+}
+
 bool IsHttpUrl(const std::string& value) {
     return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
 }
@@ -100,16 +106,6 @@ bool HasSameOrigin(const std::string& url, const std::string& base_url) {
 bool IsTerminalResultCode(int code) {
     return code >= 400 && code < 500 && code != 401 && code != 403 &&
            code != 408 && code != 425 && code != 429;
-}
-
-std::string HexDigest(const std::array<unsigned char, 32>& digest) {
-    static constexpr char kHex[] = "0123456789abcdef";
-    std::string result(64, '0');
-    for (size_t i = 0; i < digest.size(); ++i) {
-        result[i * 2] = kHex[digest[i] >> 4];
-        result[i * 2 + 1] = kHex[digest[i] & 0x0f];
-    }
-    return result;
 }
 
 bool ReadJsonResponse(esp_http_client_handle_t client, std::string& response) {
@@ -162,8 +158,9 @@ bool PerformJsonRequest(const std::string& url, esp_http_client_method_t method,
     const bool ok = err == ESP_OK && status >= 200 && status < 300 &&
                     ReadJsonResponse(client, response);
     if (!ok) {
+        const std::string safe_url = RedactUrlQuery(url);
         ESP_LOGW(TAG, "HTTP request failed: %s status=%d url=%s",
-                 esp_err_to_name(err), status, url.c_str());
+                 esp_err_to_name(err), status, safe_url.c_str());
     }
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -201,6 +198,7 @@ OtaUpdateService::OtaUpdateService(DeviceCloudConfigService& config_service,
 }
 
 void OtaUpdateService::SetProgressPublisher(ProgressPublisher publisher) {
+    std::lock_guard<std::mutex> lock(progress_publisher_mutex_);
     progress_publisher_ = std::move(publisher);
 }
 
@@ -239,6 +237,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         return;
     }
     const std::string task_no = JsonString(notification, "taskNo");
+    const std::string notification_from_version = JsonString(notification, "fromVersion");
     const std::string target_version = JsonString(notification, "toVersion");
     cJSON_Delete(notification);
     if (task_no.empty()) {
@@ -270,6 +269,13 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
     }
     if (!existing.task_no.empty() && existing.phase != OtaUpdatePhase::kIdle) {
         if (existing.task_no == task_no &&
+            existing.phase == OtaUpdatePhase::kAwaitingStagedAck) {
+            if (!CompleteStagedHandoff()) {
+                ScheduleStateRetry("duplicate staged notification acknowledgement failure");
+            }
+            return;
+        }
+        if (existing.task_no == task_no &&
             (existing.phase == OtaUpdatePhase::kPending ||
              existing.phase == OtaUpdatePhase::kApplying ||
              existing.phase == OtaUpdatePhase::kRestoring)) {
@@ -293,6 +299,40 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "CONFIG_MISSING", "缺少 Rodak OTA HTTP 配置");
         return;
     }
+
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const std::string running_version = app_desc != nullptr ? app_desc->version : "";
+    const std::string base_url = TrimTrailingSlash(config.mqtt_http_base_url);
+    ESP_LOGI(TAG, "Checking OTA task %s before requesting a download ticket",
+             task_no.c_str());
+
+    UpgradeCheck check;
+    if (!RequestUpgradeCheck(base_url, config.mqtt_password, check)) {
+        ESP_LOGE(TAG, "OTA check request failed for task %s", task_no.c_str());
+        FailStaging(task_no, "CHECK_FAILED", "无法完成 OTA 升级检查");
+        return;
+    }
+    if (!check.upgrade_available || check.task_no != task_no ||
+        running_version.empty() || notification_from_version.empty() ||
+        target_version.empty() || check.from_version.empty() || check.to_version.empty() ||
+        check.from_version != running_version ||
+        check.from_version != notification_from_version ||
+        check.to_version != target_version || check.from_version == check.to_version) {
+        ESP_LOGE(TAG,
+                 "OTA check invalid: available=%d task=%s expected_task=%s "
+                 "from=%s running=%s notified_from=%s to=%s notified_to=%s",
+                 check.upgrade_available, check.task_no.c_str(), task_no.c_str(),
+                 check.from_version.c_str(), running_version.c_str(),
+                 notification_from_version.c_str(), check.to_version.c_str(),
+                 target_version.c_str());
+        FailStaging(task_no, "OTA_CHECK_INVALID",
+                    "OTA 检查结果与通知或当前固件不一致");
+        return;
+    }
+    ESP_LOGI(TAG, "OTA check accepted: task=%s from=%s to=%s", task_no.c_str(),
+             check.from_version.c_str(), check.to_version.c_str());
+    PublishProgress(task_no, 0, "check", "OTA 升级检查通过");
+
     if (file_service_ == nullptr || (!file_service_->IsMounted() && !file_service_->Init())) {
         FailStaging(task_no, "SD_MOUNT_FAILED", "无法挂载 SD 卡");
         return;
@@ -304,19 +344,21 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
     PublishProgress(task_no, 0, "prepare", "正在申请下载凭证");
     std::string ticket_id;
-    const std::string base_url = TrimTrailingSlash(config.mqtt_http_base_url);
     if (!RequestTicket(base_url, config.mqtt_password, task_no, ticket_id)) {
         FailStaging(task_no, "TICKET_FAILED", "无法获取 OTA 下载凭证");
         return;
     }
+    ESP_LOGI(TAG, "OTA download ticket accepted: task=%s", task_no.c_str());
 
     Manifest manifest;
     if (!RequestManifest(base_url, config.mqtt_password, task_no, ticket_id, manifest)) {
         FailStaging(task_no, "MANIFEST_FAILED", "无法获取 OTA manifest");
         return;
     }
-    if (manifest.task_no != task_no || manifest.url.empty() || manifest.file_size == 0 ||
-        manifest.checksum_type != "sha256" || manifest.checksum_value.size() != 64) {
+    if (manifest.task_no != task_no || manifest.version.empty() ||
+        manifest.version != target_version || manifest.url.empty() ||
+        manifest.file_size == 0 || manifest.checksum_type != "sha256" ||
+        manifest.checksum_value.size() != 64) {
         FailStaging(task_no, "MANIFEST_INVALID", "OTA manifest 字段不完整或校验算法不受支持");
         return;
     }
@@ -326,6 +368,9 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "MANIFEST_TOO_LONG", "OTA 任务号或版本字符串超过设备上限");
         return;
     }
+    ESP_LOGI(TAG, "OTA manifest accepted: task=%s version=%s size=%llu",
+             task_no.c_str(), manifest.version.c_str(),
+             static_cast<unsigned long long>(manifest.file_size));
 
     const esp_partition_t* main_partition = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
@@ -343,7 +388,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
     OtaUpdateRecord record = existing;
     record.task_no = task_no;
-    record.target_version = manifest.version.empty() ? target_version : manifest.version;
+    record.target_version = manifest.version;
     if (!BackupRunningImage(record)) {
         FailStaging(task_no, "BACKUP_FAILED", "无法备份当前固件到 SD 卡");
         return;
@@ -353,7 +398,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         return;
     }
 
-    record.phase = OtaUpdatePhase::kPending;
+    record.phase = OtaUpdatePhase::kAwaitingStagedAck;
     record.pending_size = manifest.file_size;
     record.pending_sha256 = manifest.checksum_value;
     record.detail = "固件已暂存到 SD 卡，等待 Recovery 应用";
@@ -362,22 +407,95 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "STATE_SAVE_FAILED", "无法保存 OTA 恢复状态");
         return;
     }
-    PublishProgress(task_no, 100, "staged", record.detail);
+    if (!CompleteStagedHandoff()) {
+        ScheduleStateRetry("staged progress acknowledgement failure");
+    }
+}
+
+bool OtaUpdateService::CompleteStagedHandoff() {
+    OtaUpdateRecord record;
+    const OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(record);
+    if (load_result != OtaUpdateLoadResult::kValid) {
+        ESP_LOGE(TAG, "Cannot complete staged handoff because the OTA journal is unavailable");
+        return false;
+    }
+    if (record.phase != OtaUpdatePhase::kAwaitingStagedAck) {
+        return true;
+    }
+    if (file_service_ == nullptr || (!file_service_->IsMounted() && !file_service_->Init())) {
+        ESP_LOGW(TAG, "OTA staged handoff is waiting for the SD card: task=%s",
+                 record.task_no.c_str());
+        return false;
+    }
+    if (!VerifySdImage(kOtaPendingImagePath, record.pending_size,
+                       record.pending_sha256) ||
+        !VerifySdImage(kOtaInstalledImagePath, record.installed_size,
+                       record.installed_sha256)) {
+        FailStaging(record.task_no, "STAGED_IMAGE_INVALID",
+                    "SD 卡中的升级固件或回滚备份校验失败");
+        return true;
+    }
+    if (record.task_no.empty() ||
+        !PublishProgress(record.task_no, 100, "staged", record.detail, true)) {
+        ESP_LOGW(TAG, "OTA staged progress is still awaiting acknowledgement: task=%s",
+                 record.task_no.c_str());
+        return false;
+    }
+
+    OtaUpdateRecord current;
+    if (LoadOtaUpdateRecordStatus(current) != OtaUpdateLoadResult::kValid) {
+        ESP_LOGE(TAG, "Cannot persist staged acknowledgement because the OTA journal changed");
+        return false;
+    }
+    if (current.phase != OtaUpdatePhase::kAwaitingStagedAck ||
+        current.task_no != record.task_no) {
+        return true;
+    }
+    current.phase = OtaUpdatePhase::kPending;
+    if (!SaveOtaUpdateRecord(current)) {
+        ESP_LOGE(TAG, "Failed to persist acknowledged staged state: task=%s",
+                 current.task_no.c_str());
+        return false;
+    }
+    ESP_LOGI(TAG, "OTA staged progress acknowledged: task=%s", current.task_no.c_str());
 
     const esp_partition_t* recovery = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
     const esp_err_t err = recovery != nullptr ? esp_ota_set_boot_partition(recovery)
                                                : ESP_ERR_NOT_FOUND;
     if (err != ESP_OK) {
-        record.phase = OtaUpdatePhase::kIdle;
-        record.pending_size = 0;
-        record.pending_sha256.clear();
-        SaveOtaUpdateRecord(record);
-        FailStaging(task_no, "RECOVERY_SELECT_FAILED", "无法切换到 Recovery 分区");
-        return;
+        FailStaging(current.task_no, "RECOVERY_SELECT_FAILED", "无法切换到 Recovery 分区");
+        return true;
+    }
+    if (report_retry_timer_ != nullptr) {
+        xTimerStop(report_retry_timer_, 0);
     }
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
+    return true;
+}
+
+bool OtaUpdateService::RequestUpgradeCheck(const std::string& base_url,
+                                           const std::string& token,
+                                           UpgradeCheck& check) {
+    std::string response;
+    if (!PerformJsonRequest(base_url + "/api/v1/ota/check", HTTP_METHOD_GET,
+                            token, {}, response)) {
+        return false;
+    }
+    cJSON* root = nullptr;
+    cJSON* data = nullptr;
+    if (!ParseApiData(response, root, data)) {
+        return false;
+    }
+    cJSON* upgrade_available =
+        cJSON_GetObjectItemCaseSensitive(data, "upgradeAvailable");
+    check.upgrade_available = cJSON_IsTrue(upgrade_available);
+    check.task_no = JsonString(data, "taskNo");
+    check.from_version = JsonString(data, "fromVersion");
+    check.to_version = JsonString(data, "toVersion");
+    cJSON_Delete(root);
+    return true;
 }
 
 bool OtaUpdateService::RequestTicket(const std::string& base_url, const std::string& token,
@@ -473,13 +591,11 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     bool ok = err == ESP_OK && status >= 200 && status < 300 &&
               (content_length <= 0 || static_cast<uint64_t>(content_length) == manifest.file_size);
 
-    mbedtls_sha256_context sha;
-    mbedtls_sha256_init(&sha);
-    ok = ok && mbedtls_sha256_starts(&sha, false) == 0;
+    Sha256 sha;
+    ok = ok && sha.Start();
     std::unique_ptr<unsigned char[]> buffer(
         new (std::nothrow) unsigned char[kIoBufferSize]);
     if (buffer == nullptr) {
-        mbedtls_sha256_free(&sha);
         std::fclose(output);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -497,7 +613,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
         }
         ok = std::fwrite(buffer.get(), 1, static_cast<size_t>(read), output) ==
                  static_cast<size_t>(read) &&
-             mbedtls_sha256_update(&sha, buffer.get(), static_cast<size_t>(read)) == 0;
+             sha.Update(buffer.get(), static_cast<size_t>(read));
         total += static_cast<uint64_t>(read);
         const int progress = static_cast<int>((total * 90) / manifest.file_size);
         if (progress / 5 != last_progress / 5) {
@@ -507,9 +623,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     }
 
     std::array<unsigned char, 32> digest = {};
-    ok = ok && total == manifest.file_size &&
-         mbedtls_sha256_finish(&sha, digest.data()) == 0;
-    mbedtls_sha256_free(&sha);
+    ok = ok && total == manifest.file_size && sha.Finish(digest);
     if (ok) {
         ok = std::fflush(output) == 0;
     }
@@ -520,7 +634,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
-    ok = ok && HexDigest(digest) == manifest.checksum_value;
+    ok = ok && Sha256ToHex(digest) == manifest.checksum_value;
     if (!ok) {
         file_service_->DeleteFile(kOtaPendingPartPath);
         return false;
@@ -555,13 +669,11 @@ bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
         return false;
     }
 
-    mbedtls_sha256_context sha;
-    mbedtls_sha256_init(&sha);
-    bool ok = mbedtls_sha256_starts(&sha, false) == 0;
+    Sha256 sha;
+    bool ok = sha.Start();
     std::unique_ptr<unsigned char[]> buffer(
         new (std::nothrow) unsigned char[kIoBufferSize]);
     if (buffer == nullptr) {
-        mbedtls_sha256_free(&sha);
         std::fclose(output);
         file_service_->DeleteFile(kOtaInstalledPartPath);
         return false;
@@ -572,12 +684,11 @@ bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
             std::min<uint64_t>(kIoBufferSize, metadata.image_len - offset));
         ok = esp_partition_read(running, offset, buffer.get(), length) == ESP_OK &&
              std::fwrite(buffer.get(), 1, length, output) == length &&
-             mbedtls_sha256_update(&sha, buffer.get(), length) == 0;
+             sha.Update(buffer.get(), length);
         offset += length;
     }
     std::array<unsigned char, 32> digest = {};
-    ok = ok && mbedtls_sha256_finish(&sha, digest.data()) == 0;
-    mbedtls_sha256_free(&sha);
+    ok = ok && sha.Finish(digest);
     if (ok) {
         ok = std::fflush(output) == 0;
     }
@@ -597,7 +708,7 @@ bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
         return false;
     }
     record.installed_size = metadata.image_len;
-    record.installed_sha256 = HexDigest(digest);
+    record.installed_sha256 = Sha256ToHex(digest);
     return true;
 }
 
@@ -636,13 +747,11 @@ bool OtaUpdateService::VerifySdImage(const char* relative_path, uint64_t expecte
         return false;
     }
 
-    mbedtls_sha256_context sha;
-    mbedtls_sha256_init(&sha);
-    bool ok = mbedtls_sha256_starts(&sha, false) == 0;
+    Sha256 sha;
+    bool ok = sha.Start();
     std::unique_ptr<unsigned char[]> buffer(
         new (std::nothrow) unsigned char[kIoBufferSize]);
     if (buffer == nullptr) {
-        mbedtls_sha256_free(&sha);
         std::fclose(input);
         return false;
     }
@@ -651,7 +760,7 @@ bool OtaUpdateService::VerifySdImage(const char* relative_path, uint64_t expecte
         const size_t read = std::fread(buffer.get(), 1, kIoBufferSize, input);
         if (read > 0) {
             total += read;
-            ok = mbedtls_sha256_update(&sha, buffer.get(), read) == 0;
+            ok = sha.Update(buffer.get(), read);
         }
         if (read < kIoBufferSize) {
             ok = ok && std::feof(input) != 0;
@@ -661,9 +770,8 @@ bool OtaUpdateService::VerifySdImage(const char* relative_path, uint64_t expecte
     std::fclose(input);
 
     std::array<unsigned char, 32> digest = {};
-    ok = ok && mbedtls_sha256_finish(&sha, digest.data()) == 0;
-    mbedtls_sha256_free(&sha);
-    return ok && total == expected_size && HexDigest(digest) == expected_sha256;
+    ok = ok && sha.Finish(digest);
+    return ok && total == expected_size && Sha256ToHex(digest) == expected_sha256;
 }
 
 bool OtaUpdateService::ConfirmRunningImage() {
@@ -772,6 +880,23 @@ void OtaUpdateService::OnNetworkReady() {
         }
         return;
     }
+    if (record.phase == OtaUpdatePhase::kAwaitingStagedAck) {
+        if (record.task_no.empty() || busy_.load()) {
+            return;
+        }
+        bool expected = false;
+        if (!staged_handoff_running_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        if (xTaskCreate(StagedHandoffTask, "ota_staged_ack", 6144, this, 3, nullptr) !=
+            pdPASS) {
+            staged_handoff_running_.store(false);
+            ScheduleStateRetry("staged acknowledgement task creation failure");
+        } else if (report_retry_timer_ != nullptr) {
+            xTimerStop(report_retry_timer_, 0);
+        }
+        return;
+    }
     if ((record.phase != OtaUpdatePhase::kConfirmed &&
          record.phase != OtaUpdatePhase::kRollbackPending &&
          record.phase != OtaUpdatePhase::kFailed) ||
@@ -789,6 +914,18 @@ void OtaUpdateService::OnNetworkReady() {
     } else if (report_retry_timer_ != nullptr) {
         xTimerStop(report_retry_timer_, 0);
     }
+}
+
+void OtaUpdateService::StagedHandoffTask(void* arg) {
+    auto* service = static_cast<OtaUpdateService*>(arg);
+    if (service != nullptr) {
+        const bool completed = service->CompleteStagedHandoff();
+        service->staged_handoff_running_.store(false);
+        if (!completed) {
+            service->ScheduleStateRetry("staged progress acknowledgement failure");
+        }
+    }
+    vTaskDelete(nullptr);
 }
 
 bool OtaUpdateService::ScheduleStateRetry(const char* reason) {
@@ -997,10 +1134,7 @@ void OtaUpdateService::ReportResultUntilSuccess(const OtaUpdateRecord& record, b
 
 bool OtaUpdateService::PublishProgress(const std::string& task_no, int progress_percent,
                                        const std::string& step_code,
-                                       const std::string& detail) {
-    if (!progress_publisher_) {
-        return false;
-    }
+                                       const std::string& detail, bool wait_for_ack) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "protocolVersion", 2);
     cJSON_AddStringToObject(root, "taskNo", task_no.c_str());
@@ -1011,7 +1145,8 @@ bool OtaUpdateService::PublishProgress(const std::string& task_no, int progress_
     }
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);
-    return progress_publisher_(payload);
+    std::lock_guard<std::mutex> lock(progress_publisher_mutex_);
+    return progress_publisher_ && progress_publisher_(payload, wait_for_ack);
 }
 
 void OtaUpdateService::FailStaging(const std::string& task_no,

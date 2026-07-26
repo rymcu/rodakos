@@ -59,6 +59,9 @@ CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_API_ENCODING_UTF_8=y
 
+# Reliable OTA progress must observe QoS outbox expiry and retry with a new message ID.
+CONFIG_MQTT_REPORT_DELETED_MESSAGES=y
+
 # RYMCU BigSmart uses ES8311 for speaker output and ES7210 for microphone input.
 # Keep unused codec drivers out of the firmware image.
 CONFIG_CODEC_ES8311_SUPPORT=y

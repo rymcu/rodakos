@@ -52,6 +52,7 @@ constexpr const char* kMqttShadowReportTopicKey = "shadow_report";
 constexpr const char* kMqttShadowDesiredTopicKey = "shadow_desired";
 constexpr const char* kMqttOtaNotifyTopicKey = "ota_notify";
 constexpr const char* kMqttOtaProgressTopicKey = "ota_progress";
+constexpr const char* kMqttCommandsTopicKey = "commands";
 constexpr const char* kMqttPcStatusTopicKey = "pc_status";
 constexpr const char* kMqttHomePrefixTopicKey = "home_prefix";
 constexpr const char* kDefaultProvisioningUrl = "https://api.tenclass.net/xiaozhi/ota/";
@@ -133,6 +134,7 @@ void ResetMqttConfig(DeviceCloudConfig& config) {
     config.mqtt_topic_shadow_desired.clear();
     config.mqtt_topic_ota_notify.clear();
     config.mqtt_topic_ota_progress.clear();
+    config.mqtt_topic_commands.clear();
     config.mqtt_topic_pc_status.clear();
     config.mqtt_topic_home_prefix.clear();
     config.has_mqtt_config = false;
@@ -157,6 +159,9 @@ void FillMqttTopicFallbacks(DeviceCloudConfig& config) {
     }
     if (config.mqtt_topic_ota_progress.empty()) {
         config.mqtt_topic_ota_progress = prefix + "/ota/progress";
+    }
+    if (config.mqtt_topic_commands.empty()) {
+        config.mqtt_topic_commands = prefix + "/commands/+";
     }
     if (config.mqtt_topic_pc_status.empty()) {
         config.mqtt_topic_pc_status = prefix + "/pc_status";
@@ -237,6 +242,7 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     config.mqtt_topic_shadow_desired = mqtt_settings.GetString(kMqttShadowDesiredTopicKey, "");
     config.mqtt_topic_ota_notify = mqtt_settings.GetString(kMqttOtaNotifyTopicKey, "");
     config.mqtt_topic_ota_progress = mqtt_settings.GetString(kMqttOtaProgressTopicKey, "");
+    config.mqtt_topic_commands = mqtt_settings.GetString(kMqttCommandsTopicKey, "");
     config.mqtt_topic_pc_status = mqtt_settings.GetString(kMqttPcStatusTopicKey, "");
     config.mqtt_topic_home_prefix = mqtt_settings.GetString(kMqttHomePrefixTopicKey, "");
     FinalizeMqttConfig(config);
@@ -405,6 +411,7 @@ bool DeviceCloudConfigService::SaveMqttConfig(const DeviceCloudConfig& config) {
     settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired);
     settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify);
     settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress);
+    settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands);
     settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
     settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
     return true;
@@ -467,6 +474,7 @@ bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& resp
             AddStringIfPresent(topics, "shadow_desired", config.mqtt_topic_shadow_desired);
             AddStringIfPresent(topics, "ota_notify", config.mqtt_topic_ota_notify);
             AddStringIfPresent(topics, "ota_progress", config.mqtt_topic_ota_progress);
+            AddStringIfPresent(topics, "commands", config.mqtt_topic_commands);
             AddStringIfPresent(topics, "pc_status", config.mqtt_topic_pc_status);
             AddStringIfPresent(topics, "home_prefix", config.mqtt_topic_home_prefix);
         }

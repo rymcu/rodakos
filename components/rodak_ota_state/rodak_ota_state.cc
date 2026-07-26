@@ -30,6 +30,12 @@ enum class PersistedPhase : uint8_t {
     kReportAcknowledged = 0x50,
 };
 
+enum class PersistedMarker : uint8_t {
+    kNone = 0x00,
+    // 继续使用旧 Recovery 可识别的 idle phase，避免旧版本误应用或判坏 journal。
+    kAwaitingStagedAck = 0xa1,
+};
+
 struct PersistedRecord {
     uint32_t magic = kRecordMagic;
     uint16_t schema_version = kOtaJournalSchemaVersion;
@@ -91,6 +97,7 @@ bool ValidateRecord(const OtaUpdateRecord& record) {
     const bool has_pending = record.pending_size > 0 && IsSha256(record.pending_sha256);
     const bool has_installed = record.installed_size > 0 && IsSha256(record.installed_sha256);
     switch (record.phase) {
+        case OtaUpdatePhase::kAwaitingStagedAck:
         case OtaUpdatePhase::kPending:
         case OtaUpdatePhase::kApplying:
         case OtaUpdatePhase::kReadyToBoot:
@@ -111,9 +118,14 @@ bool ValidateRecord(const OtaUpdateRecord& record) {
     return false;
 }
 
-bool EncodePhase(OtaUpdatePhase source, uint8_t& destination) {
+bool EncodePhase(OtaUpdatePhase source, uint8_t& destination, uint8_t& marker) {
+    marker = static_cast<uint8_t>(PersistedMarker::kNone);
     switch (source) {
         case OtaUpdatePhase::kIdle: destination = static_cast<uint8_t>(PersistedPhase::kIdle); break;
+        case OtaUpdatePhase::kAwaitingStagedAck:
+            destination = static_cast<uint8_t>(PersistedPhase::kIdle);
+            marker = static_cast<uint8_t>(PersistedMarker::kAwaitingStagedAck);
+            break;
         case OtaUpdatePhase::kPending: destination = static_cast<uint8_t>(PersistedPhase::kPending); break;
         case OtaUpdatePhase::kApplying: destination = static_cast<uint8_t>(PersistedPhase::kApplying); break;
         case OtaUpdatePhase::kReadyToBoot: destination = static_cast<uint8_t>(PersistedPhase::kReadyToBoot); break;
@@ -129,9 +141,13 @@ bool EncodePhase(OtaUpdatePhase source, uint8_t& destination) {
     return true;
 }
 
-bool DecodePhase(uint8_t source, OtaUpdatePhase& destination) {
+bool DecodePhase(uint8_t source, uint8_t marker, OtaUpdatePhase& destination) {
     switch (static_cast<PersistedPhase>(source)) {
-        case PersistedPhase::kIdle: destination = OtaUpdatePhase::kIdle; return true;
+        case PersistedPhase::kIdle:
+            destination = marker == static_cast<uint8_t>(PersistedMarker::kAwaitingStagedAck)
+                              ? OtaUpdatePhase::kAwaitingStagedAck
+                              : OtaUpdatePhase::kIdle;
+            return true;
         case PersistedPhase::kPending: destination = OtaUpdatePhase::kPending; return true;
         case PersistedPhase::kApplying: destination = OtaUpdatePhase::kApplying; return true;
         case PersistedPhase::kReadyToBoot: destination = OtaUpdatePhase::kReadyToBoot; return true;
@@ -172,7 +188,7 @@ bool EncodeRecord(const OtaUpdateRecord& source, uint32_t generation,
         return false;
     }
     destination = {};
-    if (!EncodePhase(source.phase, destination.phase)) {
+    if (!EncodePhase(source.phase, destination.phase, destination.reserved)) {
         return false;
     }
     destination.generation = generation;
@@ -193,7 +209,7 @@ bool EncodeRecord(const OtaUpdateRecord& source, uint32_t generation,
 
 bool DecodeRecord(const PersistedRecord& source, OtaUpdateRecord& destination) {
     destination = {};
-    if (!DecodePhase(source.phase, destination.phase)) {
+    if (!DecodePhase(source.phase, source.reserved, destination.phase)) {
         return false;
     }
     destination.pending_size = source.pending_size;
@@ -252,6 +268,7 @@ bool IsNewerGeneration(uint32_t candidate, uint32_t baseline) {
 
 const char* OtaUpdatePhaseName(OtaUpdatePhase phase) {
     switch (phase) {
+        case OtaUpdatePhase::kAwaitingStagedAck: return "awaiting_staged_ack";
         case OtaUpdatePhase::kPending: return "pending";
         case OtaUpdatePhase::kApplying: return "applying";
         case OtaUpdatePhase::kReadyToBoot: return "ready_to_boot";

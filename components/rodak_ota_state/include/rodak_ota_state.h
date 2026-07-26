@@ -20,6 +20,7 @@ inline constexpr uint16_t kOtaJournalSchemaVersion = 1;
 
 enum class OtaUpdatePhase {
     kIdle,
+    kAwaitingStagedAck,
     kPending,
     kApplying,
     kReadyToBoot,

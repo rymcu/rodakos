@@ -1,4 +1,5 @@
 #include "rodak_ota_state.h"
+#include "rodak_sha256.h"
 
 #include <driver/sdmmc_host.h>
 #include <esp_err.h>
@@ -10,7 +11,6 @@
 #include <esp_vfs_fat.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <mbedtls/sha256.h>
 #include <nvs_flash.h>
 #include <sdmmc_cmd.h>
 
@@ -92,16 +92,6 @@ std::string AbsolutePath(const MountedSdCard& sd_card, const char* relative_path
     return sd_card.mount_point + relative_path;
 }
 
-std::string HexDigest(const std::array<unsigned char, 32>& digest) {
-    static constexpr char kHex[] = "0123456789abcdef";
-    std::string result(64, '0');
-    for (size_t i = 0; i < digest.size(); ++i) {
-        result[i * 2] = kHex[digest[i] >> 4];
-        result[i * 2 + 1] = kHex[digest[i] & 0x0f];
-    }
-    return result;
-}
-
 bool VerifyFile(const std::string& path, uint64_t expected_size,
                 const std::string& expected_sha256) {
     FILE* file = std::fopen(path.c_str(), "rb");
@@ -110,14 +100,12 @@ bool VerifyFile(const std::string& path, uint64_t expected_size,
         return false;
     }
 
-    mbedtls_sha256_context context;
-    mbedtls_sha256_init(&context);
-    bool ok = mbedtls_sha256_starts(&context, false) == 0;
+    rodakos::Sha256 sha;
+    bool ok = sha.Start();
     uint64_t total = 0;
     std::unique_ptr<unsigned char[]> buffer(
         new (std::nothrow) unsigned char[kCopyBufferSize]);
     if (buffer == nullptr) {
-        mbedtls_sha256_free(&context);
         std::fclose(file);
         ESP_LOGE(TAG, "Cannot allocate image verification buffer");
         return false;
@@ -126,7 +114,7 @@ bool VerifyFile(const std::string& path, uint64_t expected_size,
         const size_t read = std::fread(buffer.get(), 1, kCopyBufferSize, file);
         if (read > 0) {
             total += read;
-            ok = mbedtls_sha256_update(&context, buffer.get(), read) == 0;
+            ok = sha.Update(buffer.get(), read);
         }
         if (read < kCopyBufferSize) {
             ok = ok && std::feof(file) != 0;
@@ -136,8 +124,7 @@ bool VerifyFile(const std::string& path, uint64_t expected_size,
     std::fclose(file);
 
     std::array<unsigned char, 32> digest = {};
-    ok = ok && mbedtls_sha256_finish(&context, digest.data()) == 0;
-    mbedtls_sha256_free(&context);
+    ok = ok && sha.Finish(digest);
     if (!ok || total != expected_size) {
         ESP_LOGE(TAG, "Image size mismatch: expected=%llu actual=%llu",
                  static_cast<unsigned long long>(expected_size),
@@ -145,7 +132,7 @@ bool VerifyFile(const std::string& path, uint64_t expected_size,
         return false;
     }
 
-    const std::string actual_sha256 = HexDigest(digest);
+    const std::string actual_sha256 = rodakos::Sha256ToHex(digest);
     if (actual_sha256 != expected_sha256) {
         ESP_LOGE(TAG, "Image SHA-256 mismatch");
         return false;
@@ -311,6 +298,7 @@ extern "C" void app_main(void) {
     const bool main_was_invalid = main_partition != nullptr && last_invalid != nullptr &&
                                   last_invalid->address == main_partition->address;
     if (!has_update || record.phase == rodakos::OtaUpdatePhase::kIdle ||
+        record.phase == rodakos::OtaUpdatePhase::kAwaitingStagedAck ||
         record.phase == rodakos::OtaUpdatePhase::kConfirmed ||
         record.phase == rodakos::OtaUpdatePhase::kFailed ||
         record.phase == rodakos::OtaUpdatePhase::kReportAcknowledged) {
