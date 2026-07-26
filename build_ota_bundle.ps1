@@ -1,6 +1,6 @@
 param(
     [string]$OutputRoot = "build/packages/ota",
-    [switch]$RegenerateBoardConfig
+    [string]$ImmutableRecoveryPackage = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,24 +38,57 @@ if (-not $env:IDF_PATH) {
 }
 
 $repoRoot = $PSScriptRoot
+$environmentCheck = Join-Path $repoRoot "assert_idf6_environment.ps1"
+& $environmentCheck
 $outputRootPath = Join-Path $repoRoot $OutputRoot
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $packageDir = Join-Path $outputRootPath $timestamp
+$immutableRecoveryPackagePath = $null
+if (-not [string]::IsNullOrWhiteSpace($ImmutableRecoveryPackage)) {
+    if (-not (Test-Path -LiteralPath $ImmutableRecoveryPackage -PathType Container)) {
+        throw "Immutable Recovery 包目录不存在：$ImmutableRecoveryPackage"
+    }
+    $immutableRecoveryPackagePath = (Resolve-Path -LiteralPath $ImmutableRecoveryPackage).Path
+}
+
+function Test-BinaryRegionMatches {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ContainerPath,
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [long]$Offset
+    )
+
+    $sourceBytes = [System.IO.File]::ReadAllBytes($FilePath)
+    $regionBytes = [byte[]]::new($sourceBytes.Length)
+    $stream = [System.IO.File]::OpenRead($ContainerPath)
+    try {
+        if ($Offset -lt 0 -or $Offset + $sourceBytes.Length -gt $stream.Length) {
+            return $false
+        }
+        $stream.Position = $Offset
+        $readTotal = 0
+        while ($readTotal -lt $regionBytes.Length) {
+            $read = $stream.Read($regionBytes, $readTotal, $regionBytes.Length - $readTotal)
+            if ($read -le 0) {
+                return $false
+            }
+            $readTotal += $read
+        }
+    } finally {
+        $stream.Dispose()
+    }
+
+    return [System.Linq.Enumerable]::SequenceEqual[byte]($sourceBytes, $regionBytes)
+}
 
 Push-Location $repoRoot
 try {
-    $generatedBoardCmake = Join-Path $repoRoot "components/gen_bmgr_codes/CMakeLists.txt"
-    if ($RegenerateBoardConfig -or -not (Test-Path -LiteralPath $generatedBoardCmake)) {
-        & idf.py bmgr -b rymcu_bigsmart
-        if ($LASTEXITCODE -ne 0) {
-            throw "Board Manager 配置生成失败"
-        }
-        & (Join-Path $repoRoot "fix_gen_paths.ps1")
-        if ($LASTEXITCODE -ne 0) {
-            throw "Board Manager 生成路径修复失败"
-        }
-    } else {
-        Write-Host "复用现有 Board Manager 生成配置；需要刷新时传入 -RegenerateBoardConfig"
+    & (Join-Path $repoRoot "generate_board_config.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Board Manager 配置生成失败"
     }
 
     & idf.py build
@@ -69,11 +102,27 @@ try {
     }
 
     $mainBin = Join-Path $repoRoot "build/rodakos.bin"
-    $recoveryBin = Join-Path $repoRoot "recovery/build/rodakos_recovery.bin"
-    $bootloaderBin = Join-Path $repoRoot "recovery/build/bootloader/bootloader.bin"
-    $partitionBin = Join-Path $repoRoot "recovery/build/partition_table/partition-table.bin"
+    $recoveryBin = if ($null -eq $immutableRecoveryPackagePath) {
+        Join-Path $repoRoot "recovery/build/rodakos_recovery.bin"
+    } else {
+        Join-Path $immutableRecoveryPackagePath "rodakos_recovery.bin"
+    }
+    $bootloaderBin = if ($null -eq $immutableRecoveryPackagePath) {
+        Join-Path $repoRoot "recovery/build/bootloader/bootloader.bin"
+    } else {
+        Join-Path $immutableRecoveryPackagePath "bootloader.bin"
+    }
+    $partitionBin = if ($null -eq $immutableRecoveryPackagePath) {
+        Join-Path $repoRoot "recovery/build/partition_table/partition-table.bin"
+    } else {
+        Join-Path $immutableRecoveryPackagePath "partition-table.bin"
+    }
     $mainPartitionBin = Join-Path $repoRoot "build/partition_table/partition-table.bin"
-    $otaDataBin = Join-Path $repoRoot "recovery/build/ota_data_initial.bin"
+    $otaDataBin = if ($null -eq $immutableRecoveryPackagePath) {
+        Join-Path $repoRoot "recovery/build/ota_data_initial.bin"
+    } else {
+        Join-Path $immutableRecoveryPackagePath "ota_data_initial.bin"
+    }
     $recoveryFlashArgsPath = Join-Path $repoRoot "recovery/build/flasher_args.json"
     $mainFlashArgsPath = Join-Path $repoRoot "build/flasher_args.json"
     $mainProjectDescriptionPath = Join-Path $repoRoot "build/project_description.json"
@@ -83,10 +132,16 @@ try {
     $partTool = Join-Path $env:IDF_PATH "components/partition_table/parttool.py"
 
     $requiredFiles = @($mainBin, $recoveryBin, $bootloaderBin, $partitionBin,
-                       $mainPartitionBin, $otaDataBin, $recoveryFlashArgsPath,
-                       $mainFlashArgsPath, $mainProjectDescriptionPath,
-                       $recoveryProjectDescriptionPath, $recoverySdkconfigPath,
-                       $journalHeaderPath, $partTool)
+                       $mainPartitionBin, $otaDataBin, $mainFlashArgsPath,
+                       $mainProjectDescriptionPath, $journalHeaderPath, $partTool)
+    $requiredFiles += @($recoveryFlashArgsPath, $recoveryProjectDescriptionPath,
+                        $recoverySdkconfigPath)
+    if ($null -ne $immutableRecoveryPackagePath) {
+        $requiredFiles += @(
+            (Join-Path $immutableRecoveryPackagePath "manifest.json"),
+            (Join-Path $immutableRecoveryPackagePath "rodakos_sd_recovery_merged.bin")
+        )
+    }
     foreach ($file in $requiredFiles) {
         if (-not (Test-Path -LiteralPath $file)) {
             throw "缺少构建产物：$file"
@@ -100,9 +155,9 @@ try {
     $otaDataPartition = Get-PartitionLayout -PartTool $partTool `
         -PartitionTable $partitionBin -Name "otadata"
 
-    $recoveryFlashArgs = Get-Content -Raw -LiteralPath $recoveryFlashArgsPath | ConvertFrom-Json
     $mainFlashArgs = Get-Content -Raw -LiteralPath $mainFlashArgsPath | ConvertFrom-Json
     $mainProject = Get-Content -Raw -LiteralPath $mainProjectDescriptionPath | ConvertFrom-Json
+    $recoveryFlashArgs = Get-Content -Raw -LiteralPath $recoveryFlashArgsPath | ConvertFrom-Json
     $recoveryProject = Get-Content -Raw -LiteralPath $recoveryProjectDescriptionPath | ConvertFrom-Json
     if ($mainProject.target -ne "esp32s3" -or $recoveryProject.target -ne "esp32s3") {
         throw "主应用与 Recovery 必须都以 esp32s3 为目标"
@@ -113,14 +168,38 @@ try {
             throw "主应用与 Recovery 的 $setting 配置不一致"
         }
     }
-    if ($recoveryFlashArgs.flash_settings.flash_size -ne "16MB") {
+    if (-not (Select-String -LiteralPath $recoverySdkconfigPath `
+            -Pattern '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y$' -Quiet)) {
+        throw "Recovery 构建配置未启用 Bootloader app rollback：$recoverySdkconfigPath"
+    }
+
+    $immutableManifest = $null
+    if ($null -ne $immutableRecoveryPackagePath) {
+        $immutableManifestPath = Join-Path $immutableRecoveryPackagePath "manifest.json"
+        $immutableManifest = Get-Content -Raw -LiteralPath $immutableManifestPath | ConvertFrom-Json
+        $immutableMerged = Join-Path $immutableRecoveryPackagePath "rodakos_sd_recovery_merged.bin"
+        $immutableMergedSize = (Get-Item -LiteralPath $immutableMerged).Length
+        $immutableMergedHash =
+            (Get-FileHash -LiteralPath $immutableMerged -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($immutableManifest.protocolVersion -ne 2 -or
+            $immutableManifest.otaJournalSchemaVersion -ne 1 -or
+            [string]$immutableManifest.firstFlashImage.fileName -ne
+                "rodakos_sd_recovery_merged.bin" -or
+            [string]$immutableManifest.firstFlashImage.checksumType -ne "sha256" -or
+            [long]$immutableManifest.firstFlashImage.fileSize -ne 16MB -or
+            $immutableMergedSize -ne 16MB -or
+            $immutableMergedHash -ne
+                ([string]$immutableManifest.firstFlashImage.checksumValue).ToLowerInvariant()) {
+            throw "Immutable Recovery 包 manifest 或合并镜像校验失败"
+        }
+    }
+    if ($mainFlashArgs.flash_settings.flash_size -ne "16MB") {
         throw "首次迁移包必须使用 16MB Flash 配置"
     }
-    foreach ($sdkconfigPath in @((Join-Path $repoRoot "sdkconfig"), $recoverySdkconfigPath)) {
-        if (-not (Select-String -LiteralPath $sdkconfigPath `
-                -Pattern '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y$' -Quiet)) {
-            throw "构建配置未启用 Bootloader app rollback：$sdkconfigPath"
-        }
+    $mainSdkconfigPath = Join-Path $repoRoot "sdkconfig"
+    if (-not (Select-String -LiteralPath $mainSdkconfigPath `
+            -Pattern '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y$' -Quiet)) {
+        throw "主应用构建配置未启用 Bootloader app rollback：$mainSdkconfigPath"
     }
     $schemaMatch = Select-String -LiteralPath $journalHeaderPath `
         -Pattern 'kOtaJournalSchemaVersion\s*=\s*(\d+)' | Select-Object -First 1
@@ -149,6 +228,52 @@ try {
     if ($partitionSha -ne $mainPartitionSha) {
         throw "主应用与 Recovery 使用了不同的分区表"
     }
+    if ($null -ne $immutableManifest) {
+        $recoveryHash =
+            (Get-FileHash -LiteralPath $recoveryBin -Algorithm SHA256).Hash.ToLowerInvariant()
+        $otaDataHash =
+            (Get-FileHash -LiteralPath $otaDataBin -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([string]$immutableManifest.recoveryImage.fileName -ne "rodakos_recovery.bin" -or
+            [long]$immutableManifest.recoveryImage.fileSize -ne $recoverySize -or
+            [string]$immutableManifest.recoveryImage.checksumType -ne "sha256" -or
+            $recoveryHash -ne
+                ([string]$immutableManifest.recoveryImage.checksumValue).ToLowerInvariant() -or
+            [string]$immutableManifest.otaDataImage.fileName -ne "ota_data_initial.bin" -or
+            [long]$immutableManifest.otaDataImage.fileSize -ne $otaDataSize -or
+            [string]$immutableManifest.otaDataImage.checksumType -ne "sha256" -or
+            $otaDataHash -ne
+                ([string]$immutableManifest.otaDataImage.checksumValue).ToLowerInvariant() -or
+            $partitionSha.ToLowerInvariant() -ne
+                ([string]$immutableManifest.partitionTableChecksum.checksumValue).ToLowerInvariant() -or
+            [string]$immutableManifest.partitionTableChecksum.checksumType -ne "sha256" -or
+            [string]$immutableManifest.appPartition.label -ne "app" -or
+            [string]$immutableManifest.appPartition.offset -ne $appPartition.OffsetText -or
+            [string]$immutableManifest.appPartition.size -ne $appPartition.SizeText -or
+            [string]$immutableManifest.recoveryPartition.label -ne "recovery" -or
+            [string]$immutableManifest.recoveryPartition.offset -ne
+                $recoveryPartition.OffsetText -or
+            [string]$immutableManifest.recoveryPartition.size -ne
+                $recoveryPartition.SizeText -or
+            [string]$immutableManifest.otaDataPartition.label -ne "otadata" -or
+            [string]$immutableManifest.otaDataPartition.offset -ne
+                $otaDataPartition.OffsetText -or
+            [string]$immutableManifest.otaDataPartition.size -ne
+                $otaDataPartition.SizeText) {
+            throw "Immutable Recovery 包内资产或分区布局与 manifest 不一致"
+        }
+        if (-not (Test-BinaryRegionMatches -ContainerPath $immutableMerged `
+                -FilePath $bootloaderBin -Offset 0) -or
+            -not (Test-BinaryRegionMatches -ContainerPath $immutableMerged `
+                -FilePath $partitionBin -Offset 0x8000) -or
+            -not (Test-BinaryRegionMatches -ContainerPath $immutableMerged `
+                -FilePath $otaDataBin -Offset $otaDataPartition.Offset) -or
+            -not (Test-BinaryRegionMatches -ContainerPath $immutableMerged `
+                -FilePath $recoveryBin -Offset $recoveryPartition.Offset)) {
+            throw "Immutable Recovery 包资产与已校验的合并镜像不一致"
+        }
+        Write-Host "复用已验证的 immutable Recovery 包：$immutableRecoveryPackagePath" `
+            -ForegroundColor Yellow
+    }
 
     & python "$env:IDF_PATH/components/partition_table/check_sizes.py" partition `
         --type app --subtype ota_0 $partitionBin $mainBin
@@ -168,18 +293,27 @@ try {
     Copy-Item -LiteralPath $partitionBin -Destination (Join-Path $packageDir "partition-table.bin")
     Copy-Item -LiteralPath $otaDataBin -Destination (Join-Path $packageDir "ota_data_initial.bin")
 
-    $flashMode = [string]$recoveryFlashArgs.flash_settings.flash_mode
-    $flashFrequency = [string]$recoveryFlashArgs.flash_settings.flash_freq
-    $flashSize = [string]$recoveryFlashArgs.flash_settings.flash_size
-    $bootloaderOffset = [string]$recoveryFlashArgs.bootloader.offset
-    $partitionTableOffset = [string]$recoveryFlashArgs.'partition-table'.offset
+    if ($null -eq $immutableManifest) {
+        $flashMode = [string]$recoveryFlashArgs.flash_settings.flash_mode
+        $flashFrequency = [string]$recoveryFlashArgs.flash_settings.flash_freq
+        $flashHeaderSize = [string]$recoveryFlashArgs.flash_settings.flash_size
+        $bootloaderOffset = [string]$recoveryFlashArgs.bootloader.offset
+        $partitionTableOffset = [string]$recoveryFlashArgs.'partition-table'.offset
+    } else {
+        $flashMode = "keep"
+        $flashFrequency = "keep"
+        $flashHeaderSize = "keep"
+        $bootloaderOffset = "0x0"
+        $partitionTableOffset = "0x8000"
+    }
+    $paddedFlashSize = "16MB"
 
     $mergedBin = Join-Path $packageDir "rodakos_sd_recovery_merged.bin"
-    & python -m esptool --chip esp32s3 merge_bin `
-        --flash_mode $flashMode `
-        --flash_freq $flashFrequency `
-        --flash_size $flashSize `
-        --fill-flash-size $flashSize `
+    & python -m esptool --chip esp32s3 merge-bin `
+        --flash-mode $flashMode `
+        --flash-freq $flashFrequency `
+        --flash-size $flashHeaderSize `
+        --pad-to-size $paddedFlashSize `
         -o $mergedBin `
         $bootloaderOffset $bootloaderBin `
         $partitionTableOffset $partitionBin `
@@ -194,6 +328,22 @@ try {
     if ($mergedSize -ne 16MB) {
         throw "首次烧录镜像必须恰好为 16 MiB，实际为 $mergedSize 字节"
     }
+    if ($null -ne $immutableManifest -and
+        (-not (Test-BinaryRegionMatches -ContainerPath $mergedBin `
+                -FilePath $bootloaderBin -Offset 0) -or
+         -not (Test-BinaryRegionMatches -ContainerPath $mergedBin `
+                -FilePath $partitionBin -Offset 0x8000) -or
+         -not (Test-BinaryRegionMatches -ContainerPath $mergedBin `
+                -FilePath $otaDataBin -Offset $otaDataPartition.Offset) -or
+         -not (Test-BinaryRegionMatches -ContainerPath $mergedBin `
+                -FilePath $recoveryBin -Offset $recoveryPartition.Offset) -or
+         -not (Test-BinaryRegionMatches -ContainerPath $mergedBin `
+                -FilePath $mainBin -Offset $appPartition.Offset))) {
+        throw "新合并镜像未完整保留 immutable 基线资产或当前主应用"
+    }
+    $bootloaderSize = (Get-Item -LiteralPath $bootloaderBin).Length
+    $bootloaderSha256 =
+        (Get-FileHash -LiteralPath $bootloaderBin -Algorithm SHA256).Hash.ToLowerInvariant()
     $mainSha256 = (Get-FileHash -LiteralPath $mainBin -Algorithm SHA256).Hash.ToLowerInvariant()
     $recoverySha256 = (Get-FileHash -LiteralPath $recoveryBin -Algorithm SHA256).Hash.ToLowerInvariant()
     $otaDataSha256 = (Get-FileHash -LiteralPath $otaDataBin -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -206,6 +356,13 @@ try {
         fileSize = $mainSize
         checksumType = "sha256"
         checksumValue = $mainSha256
+        bootloaderImage = [ordered]@{
+            fileName = "bootloader.bin"
+            fileSize = $bootloaderSize
+            checksumType = "sha256"
+            checksumValue = $bootloaderSha256
+            offset = $bootloaderOffset
+        }
         appPartition = [ordered]@{
             label = "app"
             offset = $appPartition.OffsetText
@@ -247,8 +404,8 @@ try {
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageDir "manifest.json") -Encoding utf8
     @(
         "首次烧录："
-        "python -m esptool --chip esp32s3 -p COM3 erase_flash"
-        "python -m esptool --chip esp32s3 -p COM3 -b 460800 --before default_reset --after hard_reset write_flash 0x0 rodakos_sd_recovery_merged.bin"
+        "python -m esptool --chip esp32s3 -p COM3 erase-flash"
+        "python -m esptool --chip esp32s3 -p COM3 -b 460800 --before default-reset --after hard-reset write-flash 0x0 rodakos_sd_recovery_merged.bin"
         ""
         "Rodak OTA：仅上传 rodakos.bin，并使用 manifest.json 中的 fileSize/checksumValue。"
     ) | Set-Content -LiteralPath (Join-Path $packageDir "flash_args.txt") -Encoding utf8
