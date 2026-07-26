@@ -168,6 +168,7 @@ def parse(name: str, config: dict) -> dict:
             'trans_queue_depth': 0,  # Default queue depth
             'flags': {
                 'enable_internal_pullup': enable_internal_pullup,
+                'allow_pd': False,
             },
         }
         # i2c_master_bus_config_t uses union: clk_source vs lp_source_clk (SOC_LP_I2C_SUPPORTED)

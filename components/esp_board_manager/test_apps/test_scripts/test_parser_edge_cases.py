@@ -8,6 +8,71 @@ import sys
 
 import pytest
 
+
+def test_led_strip_accepts_v3_color_component_format(bmgr_root):
+    sys.path.insert(0, str(bmgr_root))
+    from devices.dev_led_strip import dev_led_strip as mod
+
+    result = mod.parse(
+        'status_led',
+        {
+            'sub_type': 'rmt',
+            'config': {
+                'strip_gpio_num': 48,
+                'max_leds': 1,
+                'color_component_format': 'LED_STRIP_COLOR_COMPONENT_FMT_GRB',
+            },
+        },
+    )
+
+    assert result['struct_init']['strip_config']['color_component_format'] == (
+        'LED_STRIP_COLOR_COMPONENT_FMT_GRB'
+    )
+
+
+@pytest.mark.parametrize(
+    ('legacy_value', 'expected_value'),
+    [
+        ('LED_PIXEL_FORMAT_GRB', 'LED_STRIP_COLOR_COMPONENT_FMT_GRB'),
+        ('LED_PIXEL_FORMAT_GRBW', 'LED_STRIP_COLOR_COMPONENT_FMT_GRBW'),
+    ],
+)
+def test_led_strip_maps_legacy_pixel_format(bmgr_root, legacy_value, expected_value):
+    sys.path.insert(0, str(bmgr_root))
+    from devices.dev_led_strip import dev_led_strip as mod
+
+    result = mod.parse(
+        'status_led',
+        {
+            'sub_type': 'rmt',
+            'config': {
+                'strip_gpio_num': 48,
+                'max_leds': 1,
+                'led_pixel_format': legacy_value,
+            },
+        },
+    )
+
+    assert result['struct_init']['strip_config']['color_component_format'] == expected_value
+
+
+def test_led_strip_rejects_unknown_color_component_format(bmgr_root):
+    sys.path.insert(0, str(bmgr_root))
+    from devices.dev_led_strip import dev_led_strip as mod
+
+    with pytest.raises(ValueError, match='Unsupported LED strip color_component_format'):
+        mod.parse(
+            'status_led',
+            {
+                'sub_type': 'rmt',
+                'config': {
+                    'strip_gpio_num': 48,
+                    'max_leds': 1,
+                    'color_component_format': 'LED_STRIP_COLOR_COMPONENT_FMT_UNKNOWN',
+                },
+            },
+        )
+
 def test_adc_continuous_patterns_reject_single_unit_conv_mode_for_mixed_units(bmgr_root):
     sys.path.insert(0, str(bmgr_root))
     from peripherals.periph_adc import periph_adc as mod

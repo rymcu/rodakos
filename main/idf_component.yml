@@ -1,20 +1,20 @@
 dependencies:
   # LVGL
   lvgl/lvgl: ~9.3.0
-  esp_lvgl_port: ~2.6.0
+  esp_lvgl_port: ^2.8.0
 
   # 字体（普惠体中文 + Font Awesome 图标 + emoji），解决"豆腐块"显示问题
   # 参考 xiaozhi-esp32 的字体方案
   78/xiaozhi-fonts: ~1.6.0
 
   # Touch driver
-  espressif/esp_lcd_touch_gt911: ~1.0.0
+  espressif/esp_lcd_touch_gt911: ^1.2.0
 
   # USB Mass Storage device mode
   espressif/esp_tinyusb: ~2.1.1
 
   # Board RGB LED control through RMT
-  espressif/led_strip: ^2.5.2
+  espressif/led_strip: ^3.0.3
 
   # JPEG decode for SD card photo rendering
   espressif/esp_new_jpeg: ^0.6.1
@@ -26,8 +26,12 @@ dependencies:
   # Voice cloud websocket transport
   espressif/esp_websocket_client: ^1.7.0
 
+  # ESP-IDF 6 moved MQTT and cJSON to managed components.
+  espressif/mqtt: ^1.0.0
+  espressif/cjson: ^1.7.19
+
   idf:
-    version: ">=5.4.0"
+    version: ">=6.0.0,<7.0.0"
 
 # Board Manager and board-specific helper components live under local components/.
 # ESP-IDF discovers and builds them from CMake dependencies.

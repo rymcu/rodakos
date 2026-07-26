@@ -1,13 +1,13 @@
 # RodakOS - Local ESP-IDF environment activator
 #
-# Auto-detects installed ESP-IDF versions and activates the toolchain in the
+# Auto-detects installed ESP-IDF versions and activates the project baseline
 # current PowerShell session. Mirrors the official `Microsoft.vX.Y.Z.PowerShell_profile.ps1`
 # layout but scans the local machine for any installed version/tooling instead
 # of hardcoding paths.
 #
 # Usage (from any PowerShell):
-#   . .\activate_idf.ps1                 # use highest installed version
-#   . .\activate_idf.ps1 -Version v5.4.2 # pin a specific version
+#   . .\activate_idf.ps1                 # prefer the v6.0.2 baseline
+#   . .\activate_idf.ps1 -Version v6.0.2 # pin the baseline explicitly
 #   . .\activate_idf.ps1 -List           # show available versions
 #
 # After activation, `idf.py` and friends are available, and `$env:IDF_PATH` is
@@ -27,6 +27,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$BaselineIdfVersion = "v6.0.2"
 $EspRootCandidates = @("C:\esp", "D:\esp", "$env:USERPROFILE\esp")
 $ToolsRootCandidates = @("C:\Espressif\tools", "$env:USERPROFILE\Espressif\tools")
 
@@ -151,6 +152,66 @@ function Normalize-IdfVersionName {
     return "v$trimmed"
 }
 
+function Get-RecommendedIdfToolRoot {
+    param(
+        [string]$IdfPath,
+        [string]$ToolsRoot,
+        [string]$ToolName
+    )
+    $manifestPath = Join-Path $IdfPath "tools\tools.json"
+    if (-not (Test-Path -LiteralPath $manifestPath) -or
+        -not (Test-Path -LiteralPath $ToolsRoot)) {
+        return $null
+    }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        $tool = $manifest.tools | Where-Object { $_.name -eq $ToolName } | Select-Object -First 1
+        $version = $tool.versions | Where-Object { $_.status -eq "recommended" } |
+            Select-Object -First 1
+        if (-not $version) { return $null }
+        $root = Join-Path (Join-Path $ToolsRoot $ToolName) $version.name
+        if (Test-Path -LiteralPath $root) { return $root }
+    } catch {
+        Write-Warning "Could not read recommended $ToolName version from $manifestPath"
+    }
+    return $null
+}
+
+function Get-RecommendedIdfToolPaths {
+    param(
+        [string]$IdfPath,
+        [string]$ToolsRoot
+    )
+    $manifestPath = Join-Path $IdfPath "tools\tools.json"
+    if (-not (Test-Path -LiteralPath $manifestPath) -or
+        -not (Test-Path -LiteralPath $ToolsRoot)) {
+        return @()
+    }
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    foreach ($tool in $manifest.tools) {
+        $version = $tool.versions | Where-Object { $_.status -eq "recommended" } |
+            Select-Object -First 1
+        if (-not $version) { continue }
+        $versionRoot = Join-Path (Join-Path $ToolsRoot $tool.name) $version.name
+        if (-not (Test-Path -LiteralPath $versionRoot)) { continue }
+
+        foreach ($exportPath in @($tool.export_paths)) {
+            $segments = @($exportPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            $candidate = if ($segments.Count -eq 0) {
+                $versionRoot
+            } else {
+                Join-Path $versionRoot ($segments -join [IO.Path]::DirectorySeparatorChar)
+            }
+            if ((Test-Path -LiteralPath $candidate) -and -not $result.Contains($candidate)) {
+                $result.Add($candidate)
+            }
+        }
+    }
+    return $result.ToArray()
+}
+
 # ---------- Discovery ----------
 
 $eimVersions = Find-EimInstalledVersions
@@ -190,6 +251,17 @@ if ($Version) {
     if (-not $selected) {
         Write-Error "Requested ESP-IDF version '$Version' not found. Use -List to see installed versions."
     }
+} elseif ($allVersions.Count -gt 0) {
+    $selected = $allVersions | Where-Object { $_.Version -eq $BaselineIdfVersion } |
+        Select-Object -First 1
+    if (-not $selected) {
+        $selected = $allVersions | Where-Object { $_.Version -match '^v6\.' } |
+            Select-Object -First 1
+    }
+    if (-not $selected) {
+        $selected = $allVersions | Where-Object { $_.Selected } | Select-Object -First 1
+    }
+    if (-not $selected) { $selected = $allVersions | Select-Object -First 1 }
 } elseif ($env:IDF_PATH -and (Test-Path $env:IDF_PATH)) {
     $versionName = Normalize-IdfVersionName (Get-IdfVersionFromPath $env:IDF_PATH)
     if (-not $versionName) {
@@ -207,9 +279,6 @@ if ($Version) {
         ToolsPath  = $env:IDF_TOOLS_PATH
         Source     = "env"
     }
-} else {
-    $selected = $allVersions | Where-Object { $_.Selected } | Select-Object -First 1
-    if (-not $selected) { $selected = $allVersions | Select-Object -First 1 }
 }
 
 if (-not $selected) {
@@ -223,7 +292,7 @@ if (-not $selected) {
     Write-Host "  - Manually: clone esp-idf into C:\esp\vX.Y.Z\esp-idf" -ForegroundColor White
     Write-Host ""
     Write-Host "Or pass -Version after installing:" -ForegroundColor Yellow
-    Write-Host "  . .\activate_idf.ps1 -Version v5.5.4" -ForegroundColor White
+    Write-Host "  . .\activate_idf.ps1 -Version $BaselineIdfVersion" -ForegroundColor White
     return
 }
 
@@ -264,41 +333,22 @@ if (-not (Test-Path $pythonExe)) {
     Write-Error "Python not found at $pythonExe"
 }
 
-$espRomElfDir = Resolve-EspRomElfDir -ToolsRoot $toolsRoot
-$openocdScripts = Resolve-OpenOcdScripts -ToolsRoot $toolsRoot
+$espRomElfDir = Get-RecommendedIdfToolRoot -IdfPath $idfPath -ToolsRoot $toolsRoot `
+    -ToolName "esp-rom-elfs"
+$openocdRoot = Get-RecommendedIdfToolRoot -IdfPath $idfPath -ToolsRoot $toolsRoot `
+    -ToolName "openocd-esp32"
+$openocdScripts = if ($openocdRoot) {
+    $candidate = Join-Path $openocdRoot "openocd-esp32\share\openocd\scripts"
+    if (Test-Path -LiteralPath $candidate) { $candidate } else { $null }
+} else {
+    $null
+}
 
 # ---------- Build PATH ----------
 
 $pathParts = @()
 if ($toolsRoot -and (Test-Path $toolsRoot)) {
-    $toolDirs = @(
-        "ccache", "cmake", "dfu-util", "esp-clang", "esp-rom-elfs",
-        "esp32ulp-elf", "idf-exe", "ninja", "openocd-esp32",
-        "qemu-xtensa", "riscv32-esp-elf", "xtensa-esp-elf", "xtensa-esp-elf-gdb",
-        "esp-clang-libs"
-    )
-    foreach ($tool in $toolDirs) {
-        $toolRootPath = Join-Path $toolsRoot $tool
-        if (-not (Test-Path $toolRootPath)) { continue }
-        # Each tool is a directory containing a versioned subdirectory.
-        Get-ChildItem -Path $toolRootPath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $binDir = Join-Path $_.FullName "bin"
-            if (Test-Path $binDir) { $pathParts += $binDir }
-            # Some tools (e.g. esp32ulp-elf, xtensa-esp-elf) have nested bin dirs.
-            Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                $nestedBin = Join-Path $_.FullName "bin"
-                if (Test-Path $nestedBin) { $pathParts += $nestedBin }
-            }
-            # Some tools, including ninja, place their executable at the version root.
-            if (Get-ChildItem -Path $_.FullName -File -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1) {
-                $pathParts += $_.FullName
-            }
-            # Top-level fallback (e.g. esp-rom-elfs has no bin but its dir is on PATH).
-            if (-not (Test-Path $binDir) -and $tool -eq "esp-rom-elfs") {
-                $pathParts += $_.FullName
-            }
-        }
-    }
+    $pathParts += Get-RecommendedIdfToolPaths -IdfPath $idfPath -ToolsRoot $toolsRoot
     $pathParts += (Join-Path $pythonVenv "Scripts")
 }
 
@@ -313,6 +363,14 @@ $env:IDF_TOOLS_PATH = $toolsRoot
 $env:IDF_PYTHON_ENV_PATH = $pythonVenv
 $env:IDF_COMPONENT_LOCAL_STORAGE_URL = "file://$toolsRoot"
 $env:ESP_IDF_VERSION = $versionActual
+$boardManagerActions = Join-Path $PSScriptRoot "components\esp_board_manager"
+if (Test-Path -LiteralPath $boardManagerActions) {
+    $extraActionPaths = @($env:IDF_EXTRA_ACTIONS_PATH -split ';') |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($extraActionPaths -notcontains $boardManagerActions) {
+        $env:IDF_EXTRA_ACTIONS_PATH = (@($boardManagerActions) + $extraActionPaths) -join ';'
+    }
+}
 if ($espRomElfDir)    { $env:ESP_ROM_ELF_DIR    = $espRomElfDir }
 if ($openocdScripts)  { $env:OPENOCD_SCRIPTS    = $openocdScripts }
 $env:PATH = ($pathParts -join ";")

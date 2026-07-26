@@ -8,24 +8,27 @@ VERSION = 'v1.0.0'
 
 VALID_SUB_TYPES = ['rmt', 'spi']
 
-COLOR_COMPONENT_FORMAT_MAP = {
-    'LED_STRIP_COLOR_COMPONENT_FMT_GRB': 'LED_PIXEL_FORMAT_GRB',
-    'LED_STRIP_COLOR_COMPONENT_FMT_GRBW': 'LED_PIXEL_FORMAT_GRBW',
+LEGACY_PIXEL_FORMAT_MAP = {
+    'LED_PIXEL_FORMAT_GRB': 'LED_STRIP_COLOR_COMPONENT_FMT_GRB',
+    'LED_PIXEL_FORMAT_GRBW': 'LED_STRIP_COLOR_COMPONENT_FMT_GRBW',
 }
 
-UNSUPPORTED_COLOR_COMPONENT_FORMATS = {
+VALID_COLOR_COMPONENT_FORMATS = {
+    'LED_STRIP_COLOR_COMPONENT_FMT_GRB',
+    'LED_STRIP_COLOR_COMPONENT_FMT_GRBW',
     'LED_STRIP_COLOR_COMPONENT_FMT_RGB',
     'LED_STRIP_COLOR_COMPONENT_FMT_RGBW',
 }
 
-
-def _parse_pixel_format(config: dict) -> str:
-    value = config.get('led_pixel_format', config.get('color_component_format', 'LED_PIXEL_FORMAT_GRB'))
-    if value in UNSUPPORTED_COLOR_COMPONENT_FORMATS:
-        raise ValueError(
-            f'{value} has no exact led_pixel_format equivalent in the current led_strip driver'
-        )
-    return COLOR_COMPONENT_FORMAT_MAP.get(value, value)
+def _parse_color_component_format(config: dict) -> str:
+    value = config.get(
+        'color_component_format',
+        config.get('led_pixel_format', 'LED_STRIP_COLOR_COMPONENT_FMT_GRB'),
+    )
+    value = LEGACY_PIXEL_FORMAT_MAP.get(value, value)
+    if value not in VALID_COLOR_COMPONENT_FORMATS:
+        raise ValueError(f'Unsupported LED strip color_component_format: {value}')
+    return value
 
 
 def get_includes() -> list:
@@ -40,7 +43,7 @@ def _parse_strip_config(config: dict) -> dict:
     return {
         'strip_gpio_num': int(config.get('strip_gpio_num', -1)),
         'max_leds': int(config.get('max_leds', 1)),
-        'led_pixel_format': _parse_pixel_format(config),
+        'color_component_format': _parse_color_component_format(config),
         'led_model': config.get('led_model', 'LED_MODEL_WS2812'),
         'flags': {
             'invert_out': config.get('invert_out', config.get('flags', {}).get('invert_out', False)),

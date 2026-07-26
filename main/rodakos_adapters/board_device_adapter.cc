@@ -13,11 +13,11 @@
 #include <esp_log.h>
 #include <iot_button.h>
 
+extern "C" const esp_board_device_desc_t g_esp_board_devices[];
+
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "BoardDeviceAdapter";
-
-extern "C" const esp_board_device_desc_t g_esp_board_devices[];
 
 struct BoardButtonCallbackContext {
     std::string button_id;

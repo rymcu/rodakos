@@ -7,6 +7,9 @@ param(
     [string]$Port = "COM3"
 )
 
+$ErrorActionPreference = "Stop"
+& (Join-Path $PSScriptRoot "assert_idf6_environment.ps1")
+
 Write-Host "🔨 RodakOS Quick Build" -ForegroundColor Cyan
 Write-Host ""
 

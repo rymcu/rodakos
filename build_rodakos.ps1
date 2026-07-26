@@ -13,6 +13,8 @@ if (-not $env:IDF_PATH) {
 }
 
 $ErrorActionPreference = "Stop"
+$repoRoot = $PSScriptRoot
+& (Join-Path $repoRoot "assert_idf6_environment.ps1")
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RodakOS 自动化构建脚本" -ForegroundColor Cyan
@@ -28,43 +30,27 @@ if (-not (Test-Path "partitions_16m.csv")) {
 }
 Write-Host "  ✅ partitions_16m.csv 存在" -ForegroundColor Green
 
-# 2. 生成板级配置
-Write-Host "[2/5] 生成板级配置..." -ForegroundColor Yellow
-idf.py bmgr -b rymcu_bigsmart
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ❌ 板级配置生成失败" -ForegroundColor Red
-    exit 1
-}
-Write-Host "  ✅ 板级配置生成完成" -ForegroundColor Green
-
-# 3. 修正生成代码路径
-Write-Host "[3/5] 修正生成代码路径..." -ForegroundColor Yellow
-$genDir = "components/gen_bmgr_codes"
-
-# 修正 idf_component.yml
-(Get-Content "$genDir/idf_component.yml") `
-    -replace 'D:\\workspace\\rodakos\\managed_components\\espressif__brookesia_hal_boards', '../../components/brookesia_hal_boards' `
-    | Set-Content "$genDir/idf_component.yml"
-
-# 修正 CMakeLists.txt
-(Get-Content "$genDir/CMakeLists.txt") `
-    -replace '../../managed_components/espressif__brookesia_hal_boards', '../../components/brookesia_hal_boards' `
-    -replace 'D:/workspace/rodakos/managed_components/espressif__brookesia_hal_boards', '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards' `
-    | Set-Content "$genDir/CMakeLists.txt"
-
-Write-Host "  ✅ 路径修正完成" -ForegroundColor Green
-
-# 4. 清理并重新配置
-Write-Host "[4/5] 清理并重新配置..." -ForegroundColor Yellow
+# 2. 清理旧构建目录
+Write-Host "[2/5] 清理旧构建目录..." -ForegroundColor Yellow
 if (Test-Path "build") {
     Remove-Item -Recurse -Force build
 }
-idf.py reconfigure > $null 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ❌ 重新配置失败" -ForegroundColor Red
+Write-Host "  ✅ 旧构建目录已清理" -ForegroundColor Green
+
+# 3. 生成板级配置并重新配置
+Write-Host "[3/5] 生成板级配置并重新配置..." -ForegroundColor Yellow
+& (Join-Path $repoRoot "generate_board_config.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "  ✅ 板级配置生成完成" -ForegroundColor Green
+
+# 4. 验证生成配置
+Write-Host "[4/5] 验证生成配置..." -ForegroundColor Yellow
+$generatedCmake = Join-Path $repoRoot "components/gen_bmgr_codes/CMakeLists.txt"
+if (-not (Test-Path -LiteralPath $generatedCmake)) {
+    Write-Host "  ❌ 缺少 Board Manager 生成组件" -ForegroundColor Red
     exit 1
 }
-Write-Host "  ✅ 重新配置完成" -ForegroundColor Green
+Write-Host "  ✅ Board Manager 生成组件可用" -ForegroundColor Green
 
 # 5. 构建项目
 Write-Host "[5/5] 构建项目..." -ForegroundColor Yellow

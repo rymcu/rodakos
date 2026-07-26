@@ -85,7 +85,6 @@ idf_component_register(
         mqtt
         esp_netif
         lwip
-        json
         esp_board_manager
         esp_driver_i2c
         espressif__esp_websocket_client

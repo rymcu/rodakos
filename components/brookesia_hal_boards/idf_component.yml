@@ -1,5 +1,9 @@
 description: ESP-Brookesia HAL boards component that provides board-specific device
   configurations, peripheral mappings, and hardware setup hooks for esp_board_manager.
+dependencies:
+  esp_io_expander_pca9557:
+    override_path: boards/rymcu/rymcu_bigsmart/components/esp_io_expander_pca9557
+  espressif/esp_lcd_touch_gt911: ^1.2.0
 issues: https://github.com/espressif/esp-brookesia/issues
 repository: git://github.com/espressif/esp-brookesia.git
 repository_info:
