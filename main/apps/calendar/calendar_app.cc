@@ -110,20 +110,29 @@ bool CalendarApp::OnCreate(PhoneAppContext& context) {
 
 void CalendarApp::OnResume() {
     paused_ = false;
+    if (ui_ == nullptr) {
+        return;
+    }
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return;
+    }
     if (refresh_timer_ != nullptr) {
         lv_timer_resume(refresh_timer_);
         lv_timer_reset(refresh_timer_);
     }
-    if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_);
-        if (lock.locked()) {
-            RefreshToday();
-        }
-    }
+    RefreshToday();
 }
 
 void CalendarApp::OnPause() {
     paused_ = true;
+    if (ui_ == nullptr) {
+        return;
+    }
+    PhoneUiLock lock(*ui_);
+    if (!lock.locked()) {
+        return;
+    }
     if (refresh_timer_ != nullptr) {
         lv_timer_pause(refresh_timer_);
     }
