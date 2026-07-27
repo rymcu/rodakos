@@ -63,6 +63,7 @@ set(SOURCES
     "apps/photos/photos_app.cc"
     "apps/camera/camera_app.cc"
     "apps/clock/clock_app.cc"
+    "apps/calendar/calendar_app.cc"
     "apps/file_manager/file_manager_app.cc"
     "apps/gyro/gyro_app.cc"
     "apps/music/music_app.cc"
