@@ -17,7 +17,8 @@ As of 2026-07-24:
 - Home Phase 4 keeps stable page tile shells while retaining grids/buttons only for the active page
   and immediate neighbors. Pure policy tests and a production-HomeApp host LVGL suite pass;
   multi-page hardware validation remains open.
-- Built-in apps: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Recorder, Assistant, Smart.
+- Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
+  Music, Recorder, Assistant, Smart, and Wake.
 - Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, voice assistant, voice wake, device cloud config, time, button binding, lights, motion, unified MQTT, and SD-staged OTA.
 - Current IDF 6 app binary is about 3.30 MiB of the 13.3125 MiB main application partition.
 
@@ -98,6 +99,8 @@ Status: partially implemented.
 - Time sync entry points exist.
 - Audio playback and voice assistant services exist, with heavy hardware opened on demand.
 - Light and button binding services exist.
+- Wake-on-LAN validates and sends UDP magic packets on demand; the Wake app stores up to eight
+  named devices with configurable MAC, broadcast address, and port.
 
 Next work:
 

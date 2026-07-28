@@ -17,7 +17,7 @@ flowchart TD
   "app_main" --> "PhoneServices"
   "PhoneServices" --> "Backlight/WiFi/FileService"
   "PhoneServices" --> "Audio/Music/Voice"
-  "PhoneServices" --> "Camera/WebFiles/Time/Buttons/Lights/Motion"
+  "PhoneServices" --> "Camera/WebFiles/Time/Buttons/Lights/Motion/Wake-on-LAN"
   "PhoneServices" --> "Unified MQTT/SD OTA"
   "Unified MQTT/SD OTA" --> "Factory Recovery"
   "PhoneUi" --> "PhoneSystem"
@@ -118,6 +118,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Photos: scans `/photos`, `/DCIM`, and fallback roots for images.
 - Camera: opens camera service on demand, previews and captures to storage.
 - Clock: local display and network time sync entry points.
+- Calendar: local month navigation and current-day selection.
 - File Manager: browses and manages FileService-backed storage.
 - Gyro: motion capability surface for gyroscope/accelerometer samples.
 - System Info: firmware, WiFi, memory, and storage status.
@@ -125,6 +126,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
 - Assistant: voice assistant surface, wake-listening controls, cloud transport status.
 - Smart: light/smart-device control surface.
+- Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
 
 ## Service Notes
 
@@ -137,6 +139,8 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   Recovery project is the only runtime allowed to rewrite `ota_0`.
 - Shell preferences use the short-lived `shell` NVS namespace. Settings exposes explicit commit results so a failed save cannot be reported as successful.
 - ButtonBindingService encodes Lock and Control Center as stable actions; persisted `btnbind` values override compiled defaults.
+- WakeOnLanService creates a UDP socket only for a user-requested wake, requires active WiFi, and
+  leaves device-list persistence to the Wake app's versioned `wol/devices` NVS document.
 
 ## Related Docs
 

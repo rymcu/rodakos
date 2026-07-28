@@ -23,6 +23,7 @@
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_recorder_service.h"
 #include "phone_os/voice_wake_service.h"
+#include "phone_os/wake_on_lan_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_os/voice_cloud_websocket_transport.h"
 #include "phone_ui/phone_ui.h"
@@ -391,6 +392,7 @@ extern "C" void app_main(void) {
     static rodakos::UnavailableVoiceWakeRuntime voice_wake_runtime;
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_wake_runtime);
+    static rodakos::WakeOnLanService wake_on_lan_service(wifi);
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
     ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
 
@@ -415,6 +417,7 @@ extern "C" void app_main(void) {
     services.SetDeviceCloud(&device_cloud_config_service);
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
+    services.SetWakeOnLan(&wake_on_lan_service);
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
 
