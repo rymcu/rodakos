@@ -30,6 +30,8 @@ set(SOURCES
     "phone_os/voice_assistant_transport.cc"
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_service.cc"
+    "phone_os/wake_on_lan_packet.cc"
+    "phone_os/wake_on_lan_service.cc"
     "phone_os/device_cloud_config.cc"
     "phone_os/ota_update_service.cc"
     "phone_os/unified_mqtt_service.cc"
@@ -71,6 +73,9 @@ set(SOURCES
     "apps/assistant/assistant_app.cc"
     "apps/system_info/system_info_app.cc"
     "apps/smart/smart_app.cc"
+    "apps/wol/wol_device_codec.cc"
+    "apps/wol/wol_device_store.cc"
+    "apps/wol/wol_app.cc"
 )
 
 idf_component_register(

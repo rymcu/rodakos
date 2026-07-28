@@ -17,6 +17,7 @@ class MusicPlayerService;
 class RecordingService;
 class VoiceAssistantService;
 class VoiceWakeService;
+class WakeOnLanService;
 class WebFileSystemService;
 }
 
@@ -64,6 +65,9 @@ public:
     void SetVoiceWake(rodakos::VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
     rodakos::VoiceWakeService* voice_wake() { return voice_wake_; }
 
+    void SetWakeOnLan(rodakos::WakeOnLanService* wake_on_lan) { wake_on_lan_ = wake_on_lan; }
+    rodakos::WakeOnLanService* wake_on_lan() { return wake_on_lan_; }
+
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
 
@@ -85,6 +89,7 @@ private:
     rodakos::DeviceCloudConfigService* device_cloud_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
     rodakos::VoiceWakeService* voice_wake_ = nullptr;
+    rodakos::WakeOnLanService* wake_on_lan_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;
 };

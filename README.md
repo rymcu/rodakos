@@ -30,7 +30,8 @@ Last refreshed: 2026-07-24.
   manual or fixture validation, and true out-of-memory recovery remains unproven while LVGL uses
   CLIB allocation with malloc assertions enabled.
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
-- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, File Manager, Gyro, System Info, Music, Recorder, Assistant, and Smart.
+- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
+  Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
 - Current IDF 6 built artifact seen in `build/rodakos.bin`: about 3.30 MiB. The main application slot is
   13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
