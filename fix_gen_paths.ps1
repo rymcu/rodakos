@@ -33,8 +33,8 @@ if ($missingPortableFiles.Count -gt 0) {
 $content = Get-Content -Raw -LiteralPath $componentManifest
 $content = $content.Replace($managedForward, '../../components/brookesia_hal_boards')
 $content = $content.Replace($managedBackward, '..\..\components\brookesia_hal_boards')
-$content = $content.Replace($boardForward, '../../components/brookesia_hal_boards')
-$content = $content.Replace($boardBackward, '..\..\components\brookesia_hal_boards')
+$content = $content.Replace($boardForward, '../brookesia_hal_boards')
+$content = $content.Replace($boardBackward, '..\brookesia_hal_boards')
 Set-Content -LiteralPath $componentManifest -Value $content -Encoding utf8 -NoNewline
 Write-Host "  ✅ idf_component.yml 路径已修正" -ForegroundColor Green
 
