@@ -19,6 +19,8 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "RecordingService";
+constexpr const char* kAudioInputOwner = "recording-service";
+constexpr int kAudioInputPriority = 20;
 constexpr const char* kRecordingsDir = "/recordings";
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxNameSuffix = 9999;
@@ -155,7 +157,6 @@ RecordingService::RecordingService(AudioCodecInput& input,
 
 RecordingService::~RecordingService() {
     Stop();
-    input_.Deinit();
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -347,11 +348,13 @@ void RecordingService::RecordingTask() {
         goto cleanup;
     }
 
-    if (!input_.Open(config.sample_rate,
-                     config.input_channels,
-                     config.bits_per_sample,
-                     config.gain,
-                     config.input_channel_mask)) {
+    if (!input_.OpenForOwner(kAudioInputOwner,
+                             kAudioInputPriority,
+                             config.sample_rate,
+                             config.input_channels,
+                             config.bits_per_sample,
+                             config.gain,
+                             config.input_channel_mask)) {
         failed = true;
         error = "Audio ADC unavailable";
         goto cleanup;
@@ -376,7 +379,7 @@ void RecordingService::RecordingTask() {
              static_cast<unsigned>(config.bits_per_sample));
 
     while (!ShouldStop()) {
-        if (!input_.Read(buffer, static_cast<int>(kRecordBufferSize))) {
+        if (!input_.ReadForOwner(kAudioInputOwner, buffer, static_cast<int>(kRecordBufferSize))) {
             failed = true;
             error = "Audio read failed";
             break;
@@ -396,8 +399,7 @@ cleanup:
     if (buffer != nullptr) {
         heap_caps_free(buffer);
     }
-    input_.Close();
-    input_.Deinit();
+    input_.CloseForOwner(kAudioInputOwner);
 
     if (fp != nullptr) {
         if (std::fseek(fp, 0, SEEK_SET) == 0) {

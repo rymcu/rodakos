@@ -1,4 +1,28 @@
 dependencies:
+  78/esp-opus:
+    component_hash: 8182b733f071d7bfe1e837f4c9f8649a63e4c937177f089e65772880c02f2e17
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.5
+  78/esp-opus-encoder:
+    component_hash: b80e5b6d6dc4bf6b0bf1a3729f52b80500e9e6b1003b3e827b78ba738283a296
+    dependencies:
+    - name: 78/esp-opus
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.0.5
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.4.1
   78/xiaozhi-fonts:
     component_hash: 19ee829a7439702e18084a313b7b86017d3b8d17a094684575edc76bb6d11023
     dependencies:
@@ -60,6 +84,44 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.7.19~2
+  espressif/dl_fft:
+    component_hash: a955ca29581de2177ddf25759273bd83f082b3c805e735fe6ee105858643989b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.6.0
+  espressif/esp-dsp:
+    component_hash: 619639efc18cfa361a9e423739b9b0ffc14991effc6c027f955c2f2c3bf1754b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.6.0
+  espressif/esp-sr:
+    component_hash: 1b731f6ddb493361dcf3d256e3877c58ccac50455437bc584057e08b44df6040
+    dependencies:
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.6.0
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.2.2
   espressif/esp_cam_sensor:
     component_hash: 4ed9e34055a7ac5d6c60552c21dfa470deaadb7eda8040d157c5f3314de8d2fd
     dependencies:
@@ -332,11 +394,14 @@ dependencies:
       type: service
     version: 9.3.0
 direct_dependencies:
+- 78/esp-opus
+- 78/esp-opus-encoder
 - 78/xiaozhi-fonts
 - chmorgan/esp-libhelix-mp3
 - esp_io_expander_pca9557
 - espressif/button
 - espressif/cjson
+- espressif/esp-sr
 - espressif/esp_codec_dev
 - espressif/esp_io_expander
 - espressif/esp_lcd_touch
@@ -350,6 +415,6 @@ direct_dependencies:
 - espressif/mqtt
 - idf
 - lvgl/lvgl
-manifest_hash: 0ebe9a0b26363e63364456007931d2ea5c81919b58b1633c0794a2ce15a0d2fc
+manifest_hash: 6d79f3971db008b957295a577788a6ef5fbd92444ddc5319463e02cda8c0aa83
 target: esp32s3
 version: 3.0.0

@@ -19,9 +19,9 @@
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/voice_audio_frontend.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
-#include "phone_os/voice_recorder_service.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/wake_on_lan_service.h"
 #include "phone_os/web_file_system_service.h"
@@ -376,7 +376,8 @@ extern "C" void app_main(void) {
     static rodakos::Qmi8658MotionSensor qmi8658_motion_sensor;
     static rodakos::MotionService motion_service(&qmi8658_motion_sensor);
     static rodakos::ButtonBindingService button_binding_service;
-    static rodakos::AudioFocusService audio_focus_service(music_player_service);
+    static rodakos::AudioFocusService audio_focus_service(
+        music_player_service, audio_output_service);
     static rodakos::AudioCodecInput audio_input;
     static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
@@ -386,12 +387,14 @@ extern "C" void app_main(void) {
         device_cloud_config_service, ota_update_service, &audio_output_service);
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
-    static rodakos::NoopVoiceRecorderService voice_recorder_service;
+    static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
     static rodakos::VoiceAssistantService voice_assistant_service(
-        audio_focus_service, voice_assistant_transport, voice_recorder_service);
-    static rodakos::UnavailableVoiceWakeRuntime voice_wake_runtime;
+        audio_focus_service,
+        voice_assistant_transport,
+        voice_audio_frontend,
+        audio_output_service);
     static rodakos::VoiceWakeService voice_wake_service(
-        voice_assistant_service, voice_wake_runtime);
+        voice_assistant_service, voice_audio_frontend);
     static rodakos::WakeOnLanService wake_on_lan_service(wifi);
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
     ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
@@ -429,7 +432,16 @@ extern "C" void app_main(void) {
 
     button_binding_service.Init(system.navigation(), ui);
 
-    voice_wake_service.Start();
+    const bool voice_wake_started = voice_wake_service.Start();
+    const auto voice_wake_state = voice_wake_service.GetState();
+    if (!voice_wake_started) {
+        ESP_LOGW(TAG, "Voice wake service failed to start: %s",
+                 voice_wake_state.message.c_str());
+    } else {
+        ESP_LOGI(TAG, "Voice wake service %s: %s",
+                 voice_wake_state.enabled ? "enabled" : "disabled",
+                 voice_wake_state.message.c_str());
+    }
     // 到达此处即通过本地启动健康门槛；先持久化，再允许 MQTT connected 回调上报。
     if (!ota_update_service.ConfirmRunningImage()) {
         ESP_LOGW(TAG, "Local boot confirmation did not complete");

@@ -2,6 +2,7 @@
 
 #include "phone_os/voice_assistant_service.h"
 
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -76,10 +77,12 @@ public:
 private:
     static void SupervisorTask(void* arg);
 
-    void LoadSettingsLocked();
-    void SaveSettings(bool enabled);
+    bool LoadSettingsLocked();
+    bool SaveSettings(bool enabled);
     void EnsureSupervisorTaskLocked();
+    void WaitForSupervisorStop();
     void SupervisorTick();
+    void HandleWakeWordDetected(const std::string& wake_word, uint32_t enable_generation);
     bool StartRuntimeLocked();
     void StopRuntimeLocked(const char* message);
     void SetStatusLocked(VoiceWakeStatus status, const char* message);
@@ -88,9 +91,13 @@ private:
     VoiceWakeRuntime& runtime_;
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
+    bool service_stopping_ = false;
     bool task_running_ = false;
     bool enabled_ = false;
     bool listening_ = false;
+    bool assistant_starting_ = false;
+    uint32_t enable_generation_ = 0;
+    uint32_t assistant_start_generation_ = 0;
     TickType_t assistant_active_since_ticks_ = 0;
     TaskHandle_t task_ = nullptr;
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;

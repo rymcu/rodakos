@@ -274,7 +274,7 @@ bool MusicPlayerService::PlayTrack(size_t index) {
     MusicTrack track;
     int mode_value = 0;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (playback_starting_ || index >= tracks_.size()) {
+    if (playback_blocked_ || playback_starting_ || index >= tracks_.size()) {
         xSemaphoreGive(mutex_);
         return false;
     }
@@ -335,6 +335,15 @@ bool MusicPlayerService::PlayNext() {
 }
 
 bool MusicPlayerService::TogglePlayPause() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool blocked = playback_blocked_;
+        xSemaphoreGive(mutex_);
+        if (blocked) {
+            return false;
+        }
+    }
+
     const auto state = audio_.GetState();
     if (state.status == AudioPlaybackStatus::kPaused) {
         if (mutex_ != nullptr) {
@@ -392,12 +401,60 @@ void MusicPlayerService::Pause() {
 }
 
 void MusicPlayerService::Resume() {
+    bool blocked = false;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        queue_paused_ = false;
+        blocked = playback_blocked_;
+        if (!blocked) {
+            queue_paused_ = false;
+        }
         xSemaphoreGive(mutex_);
     }
+    if (blocked) {
+        return;
+    }
     audio_.Resume();
+}
+
+bool MusicPlayerService::SuspendPlaybackHardware() {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        queue_paused_ = true;
+        completion_handled_ = true;
+        xSemaphoreGive(mutex_);
+    }
+    return audio_.SuspendPlaybackHardware();
+}
+
+bool MusicPlayerService::SetPlaybackBlocked(bool blocked) {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    playback_blocked_ = blocked;
+    xSemaphoreGive(mutex_);
+
+    if (!blocked) {
+        return true;
+    }
+
+    constexpr uint32_t kPlaybackStartWaitMs = 1000;
+    constexpr uint32_t kPlaybackStartPollMs = 10;
+    for (uint32_t waited = 0; waited < kPlaybackStartWaitMs; waited += kPlaybackStartPollMs) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool starting = playback_starting_;
+        xSemaphoreGive(mutex_);
+        if (!starting) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(kPlaybackStartPollMs));
+    }
+    ESP_LOGW(TAG, "Timed out waiting for playback start while blocking music");
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    playback_blocked_ = false;
+    xSemaphoreGive(mutex_);
+    return false;
 }
 
 void MusicPlayerService::Stop() {
@@ -410,8 +467,8 @@ void MusicPlayerService::Stop() {
     }
 }
 
-void MusicPlayerService::ReleasePlaybackHardware() {
-    audio_.ReleasePlaybackHardware();
+bool MusicPlayerService::ReleasePlaybackHardware() {
+    return audio_.ReleasePlaybackHardware();
 }
 
 bool MusicPlayerService::Refresh() {
