@@ -82,6 +82,7 @@ private:
     void EnsureSupervisorTaskLocked();
     void WaitForSupervisorStop();
     void SupervisorTick();
+    void LogHealthIfDueLocked();
     void HandleWakeWordDetected(const std::string& wake_word, uint32_t enable_generation);
     bool StartRuntimeLocked();
     void StopRuntimeLocked(const char* message);
@@ -99,6 +100,7 @@ private:
     uint32_t enable_generation_ = 0;
     uint32_t assistant_start_generation_ = 0;
     TickType_t assistant_active_since_ticks_ = 0;
+    TickType_t last_health_log_ticks_ = 0;
     TaskHandle_t task_ = nullptr;
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;
     std::string message_ = "Disabled";

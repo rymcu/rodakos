@@ -569,8 +569,21 @@ void VoiceCloudWebSocketTransport::CleanupDetachedClient() {
     }
 
     if (client != nullptr) {
-        esp_websocket_client_stop(client);
-        esp_websocket_client_destroy(client);
+        const int64_t cleanup_started_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "Voice websocket cleanup started");
+        const esp_err_t stop_result = esp_websocket_client_stop(client);
+        const int64_t stop_completed_us = esp_timer_get_time();
+        ESP_LOGI(TAG,
+                 "Voice websocket stop completed: result=%s duration_ms=%lld",
+                 esp_err_to_name(stop_result),
+                 static_cast<long long>((stop_completed_us - cleanup_started_us) / 1000));
+        const esp_err_t destroy_result = esp_websocket_client_destroy(client);
+        const int64_t destroy_completed_us = esp_timer_get_time();
+        ESP_LOGI(TAG,
+                 "Voice websocket destroy completed: result=%s duration_ms=%lld total_ms=%lld",
+                 esp_err_to_name(destroy_result),
+                 static_cast<long long>((destroy_completed_us - stop_completed_us) / 1000),
+                 static_cast<long long>((destroy_completed_us - cleanup_started_us) / 1000));
     }
 
     if (mutex_ != nullptr) {
@@ -595,10 +608,17 @@ void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
         return;
     }
 
+    const int64_t wait_started_us = esp_timer_get_time();
+    int64_t next_warning_us = wait_started_us + 5 * 1000 * 1000;
     while (true) {
         bool cleanup_inline = false;
         bool complete = false;
         TaskHandle_t cleanup_task = nullptr;
+        bool closing = false;
+        bool cleanup_in_progress = false;
+        bool cleanup_inline_required = false;
+        bool cleanup_task_finished = false;
+        bool cleanup_client_pending = false;
         {
             RecursiveSemaphoreLock client_lock(client_mutex_);
             if (!client_lock.locked()) {
@@ -615,6 +635,11 @@ void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
             complete = !closing_ && !cleanup_in_progress_ &&
                        !cleanup_inline_required_ && !cleanup_task_finished_ &&
                        cleanup_task_ == nullptr && cleanup_client_ == nullptr;
+            closing = closing_;
+            cleanup_in_progress = cleanup_in_progress_;
+            cleanup_inline_required = cleanup_inline_required_;
+            cleanup_task_finished = cleanup_task_finished_;
+            cleanup_client_pending = cleanup_client_ != nullptr;
             xSemaphoreGive(mutex_);
 
             if (cleanup_task != nullptr) {
@@ -636,6 +661,16 @@ void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
             if (complete) {
                 return;
             }
+        }
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_warning_us) {
+            ESP_LOGW(TAG,
+                     "Waiting for voice websocket cleanup: elapsed_ms=%lld closing=%d "
+                     "in_progress=%d inline=%d task_finished=%d client_pending=%d",
+                     static_cast<long long>((now_us - wait_started_us) / 1000),
+                     closing, cleanup_in_progress, cleanup_inline_required,
+                     cleanup_task_finished, cleanup_client_pending);
+            next_warning_us = now_us + 5 * 1000 * 1000;
         }
         vTaskDelay(1);
     }

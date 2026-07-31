@@ -11,6 +11,7 @@ namespace {
 constexpr const char* TAG = "VoiceWakeService";
 constexpr TickType_t kSupervisorIntervalTicks = pdMS_TO_TICKS(1000);
 constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(120000);
+constexpr TickType_t kHealthLogIntervalTicks = pdMS_TO_TICKS(60000);
 
 const char* StatusMessage(VoiceWakeStatus status) {
     switch (status) {
@@ -366,6 +367,7 @@ void VoiceWakeService::EnsureSupervisorTaskLocked() {
     }
 
     task_running_ = true;
+    last_health_log_ticks_ = 0;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     const BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         SupervisorTask, "voice_wake", 4096, this, 2, &task_, 0,
@@ -398,6 +400,35 @@ void VoiceWakeService::WaitForSupervisorStop() {
     }
 }
 
+void VoiceWakeService::LogHealthIfDueLocked() {
+    const TickType_t now = xTaskGetTickCount();
+    if (last_health_log_ticks_ != 0 &&
+        (now - last_health_log_ticks_) < kHealthLogIntervalTicks) {
+        return;
+    }
+    last_health_log_ticks_ = now;
+
+    ESP_LOGI(TAG,
+             "Voice health: enabled=%d status=%u listening=%d assistant_starting=%d "
+             "internal_free=%u internal_min=%u internal_largest=%u "
+             "psram_free=%u psram_min=%u psram_largest=%u "
+             "supervisor_stack_min_free=%u",
+             enabled_, static_cast<unsigned>(status_), listening_, assistant_starting_,
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+}
+
 void VoiceWakeService::SupervisorTick() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (!initialized_ || service_stopping_ || !task_running_) {
@@ -409,6 +440,7 @@ void VoiceWakeService::SupervisorTick() {
         xSemaphoreGive(mutex_);
         return;
     }
+    LogHealthIfDueLocked();
     if (listening_ && !runtime_.IsListening()) {
         listening_ = false;
         SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());

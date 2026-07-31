@@ -127,6 +127,25 @@ const char* TriggerName(VoiceAssistantTrigger trigger) {
     }
 }
 
+void LogVoiceMemorySnapshot(const char* event, uint32_t generation) {
+    ESP_LOGI(TAG,
+             "%s: generation=%" PRIu32 " internal_free=%u internal_min=%u "
+             "internal_largest=%u psram_free=%u psram_min=%u psram_largest=%u",
+             event, generation,
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+}
+
 }  // namespace
 
 VoiceAssistantService::VoiceAssistantService(AudioFocusService& audio_focus,
@@ -381,6 +400,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
 
     ESP_LOGI(TAG, "Interaction started: trigger=%s focus_token=%" PRIu32,
              TriggerName(trigger), token);
+    LogVoiceMemorySnapshot("Interaction memory start", interaction_generation);
     if (started_generation != nullptr) {
         *started_generation = interaction_generation;
     }
@@ -580,6 +600,7 @@ void VoiceAssistantService::CompleteInteractionCleanupLocked(uint32_t generation
     cleanup_resources_released_ = false;
     cleanup_generation_ = 0;
     cleanup_task_ = nullptr;
+    LogVoiceMemorySnapshot("Interaction memory end", generation);
 }
 
 void VoiceAssistantService::CompleteStartAttempt(TaskHandle_t task) {
