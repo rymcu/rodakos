@@ -558,6 +558,8 @@ void UnifiedMqttService::ConnectedTask(void* arg) {
     if (service != nullptr) {
         service->event_worker_count_.fetch_sub(1);
     }
+    // FreeRTOS task deletion does not unwind C++ locals, so release the heap context explicitly.
+    context.reset();
     vTaskDelete(nullptr);
 }
 
@@ -570,6 +572,8 @@ void UnifiedMqttService::MessageTask(void* arg) {
         }
         context->service->event_worker_count_.fetch_sub(1);
     }
+    // PC status arrives frequently; leaking this payload context grows PSRAM every message.
+    context.reset();
     vTaskDelete(nullptr);
 }
 

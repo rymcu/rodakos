@@ -431,6 +431,7 @@ bool AudioService::IsSupportedAudioFile(const std::string& name) {
 
 void AudioService::PlaybackTaskEntry(void* arg) {
     static_cast<AudioService*>(arg)->PlaybackTask();
+    vTaskDelete(nullptr);
 }
 
 void AudioService::PlaybackTask() {
@@ -440,7 +441,6 @@ void AudioService::PlaybackTask() {
         ESP_LOGE(TAG, "Failed to open %s", path.c_str());
         SetState(AudioPlaybackStatus::kError, "Cannot open file");
         ClearPlaybackTask();
-        vTaskDelete(nullptr);
         return;
     }
 
@@ -467,7 +467,6 @@ void AudioService::PlaybackTask() {
 
     ESP_LOGI(TAG, "Playback ended: %s", path.c_str());
     ClearPlaybackTask();
-    vTaskDelete(nullptr);
 }
 
 bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped) {

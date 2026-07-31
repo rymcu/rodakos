@@ -322,6 +322,7 @@ bool RecordingService::IsRecordingFile(const std::string& name) {
 
 void RecordingService::RecordingTaskEntry(void* arg) {
     static_cast<RecordingService*>(arg)->RecordingTask();
+    vTaskDelete(nullptr);
 }
 
 void RecordingService::RecordingTask() {
@@ -434,7 +435,6 @@ cleanup:
     }
 
     ClearTask();
-    vTaskDelete(nullptr);
 }
 
 bool RecordingService::PrepareStorage() {
