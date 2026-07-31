@@ -124,7 +124,8 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - System Info: firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services.
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
-- Assistant: voice assistant surface, wake-listening controls, cloud transport status.
+- Assistant: configuration and status for the local "你好达克" monitor; interaction runs as a
+  system service rather than an app-owned Talk/Stop session.
 - Smart: light/smart-device control surface.
 - Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
 
@@ -132,6 +133,9 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
+- Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
+  audio focus, opens a short Rodak WebSocket turn, streams Opus, drains TTS, disconnects, and re-arms
+  local monitoring. See [Voice assistant integration](voice-assistant.md).
 - WiFi credentials are stored in NVS by `WiFiConfig`; auto-connect starts after PhoneSystem is up so UI boot is not blocked.
 - MotionService exposes a stable app-facing motion API. The BigSmart QMI8658 adapter samples over the shared Board Manager I2C peripheral in a background task so apps never perform I2C work in the LVGL thread.
 - UnifiedMqttService consumes Rodak bootstrap credentials, reports device state, and routes OTA
