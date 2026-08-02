@@ -176,6 +176,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
+- [Voice assistant integration](docs/voice-assistant.md)
 - [OpenOS comparison and design decisions](docs/openos-comparison.md)
 - [Home layout and folder design](docs/home-layout-design.md)
 - [Troubleshooting](TROUBLESHOOTING.md)

@@ -19,7 +19,7 @@ As of 2026-07-24:
   multi-page hardware validation remains open.
 - Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
   Music, Recorder, Assistant, Smart, and Wake.
-- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, voice assistant, voice wake, device cloud config, time, button binding, lights, motion, unified MQTT, and SD-staged OTA.
+- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, and SD-staged OTA.
 - Current IDF 6 app binary is about 3.30 MiB of the 13.3125 MiB main application partition.
 
 ## Milestone 0: Hardware And Build Baseline
@@ -131,13 +131,23 @@ Next work:
 
 ## Milestone 5: Assistant And Cloud
 
-Status: early integration.
+Status: hardware-backed integration implemented; device verification pending.
+
+- Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
+- A wake match acquires audio focus, buffers 16 kHz mono PCM, opens the Rodak WebSocket, uploads
+  60 ms Opus frames, decodes downlink Opus, drains TTS, disconnects, and re-arms local monitoring.
+- Wake, Recorder, and assistant capture use explicit ADC owners and priorities.
+- The Assistant app is a persistent enable/configuration and status surface, not a Talk/Stop page.
+- The selected ESP-SR model bundle is embedded in `ota_0`; the immutable Recovery layout is unchanged.
 
 Next work:
 
-- Complete cloud configuration UX.
-- Replace no-op recorder/wake runtime placeholders with real hardware-backed implementations when the audio path is stable.
-- Decide what should be system-level assistant behavior versus a regular Assistant app surface.
+- Complete cloud configuration UX and credential diagnostics.
+- Run the full [voice assistant hardware verification](voice-assistant.md#verification-gates),
+  including music resume, Recorder preemption, repeated wake suppression, and TTS tail playback.
+- Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
+- Decide whether a later release should support multi-turn follow-up windows; the current contract is
+  one local wake, one cloud turn, then disconnect.
 
 ## Milestone 6: Rodak Device And OTA Protocol
 
