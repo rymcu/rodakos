@@ -46,10 +46,6 @@ public:
     static const char* DefaultProvisioningUrl();
 
 private:
-    bool SaveWebsocketConfig(const DeviceCloudConfig& config);
-    bool SaveMqttConfig(const DeviceCloudConfig& config);
-    void ClearWebsocketConfig();
-    void ClearMqttConfig();
     bool ParseProvisioningResponse(const std::string& response, DeviceCloudConfig& config);
     std::string BuildSystemInfoJson();
     std::string BuildBoardJson();

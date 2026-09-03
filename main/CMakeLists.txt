@@ -8,6 +8,7 @@ set(SOURCES
     "rodakos_adapters/backlight_adapter.cc"
     "rodakos_adapters/camera_device.cc"
     "rodakos_adapters/qmi8658_motion_sensor.cc"
+    "rodakos_adapters/wifi_connection_policy.cc"
     "rodakos_adapters/wifi_adapter.cc"
     "rodakos_adapters/wifi_config.cc"
     "rodakos_adapters/file_service.cc"
@@ -35,6 +36,9 @@ set(SOURCES
     "phone_os/wake_on_lan_packet.cc"
     "phone_os/wake_on_lan_service.cc"
     "phone_os/device_cloud_config.cc"
+    "phone_os/serial_provisioning_protocol.cc"
+    "phone_os/serial_provisioning_service.cc"
+    "phone_os/mqtt_credential_refresh_policy.cc"
     "phone_os/ota_update_service.cc"
     "phone_os/unified_mqtt_service.cc"
     "phone_os/voice_cloud_websocket_transport.cc"
@@ -95,6 +99,7 @@ idf_component_register(
         lwip
         esp_board_manager
         esp_driver_i2c
+        esp_driver_usb_serial_jtag
         espressif__esp_websocket_client
         espressif__esp_codec_dev
         espressif__esp-sr

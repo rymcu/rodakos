@@ -29,6 +29,9 @@ public:
 
     bool Start();
     void Stop();
+    // Apply a provisioning change. An active session restarts so its outbox
+    // and event workers cannot cross broker or routing boundaries.
+    void RequestCredentialRefresh();
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
 
@@ -52,7 +55,7 @@ private:
     static void MqttEventHandler(void* arg, esp_event_base_t event_base,
                                  int32_t event_id, void* event_data);
     static void ConnectionTask(void* arg);
-    static void ClientResetTask(void* arg);
+    static void CredentialRefreshTask(void* arg);
     static void ConnectedTask(void* arg);
     static void MessageTask(void* arg);
     static void TelemetryTimerCallback(TimerHandle_t timer);

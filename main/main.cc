@@ -16,6 +16,7 @@
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/serial_provisioning_service.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
@@ -385,6 +386,9 @@ extern "C" void app_main(void) {
         device_cloud_config_service, file_service);
     static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service);
+    static rodakos::SerialProvisioningService serial_provisioning_service(
+        wifi, device_cloud_config_service,
+        []() { unified_mqtt_service.RequestCredentialRefresh(); });
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
@@ -396,6 +400,10 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
     static rodakos::WakeOnLanService wake_on_lan_service(wifi);
+    if (!rodakos::SerialProvisioningService::RecoverPendingTransaction(
+            device_cloud_config_service)) {
+        ESP_LOGW(TAG, "Pending serial provisioning recovery did not complete");
+    }
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
     ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
 
@@ -418,6 +426,7 @@ extern "C" void app_main(void) {
     services.SetButtons(&button_binding_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
+    services.SetSerialProvisioning(&serial_provisioning_service);
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
     services.SetWakeOnLan(&wake_on_lan_service);
@@ -466,6 +475,10 @@ extern "C" void app_main(void) {
                 }
             });
         }
+    }
+
+    if (!serial_provisioning_service.Start()) {
+        ESP_LOGW(TAG, "Serial provisioning service failed to start");
     }
 
     ESP_LOGI(TAG, "RodakOS started successfully");
