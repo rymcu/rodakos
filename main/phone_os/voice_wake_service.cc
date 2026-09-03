@@ -1,16 +1,17 @@
 #include "phone_os/voice_wake_service.h"
 
-#include "settings.h"
+#include "phone_os/voice_wake_settings.h"
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <freertos/idf_additions.h>
 
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "VoiceWakeService";
-constexpr const char* kSettingsNamespace = "voice_wake";
-constexpr const char* kEnabledKey = "enabled";
 constexpr TickType_t kSupervisorIntervalTicks = pdMS_TO_TICKS(1000);
-constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(30000);
+constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(120000);
+constexpr TickType_t kHealthLogIntervalTicks = pdMS_TO_TICKS(60000);
 
 const char* StatusMessage(VoiceWakeStatus status) {
     switch (status) {
@@ -70,8 +71,17 @@ bool VoiceWakeService::Init() {
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (service_stopping_) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
     if (!initialized_) {
-        LoadSettingsLocked();
+        if (!LoadSettingsLocked()) {
+            SetStatusLocked(VoiceWakeStatus::kError, "Failed to load wake setting");
+            xSemaphoreGive(mutex_);
+            ESP_LOGE(TAG, "Failed to load or initialize wake listener setting");
+            return false;
+        }
         initialized_ = true;
         SetStatusLocked(enabled_ ? VoiceWakeStatus::kUnavailable : VoiceWakeStatus::kDisabled,
                         enabled_ ? "Wake runtime unavailable" : "Disabled");
@@ -81,30 +91,37 @@ bool VoiceWakeService::Init() {
 }
 
 void VoiceWakeService::Deinit() {
-    TaskHandle_t task = nullptr;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        task_running_ = false;
-        task = task_;
-        xSemaphoreGive(mutex_);
-    }
-    for (int i = 0; task != nullptr && i < 150; ++i) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stopped = task_ == nullptr;
-        xSemaphoreGive(mutex_);
-        if (stopped) {
-            break;
+        if (service_stopping_) {
+            xSemaphoreGive(mutex_);
+            while (true) {
+                xSemaphoreTake(mutex_, portMAX_DELAY);
+                const bool complete = !service_stopping_;
+                xSemaphoreGive(mutex_);
+                if (complete) {
+                    Deinit();
+                    return;
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    Stop();
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
+        service_stopping_ = true;
+        ++enable_generation_;
         initialized_ = false;
+        task_running_ = false;
+        StopRuntimeLocked(enabled_ ? "Stopped" : "Disabled");
         xSemaphoreGive(mutex_);
     }
+    WaitForSupervisorStop();
+
+    assistant_.StopInteraction();
     runtime_.Deinit();
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        service_stopping_ = false;
+        xSemaphoreGive(mutex_);
+    }
 }
 
 bool VoiceWakeService::Start() {
@@ -114,7 +131,9 @@ bool VoiceWakeService::Start() {
 
     bool started = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (!enabled_) {
+    if (service_stopping_) {
+        started = false;
+    } else if (!enabled_) {
         SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
         started = true;
     } else {
@@ -131,7 +150,19 @@ void VoiceWakeService::Stop() {
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (service_stopping_) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    service_stopping_ = true;
+    ++enable_generation_;
+    task_running_ = false;
     StopRuntimeLocked(enabled_ ? "Stopped" : "Disabled");
+    xSemaphoreGive(mutex_);
+    WaitForSupervisorStop();
+    assistant_.StopInteraction();
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    service_stopping_ = false;
     xSemaphoreGive(mutex_);
 }
 
@@ -142,9 +173,20 @@ bool VoiceWakeService::SetEnabled(bool enabled) {
 
     bool active = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (service_stopping_) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    if (!SaveSettings(enabled)) {
+        SetStatusLocked(VoiceWakeStatus::kError, "Failed to save wake setting");
+        xSemaphoreGive(mutex_);
+        ESP_LOGE(TAG, "Failed to persist wake listener setting");
+        return false;
+    }
+    ++enable_generation_;
     enabled_ = enabled;
-    SaveSettings(enabled_);
     if (!enabled_) {
+        service_stopping_ = true;
         StopRuntimeLocked("Disabled");
         SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
     } else {
@@ -152,6 +194,12 @@ bool VoiceWakeService::SetEnabled(bool enabled) {
         active = StartRuntimeLocked();
     }
     xSemaphoreGive(mutex_);
+    if (!enabled) {
+        assistant_.StopInteraction();
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        service_stopping_ = false;
+        xSemaphoreGive(mutex_);
+    }
     ESP_LOGI(TAG, "Wake listener %s", enabled ? "enabled" : "disabled");
     return !enabled || active;
 }
@@ -188,14 +236,29 @@ VoiceWakeState VoiceWakeService::GetState() {
 }
 
 void VoiceWakeService::NotifyWakeWordDetected(const std::string& wake_word) {
+    uint32_t enable_generation = 0;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        enable_generation = enable_generation_;
+        xSemaphoreGive(mutex_);
+    }
+    HandleWakeWordDetected(wake_word, enable_generation);
+}
+
+void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
+                                              uint32_t enable_generation) {
     bool should_start = false;
     std::string detected = wake_word.empty() ? "wake word" : wake_word;
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (enabled_) {
+        if (initialized_ && task_running_ && enabled_ && listening_ &&
+            !service_stopping_ && !assistant_starting_ &&
+            enable_generation_ == enable_generation) {
             runtime_.StopListening();
             listening_ = false;
+            assistant_starting_ = true;
+            assistant_start_generation_ = enable_generation;
             last_wake_word_ = detected;
             SetStatusLocked(VoiceWakeStatus::kAssistantActive, "Wake word detected");
             should_start = true;
@@ -207,19 +270,56 @@ void VoiceWakeService::NotifyWakeWordDetected(const std::string& wake_word) {
         return;
     }
 
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    should_start = initialized_ && task_running_ && enabled_ && !service_stopping_ &&
+                   enable_generation_ == enable_generation;
+    if (!should_start && assistant_starting_ &&
+        assistant_start_generation_ == enable_generation) {
+        assistant_starting_ = false;
+    }
+    xSemaphoreGive(mutex_);
+    if (!should_start) {
+        return;
+    }
+
     ESP_LOGI(TAG, "Wake word detected: %s", detected.c_str());
-    if (!assistant_.StartInteraction(VoiceAssistantTrigger::kWakeWord, detected)) {
-        assistant_.StopInteraction();
+    const auto can_start = [this, enable_generation]() {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool current = initialized_ && task_running_ && enabled_ &&
+                             !service_stopping_ &&
+                             enable_generation_ == enable_generation;
+        xSemaphoreGive(mutex_);
+        return current;
+    };
+    uint32_t assistant_generation = 0;
+    if (!assistant_.StartInteraction(
+            VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation)) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
+            assistant_starting_ = false;
+        }
         assistant_active_since_ticks_ = 0;
-        SetStatusLocked(VoiceWakeStatus::kError, "Assistant start failed");
+        if (initialized_ && task_running_ && enabled_ &&
+            enable_generation_ == enable_generation) {
+            SetStatusLocked(VoiceWakeStatus::kError, "Assistant start failed");
+        }
         xSemaphoreGive(mutex_);
         return;
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    assistant_active_since_ticks_ = xTaskGetTickCount();
+    const bool keep_active = initialized_ && task_running_ && enabled_ &&
+                             !service_stopping_ && enable_generation_ == enable_generation;
+    if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
+        assistant_starting_ = false;
+    }
+    if (keep_active) {
+        assistant_active_since_ticks_ = xTaskGetTickCount();
+    }
     xSemaphoreGive(mutex_);
+    if (!keep_active) {
+        assistant_.StopInteractionIfCurrent(assistant_generation);
+    }
 }
 
 void VoiceWakeService::SupervisorTask(void* arg) {
@@ -244,31 +344,38 @@ void VoiceWakeService::SupervisorTask(void* arg) {
         self->task_ = nullptr;
         xSemaphoreGive(self->mutex_);
     }
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
-void VoiceWakeService::LoadSettingsLocked() {
-    Settings settings(kSettingsNamespace, false);
-    enabled_ = settings.GetBool(kEnabledKey, false);
+bool VoiceWakeService::LoadSettingsLocked() {
+    enabled_ = false;
+    if (!LoadVoiceWakeSettings(enabled_)) {
+        return false;
+    }
+    ESP_LOGI(TAG, "Wake listener setting restored from NVS: %s",
+             enabled_ ? "enabled" : "disabled");
+    return true;
 }
 
-void VoiceWakeService::SaveSettings(bool enabled) {
-    Settings settings(kSettingsNamespace, true);
-    settings.SetBool(kEnabledKey, enabled);
+bool VoiceWakeService::SaveSettings(bool enabled) {
+    return SaveVoiceWakeSettings(enabled);
 }
 
 void VoiceWakeService::EnsureSupervisorTaskLocked() {
     if (task_ != nullptr) {
-        task_running_ = true;
         return;
     }
 
     task_running_ = true;
+    last_health_log_ticks_ = 0;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t ret = xTaskCreatePinnedToCore(
-        SupervisorTask, "voice_wake", 4096, this, 2, &task_, 0);
+    const BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
+        SupervisorTask, "voice_wake", 4096, this, 2, &task_, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t ret = xTaskCreate(SupervisorTask, "voice_wake", 4096, this, 2, &task_);
+    const BaseType_t ret = xTaskCreateWithCaps(
+        SupervisorTask, "voice_wake", 4096, this, 2, &task_,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (ret != pdPASS) {
         task_ = nullptr;
@@ -278,14 +385,74 @@ void VoiceWakeService::EnsureSupervisorTaskLocked() {
     }
 }
 
+void VoiceWakeService::WaitForSupervisorStop() {
+    if (mutex_ == nullptr) {
+        return;
+    }
+    while (true) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool stopped = task_ == nullptr;
+        xSemaphoreGive(mutex_);
+        if (stopped) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void VoiceWakeService::LogHealthIfDueLocked() {
+    const TickType_t now = xTaskGetTickCount();
+    if (last_health_log_ticks_ != 0 &&
+        (now - last_health_log_ticks_) < kHealthLogIntervalTicks) {
+        return;
+    }
+    last_health_log_ticks_ = now;
+
+    ESP_LOGI(TAG,
+             "Voice health: enabled=%d status=%u listening=%d assistant_starting=%d "
+             "internal_free=%u internal_min=%u internal_largest=%u "
+             "psram_free=%u psram_min=%u psram_largest=%u "
+             "supervisor_stack_min_free=%u",
+             enabled_, static_cast<unsigned>(status_), listening_, assistant_starting_,
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+}
+
 void VoiceWakeService::SupervisorTick() {
-    const auto assistant_state = assistant_.GetState();
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!initialized_ || service_stopping_ || !task_running_) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
     if (!enabled_) {
         StopRuntimeLocked("Disabled");
         xSemaphoreGive(mutex_);
         return;
     }
+    LogHealthIfDueLocked();
+    if (listening_ && !runtime_.IsListening()) {
+        listening_ = false;
+        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
+        ESP_LOGW(TAG, "Wake runtime stopped capturing; re-arming");
+    }
+    if (assistant_starting_) {
+        SetStatusLocked(VoiceWakeStatus::kAssistantActive, "Assistant starting");
+        xSemaphoreGive(mutex_);
+        return;
+    }
+
+    const auto assistant_state = assistant_.GetState();
 
     if (assistant_state.phase == VoiceAssistantPhase::kError) {
         assistant_active_since_ticks_ = 0;
@@ -296,7 +463,8 @@ void VoiceWakeService::SupervisorTick() {
         return;
     }
 
-    if (assistant_state.focus_active || assistant_state.phase != VoiceAssistantPhase::kIdle) {
+    if (assistant_state.stopping || assistant_state.focus_active ||
+        assistant_state.phase != VoiceAssistantPhase::kIdle) {
         const TickType_t now = xTaskGetTickCount();
         if (assistant_active_since_ticks_ == 0) {
             assistant_active_since_ticks_ = now;
@@ -323,6 +491,11 @@ void VoiceWakeService::SupervisorTick() {
 }
 
 bool VoiceWakeService::StartRuntimeLocked() {
+    if (!initialized_ || service_stopping_ || !task_running_ || !enabled_ ||
+        assistant_starting_) {
+        listening_ = false;
+        return false;
+    }
     if (!runtime_.IsAvailable()) {
         listening_ = false;
         SetStatusLocked(VoiceWakeStatus::kUnavailable, runtime_.last_error());
@@ -335,8 +508,9 @@ bool VoiceWakeService::StartRuntimeLocked() {
         return false;
     }
 
-    const bool started = runtime_.StartListening([this](const std::string& wake_word) {
-        NotifyWakeWordDetected(wake_word);
+    const uint32_t enable_generation = enable_generation_;
+    const bool started = runtime_.StartListening([this, enable_generation](const std::string& wake_word) {
+        HandleWakeWordDetected(wake_word, enable_generation);
     });
     if (!started) {
         listening_ = false;

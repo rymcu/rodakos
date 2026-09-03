@@ -47,7 +47,8 @@ public:
 
     bool PlayFile(const std::string& path, const std::string& title = "");
     void Stop();
-    void ReleasePlaybackHardware();
+    bool ReleasePlaybackHardware();
+    bool SuspendPlaybackHardware();
     void Pause();
     void Resume();
     void TogglePause();
@@ -83,6 +84,8 @@ private:
     bool initialized_ = false;
     bool stop_requested_ = false;
     bool pause_requested_ = false;
+    bool playback_io_idle_ = false;
+    bool playback_hardware_suspended_ = false;
     int volume_ = 60;
     AudioPlaybackState state_;
 };

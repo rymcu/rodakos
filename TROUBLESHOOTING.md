@@ -281,7 +281,12 @@ These services intentionally open heavy hardware paths on demand. If an app says
 - Check Board Manager device names: `audio_dac`, `audio_adc`, `camera`, `fs_sdcard`.
 - Check I2C errors from codec/camera setup.
 - Confirm SD card files exist for Music and Photos.
-- For Assistant wake/runtime, current code may report unavailable when no real wake runtime or recorder is configured.
+- For Assistant wake/runtime, confirm the embedded MultiNet model symbols exist, the `components/json`
+  compatibility shim is present, and the log reports the `ni hao da ke` command as loaded. Idle mode
+  must not show a `VoiceWs` connection; that transport opens only after "你好达克" is detected.
+- If ESP-SR 2.2.x fails to link with `undefined reference to '_ctype_'` on IDF 6, keep the project
+  linker alias `_ctype_=_ctype_b+127` in `main/CMakeLists.txt`; do not replace it with a C pointer
+  variable or patch the prebuilt library under `managed_components/`.
 
 ## USB Disk Mode
 

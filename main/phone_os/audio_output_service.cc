@@ -22,29 +22,65 @@ AudioOutputService::~AudioOutputService() {
 }
 
 bool AudioOutputService::Init() {
-    if (initialized_) {
-        return true;
+    bool initialized_now = false;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
     }
-
-    if (!output_.Init()) {
-        return false;
+    if (!initialized_) {
+        initialized_ = output_.Init();
+        initialized_now = initialized_;
     }
-
-    initialized_ = true;
-    ESP_LOGI(TAG, "Audio output initialized");
-    return true;
+    const bool initialized = initialized_;
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
+    }
+    if (initialized_now) {
+        ESP_LOGI(TAG, "Audio output initialized");
+    }
+    return initialized;
 }
 
 void AudioOutputService::Deinit() {
-    Close();
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    CloseLocked();
     if (initialized_) {
         output_.Deinit();
         initialized_ = false;
         ESP_LOGI(TAG, "Audio output deinitialized");
     }
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
+    }
 }
 
-bool AudioOutputService::Open(uint32_t sample_rate, uint16_t channels, uint16_t bits_per_sample) {
+bool AudioOutputService::ReserveOwner(const char* owner) {
+    if (owner == nullptr || owner[0] == '\0' || mutex_ == nullptr) {
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool available = owner_.empty() || owner_ == owner;
+    const std::string active_owner = owner_;
+    if (available) {
+        owner_ = owner;
+    }
+    xSemaphoreGive(mutex_);
+    if (!available) {
+        ESP_LOGW(TAG, "Audio output busy: owner=%s requested_by=%s",
+                 active_owner.c_str(), owner);
+    }
+    return available;
+}
+
+bool AudioOutputService::OpenForOwner(const char* owner,
+                                      uint32_t sample_rate,
+                                      uint16_t channels,
+                                      uint16_t bits_per_sample) {
+    if (owner == nullptr || owner[0] == '\0') {
+        return false;
+    }
     if (!Init()) {
         return false;
     }
@@ -60,33 +96,44 @@ bool AudioOutputService::Open(uint32_t sample_rate, uint16_t channels, uint16_t 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
-    ok = output_.Open(sample_rate, channels, bits_per_sample, volume);
+    if (owner_.empty() || owner_ == owner) {
+        ok = output_.Open(sample_rate, channels, bits_per_sample, volume);
+        if (ok) {
+            owner_ = owner;
+        } else if (!output_.IsOpen()) {
+            owner_.clear();
+        }
+    }
     if (mutex_ != nullptr) {
         xSemaphoreGive(mutex_);
     }
     return ok;
 }
 
-void AudioOutputService::Close() {
+void AudioOutputService::CloseForOwner(const char* owner) {
+    if (owner == nullptr || owner[0] == '\0') {
+        return;
+    }
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
-    output_.Close();
-
+    if (owner_ == owner) {
+        CloseLocked();
+    }
     if (mutex_ != nullptr) {
         xSemaphoreGive(mutex_);
     }
 }
 
-bool AudioOutputService::Write(const void* data, int bytes) {
-    if (data == nullptr || bytes <= 0) {
+bool AudioOutputService::WriteForOwner(const char* owner, const void* data, int bytes) {
+    if (owner == nullptr || owner[0] == '\0' || data == nullptr || bytes <= 0) {
         return false;
     }
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
-    const bool ok = output_.Write(data, bytes);
+    const bool ok = owner_ == owner && output_.Write(data, bytes);
     if (mutex_ != nullptr) {
         xSemaphoreGive(mutex_);
     }
@@ -133,6 +180,21 @@ bool AudioOutputService::IsOpen() {
     const bool open = output_.IsOpen();
     xSemaphoreGive(mutex_);
     return open;
+}
+
+bool AudioOutputService::IsOpenForOwner(const char* owner) {
+    if (owner == nullptr || owner[0] == '\0' || mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool open = owner_ == owner && output_.IsOpen();
+    xSemaphoreGive(mutex_);
+    return open;
+}
+
+void AudioOutputService::CloseLocked() {
+    output_.Close();
+    owner_.clear();
 }
 
 }  // namespace rodakos

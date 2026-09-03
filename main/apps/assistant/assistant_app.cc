@@ -190,7 +190,7 @@ void AssistantApp::CreateUi() {
                                  PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(wake_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
-    auto* wake_title = CreateText(wake_card, "Wake listening", &phone_font_14, rodakos_theme_text_primary());
+    auto* wake_title = CreateText(wake_card, "你好达克", &phone_font_14, rodakos_theme_text_primary());
     lv_obj_set_width(wake_title, 176);
     lv_label_set_long_mode(wake_title, LV_LABEL_LONG_DOT);
     lv_obj_align(wake_title, LV_ALIGN_TOP_LEFT, 44, 8);
@@ -293,8 +293,10 @@ void AssistantApp::ToggleWakeListening(bool enabled) {
         ui_->ShowToastUnlocked("Wake service unavailable");
         return;
     }
-    if (!wake_->SetEnabled(enabled) && enabled) {
-        ui_->ShowToastUnlocked("Wake runtime unavailable");
+    if (!wake_->SetEnabled(enabled)) {
+        const auto state = wake_->GetState();
+        ui_->ShowToastUnlocked(
+            state.message.empty() ? "Wake setting failed" : state.message.c_str());
     } else {
         ui_->ShowToastUnlocked(enabled ? "Wake listening enabled" : "Wake listening disabled");
     }

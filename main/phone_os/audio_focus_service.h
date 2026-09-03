@@ -9,6 +9,7 @@
 namespace rodakos {
 
 class MusicPlayerService;
+class AudioOutputService;
 
 enum class AudioFocusGain {
     kDuck,
@@ -33,7 +34,7 @@ struct AudioFocusState {
 
 class AudioFocusService {
 public:
-    explicit AudioFocusService(MusicPlayerService& music_player);
+    AudioFocusService(MusicPlayerService& music_player, AudioOutputService& audio_output);
     ~AudioFocusService();
 
     bool RequestFocus(const AudioFocusRequest& request, uint32_t& token);
@@ -42,12 +43,12 @@ public:
     AudioFocusState GetState();
 
 private:
-    void ApplyFocusLocked(const AudioFocusRequest& request);
+    bool ApplyFocusLocked(const AudioFocusRequest& request);
     void RestoreFocusLocked();
     void ClearFocusLocked();
-    void WaitForMusicIdle(uint32_t timeout_ms);
 
     MusicPlayerService& music_player_;
+    AudioOutputService& audio_output_;
     SemaphoreHandle_t mutex_ = nullptr;
     bool active_ = false;
     uint32_t active_token_ = 0;
@@ -58,6 +59,7 @@ private:
     bool music_was_playing_ = false;
     bool music_was_paused_ = false;
     bool playback_hardware_released_ = false;
+    bool playback_suspended_for_focus_ = false;
     int previous_volume_ = 60;
 };
 

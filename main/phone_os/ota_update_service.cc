@@ -226,6 +226,8 @@ void OtaUpdateService::DownloadTask(void* arg) {
         context->service->RunDownload(context->payload);
         context->service->busy_.store(false);
     }
+    // FreeRTOS task deletion does not unwind C++ locals.
+    context.reset();
     vTaskDelete(nullptr);
 }
 

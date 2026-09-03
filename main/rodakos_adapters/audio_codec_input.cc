@@ -12,6 +12,7 @@ namespace {
 constexpr const char* TAG = "AudioCodecInput";
 constexpr const char* kAudioAdcDeviceName = "audio_adc";
 constexpr const char* kI2sCommonTag = "i2s_common";
+constexpr const char* kLegacyOwner = "legacy-audio-input";
 
 esp_codec_dev_handle_t CodecFromHandle(void* adc_handle) {
     auto* handle = static_cast<dev_audio_codec_handles_t*>(adc_handle);
@@ -28,7 +29,30 @@ int OpenCodecSuppressingBenignI2sDisable(esp_codec_dev_handle_t codec,
 }
 }  // namespace
 
+AudioCodecInput::AudioCodecInput() {
+    mutex_ = xSemaphoreCreateMutex();
+}
+
+AudioCodecInput::~AudioCodecInput() {
+    Deinit();
+    if (mutex_ != nullptr) {
+        vSemaphoreDelete(mutex_);
+        mutex_ = nullptr;
+    }
+}
+
 bool AudioCodecInput::Init() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool initialized = InitLocked();
+    xSemaphoreGive(mutex_);
+    return initialized;
+}
+
+bool AudioCodecInput::InitLocked() {
     if (initialized_) {
         return true;
     }
@@ -53,7 +77,12 @@ bool AudioCodecInput::Init() {
 }
 
 void AudioCodecInput::Deinit() {
-    Close();
+    if (mutex_ == nullptr) {
+        return;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    CloseLocked();
     if (initialized_) {
         const esp_err_t ret = esp_board_manager_deinit_device_by_name(kAudioAdcDeviceName);
         if (ret != ESP_OK) {
@@ -63,6 +92,7 @@ void AudioCodecInput::Deinit() {
         adc_handle_ = nullptr;
         ESP_LOGI(TAG, "Audio codec input deinitialized");
     }
+    xSemaphoreGive(mutex_);
 }
 
 bool AudioCodecInput::Open(uint32_t sample_rate,
@@ -70,20 +100,57 @@ bool AudioCodecInput::Open(uint32_t sample_rate,
                            uint16_t bits_per_sample,
                            int gain,
                            uint16_t channel_mask) {
-    if (!Init()) {
+    return OpenForOwner(kLegacyOwner,
+                        0,
+                        sample_rate,
+                        channels,
+                        bits_per_sample,
+                        gain,
+                        channel_mask);
+}
+
+bool AudioCodecInput::OpenForOwner(const char* owner,
+                                   int priority,
+                                   uint32_t sample_rate,
+                                   uint16_t channels,
+                                   uint16_t bits_per_sample,
+                                   int gain,
+                                   uint16_t channel_mask) {
+    if (mutex_ == nullptr || owner == nullptr || owner[0] == '\0') {
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!owner_.empty() && owner_ != owner && priority <= owner_priority_) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+
+    if (!owner_.empty() && owner_ != owner) {
+        ESP_LOGI(TAG, "Audio input owner changed: %s -> %s", owner_.c_str(), owner);
+        CloseLocked();
+    }
+
+    if (!InitLocked()) {
+        xSemaphoreGive(mutex_);
         return false;
     }
 
     if (codec_open_ && MatchesOpenFormat(sample_rate, channels, bits_per_sample, channel_mask)) {
-        return SetGain(gain);
+        owner_ = owner;
+        owner_priority_ = priority;
+        const bool gain_set = SetGainLocked(gain);
+        xSemaphoreGive(mutex_);
+        return gain_set;
     }
     if (codec_open_) {
-        Close();
+        CloseLocked();
     }
 
     esp_codec_dev_handle_t codec = CodecFromHandle(adc_handle_);
     if (codec == nullptr) {
         ESP_LOGE(TAG, "Audio ADC unavailable");
+        xSemaphoreGive(mutex_);
         return false;
     }
 
@@ -97,7 +164,12 @@ bool AudioCodecInput::Open(uint32_t sample_rate,
     const int ret = OpenCodecSuppressingBenignI2sDisable(codec, &sample_info);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to open ADC codec: %d", ret);
+        const int close_ret = esp_codec_dev_close(codec);
+        if (close_ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGW(TAG, "Failed to clean up ADC codec after open error: %d", close_ret);
+        }
         ClearOpenFormat();
+        xSemaphoreGive(mutex_);
         return false;
     }
 
@@ -106,29 +178,62 @@ bool AudioCodecInput::Open(uint32_t sample_rate,
     channels_ = channels;
     bits_per_sample_ = bits_per_sample;
     channel_mask_ = channel_mask;
-    SetGain(gain);
-    return true;
+    owner_ = owner;
+    owner_priority_ = priority;
+    const bool gain_set = SetGainLocked(gain);
+    xSemaphoreGive(mutex_);
+    return gain_set;
 }
 
 void AudioCodecInput::Close() {
+    CloseForOwner(kLegacyOwner);
+}
+
+void AudioCodecInput::CloseForOwner(const char* owner) {
+    if (mutex_ == nullptr || owner == nullptr) {
+        return;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (owner_ == owner) {
+        CloseLocked();
+    }
+    xSemaphoreGive(mutex_);
+}
+
+void AudioCodecInput::CloseLocked() {
     esp_codec_dev_handle_t codec = CodecFromHandle(adc_handle_);
     if (codec_open_ && codec != nullptr) {
         esp_codec_dev_close(codec);
     }
     ClearOpenFormat();
+    owner_.clear();
+    owner_priority_ = 0;
 }
 
 bool AudioCodecInput::Read(void* data, int bytes) {
-    if (data == nullptr || bytes <= 0 || !codec_open_) {
+    return ReadForOwner(kLegacyOwner, data, bytes);
+}
+
+bool AudioCodecInput::ReadForOwner(const char* owner, void* data, int bytes) {
+    if (mutex_ == nullptr || owner == nullptr || data == nullptr || bytes <= 0) {
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!codec_open_ || owner_ != owner) {
+        xSemaphoreGive(mutex_);
         return false;
     }
 
     esp_codec_dev_handle_t codec = CodecFromHandle(adc_handle_);
     if (codec == nullptr) {
+        xSemaphoreGive(mutex_);
         return false;
     }
 
     const int ret = esp_codec_dev_read(codec, data, bytes);
+    xSemaphoreGive(mutex_);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Codec read failed: %d", ret);
         return false;
@@ -137,8 +242,21 @@ bool AudioCodecInput::Read(void* data, int bytes) {
 }
 
 bool AudioCodecInput::SetGain(int gain) {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool gain_set = SetGainLocked(gain);
+    xSemaphoreGive(mutex_);
+    return gain_set;
+}
+
+bool AudioCodecInput::SetGainLocked(int gain) {
     esp_codec_dev_handle_t codec = CodecFromHandle(adc_handle_);
     if (!codec_open_ || codec == nullptr) {
+        return true;
+    }
+    if (gain_configured_ && gain_ == gain) {
         return true;
     }
 
@@ -147,7 +265,19 @@ bool AudioCodecInput::SetGain(int gain) {
         ESP_LOGW(TAG, "Failed to set input gain to %d", gain);
         return false;
     }
+    gain_ = gain;
+    gain_configured_ = true;
     return true;
+}
+
+bool AudioCodecInput::IsOpen() const {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool open = codec_open_;
+    xSemaphoreGive(mutex_);
+    return open;
 }
 
 bool AudioCodecInput::MatchesOpenFormat(uint32_t sample_rate,
@@ -167,6 +297,8 @@ void AudioCodecInput::ClearOpenFormat() {
     channels_ = 0;
     bits_per_sample_ = 0;
     channel_mask_ = 0;
+    gain_ = 0;
+    gain_configured_ = false;
 }
 
 }  // namespace rodakos

@@ -11,6 +11,10 @@ add_executable(rodakos_app_model_tests
     navigation_test.cc
     home_layout_test.cc
     wol_test.cc
+    voice_wake_settings_test.cc
+    serial_provisioning_frame_test.cc
+    mqtt_credential_refresh_policy_test.cc
+    wifi_connection_policy_test.cc
     ../../main/phone_os/phone_app_registry.cc
     ../../main/phone_os/phone_app_host.cc
     ../../main/phone_os/phone_navigation.cc
@@ -19,6 +23,10 @@ add_executable(rodakos_app_model_tests
     ../../main/apps/home/home_layout_store.cc
     ../../main/apps/wol/wol_device_codec.cc
     ../../main/phone_os/wake_on_lan_packet.cc
+    ../../main/phone_os/voice_wake_settings.cc
+    ../../main/phone_os/serial_provisioning_protocol.cc
+    ../../main/phone_os/mqtt_credential_refresh_policy.cc
+    ../../main/rodakos_adapters/wifi_connection_policy.cc
 )
 
 target_include_directories(rodakos_app_model_tests BEFORE PRIVATE

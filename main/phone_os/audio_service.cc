@@ -15,6 +15,7 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "AudioService";
+constexpr const char* kOutputOwner = "audio-playback";
 constexpr size_t kPlaybackBufferSize = 4096;
 constexpr int kMp3ReadBufferSize = 16 * 1024;
 constexpr int kMp3RefillThreshold = 2 * MAINBUF_SIZE;
@@ -232,6 +233,8 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         stop_requested_ = false;
         pause_requested_ = false;
+        playback_io_idle_ = false;
+        playback_hardware_suspended_ = false;
         state_ = {};
         state_.status = AudioPlaybackStatus::kLoading;
         state_.file_path = path;
@@ -267,17 +270,58 @@ void AudioService::Stop() {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         stop_requested_ = true;
         pause_requested_ = false;
+        playback_io_idle_ = false;
+        playback_hardware_suspended_ = false;
         xSemaphoreGive(mutex_);
     }
 }
 
-void AudioService::ReleasePlaybackHardware() {
+bool AudioService::ReleasePlaybackHardware() {
     Stop();
-    if (JoinPlaybackTask(1500)) {
-        output_.Close();
-    } else {
+    if (!JoinPlaybackTask(1500)) {
         ESP_LOGW(TAG, "Timed out waiting to release playback hardware");
+        return false;
     }
+
+    output_.CloseForOwner(kOutputOwner);
+    if (output_.IsOpenForOwner(kOutputOwner)) {
+        ESP_LOGW(TAG, "Playback hardware remained open after release");
+        return false;
+    }
+    return true;
+}
+
+bool AudioService::SuspendPlaybackHardware() {
+    Pause();
+
+    constexpr uint32_t kSuspendTimeoutMs = 1500;
+    constexpr uint32_t kSuspendPollMs = 10;
+    for (uint32_t waited = 0; waited < kSuspendTimeoutMs; waited += kSuspendPollMs) {
+        bool active = false;
+        bool io_idle = false;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            active = playback_task_active_;
+            io_idle = playback_io_idle_;
+            xSemaphoreGive(mutex_);
+        }
+        if (!active || io_idle) {
+            const bool was_open = output_.IsOpenForOwner(kOutputOwner);
+            if (was_open) {
+                output_.CloseForOwner(kOutputOwner);
+            }
+            if (mutex_ != nullptr) {
+                xSemaphoreTake(mutex_, portMAX_DELAY);
+                playback_hardware_suspended_ = was_open;
+                xSemaphoreGive(mutex_);
+            }
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(kSuspendPollMs));
+    }
+
+    ESP_LOGW(TAG, "Timed out waiting for playback to reach a pause boundary");
+    return false;
 }
 
 void AudioService::Pause() {
@@ -286,6 +330,7 @@ void AudioService::Pause() {
         if (state_.status == AudioPlaybackStatus::kPlaying ||
             state_.status == AudioPlaybackStatus::kLoading) {
             pause_requested_ = true;
+            playback_io_idle_ = false;
             state_.status = AudioPlaybackStatus::kPaused;
             state_.message = "Paused";
         }
@@ -294,15 +339,40 @@ void AudioService::Pause() {
 }
 
 void AudioService::Resume() {
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (state_.status == AudioPlaybackStatus::kPaused) {
-            pause_requested_ = false;
-            state_.status = AudioPlaybackStatus::kPlaying;
-            state_.message = "Playing";
-        }
-        xSemaphoreGive(mutex_);
+    if (mutex_ == nullptr) {
+        return;
     }
+
+    bool should_resume = false;
+    bool reopen_output = false;
+    uint32_t sample_rate = 0;
+    uint16_t channels = 0;
+    uint16_t bits_per_sample = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    should_resume = state_.status == AudioPlaybackStatus::kPaused;
+    reopen_output = should_resume && playback_hardware_suspended_;
+    sample_rate = state_.sample_rate;
+    channels = state_.channels;
+    bits_per_sample = state_.bits_per_sample;
+    xSemaphoreGive(mutex_);
+
+    if (!should_resume) {
+        return;
+    }
+    if (reopen_output &&
+        (sample_rate == 0 || channels == 0 || bits_per_sample == 0 ||
+         !output_.OpenForOwner(kOutputOwner, sample_rate, channels, bits_per_sample))) {
+        SetState(AudioPlaybackStatus::kError, "Cannot resume audio hardware");
+        return;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    playback_hardware_suspended_ = false;
+    playback_io_idle_ = false;
+    pause_requested_ = false;
+    state_.status = AudioPlaybackStatus::kPlaying;
+    state_.message = "Playing";
+    xSemaphoreGive(mutex_);
 }
 
 void AudioService::TogglePause() {
@@ -361,6 +431,7 @@ bool AudioService::IsSupportedAudioFile(const std::string& name) {
 
 void AudioService::PlaybackTaskEntry(void* arg) {
     static_cast<AudioService*>(arg)->PlaybackTask();
+    vTaskDelete(nullptr);
 }
 
 void AudioService::PlaybackTask() {
@@ -370,7 +441,6 @@ void AudioService::PlaybackTask() {
         ESP_LOGE(TAG, "Failed to open %s", path.c_str());
         SetState(AudioPlaybackStatus::kError, "Cannot open file");
         ClearPlaybackTask();
-        vTaskDelete(nullptr);
         return;
     }
 
@@ -397,7 +467,6 @@ void AudioService::PlaybackTask() {
 
     ESP_LOGI(TAG, "Playback ended: %s", path.c_str());
     ClearPlaybackTask();
-    vTaskDelete(nullptr);
 }
 
 bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped) {
@@ -412,7 +481,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         return false;
     }
 
-    if (!output_.Open(wav.sample_rate, wav.channels, wav.bits_per_sample)) {
+    if (!output_.OpenForOwner(kOutputOwner, wav.sample_rate, wav.channels, wav.bits_per_sample)) {
         SetState(AudioPlaybackStatus::kError, "Codec open failed");
         return false;
     }
@@ -431,7 +500,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
 
     uint8_t* buffer = AllocateAudioBuffer(kPlaybackBufferSize);
     if (buffer == nullptr) {
-        output_.Close();
+        output_.CloseForOwner(kOutputOwner);
         SetState(AudioPlaybackStatus::kError, "No audio buffer");
         return false;
     }
@@ -469,7 +538,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
             peak = std::max(peak, PeakAbs16(buffer, bytes_read));
         }
 
-        if (!output_.Write(buffer, static_cast<int>(bytes_read))) {
+        if (!output_.WriteForOwner(kOutputOwner, buffer, static_cast<int>(bytes_read))) {
             failed = true;
             break;
         }
@@ -479,7 +548,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
 
     heap_caps_free(buffer);
     if (failed || stopped) {
-        output_.Close();
+        output_.CloseForOwner(kOutputOwner);
     }
 
     if (!failed && !stopped) {
@@ -612,9 +681,10 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
 
         if (!codec_ready) {
-            if (!output_.Open(static_cast<uint32_t>(frame_info.samprate),
-                              static_cast<uint16_t>(frame_info.nChans),
-                              static_cast<uint16_t>(frame_info.bitsPerSample))) {
+            if (!output_.OpenForOwner(kOutputOwner,
+                                      static_cast<uint32_t>(frame_info.samprate),
+                                      static_cast<uint16_t>(frame_info.nChans),
+                                      static_cast<uint16_t>(frame_info.bitsPerSample))) {
                 SetState(AudioPlaybackStatus::kError, "Codec open failed");
                 failed = true;
                 break;
@@ -637,7 +707,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
 
         const int output_bytes = frame_info.outputSamps * (frame_info.bitsPerSample / 8);
-        if (!output_.Write(pcm_buffer, output_bytes)) {
+        if (!output_.WriteForOwner(kOutputOwner, pcm_buffer, output_bytes)) {
             failed = true;
             break;
         }
@@ -652,7 +722,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     }
 
     if (codec_ready && (failed || stopped)) {
-        output_.Close();
+        output_.CloseForOwner(kOutputOwner);
     }
     heap_caps_free(pcm_buffer);
     heap_caps_free(read_buffer);
@@ -676,6 +746,7 @@ bool AudioService::ShouldStopOrPause(bool& should_pause) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         should_stop = stop_requested_;
         should_pause = pause_requested_;
+        playback_io_idle_ = should_pause;
         xSemaphoreGive(mutex_);
     }
     return should_stop;

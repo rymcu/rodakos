@@ -69,6 +69,13 @@ public:
     virtual void Disconnect() = 0;
 
     /**
+     * 断开并等待驱动确认旧连接已结束。
+     * @param timeout_ms 最长等待时间；0 表示只发起断开而不等待
+     * @return true 已确认断开（或本来就是断开状态），false 表示仍在等待、超时或驱动拒绝
+     */
+    virtual bool DisconnectAndWait(uint32_t timeout_ms) = 0;
+
+    /**
      * 获取当前连接状态
      */
     virtual WiFiStatus GetStatus() const = 0;

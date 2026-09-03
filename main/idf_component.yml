@@ -26,6 +26,11 @@ dependencies:
   # Voice cloud websocket transport
   espressif/esp_websocket_client: ^1.7.0
 
+  # Local custom wake-word detection and realtime Opus audio.
+  espressif/esp-sr: ~2.2.0
+  78/esp-opus: ^1.0.5
+  78/esp-opus-encoder: ~2.4.1
+
   # ESP-IDF 6 moved MQTT and cJSON to managed components.
   espressif/mqtt: ^1.0.0
   espressif/cjson: ^1.7.19

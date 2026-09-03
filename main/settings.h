@@ -20,6 +20,13 @@ enum class SettingsStringWriteStatus {
     kError,
 };
 
+enum class SettingsBoolReadStatus {
+    kOk,
+    kNotFound,
+    kTypeMismatch,
+    kError,
+};
+
 class Settings {
 public:
     explicit Settings(const std::string& ns, bool read_write = false);
@@ -34,6 +41,7 @@ public:
     int32_t GetInt(const std::string& key, int32_t default_value = 0);
     bool SetInt(const std::string& key, int32_t value);
     bool GetBool(const std::string& key, bool default_value = false);
+    SettingsBoolReadStatus ReadBool(const std::string& key, bool& value);
     bool SetBool(const std::string& key, bool value);
     bool Commit();
 

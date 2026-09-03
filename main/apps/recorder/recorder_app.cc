@@ -30,6 +30,7 @@ constexpr uint32_t kToneDurationMs = 1200;
 constexpr uint32_t kToneFrequencyHz = 880;
 constexpr int16_t kToneAmplitude = 20000;
 constexpr int kRecordingPlaybackVolume = 90;
+constexpr const char* kToneOutputOwner = "recorder-tone";
 bool s_tone_running = false;
 
 struct ToneTaskPayload {
@@ -68,7 +69,8 @@ void ToneTask(void* arg) {
     auto* output = payload != nullptr ? payload->output : nullptr;
     delete payload;
 
-    if (output != nullptr && output->Open(kToneSampleRate, 1, 16)) {
+    if (output != nullptr &&
+        output->OpenForOwner(kToneOutputOwner, kToneSampleRate, 1, 16)) {
         output->SetVolume(90);
         constexpr size_t kFramesPerChunk = 240;
         int16_t samples[kFramesPerChunk] = {};
@@ -85,13 +87,14 @@ void ToneTask(void* arg) {
                 const int16_t value = (phase & 1U) ? -kToneAmplitude : kToneAmplitude;
                 samples[i] = value;
             }
-            if (!output->Write(samples, static_cast<int>(frames * sizeof(int16_t)))) {
+            if (!output->WriteForOwner(
+                    kToneOutputOwner, samples, static_cast<int>(frames * sizeof(int16_t)))) {
                 ESP_LOGW(TAG, "Speaker test tone write failed");
                 break;
             }
             frame_index += frames;
         }
-        output->Close();
+        output->CloseForOwner(kToneOutputOwner);
         ESP_LOGI(TAG, "Speaker test tone ended");
     } else {
         ESP_LOGW(TAG, "Speaker test tone could not open audio output");

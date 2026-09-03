@@ -30,7 +30,7 @@ public:
     /**
      * 清除保存的凭据
      */
-    void ClearCredentials();
+    bool ClearCredentials();
 
 private:
     static constexpr const char* kNamespace = "wifi";

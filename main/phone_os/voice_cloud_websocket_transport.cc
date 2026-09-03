@@ -5,9 +5,11 @@
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_timer.h>
 
 #include <limits>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace rodakos {
@@ -16,6 +18,7 @@ constexpr const char* TAG = "VoiceWs";
 constexpr EventBits_t kConnectedBit = BIT0;
 constexpr EventBits_t kHelloBit = BIT1;
 constexpr EventBits_t kErrorBit = BIT2;
+constexpr EventBits_t kCancelBit = BIT3;
 constexpr int kConnectTimeoutMs = 10000;
 constexpr int kHelloTimeoutMs = 10000;
 constexpr int kSendTimeoutMs = 3000;
@@ -25,6 +28,50 @@ constexpr int kUplinkFrameDurationMs = 60;
 constexpr uint16_t kBinaryMessageTypeAudio = 0;
 constexpr size_t kBinaryProtocol2HeaderSize = 16;
 constexpr size_t kBinaryProtocol3HeaderSize = 4;
+constexpr size_t kMaxInboundAudioMessageSize = 8 * 1024;
+constexpr size_t kMaxInboundTextMessageSize = 64 * 1024;
+constexpr uint32_t kCleanupTaskStackSize = 4096;
+constexpr UBaseType_t kCleanupTaskPriority = 3;
+
+class RecursiveSemaphoreLock {
+public:
+    explicit RecursiveSemaphoreLock(SemaphoreHandle_t semaphore) : semaphore_(semaphore) {
+        locked_ = semaphore_ != nullptr &&
+                  xSemaphoreTakeRecursive(semaphore_, portMAX_DELAY) == pdTRUE;
+    }
+
+    ~RecursiveSemaphoreLock() {
+        if (locked_) {
+            xSemaphoreGiveRecursive(semaphore_);
+        }
+    }
+
+    bool locked() const { return locked_; }
+
+private:
+    SemaphoreHandle_t semaphore_ = nullptr;
+    bool locked_ = false;
+};
+
+class SemaphoreLock {
+public:
+    explicit SemaphoreLock(SemaphoreHandle_t semaphore) : semaphore_(semaphore) {
+        locked_ = semaphore_ != nullptr &&
+                  xSemaphoreTake(semaphore_, portMAX_DELAY) == pdTRUE;
+    }
+
+    ~SemaphoreLock() {
+        if (locked_) {
+            xSemaphoreGive(semaphore_);
+        }
+    }
+
+    bool locked() const { return locked_; }
+
+private:
+    SemaphoreHandle_t semaphore_ = nullptr;
+    bool locked_ = false;
+};
 
 std::string JsonToString(cJSON* root) {
     char* json = cJSON_PrintUnformatted(root);
@@ -85,16 +132,77 @@ std::vector<uint8_t> WrapAudioPacketV3(const VoiceAudioPacket& packet) {
     return frame;
 }
 
+bool UnwrapAudioPacket(const uint8_t* data,
+                       size_t size,
+                       int version,
+                       VoiceAudioPacket& packet) {
+    if (data == nullptr || size == 0) {
+        return false;
+    }
+
+    size_t payload_offset = 0;
+    size_t payload_size = size;
+    if (version == 2) {
+        if (size < kBinaryProtocol2HeaderSize) {
+            return false;
+        }
+        uint32_t timestamp = 0;
+        uint32_t wire_size = 0;
+        std::memcpy(&timestamp, data + 8, sizeof(timestamp));
+        std::memcpy(&wire_size, data + 12, sizeof(wire_size));
+        packet.timestamp_ms = ntohl(timestamp);
+        payload_offset = kBinaryProtocol2HeaderSize;
+        payload_size = ntohl(wire_size);
+    } else if (version == 3) {
+        if (size < kBinaryProtocol3HeaderSize) {
+            return false;
+        }
+        uint16_t wire_size = 0;
+        std::memcpy(&wire_size, data + 2, sizeof(wire_size));
+        payload_offset = kBinaryProtocol3HeaderSize;
+        payload_size = ntohs(wire_size);
+    } else {
+        packet.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    }
+
+    if (payload_size == 0 || payload_offset + payload_size > size) {
+        return false;
+    }
+    packet.payload.assign(data + payload_offset, data + payload_offset + payload_size);
+    return true;
+}
+
+bool IsSupportedOpusSampleRate(int sample_rate) {
+    return sample_rate == 8000 || sample_rate == 12000 || sample_rate == 16000 ||
+           sample_rate == 24000 || sample_rate == 48000;
+}
+
+bool IsSupportedOpusFrameDuration(int frame_duration_ms) {
+    return frame_duration_ms == 5 || frame_duration_ms == 10 ||
+           frame_duration_ms == 20 || frame_duration_ms == 40 ||
+           frame_duration_ms == 60;
+}
+
 }  // namespace
 
 VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(DeviceCloudConfigService& config_service)
     : config_service_(config_service) {
     mutex_ = xSemaphoreCreateMutex();
+    client_mutex_ = xSemaphoreCreateRecursiveMutex();
+    open_mutex_ = xSemaphoreCreateMutex();
+    frame_mutex_ = xSemaphoreCreateMutex();
     events_ = xEventGroupCreate();
 }
 
 VoiceCloudWebSocketTransport::~VoiceCloudWebSocketTransport() {
     CloseAudioChannel();
+    if (open_mutex_ != nullptr) {
+        xSemaphoreTake(open_mutex_, portMAX_DELAY);
+        xSemaphoreGive(open_mutex_);
+        vSemaphoreDelete(open_mutex_);
+        open_mutex_ = nullptr;
+    }
+    WaitForAudioChannelClosed();
     if (events_ != nullptr) {
         vEventGroupDelete(events_);
         events_ = nullptr;
@@ -103,26 +211,82 @@ VoiceCloudWebSocketTransport::~VoiceCloudWebSocketTransport() {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
     }
+    if (client_mutex_ != nullptr) {
+        vSemaphoreDelete(client_mutex_);
+        client_mutex_ = nullptr;
+    }
+    if (frame_mutex_ != nullptr) {
+        vSemaphoreDelete(frame_mutex_);
+        frame_mutex_ = nullptr;
+    }
 }
 
 bool VoiceCloudWebSocketTransport::Start() {
     if (started_) {
         return true;
     }
+    if (mutex_ == nullptr || client_mutex_ == nullptr || open_mutex_ == nullptr ||
+        frame_mutex_ == nullptr || events_ == nullptr) {
+        SetError("Voice transport synchronization unavailable");
+        return false;
+    }
     started_ = true;
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::OpenAudioChannel() {
-    CloseAudioChannel();
-    if (events_ == nullptr) {
-        SetError("Transport events unavailable");
+bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue) {
+    if (mutex_ == nullptr || client_mutex_ == nullptr || open_mutex_ == nullptr ||
+        frame_mutex_ == nullptr || events_ == nullptr) {
+        SetError("Voice transport synchronization unavailable");
         return false;
     }
-    xEventGroupClearBits(events_, kConnectedBit | kHelloBit | kErrorBit);
+    SemaphoreLock open_lock(open_mutex_);
+    if (!open_lock.locked()) {
+        SetError("Transport lock unavailable");
+        return false;
+    }
+    if (can_continue && !can_continue()) {
+        SetError("Voice websocket open cancelled");
+        return false;
+    }
 
-    if (!config_service_.Load(config_) && !config_service_.Refresh(config_)) {
-        SetError(config_service_.last_error());
+    CloseAudioChannel();
+    WaitForAudioChannelClosed();
+    if (can_continue && !can_continue()) {
+        SetError("Voice websocket open cancelled");
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool cleanup_pending = closing_ || cleanup_in_progress_ ||
+                                 cleanup_inline_required_ || cleanup_task_finished_ ||
+                                 cleanup_task_ != nullptr || cleanup_client_ != nullptr;
+    xSemaphoreGive(mutex_);
+    if (cleanup_pending) {
+        SetError("Previous voice websocket is still closing");
+        return false;
+    }
+
+    uint32_t generation = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    generation = ++connection_generation_;
+    closing_ = false;
+    connected_ = false;
+    channel_open_ = false;
+    session_id_.clear();
+    xSemaphoreGive(mutex_);
+    xEventGroupClearBits(events_, kConnectedBit | kHelloBit | kErrorBit | kCancelBit);
+
+    if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        return false;
+    }
+
+    if (!config_service_.Load(config_)) {
+        const std::string error = config_service_.last_error();
+        SetError(error.empty() ? "Voice cloud config unavailable" : error);
+        return false;
+    }
+    if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        SetError("Voice websocket open cancelled");
         return false;
     }
 
@@ -156,83 +320,401 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel() {
     ws_config.task_stack = 6144;
     ws_config.crt_bundle_attach = esp_crt_bundle_attach;
 
-    client_ = esp_websocket_client_init(&ws_config);
-    if (client_ == nullptr) {
+    esp_websocket_client_handle_t client = esp_websocket_client_init(&ws_config);
+    if (client == nullptr) {
         SetError("Failed to create websocket client");
         return false;
     }
-    esp_websocket_register_events(client_, WEBSOCKET_EVENT_ANY, EventHandler, this);
+    esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, EventHandler, this);
+
+    {
+        RecursiveSemaphoreLock client_lock(client_mutex_);
+        if (!client_lock.locked() || !IsConnectionCurrent(generation) ||
+            (can_continue && !can_continue())) {
+            esp_websocket_client_destroy(client);
+            return false;
+        }
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        client_ = client;
+        xSemaphoreGive(mutex_);
+    }
 
     ESP_LOGI(TAG, "Connecting to voice cloud websocket: %s", config_.websocket_url.c_str());
-    esp_err_t err = esp_websocket_client_start(client_);
+    esp_err_t err = ESP_FAIL;
+    {
+        RecursiveSemaphoreLock client_lock(client_mutex_);
+        if (!client_lock.locked() || !IsConnectionCurrent(generation) ||
+            (can_continue && !can_continue())) {
+            CloseAudioChannel();
+            return false;
+        }
+        err = esp_websocket_client_start(client);
+    }
     if (err != ESP_OK) {
         SetError(std::string("Websocket start failed: ") + esp_err_to_name(err));
         CloseAudioChannel();
         return false;
     }
 
-    EventBits_t bits = xEventGroupWaitBits(events_, kConnectedBit | kErrorBit, pdFALSE, pdFALSE,
-                                           pdMS_TO_TICKS(kConnectTimeoutMs));
-    if ((bits & kConnectedBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error_ : "Websocket connect timeout");
+    EventBits_t bits = xEventGroupWaitBits(
+        events_, kConnectedBit | kErrorBit | kCancelBit, pdFALSE, pdFALSE,
+        pdMS_TO_TICKS(kConnectTimeoutMs));
+    if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
+        (can_continue && !can_continue())) {
+        SetError("Voice websocket open cancelled");
+        CloseAudioChannel();
+        return false;
+    }
+    if ((bits & kErrorBit) != 0 || (bits & kConnectedBit) == 0) {
+        SetError((bits & kErrorBit) ? last_error() : "Websocket connect timeout");
         CloseAudioChannel();
         return false;
     }
 
-    if (!SendHello()) {
+    if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        CloseAudioChannel();
+        return false;
+    }
+    if (!SendHello(generation)) {
         CloseAudioChannel();
         return false;
     }
 
-    bits = xEventGroupWaitBits(events_, kHelloBit | kErrorBit, pdTRUE, pdFALSE,
+    if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        CloseAudioChannel();
+        return false;
+    }
+    bits = xEventGroupWaitBits(events_, kHelloBit | kErrorBit | kCancelBit, pdTRUE, pdFALSE,
                                pdMS_TO_TICKS(kHelloTimeoutMs));
-    if ((bits & kHelloBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error_ : "Voice cloud hello timeout");
+    if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
+        (can_continue && !can_continue())) {
+        SetError("Voice websocket hello cancelled");
+        CloseAudioChannel();
+        return false;
+    }
+    if ((bits & kErrorBit) != 0 || (bits & kHelloBit) == 0) {
+        SetError((bits & kErrorBit) ? last_error() : "Voice cloud hello timeout");
         CloseAudioChannel();
         return false;
     }
 
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        channel_open_ = true;
-        xSemaphoreGive(mutex_);
+    const bool allowed = !can_continue || can_continue();
+    bool current = false;
+    {
+        RecursiveSemaphoreLock client_lock(client_mutex_);
+        if (client_lock.locked() && mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            current = allowed && connection_generation_ == generation && !closing_ &&
+                      client_ == client && connected_ &&
+                      esp_websocket_client_is_connected(client);
+            if (current) {
+                channel_open_ = true;
+                last_error_.clear();
+            }
+            xSemaphoreGive(mutex_);
+        }
     }
-    last_error_.clear();
+    if (!current) {
+        CloseAudioChannel();
+        return false;
+    }
     return true;
 }
 
 void VoiceCloudWebSocketTransport::CloseAudioChannel() {
-    esp_websocket_client_handle_t client = client_;
-    client_ = nullptr;
+    if (mutex_ == nullptr || client_mutex_ == nullptr) {
+        const auto restore_closed_state = [this]() {
+            ++connection_generation_;
+            connected_ = false;
+            channel_open_ = false;
+            closing_ = false;
+            cleanup_in_progress_ = false;
+            cleanup_inline_required_ = false;
+            cleanup_task_finished_ = false;
+            cleanup_task_ = nullptr;
+            client_ = nullptr;
+            cleanup_client_ = nullptr;
+            session_id_.clear();
+        };
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            restore_closed_state();
+            xSemaphoreGive(mutex_);
+        } else {
+            restore_closed_state();
+        }
+        if (events_ != nullptr) {
+            xEventGroupSetBits(events_, kCancelBit | kErrorBit);
+        }
+        return;
+    }
+
+    esp_websocket_client_handle_t client_to_cleanup = nullptr;
+    bool cleanup_started = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    closing_ = true;
+    ++connection_generation_;
+    xSemaphoreGive(mutex_);
+    if (events_ != nullptr) {
+        xEventGroupSetBits(events_, kCancelBit | kErrorBit);
+    }
+
+    {
+        // OpenAudioChannel no longer holds this lock while waiting for network events, so
+        // cancellation can detach the client even while connect/hello is pending.
+        RecursiveSemaphoreLock client_lock(client_mutex_);
+        if (!client_lock.locked()) {
+            return;
+        }
+
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (!cleanup_in_progress_) {
+                cleanup_client_ = client_;
+                client_ = nullptr;
+            }
+            connected_ = false;
+            channel_open_ = false;
+            session_id_.clear();
+            if (cleanup_client_ != nullptr && !cleanup_in_progress_) {
+                cleanup_in_progress_ = true;
+                cleanup_inline_required_ = false;
+                cleanup_task_finished_ = false;
+                cleanup_started = true;
+                client_to_cleanup = cleanup_client_;
+            }
+            xSemaphoreGive(mutex_);
+        } else {
+            cleanup_client_ = client_;
+            client_ = nullptr;
+            cleanup_started = cleanup_client_ != nullptr;
+            client_to_cleanup = cleanup_client_;
+        }
+    }
+
+    if (cleanup_started) {
+        esp_websocket_unregister_events(
+            client_to_cleanup, WEBSOCKET_EVENT_ANY, EventHandler);
+    }
+
+    {
+        SemaphoreLock frame_lock(frame_mutex_);
+        if (frame_lock.locked()) {
+            inbound_frame_.clear();
+            inbound_opcode_ = 0;
+            inbound_frame_offset_ = 0;
+            inbound_message_active_ = false;
+        }
+    }
+
+    if (cleanup_started) {
+        TaskHandle_t cleanup_task = nullptr;
+        BaseType_t created = pdFAIL;
+        {
+            RecursiveSemaphoreLock client_lock(client_mutex_);
+            if (client_lock.locked()) {
+                created = xTaskCreate(
+                    CleanupTaskEntry, "voice_ws_gc", kCleanupTaskStackSize, this,
+                    kCleanupTaskPriority, &cleanup_task);
+                if (created == pdPASS) {
+                    xSemaphoreTake(mutex_, portMAX_DELAY);
+                    cleanup_task_ = cleanup_task;
+                    xSemaphoreGive(mutex_);
+                }
+            }
+        }
+        if (created != pdPASS) {
+            SetError("Voice websocket cleanup task unavailable");
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            cleanup_task_ = nullptr;
+            cleanup_task_finished_ = false;
+            cleanup_inline_required_ = true;
+            xSemaphoreGive(mutex_);
+        }
+        return;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!cleanup_in_progress_) {
+        closing_ = false;
+    }
+    xSemaphoreGive(mutex_);
+}
+
+void VoiceCloudWebSocketTransport::CleanupTaskEntry(void* arg) {
+    auto* owner = static_cast<VoiceCloudWebSocketTransport*>(arg);
+    if (owner != nullptr) {
+        owner->CleanupDetachedClient();
+        if (owner->mutex_ != nullptr) {
+            xSemaphoreTake(owner->mutex_, portMAX_DELAY);
+            owner->cleanup_task_finished_ = true;
+            xSemaphoreGive(owner->mutex_);
+        } else {
+            owner->cleanup_task_finished_ = true;
+        }
+    }
+    while (true) {
+        vTaskSuspend(nullptr);
+    }
+}
+
+void VoiceCloudWebSocketTransport::CleanupDetachedClient() {
+    esp_websocket_client_handle_t client = nullptr;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        client = cleanup_client_;
+        xSemaphoreGive(mutex_);
+    } else {
+        client = cleanup_client_;
+    }
 
     if (client != nullptr) {
-        esp_websocket_client_close(client, pdMS_TO_TICKS(1000));
-        esp_websocket_client_stop(client);
-        esp_websocket_client_destroy(client);
+        const int64_t cleanup_started_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "Voice websocket cleanup started");
+        const esp_err_t stop_result = esp_websocket_client_stop(client);
+        const int64_t stop_completed_us = esp_timer_get_time();
+        ESP_LOGI(TAG,
+                 "Voice websocket stop completed: result=%s duration_ms=%lld",
+                 esp_err_to_name(stop_result),
+                 static_cast<long long>((stop_completed_us - cleanup_started_us) / 1000));
+        const esp_err_t destroy_result = esp_websocket_client_destroy(client);
+        const int64_t destroy_completed_us = esp_timer_get_time();
+        ESP_LOGI(TAG,
+                 "Voice websocket destroy completed: result=%s duration_ms=%lld total_ms=%lld",
+                 esp_err_to_name(destroy_result),
+                 static_cast<long long>((destroy_completed_us - stop_completed_us) / 1000),
+                 static_cast<long long>((destroy_completed_us - cleanup_started_us) / 1000));
     }
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        connected_ = false;
-        channel_open_ = false;
-        session_id_.clear();
+        if (cleanup_client_ == client) {
+            cleanup_client_ = nullptr;
+        }
+        cleanup_in_progress_ = false;
+        cleanup_inline_required_ = false;
+        closing_ = false;
         xSemaphoreGive(mutex_);
+    } else {
+        cleanup_client_ = nullptr;
+        cleanup_in_progress_ = false;
+        cleanup_inline_required_ = false;
+        closing_ = false;
+    }
+}
+
+void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
+    if (mutex_ == nullptr || client_mutex_ == nullptr) {
+        return;
+    }
+
+    const int64_t wait_started_us = esp_timer_get_time();
+    int64_t next_warning_us = wait_started_us + 5 * 1000 * 1000;
+    while (true) {
+        bool cleanup_inline = false;
+        bool complete = false;
+        TaskHandle_t cleanup_task = nullptr;
+        bool closing = false;
+        bool cleanup_in_progress = false;
+        bool cleanup_inline_required = false;
+        bool cleanup_task_finished = false;
+        bool cleanup_client_pending = false;
+        {
+            RecursiveSemaphoreLock client_lock(client_mutex_);
+            if (!client_lock.locked()) {
+                return;
+            }
+
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (cleanup_inline_required_) {
+                cleanup_inline_required_ = false;
+                cleanup_inline = true;
+            } else if (cleanup_task_ != nullptr && cleanup_task_finished_) {
+                cleanup_task = cleanup_task_;
+            }
+            complete = !closing_ && !cleanup_in_progress_ &&
+                       !cleanup_inline_required_ && !cleanup_task_finished_ &&
+                       cleanup_task_ == nullptr && cleanup_client_ == nullptr;
+            closing = closing_;
+            cleanup_in_progress = cleanup_in_progress_;
+            cleanup_inline_required = cleanup_inline_required_;
+            cleanup_task_finished = cleanup_task_finished_;
+            cleanup_client_pending = cleanup_client_ != nullptr;
+            xSemaphoreGive(mutex_);
+
+            if (cleanup_task != nullptr) {
+                if (eTaskGetState(cleanup_task) == eSuspended) {
+                    vTaskDelete(cleanup_task);
+                    xSemaphoreTake(mutex_, portMAX_DELAY);
+                    if (cleanup_task_ == cleanup_task) {
+                        cleanup_task_ = nullptr;
+                        cleanup_task_finished_ = false;
+                    }
+                    xSemaphoreGive(mutex_);
+                    continue;
+                }
+            }
+            if (cleanup_inline) {
+                CleanupDetachedClient();
+                continue;
+            }
+            if (complete) {
+                return;
+            }
+        }
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_warning_us) {
+            ESP_LOGW(TAG,
+                     "Waiting for voice websocket cleanup: elapsed_ms=%lld closing=%d "
+                     "in_progress=%d inline=%d task_finished=%d client_pending=%d",
+                     static_cast<long long>((now_us - wait_started_us) / 1000),
+                     closing, cleanup_in_progress, cleanup_inline_required,
+                     cleanup_task_finished, cleanup_client_pending);
+            next_warning_us = now_us + 5 * 1000 * 1000;
+        }
+        vTaskDelay(1);
     }
 }
 
 bool VoiceCloudWebSocketTransport::IsAudioChannelOpen() const {
-    if (mutex_ == nullptr) {
+    RecursiveSemaphoreLock client_lock(client_mutex_);
+    if (!client_lock.locked() || mutex_ == nullptr) {
         return false;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool open = channel_open_ && client_ != nullptr &&
+    const bool open = !closing_ && channel_open_ && client_ != nullptr &&
                       esp_websocket_client_is_connected(client_);
     xSemaphoreGive(mutex_);
     return open;
 }
 
-bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet) {
-    if (!IsAudioChannelOpen()) {
+uint32_t VoiceCloudWebSocketTransport::connection_generation() const {
+    if (mutex_ == nullptr) {
+        return 0;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const uint32_t generation = connection_generation_;
+    xSemaphoreGive(mutex_);
+    return generation;
+}
+
+bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet,
+                                             uint32_t expected_generation) {
+    RecursiveSemaphoreLock client_lock(client_mutex_);
+    if (!client_lock.locked()) {
+        SetError("Transport lock unavailable");
+        return false;
+    }
+    esp_websocket_client_handle_t client = nullptr;
+    bool open = false;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        client = client_;
+        open = !closing_ && channel_open_ && connected_ && client != nullptr &&
+               connection_generation_ == expected_generation;
+        xSemaphoreGive(mutex_);
+    }
+    if (!open || !esp_websocket_client_is_connected(client)) {
         SetError("Audio channel is not open");
         return false;
     }
@@ -262,67 +744,106 @@ bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet) {
     }
 
     int sent = esp_websocket_client_send_bin(
-        client_, reinterpret_cast<const char*>(data), size,
+        client, reinterpret_cast<const char*>(data), size,
         pdMS_TO_TICKS(kSendTimeoutMs));
-    if (sent < 0) {
-        SetError("Failed to send audio");
+    if (sent != static_cast<int>(size)) {
+        SetError("Failed to send complete audio packet");
         return false;
     }
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::SendStartListening(VoiceListeningMode mode) {
+bool VoiceCloudWebSocketTransport::SendStartListening(VoiceListeningMode mode,
+                                                      uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
+        SetError("Audio channel is not open");
+        return false;
+    }
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
     cJSON_AddStringToObject(root, "state", "start");
     cJSON_AddStringToObject(root, "mode", ListeningModeName(mode));
     std::string message = JsonToString(root);
     cJSON_Delete(root);
-    return SendText(message);
+    const bool sent = SendText(message, expected_generation, session_id, true);
+    if (sent) {
+        ESP_LOGI(TAG, "Sent listen:start: session=%s mode=%s",
+                 session_id.c_str(), ListeningModeName(mode));
+    }
+    return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendStopListening() {
+bool VoiceCloudWebSocketTransport::SendStopListening(uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
+        SetError("Audio channel is not open");
+        return false;
+    }
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
     cJSON_AddStringToObject(root, "state", "stop");
     std::string message = JsonToString(root);
     cJSON_Delete(root);
-    return SendText(message);
+    const bool sent = SendText(message, expected_generation, session_id, true);
+    if (sent) {
+        ESP_LOGI(TAG, "Sent listen:stop: session=%s", session_id.c_str());
+    }
+    return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendWakeWordDetected(const std::string& wake_word) {
+bool VoiceCloudWebSocketTransport::SendWakeWordDetected(const std::string& wake_word,
+                                                        uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
+        SetError("Audio channel is not open");
+        return false;
+    }
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "listen");
     cJSON_AddStringToObject(root, "state", "detect");
     cJSON_AddStringToObject(root, "text", wake_word.c_str());
     std::string message = JsonToString(root);
     cJSON_Delete(root);
-    return SendText(message);
+    const bool sent = SendText(message, expected_generation, session_id, true);
+    if (sent) {
+        ESP_LOGI(TAG, "Sent listen:detect: session=%s text=%s",
+                 session_id.c_str(), wake_word.c_str());
+    }
+    return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason) {
+bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
+                                                     uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
+        SetError("Audio channel is not open");
+        return false;
+    }
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "abort");
     if (reason == VoiceAbortReason::kWakeWordDetected) {
         cJSON_AddStringToObject(root, "reason", "wake_word_detected");
     }
     std::string message = JsonToString(root);
     cJSON_Delete(root);
-    return SendText(message);
+    return SendText(message, expected_generation, session_id, true);
 }
 
-bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload) {
-    if (!IsAudioChannelOpen()) {
+bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload,
+                                                  uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
         return false;
     }
 
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "mcp");
     cJSON* payload_json = cJSON_Parse(payload.c_str());
     if (payload_json != nullptr) {
@@ -332,7 +853,17 @@ bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload) {
     }
     std::string message = JsonToString(root);
     cJSON_Delete(root);
-    return SendText(message);
+    return SendText(message, expected_generation, session_id, true);
+}
+
+void VoiceCloudWebSocketTransport::SetInboundHandler(VoiceInboundHandler handler) {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        inbound_handler_ = std::move(handler);
+        xSemaphoreGive(mutex_);
+    } else {
+        inbound_handler_ = std::move(handler);
+    }
 }
 
 void VoiceCloudWebSocketTransport::EventHandler(void* arg,
@@ -343,6 +874,18 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
     auto* data = static_cast<esp_websocket_event_data_t*>(event_data);
     if (self == nullptr) {
         return;
+    }
+    uint32_t generation = 0;
+    if (self->mutex_ != nullptr) {
+        xSemaphoreTake(self->mutex_, portMAX_DELAY);
+        const bool current = !self->closing_ && self->client_ != nullptr &&
+                             (data == nullptr || data->client == nullptr ||
+                              self->client_ == data->client);
+        generation = self->connection_generation_;
+        xSemaphoreGive(self->mutex_);
+        if (!current) {
+            return;
+        }
     }
 
     switch (event_id) {
@@ -355,21 +898,39 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
             xEventGroupSetBits(self->events_, kConnectedBit);
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
-        case WEBSOCKET_EVENT_CLOSED:
+        case WEBSOCKET_EVENT_CLOSED: {
+            bool unexpected_close = false;
             if (self->mutex_ != nullptr) {
                 xSemaphoreTake(self->mutex_, portMAX_DELAY);
+                unexpected_close = !self->closing_ &&
+                                   (self->connected_ || self->channel_open_);
                 self->connected_ = false;
                 self->channel_open_ = false;
                 xSemaphoreGive(self->mutex_);
             }
+            if (unexpected_close) {
+                self->SetError("Voice websocket disconnected");
+                xEventGroupSetBits(self->events_, kErrorBit);
+                self->EmitInbound(VoiceInboundEvent{
+                    .type = VoiceInboundEventType::kError,
+                    .audio = {},
+                    .payload = "Voice websocket disconnected",
+                }, generation);
+            }
             break;
+        }
         case WEBSOCKET_EVENT_ERROR:
             self->SetError("Websocket error");
             xEventGroupSetBits(self->events_, kErrorBit);
+            self->EmitInbound(VoiceInboundEvent{
+                .type = VoiceInboundEventType::kError,
+                .audio = {},
+                .payload = "Websocket error",
+            }, generation);
             break;
         case WEBSOCKET_EVENT_DATA:
-            if (data != nullptr && data->op_code == WS_TRANSPORT_OPCODES_TEXT) {
-                self->HandleTextFrame(data->data_ptr, data->data_len);
+            if (data != nullptr) {
+                self->HandleDataFrame(*data, generation);
             }
             break;
         default:
@@ -377,23 +938,133 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
     }
 }
 
-bool VoiceCloudWebSocketTransport::SendText(const std::string& text) {
-    if (client_ == nullptr || !esp_websocket_client_is_connected(client_)) {
+void VoiceCloudWebSocketTransport::HandleDataFrame(
+    const esp_websocket_event_data_t& data,
+    uint32_t generation) {
+    if (data.data_ptr == nullptr || data.data_len <= 0 || data.payload_len <= 0 ||
+        data.payload_offset < 0 || data.payload_offset + data.data_len > data.payload_len) {
+        return;
+    }
+
+    if (data.op_code >= 0x08) {
+        return;
+    }
+
+    std::vector<uint8_t> complete_frame;
+    uint8_t complete_opcode = 0;
+    {
+        SemaphoreLock frame_lock(frame_mutex_);
+        if (!frame_lock.locked()) {
+            return;
+        }
+
+        if (data.payload_offset == 0) {
+            inbound_frame_offset_ = 0;
+            if (data.op_code == WS_TRANSPORT_OPCODES_TEXT ||
+                data.op_code == WS_TRANSPORT_OPCODES_BINARY) {
+                inbound_frame_.clear();
+                inbound_opcode_ = data.op_code;
+                inbound_message_active_ = true;
+            } else if (data.op_code != WS_TRANSPORT_OPCODES_CONT || !inbound_message_active_) {
+                inbound_frame_.clear();
+                inbound_opcode_ = 0;
+                inbound_message_active_ = false;
+                return;
+            }
+        }
+
+        const size_t message_limit = inbound_opcode_ == WS_TRANSPORT_OPCODES_BINARY
+                                         ? kMaxInboundAudioMessageSize
+                                         : kMaxInboundTextMessageSize;
+        if (!inbound_message_active_ ||
+            static_cast<size_t>(data.payload_offset) != inbound_frame_offset_ ||
+            inbound_frame_.size() + static_cast<size_t>(data.data_len) > message_limit) {
+            inbound_frame_.clear();
+            inbound_opcode_ = 0;
+            inbound_frame_offset_ = 0;
+            inbound_message_active_ = false;
+            return;
+        }
+
+        const auto* chunk_begin = reinterpret_cast<const uint8_t*>(data.data_ptr);
+        inbound_frame_.insert(inbound_frame_.end(),
+                              chunk_begin,
+                              chunk_begin + static_cast<size_t>(data.data_len));
+        inbound_frame_offset_ += static_cast<size_t>(data.data_len);
+        if (data.payload_offset + data.data_len < data.payload_len) {
+            return;
+        }
+        inbound_frame_offset_ = 0;
+        if (!data.fin) {
+            return;
+        }
+
+        complete_opcode = inbound_opcode_;
+        complete_frame = std::move(inbound_frame_);
+        inbound_opcode_ = 0;
+        inbound_message_active_ = false;
+    }
+
+    if (complete_opcode == WS_TRANSPORT_OPCODES_TEXT) {
+        HandleTextFrame(reinterpret_cast<const char*>(complete_frame.data()),
+                        static_cast<int>(complete_frame.size()), generation);
+    } else if (complete_opcode == WS_TRANSPORT_OPCODES_BINARY) {
+        HandleBinaryFrame(complete_frame.data(), complete_frame.size(), generation);
+    }
+}
+
+bool VoiceCloudWebSocketTransport::SendText(const std::string& text,
+                                            uint32_t expected_generation,
+                                            const std::string& expected_session,
+                                            bool require_open) {
+    RecursiveSemaphoreLock client_lock(client_mutex_);
+    if (!client_lock.locked()) {
+        SetError("Transport lock unavailable");
+        return false;
+    }
+    esp_websocket_client_handle_t client = nullptr;
+    bool connected = false;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        client = client_;
+        connected = !closing_ && connected_ && client != nullptr &&
+                    connection_generation_ == expected_generation &&
+                    (!require_open ||
+                     (channel_open_ && session_id_ == expected_session));
+        xSemaphoreGive(mutex_);
+    }
+    if (!connected || !esp_websocket_client_is_connected(client)) {
         SetError("Websocket is not connected");
         return false;
     }
-    const int sent = esp_websocket_client_send_text(client_, text.c_str(), text.size(),
+    const int sent = esp_websocket_client_send_text(client, text.c_str(), text.size(),
                                                     pdMS_TO_TICKS(kSendTimeoutMs));
-    if (sent < 0) {
-        SetError("Failed to send websocket text");
+    if (sent != static_cast<int>(text.size())) {
+        SetError("Failed to send complete websocket text");
         return false;
     }
     ESP_LOGD(TAG, "Sent text: %s", text.c_str());
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::SendHello() {
-    return SendText(BuildHelloMessage());
+bool VoiceCloudWebSocketTransport::SendHello(uint32_t generation) {
+    return SendText(BuildHelloMessage(), generation, {}, false);
+}
+
+bool VoiceCloudWebSocketTransport::SnapshotSession(uint32_t expected_generation,
+                                                   std::string& session_id) const {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool valid = !closing_ && connected_ && channel_open_ && client_ != nullptr &&
+                       connection_generation_ == expected_generation &&
+                       !session_id_.empty();
+    if (valid) {
+        session_id = session_id_;
+    }
+    xSemaphoreGive(mutex_);
+    return valid;
 }
 
 std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
@@ -403,7 +1074,7 @@ std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
     cJSON_AddStringToObject(root, "transport", "websocket");
 
     cJSON* features = cJSON_CreateObject();
-    cJSON_AddBoolToObject(features, "mcp", true);
+    cJSON_AddBoolToObject(features, "mcp", false);
     cJSON_AddItemToObject(root, "features", features);
 
     cJSON* audio_params = cJSON_CreateObject();
@@ -419,7 +1090,9 @@ std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
     return message;
 }
 
-void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data, int len) {
+void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
+                                                   int len,
+                                                   uint32_t generation) {
     if (data == nullptr || len <= 0) {
         return;
     }
@@ -432,14 +1105,77 @@ void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data, int len) {
 
     cJSON* type = cJSON_GetObjectItem(root, "type");
     if (cJSON_IsString(type) && std::strcmp(type->valuestring, "hello") == 0) {
-        ParseServerHello(payload);
+        ParseServerHello(payload, generation);
+    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "tts") == 0) {
+        cJSON* state = cJSON_GetObjectItem(root, "state");
+        if (cJSON_IsString(state) && std::strcmp(state->valuestring, "start") == 0) {
+            EmitInbound(VoiceInboundEvent{
+                .type = VoiceInboundEventType::kSpeakingStarted,
+                .audio = {},
+                .payload = {},
+            }, generation);
+        } else if (cJSON_IsString(state) && std::strcmp(state->valuestring, "stop") == 0) {
+            EmitInbound(VoiceInboundEvent{
+                .type = VoiceInboundEventType::kSpeakingStopped,
+                .audio = {},
+                .payload = {},
+            }, generation);
+        }
+    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "goodbye") == 0) {
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kSessionFinished,
+            .audio = {},
+            .payload = {},
+        }, generation);
+    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "mcp") == 0) {
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kMcp,
+            .audio = {},
+            .payload = payload,
+        }, generation);
+    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "error") == 0) {
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kError,
+            .audio = {},
+            .payload = payload,
+        }, generation);
     } else if (cJSON_IsString(type)) {
         ESP_LOGI(TAG, "Voice cloud message: type=%s", type->valuestring);
     }
     cJSON_Delete(root);
 }
 
-void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload) {
+void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
+                                                     size_t size,
+                                                     uint32_t generation) {
+    VoiceAudioPacket packet;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        packet.sample_rate = server_sample_rate_;
+        packet.frame_duration_ms = server_frame_duration_ms_;
+        xSemaphoreGive(mutex_);
+    } else {
+        packet.sample_rate = server_sample_rate_;
+        packet.frame_duration_ms = server_frame_duration_ms_;
+    }
+    if (!UnwrapAudioPacket(data, size, config_.websocket_version, packet)) {
+        SetError("Invalid voice cloud audio packet");
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kError,
+            .audio = {},
+            .payload = "Invalid voice cloud audio packet",
+        }, generation);
+        return;
+    }
+    EmitInbound(VoiceInboundEvent{
+        .type = VoiceInboundEventType::kAudio,
+        .audio = std::move(packet),
+        .payload = {},
+    }, generation);
+}
+
+void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload,
+                                                     uint32_t generation) {
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
         SetError("Invalid server hello");
@@ -456,40 +1192,114 @@ void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload) 
     }
 
     cJSON* session_id = cJSON_GetObjectItem(root, "session_id");
-    if (cJSON_IsString(session_id) && session_id->valuestring != nullptr) {
-        session_id_ = session_id->valuestring;
-    }
-
     cJSON* audio_params = cJSON_GetObjectItem(root, "audio_params");
-    if (cJSON_IsObject(audio_params)) {
-        cJSON* sample_rate = cJSON_GetObjectItem(audio_params, "download_sample_rate");
-        if (!cJSON_IsNumber(sample_rate)) {
-            sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
-        }
-        if (cJSON_IsNumber(sample_rate)) {
-            server_sample_rate_ = sample_rate->valueint;
-        }
-        cJSON* frame_duration = cJSON_GetObjectItem(audio_params, "frame_duration");
-        if (cJSON_IsNumber(frame_duration)) {
-            server_frame_duration_ms_ = frame_duration->valueint;
-        }
+    cJSON* format = cJSON_IsObject(audio_params)
+                        ? cJSON_GetObjectItem(audio_params, "format")
+                        : nullptr;
+    cJSON* channels = cJSON_IsObject(audio_params)
+                          ? cJSON_GetObjectItem(audio_params, "channels")
+                          : nullptr;
+    cJSON* sample_rate = cJSON_IsObject(audio_params)
+                             ? cJSON_GetObjectItem(audio_params, "download_sample_rate")
+                             : nullptr;
+    if (!cJSON_IsNumber(sample_rate) && cJSON_IsObject(audio_params)) {
+        sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
+    }
+    cJSON* frame_duration = cJSON_IsObject(audio_params)
+                                ? cJSON_GetObjectItem(audio_params, "frame_duration")
+                                : nullptr;
+
+    const bool valid_session = cJSON_IsString(session_id) &&
+                               session_id->valuestring != nullptr &&
+                               session_id->valuestring[0] != '\0';
+    const bool valid_format = cJSON_IsString(format) &&
+                              std::strcmp(format->valuestring, "opus") == 0;
+    const bool valid_channels = cJSON_IsNumber(channels) && channels->valueint == 1;
+    const int negotiated_sample_rate = cJSON_IsNumber(sample_rate)
+                                           ? sample_rate->valueint
+                                           : 0;
+    const int negotiated_frame_duration = cJSON_IsNumber(frame_duration)
+                                              ? frame_duration->valueint
+                                              : 0;
+    if (!valid_session || !valid_format || !valid_channels ||
+        !IsSupportedOpusSampleRate(negotiated_sample_rate) ||
+        !IsSupportedOpusFrameDuration(negotiated_frame_duration)) {
+        cJSON_Delete(root);
+        SetError("Invalid voice cloud hello parameters");
+        xEventGroupSetBits(events_, kErrorBit);
+        return;
     }
 
+    const std::string negotiated_session_id = session_id->valuestring;
     cJSON_Delete(root);
+
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (closing_ || client_ == nullptr || connection_generation_ != generation) {
+            xSemaphoreGive(mutex_);
+            return;
+        }
+        session_id_ = negotiated_session_id;
+        server_sample_rate_ = negotiated_sample_rate;
+        server_frame_duration_ms_ = negotiated_frame_duration;
+        xSemaphoreGive(mutex_);
+    } else {
+        session_id_ = negotiated_session_id;
+        server_sample_rate_ = negotiated_sample_rate;
+        server_frame_duration_ms_ = negotiated_frame_duration;
+    }
     ESP_LOGI(TAG, "Voice cloud hello received: session=%s sample_rate=%d frame=%d",
-             session_id_.c_str(), server_sample_rate_, server_frame_duration_ms_);
+             negotiated_session_id.c_str(), negotiated_sample_rate,
+             negotiated_frame_duration);
     xEventGroupSetBits(events_, kHelloBit);
 }
 
 void VoiceCloudWebSocketTransport::SetError(const std::string& message) {
+    const std::string normalized = message.empty() ? "Voice cloud transport error" : message;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        last_error_ = message.empty() ? "Voice cloud transport error" : message;
+        last_error_ = normalized;
         xSemaphoreGive(mutex_);
     } else {
-        last_error_ = message;
+        last_error_ = normalized;
     }
-    ESP_LOGW(TAG, "%s", last_error_.c_str());
+    ESP_LOGW(TAG, "%s", normalized.c_str());
+}
+
+std::string VoiceCloudWebSocketTransport::last_error() const {
+    if (mutex_ == nullptr) {
+        return last_error_;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const std::string error = last_error_;
+    xSemaphoreGive(mutex_);
+    return error;
+}
+
+bool VoiceCloudWebSocketTransport::IsConnectionCurrent(uint32_t generation) const {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool current = connection_generation_ == generation && !closing_;
+    xSemaphoreGive(mutex_);
+    return current;
+}
+
+void VoiceCloudWebSocketTransport::EmitInbound(VoiceInboundEvent&& event,
+                                               uint32_t generation) {
+    event.transport_generation = generation;
+    VoiceInboundHandler handler;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        handler = inbound_handler_;
+        xSemaphoreGive(mutex_);
+    } else {
+        handler = inbound_handler_;
+    }
+    if (handler) {
+        handler(std::move(event));
+    }
 }
 
 }  // namespace rodakos

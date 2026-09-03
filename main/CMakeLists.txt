@@ -8,6 +8,7 @@ set(SOURCES
     "rodakos_adapters/backlight_adapter.cc"
     "rodakos_adapters/camera_device.cc"
     "rodakos_adapters/qmi8658_motion_sensor.cc"
+    "rodakos_adapters/wifi_connection_policy.cc"
     "rodakos_adapters/wifi_adapter.cc"
     "rodakos_adapters/wifi_config.cc"
     "rodakos_adapters/file_service.cc"
@@ -26,13 +27,18 @@ set(SOURCES
     "phone_os/button_binding_service.cc"
     "phone_os/camera_service.cc"
     "phone_os/time_service.cc"
+    "phone_os/voice_audio_frontend.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_assistant_transport.cc"
     "phone_os/voice_recorder_service.cc"
+    "phone_os/voice_wake_settings.cc"
     "phone_os/voice_wake_service.cc"
     "phone_os/wake_on_lan_packet.cc"
     "phone_os/wake_on_lan_service.cc"
     "phone_os/device_cloud_config.cc"
+    "phone_os/serial_provisioning_protocol.cc"
+    "phone_os/serial_provisioning_service.cc"
+    "phone_os/mqtt_credential_refresh_policy.cc"
     "phone_os/ota_update_service.cc"
     "phone_os/unified_mqtt_service.cc"
     "phone_os/voice_cloud_websocket_transport.cc"
@@ -93,8 +99,12 @@ idf_component_register(
         lwip
         esp_board_manager
         esp_driver_i2c
+        esp_driver_usb_serial_jtag
         espressif__esp_websocket_client
         espressif__esp_codec_dev
+        espressif__esp-sr
+        78__esp-opus
+        78__esp-opus-encoder
         chmorgan__esp-libhelix-mp3
         app_update
         bootloader_support
@@ -109,4 +119,52 @@ idf_component_register(
         sdmmc
         esp_tinyusb
         esp_new_jpeg
+)
+
+# ESP-SR normally flashes models into a dedicated partition. RodakOS has an
+# immutable Recovery layout, so generate the selected MultiNet bundle and embed
+# it in ota_0 instead of changing the partition table.
+idf_component_get_property(ESP_SR_COMPONENT_DIR espressif__esp-sr COMPONENT_DIR)
+idf_component_get_property(ESP_DSP_COMPONENT_LIB espressif__esp-dsp COMPONENT_LIB)
+idf_build_get_property(RODAKOS_BUILD_DIR BUILD_DIR)
+set(RODAKOS_SR_MODELS_BIN "${RODAKOS_BUILD_DIR}/srmodels/srmodels.bin")
+file(GLOB_RECURSE RODAKOS_SR_MODEL_INPUTS CONFIGURE_DEPENDS
+    "${ESP_SR_COMPONENT_DIR}/model/*"
+)
+
+# ESP-DSP 1.6.0 relies on transitive math declarations that GCC 15 no longer
+# places in std::. Keep the managed component untouched and inject <cmath>.
+target_compile_options(${ESP_DSP_COMPONENT_LIB} PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-include>
+    $<$<COMPILE_LANGUAGE:CXX>:cmath>
+)
+
+# ESP-SR 2.2.x is built against newlib and its prebuilt FST library references
+# the legacy byte-table symbol. IDF 6 uses picolibc, where the same table base
+# is exposed as `_ctype_b + 127` but the `_ctype_` symbol is no longer emitted.
+if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
+    idf_build_set_property(
+        LINK_OPTIONS
+        "-Wl,--defsym=_ctype_=_ctype_b+127"
+        APPEND
+    )
+endif()
+
+add_custom_command(
+    OUTPUT "${RODAKOS_SR_MODELS_BIN}"
+    COMMAND "${PYTHON}" "${ESP_SR_COMPONENT_DIR}/model/movemodel.py"
+            -d1 "${SDKCONFIG}"
+            -d2 "${ESP_SR_COMPONENT_DIR}"
+            -d3 "${RODAKOS_BUILD_DIR}"
+    DEPENDS "${SDKCONFIG}" ${RODAKOS_SR_MODEL_INPUTS}
+    COMMENT "Pack embedded RodakOS voice models"
+    VERBATIM
+)
+
+target_add_binary_data(
+    ${COMPONENT_LIB}
+    "${RODAKOS_SR_MODELS_BIN}"
+    BINARY
+    RENAME_TO rodakos_voice_models
+    DEPENDS "${SDKCONFIG}" ${RODAKOS_SR_MODEL_INPUTS}
 )

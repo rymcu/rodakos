@@ -1,5 +1,6 @@
 #include "phone_os/audio_focus_service.h"
 
+#include "phone_os/audio_output_service.h"
 #include "phone_os/music_player_service.h"
 
 #include <algorithm>
@@ -10,7 +11,6 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "AudioFocusService";
-constexpr uint32_t kExclusiveStopTimeoutMs = 1200;
 
 const char* GainName(AudioFocusGain gain) {
     switch (gain) {
@@ -31,8 +31,9 @@ bool IsPlayingStatus(AudioPlaybackStatus status) {
 
 }  // namespace
 
-AudioFocusService::AudioFocusService(MusicPlayerService& music_player)
-    : music_player_(music_player) {
+AudioFocusService::AudioFocusService(MusicPlayerService& music_player,
+                                     AudioOutputService& audio_output)
+    : music_player_(music_player), audio_output_(audio_output) {
     mutex_ = xSemaphoreCreateMutex();
 }
 
@@ -56,6 +57,20 @@ bool AudioFocusService::RequestFocus(const AudioFocusRequest& request, uint32_t&
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (active_) {
+            if (owner_ == sanitized.owner) {
+                token = active_token_;
+                xSemaphoreGive(mutex_);
+                return true;
+            }
+            if (gain_ == AudioFocusGain::kExclusive ||
+                sanitized.gain == AudioFocusGain::kExclusive) {
+                const std::string active_owner = owner_;
+                token = 0;
+                xSemaphoreGive(mutex_);
+                ESP_LOGW(TAG, "Audio focus busy: owner=%s requested_by=%s",
+                         active_owner.c_str(), sanitized.owner.c_str());
+                return false;
+            }
             RestoreFocusLocked();
             ClearFocusLocked();
         }
@@ -69,7 +84,13 @@ bool AudioFocusService::RequestFocus(const AudioFocusRequest& request, uint32_t&
         gain_ = sanitized.gain;
         resume_on_release_ = sanitized.resume_on_release;
         token = active_token_;
-        ApplyFocusLocked(sanitized);
+        if (!ApplyFocusLocked(sanitized)) {
+            ClearFocusLocked();
+            token = 0;
+            xSemaphoreGive(mutex_);
+            ESP_LOGW(TAG, "Audio focus setup failed: owner=%s", sanitized.owner.c_str());
+            return false;
+        }
         xSemaphoreGive(mutex_);
     } else {
         token = 0;
@@ -124,11 +145,16 @@ AudioFocusState AudioFocusService::GetState() {
     return state;
 }
 
-void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
+bool AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
+    if (request.gain == AudioFocusGain::kExclusive &&
+        !music_player_.SetPlaybackBlocked(true)) {
+        return false;
+    }
     const auto state = music_player_.GetState();
     music_was_playing_ = IsPlayingStatus(state.audio.status);
     music_was_paused_ = state.audio.status == AudioPlaybackStatus::kPaused;
     playback_hardware_released_ = false;
+    playback_suspended_for_focus_ = false;
     previous_volume_ = state.audio.volume;
 
     switch (request.gain) {
@@ -144,11 +170,19 @@ void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
             break;
         case AudioFocusGain::kExclusive:
             if (request.release_playback_hardware) {
-                if (music_was_playing_ || music_was_paused_) {
-                    music_player_.Stop();
-                    WaitForMusicIdle(kExclusiveStopTimeoutMs);
+                if (request.resume_on_release && (music_was_playing_ || music_was_paused_)) {
+                    if (!music_player_.SuspendPlaybackHardware()) {
+                        music_player_.SetPlaybackBlocked(false);
+                        if (music_was_playing_) {
+                            music_player_.Resume();
+                        }
+                        return false;
+                    }
+                    playback_suspended_for_focus_ = true;
+                } else if (!music_player_.ReleasePlaybackHardware()) {
+                    music_player_.SetPlaybackBlocked(false);
+                    return false;
                 }
-                music_player_.ReleasePlaybackHardware();
                 playback_hardware_released_ = true;
             } else if (music_was_playing_) {
                 music_player_.Pause();
@@ -157,6 +191,15 @@ void AudioFocusService::ApplyFocusLocked(const AudioFocusRequest& request) {
         default:
             break;
     }
+    if (request.gain == AudioFocusGain::kExclusive &&
+        !audio_output_.ReserveOwner(request.owner.c_str())) {
+        music_player_.SetPlaybackBlocked(false);
+        if (request.resume_on_release && music_was_playing_) {
+            music_player_.Resume();
+        }
+        return false;
+    }
+    return true;
 }
 
 void AudioFocusService::RestoreFocusLocked() {
@@ -169,7 +212,13 @@ void AudioFocusService::RestoreFocusLocked() {
         return;
     }
 
-    if (resume_on_release_ && music_was_playing_ && !playback_hardware_released_) {
+    if (gain_ == AudioFocusGain::kExclusive) {
+        audio_output_.CloseForOwner(owner_.c_str());
+        music_player_.SetPlaybackBlocked(false);
+    }
+
+    if (resume_on_release_ && music_was_playing_ &&
+        (!playback_hardware_released_ || playback_suspended_for_focus_)) {
         music_player_.Resume();
     }
 }
@@ -183,19 +232,8 @@ void AudioFocusService::ClearFocusLocked() {
     music_was_playing_ = false;
     music_was_paused_ = false;
     playback_hardware_released_ = false;
+    playback_suspended_for_focus_ = false;
     previous_volume_ = music_player_.volume();
-}
-
-void AudioFocusService::WaitForMusicIdle(uint32_t timeout_ms) {
-    const uint32_t delay_ms = 20;
-    for (uint32_t waited = 0; waited < timeout_ms; waited += delay_ms) {
-        const auto state = music_player_.GetState();
-        if (!IsPlayingStatus(state.audio.status) && state.audio.status != AudioPlaybackStatus::kPaused) {
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
-    }
-    ESP_LOGW(TAG, "Timed out waiting for music playback to stop");
 }
 
 }  // namespace rodakos

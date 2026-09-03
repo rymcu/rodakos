@@ -57,8 +57,10 @@ public:
     bool TogglePlayPause();
     void Pause();
     void Resume();
+    bool SuspendPlaybackHardware();
+    bool SetPlaybackBlocked(bool blocked);
     void Stop();
-    void ReleasePlaybackHardware();
+    bool ReleasePlaybackHardware();
     bool Refresh();
 
     bool SetVolume(int volume);
@@ -87,6 +89,7 @@ private:
     bool monitor_stop_requested_ = false;
     bool monitor_task_active_ = false;
     bool playback_starting_ = false;
+    bool playback_blocked_ = false;
     std::vector<MusicTrack> tracks_;
     int current_index_ = -1;
     MusicPlaybackMode playback_mode_ = MusicPlaybackMode::kSequential;

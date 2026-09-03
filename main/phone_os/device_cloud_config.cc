@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <new>
 #include <vector>
 
 namespace rodakos {
@@ -138,6 +140,48 @@ void ResetMqttConfig(DeviceCloudConfig& config) {
     config.mqtt_topic_pc_status.clear();
     config.mqtt_topic_home_prefix.clear();
     config.has_mqtt_config = false;
+}
+
+bool PersistWebsocketConfig(const DeviceCloudConfig& config) {
+    Settings settings(kWebsocketNamespace, true);
+    const bool written = settings.SetString(kUrlKey, config.websocket_url) &&
+                         settings.SetString(kTokenKey, config.websocket_token) &&
+                         settings.SetInt(kVersionKey, config.websocket_version);
+    if (!written || !settings.Commit()) {
+        // NVSHandleSimple may have applied an earlier field before reporting
+        // an error. Mark the handle settled before the destructor and let the
+        // caller restore its snapshot through a fresh handle.
+        (void)settings.Commit();
+        return false;
+    }
+    return true;
+}
+
+bool PersistMqttConfig(const DeviceCloudConfig& config) {
+    Settings settings(kMqttNamespace, true);
+    const bool written =
+        settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version) &&
+        settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address) &&
+        settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port) &&
+        settings.SetString(kMqttUsernameKey, config.mqtt_username) &&
+        settings.SetString(kMqttPasswordKey, config.mqtt_password) &&
+        settings.SetInt(kMqttKeepaliveKey, config.mqtt_keepalive) &&
+        settings.SetString(kMqttDeviceKey, config.mqtt_device_key) &&
+        settings.SetBool(kMqttHomeEnabledKey, config.mqtt_home_enabled) &&
+        settings.SetString(kMqttHttpBaseUrlKey, config.mqtt_http_base_url) &&
+        settings.SetString(kMqttTelemetryTopicKey, config.mqtt_topic_telemetry) &&
+        settings.SetString(kMqttShadowReportTopicKey, config.mqtt_topic_shadow_report) &&
+        settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired) &&
+        settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify) &&
+        settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress) &&
+        settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands) &&
+        settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status) &&
+        settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
+    if (!written || !settings.Commit()) {
+        (void)settings.Commit();
+        return false;
+    }
+    return true;
 }
 
 void FillMqttTopicFallbacks(DeviceCloudConfig& config) {
@@ -332,11 +376,6 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     response[std::min(static_cast<size_t>(read_len), kMaxProvisioningResponseBytes)] = '\0';
 
     if (!ParseProvisioningResponse(std::string(response.data(), read_len), config)) {
-        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
-        if (config_generation == config_generation_) {
-            ClearWebsocketConfig();
-            ClearMqttConfig();
-        }
         return false;
     }
     {
@@ -345,30 +384,98 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
             last_error_ = "Provisioning endpoint changed while refresh was in progress";
             return false;
         }
-        if (config.has_websocket_config) {
-            SaveWebsocketConfig(config);
+        // DeviceCloudConfig contains many strings. Keep rollback snapshots off
+        // the small ESP-IDF service stacks while NVS persistence is nested.
+        auto previous_config = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig());
+        auto empty_config = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig());
+        if (previous_config == nullptr || empty_config == nullptr) {
+            last_error_ = "Not enough memory to snapshot device cloud config";
+            return false;
         }
+        Load(*previous_config);
+        empty_config->websocket_version = 1;
+        ResetMqttConfig(*empty_config);
+        bool save_ok = config.has_websocket_config
+                           ? PersistWebsocketConfig(config)
+                           : PersistWebsocketConfig(*empty_config);
         if (config.has_mqtt_config) {
-            SaveMqttConfig(config);
+            save_ok = PersistMqttConfig(config) && save_ok;
         } else {
-            ClearMqttConfig();
+            save_ok = PersistMqttConfig(*empty_config) && save_ok;
+        }
+        if (!save_ok) {
+            const bool websocket_restored = PersistWebsocketConfig(*previous_config);
+            const bool mqtt_restored = PersistMqttConfig(*previous_config);
+            if (!websocket_restored || !mqtt_restored) {
+                ESP_LOGE(TAG, "Failed to restore cloud config after persistence error");
+            }
+            last_error_ = "Failed to persist device cloud credentials";
+            return false;
         }
     }
     return config.has_websocket_config;
 }
 
-bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
+ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
+    const std::string& url) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-    Settings settings(kCloudNamespace, true);
-    settings.SetString(kProvisioningUrlKey, url.empty() ? kDefaultProvisioningUrl : url);
-    ++config_generation_;
-    ClearWebsocketConfig();
-    ClearMqttConfig();
-    {
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        last_error_.clear();
+    const std::string provisioning_url = url.empty() ? kDefaultProvisioningUrl : url;
+    auto previous_config = std::unique_ptr<DeviceCloudConfig>(
+        new (std::nothrow) DeviceCloudConfig());
+    auto empty_config = std::unique_ptr<DeviceCloudConfig>(
+        new (std::nothrow) DeviceCloudConfig());
+    if (previous_config == nullptr || empty_config == nullptr) {
+        last_error_ = "Not enough memory to snapshot device cloud config";
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
-    return true;
+    Load(*previous_config);
+    empty_config->websocket_version = 1;
+    ResetMqttConfig(*empty_config);
+
+    // An explicit provisioning request is a credential-rotation boundary.
+    // Invalidate cached cloud credentials even when the URL is unchanged so
+    // the next boot must fetch fresh MQTT/WebSocket credentials.
+
+    Settings settings(kCloudNamespace, true);
+    const bool url_saved = settings.SetString(kProvisioningUrlKey, provisioning_url) &&
+                           settings.Commit();
+    if (!url_saved) {
+        (void)settings.Commit();
+        Settings rollback_settings(kCloudNamespace, true);
+        const bool url_restored =
+            rollback_settings.SetString(kProvisioningUrlKey,
+                                        previous_config->provisioning_url) &&
+            rollback_settings.Commit();
+        if (!url_restored) {
+            ESP_LOGE(TAG, "Failed to restore provisioning URL after write failure");
+        }
+        last_error_ = "Failed to persist provisioning URL";
+        return ClassifyProvisioningUrlSaveFailure(url_restored, true, true);
+    }
+    ++config_generation_;
+
+    const bool websocket_cleared = PersistWebsocketConfig(*empty_config);
+    const bool mqtt_cleared = websocket_cleared && PersistMqttConfig(*empty_config);
+    if (!mqtt_cleared) {
+        Settings rollback_settings(kCloudNamespace, true);
+        const bool url_restored =
+            rollback_settings.SetString(kProvisioningUrlKey,
+                                        previous_config->provisioning_url) &&
+            rollback_settings.Commit();
+        const bool websocket_restored = PersistWebsocketConfig(*previous_config);
+        const bool mqtt_restored = PersistMqttConfig(*previous_config);
+        if (!url_restored || !websocket_restored || !mqtt_restored) {
+            ESP_LOGE(TAG, "Failed to restore device cloud config after credential invalidation error");
+        }
+        last_error_ = "Failed to invalidate cached device cloud credentials";
+        return ClassifyProvisioningUrlSaveFailure(
+            url_restored, websocket_restored, mqtt_restored);
+    }
+
+    last_error_.clear();
+    return ProvisioningUrlSaveResult::kSaved;
 }
 
 std::string DeviceCloudConfigService::GetClientId() {
@@ -385,49 +492,6 @@ std::string DeviceCloudConfigService::GetClientId() {
 std::string DeviceCloudConfigService::last_error() const {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     return last_error_;
-}
-
-bool DeviceCloudConfigService::SaveWebsocketConfig(const DeviceCloudConfig& config) {
-    Settings settings(kWebsocketNamespace, true);
-    settings.SetString(kUrlKey, config.websocket_url);
-    settings.SetString(kTokenKey, config.websocket_token);
-    settings.SetInt(kVersionKey, config.websocket_version);
-    return true;
-}
-
-bool DeviceCloudConfigService::SaveMqttConfig(const DeviceCloudConfig& config) {
-    Settings settings(kMqttNamespace, true);
-    settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version);
-    settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address);
-    settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port);
-    settings.SetString(kMqttUsernameKey, config.mqtt_username);
-    settings.SetString(kMqttPasswordKey, config.mqtt_password);
-    settings.SetInt(kMqttKeepaliveKey, config.mqtt_keepalive);
-    settings.SetString(kMqttDeviceKey, config.mqtt_device_key);
-    settings.SetBool(kMqttHomeEnabledKey, config.mqtt_home_enabled);
-    settings.SetString(kMqttHttpBaseUrlKey, config.mqtt_http_base_url);
-    settings.SetString(kMqttTelemetryTopicKey, config.mqtt_topic_telemetry);
-    settings.SetString(kMqttShadowReportTopicKey, config.mqtt_topic_shadow_report);
-    settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired);
-    settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify);
-    settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress);
-    settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands);
-    settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
-    settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
-    return true;
-}
-
-void DeviceCloudConfigService::ClearWebsocketConfig() {
-    Settings settings(kWebsocketNamespace, true);
-    settings.SetString(kUrlKey, "");
-    settings.SetString(kTokenKey, "");
-    settings.SetInt(kVersionKey, 1);
-}
-
-void DeviceCloudConfigService::ClearMqttConfig() {
-    DeviceCloudConfig config;
-    ResetMqttConfig(config);
-    SaveMqttConfig(config);
 }
 
 bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& response,

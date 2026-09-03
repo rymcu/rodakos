@@ -532,7 +532,10 @@ void SettingsApp::CreateWiFiDetailPage() {
 
     lv_obj_add_event_cb(forget_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->wifi_config_.ClearCredentials();
+        if (!self->wifi_config_.ClearCredentials()) {
+            self->ui_->ShowToastUnlocked("Failed to forget network");
+            return;
+        }
         self->ui_->ShowToastUnlocked("Network forgotten");
 
         auto* wifi = self->context_->services().wifi();
@@ -610,7 +613,11 @@ void SettingsApp::OnWiFiConnectAsyncComplete(WiFiStatus status,
                                              const std::string& ssid,
                                              const std::string& password) {
     if (status == WiFiStatus::kConnected) {
-        wifi_config_.SaveCredentials(ssid, password);
+        if (!wifi_config_.SaveCredentials(ssid, password)) {
+            ui_->ShowToastUnlocked("WiFi connected, but credentials were not saved");
+            OnConnectResult(WiFiStatus::kFailed, ssid);
+            return;
+        }
     }
     OnConnectResult(status, ssid);
 }

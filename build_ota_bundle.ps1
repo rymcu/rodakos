@@ -1,6 +1,7 @@
 param(
     [string]$OutputRoot = "build/packages/ota",
-    [string]$ImmutableRecoveryPackage = ""
+    [string]$ImmutableRecoveryPackage = "",
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,19 +87,23 @@ function Test-BinaryRegionMatches {
 
 Push-Location $repoRoot
 try {
-    & (Join-Path $repoRoot "generate_board_config.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Board Manager 配置生成失败"
-    }
+    if ($SkipBuild) {
+        Write-Host "跳过构建，使用现有且已验证的主应用与 Recovery 构建产物" -ForegroundColor Yellow
+    } else {
+        & (Join-Path $repoRoot "generate_board_config.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Board Manager 配置生成失败"
+        }
 
-    & idf.py build
-    if ($LASTEXITCODE -ne 0) {
-        throw "RodakOS 主应用构建失败"
-    }
+        & idf.py build
+        if ($LASTEXITCODE -ne 0) {
+            throw "RodakOS 主应用构建失败"
+        }
 
-    & idf.py -C recovery build
-    if ($LASTEXITCODE -ne 0) {
-        throw "RodakOS Recovery 构建失败"
+        & idf.py -C recovery build
+        if ($LASTEXITCODE -ne 0) {
+            throw "RodakOS Recovery 构建失败"
+        }
     }
 
     $mainBin = Join-Path $repoRoot "build/rodakos.bin"

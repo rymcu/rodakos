@@ -153,14 +153,32 @@ bool Settings::SetInt(const std::string& key, int32_t value) {
 }
 
 bool Settings::GetBool(const std::string& key, bool default_value) {
-    if (handle_ == 0 || !IsValidNvsName(key, "key")) {
-        return default_value;
+    bool value = default_value;
+    return ReadBool(key, value) == SettingsBoolReadStatus::kOk ? value : default_value;
+}
+
+SettingsBoolReadStatus Settings::ReadBool(const std::string& key, bool& value) {
+    if (handle_ == 0) {
+        return open_error_ == ESP_ERR_NVS_NOT_FOUND ? SettingsBoolReadStatus::kNotFound
+                                                    : SettingsBoolReadStatus::kError;
     }
-    uint8_t value = default_value ? 1 : 0;
-    if (nvs_get_u8(handle_, key.c_str(), &value) != ESP_OK) {
-        return default_value;
+    if (!IsValidNvsName(key, "key")) {
+        return SettingsBoolReadStatus::kError;
     }
-    return value != 0;
+
+    uint8_t loaded = 0;
+    const esp_err_t err = nvs_get_u8(handle_, key.c_str(), &loaded);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return SettingsBoolReadStatus::kNotFound;
+    }
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH) {
+        return SettingsBoolReadStatus::kTypeMismatch;
+    }
+    if (err != ESP_OK) {
+        return SettingsBoolReadStatus::kError;
+    }
+    value = loaded != 0;
+    return SettingsBoolReadStatus::kOk;
 }
 
 bool Settings::SetBool(const std::string& key, bool value) {
