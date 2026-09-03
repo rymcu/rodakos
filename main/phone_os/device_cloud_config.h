@@ -35,11 +35,24 @@ struct DeviceCloudConfig {
     bool has_activation_code = false;
 };
 
+enum class ProvisioningUrlSaveResult {
+    kSaved,
+    kFailedRolledBack,
+    kStateUncertain,
+};
+
+constexpr ProvisioningUrlSaveResult ClassifyProvisioningUrlSaveFailure(
+    bool url_restored, bool websocket_restored, bool mqtt_restored) {
+    return url_restored && websocket_restored && mqtt_restored
+               ? ProvisioningUrlSaveResult::kFailedRolledBack
+               : ProvisioningUrlSaveResult::kStateUncertain;
+}
+
 class DeviceCloudConfigService {
 public:
     bool Load(DeviceCloudConfig& config);
     bool Refresh(DeviceCloudConfig& config);
-    bool SaveProvisioningUrl(const std::string& url);
+    ProvisioningUrlSaveResult SaveProvisioningUrl(const std::string& url);
     std::string GetClientId();
     std::string last_error() const;
 

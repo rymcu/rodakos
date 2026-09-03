@@ -123,7 +123,8 @@ bool SerialProvisioningService::RecoverPendingTransaction(
     WiFiConfig wifi_config;
     const bool wifi_cleared = wifi_config.ClearCredentials();
     const bool cloud_reset =
-        cloud_config.SaveProvisioningUrl(DeviceCloudConfigService::DefaultProvisioningUrl());
+        cloud_config.SaveProvisioningUrl(DeviceCloudConfigService::DefaultProvisioningUrl()) ==
+        ProvisioningUrlSaveResult::kSaved;
     const bool marker_cleared = wifi_cleared && cloud_reset && SetPendingTransaction(false);
     if (!marker_cleared) {
         ESP_LOGE(TAG, "Unable to finish interrupted provisioning recovery; retrying next boot");
@@ -407,7 +408,9 @@ bool SerialProvisioningService::ApplyRequest(const Request& request, std::string
         error = "nvs_write_failed";
         return false;
     }
-    if (!cloud_config_.SaveProvisioningUrl(request.bootstrap_url)) {
+    const ProvisioningUrlSaveResult cloud_save_result =
+        cloud_config_.SaveProvisioningUrl(request.bootstrap_url);
+    if (cloud_save_result != ProvisioningUrlSaveResult::kSaved) {
         bool wifi_restored = false;
         if (had_previous_wifi) {
             wifi_restored = previous_wifi.SaveCredentials(previous_ssid, previous_password);
@@ -416,10 +419,17 @@ bool SerialProvisioningService::ApplyRequest(const Request& request, std::string
         }
         if (!wifi_restored) {
             ESP_LOGE(TAG, "Failed to restore WiFi credentials after cloud NVS error");
-        } else {
+        } else if (ShouldClearSerialProvisioningPendingAfterCloudSaveFailure(
+                       wifi_restored, cloud_save_result)) {
             (void)SetPendingTransaction(false);
         }
-        error = "nvs_write_failed";
+        if (cloud_save_result == ProvisioningUrlSaveResult::kStateUncertain) {
+            ESP_LOGE(TAG,
+                     "Cloud provisioning state is uncertain; preserving pending recovery marker");
+            error = "nvs_state_uncertain";
+        } else {
+            error = "nvs_write_failed";
+        }
         return false;
     }
 

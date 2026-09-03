@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 
+#include "phone_os/device_cloud_config.h"
+
 namespace rodakos {
 
 // Keep the wire contract independent of ESP-IDF so the host test target can
@@ -52,5 +54,11 @@ bool IsValidSerialProvisioningBootstrapUrl(const std::string& url);
 // cJSON stores decoded strings as NUL-terminated buffers. This helper rejects
 // literal or JSON-escaped NUL bytes before parsing can truncate a field.
 bool ContainsSerialProvisioningJsonNul(const std::string& json);
+
+constexpr bool ShouldClearSerialProvisioningPendingAfterCloudSaveFailure(
+    bool wifi_restored, ProvisioningUrlSaveResult cloud_save_result) {
+    return wifi_restored &&
+           cloud_save_result == ProvisioningUrlSaveResult::kFailedRolledBack;
+}
 
 }  // namespace rodakos

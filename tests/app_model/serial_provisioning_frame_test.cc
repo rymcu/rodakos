@@ -144,3 +144,33 @@ RODAK_TEST("Serial provisioning rejects literal and escaped JSON NUL bytes") {
     RODAK_CHECK_FALSE(rodakos::ContainsSerialProvisioningJsonNul(
         "{\"ssid\":\"literal \\\\u0000 text\"}"));
 }
+
+RODAK_TEST("Device cloud save failures distinguish complete and incomplete rollback") {
+    using rodakos::ProvisioningUrlSaveResult;
+
+    RODAK_CHECK_EQ(
+        rodakos::ClassifyProvisioningUrlSaveFailure(true, true, true),
+        ProvisioningUrlSaveResult::kFailedRolledBack);
+    RODAK_CHECK_EQ(
+        rodakos::ClassifyProvisioningUrlSaveFailure(false, true, true),
+        ProvisioningUrlSaveResult::kStateUncertain);
+    RODAK_CHECK_EQ(
+        rodakos::ClassifyProvisioningUrlSaveFailure(true, false, true),
+        ProvisioningUrlSaveResult::kStateUncertain);
+    RODAK_CHECK_EQ(
+        rodakos::ClassifyProvisioningUrlSaveFailure(true, true, false),
+        ProvisioningUrlSaveResult::kStateUncertain);
+}
+
+RODAK_TEST("Serial provisioning keeps pending marker when cloud rollback is incomplete") {
+    using rodakos::ProvisioningUrlSaveResult;
+
+    RODAK_CHECK(rodakos::ShouldClearSerialProvisioningPendingAfterCloudSaveFailure(
+        true, ProvisioningUrlSaveResult::kFailedRolledBack));
+    RODAK_CHECK_FALSE(
+        rodakos::ShouldClearSerialProvisioningPendingAfterCloudSaveFailure(
+            true, ProvisioningUrlSaveResult::kStateUncertain));
+    RODAK_CHECK_FALSE(
+        rodakos::ShouldClearSerialProvisioningPendingAfterCloudSaveFailure(
+            false, ProvisioningUrlSaveResult::kFailedRolledBack));
+}

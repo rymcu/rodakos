@@ -390,7 +390,8 @@ void SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
     if (device_cloud == nullptr) {
         return;
     }
-    if (!device_cloud->SaveProvisioningUrl(url)) {
+    if (device_cloud->SaveProvisioningUrl(url) !=
+        rodakos::ProvisioningUrlSaveResult::kSaved) {
         ui_->ShowToastUnlocked("Failed to save provisioning endpoint");
         return;
     }

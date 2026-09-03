@@ -418,7 +418,8 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     return config.has_websocket_config;
 }
 
-bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
+ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
+    const std::string& url) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     const std::string provisioning_url = url.empty() ? kDefaultProvisioningUrl : url;
     auto previous_config = std::unique_ptr<DeviceCloudConfig>(
@@ -427,7 +428,7 @@ bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
         new (std::nothrow) DeviceCloudConfig());
     if (previous_config == nullptr || empty_config == nullptr) {
         last_error_ = "Not enough memory to snapshot device cloud config";
-        return false;
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
     Load(*previous_config);
     empty_config->websocket_version = 1;
@@ -443,13 +444,15 @@ bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
     if (!url_saved) {
         (void)settings.Commit();
         Settings rollback_settings(kCloudNamespace, true);
-        if (!rollback_settings.SetString(kProvisioningUrlKey,
-                                         previous_config->provisioning_url) ||
-            !rollback_settings.Commit()) {
+        const bool url_restored =
+            rollback_settings.SetString(kProvisioningUrlKey,
+                                        previous_config->provisioning_url) &&
+            rollback_settings.Commit();
+        if (!url_restored) {
             ESP_LOGE(TAG, "Failed to restore provisioning URL after write failure");
         }
         last_error_ = "Failed to persist provisioning URL";
-        return false;
+        return ClassifyProvisioningUrlSaveFailure(url_restored, true, true);
     }
     ++config_generation_;
 
@@ -467,11 +470,12 @@ bool DeviceCloudConfigService::SaveProvisioningUrl(const std::string& url) {
             ESP_LOGE(TAG, "Failed to restore device cloud config after credential invalidation error");
         }
         last_error_ = "Failed to invalidate cached device cloud credentials";
-        return false;
+        return ClassifyProvisioningUrlSaveFailure(
+            url_restored, websocket_restored, mqtt_restored);
     }
 
     last_error_.clear();
-    return true;
+    return ProvisioningUrlSaveResult::kSaved;
 }
 
 std::string DeviceCloudConfigService::GetClientId() {
