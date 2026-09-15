@@ -6,8 +6,9 @@ is sent upstream.
 
 ## Device path
 
-The BigSmart ES7210 exposes four TDM slots. The schematic shows `MIC1` and `MIC2` as the two
-near-end microphone inputs. ES8311 speaker output `OUTP/OUTN` is wired back to ES7210 `MIC3P/MIC3N`
+The BigSmart ES7210 exposes four TDM slots. The physical microphone board labels are crossed at
+the ADC net names: physical `MIC1` is wired to `ADC_MIC2P/N`, while physical `MIC2` is wired to
+`ADC_MIC1P/N`. ES8311 speaker output `OUTP/OUTN` is wired back to ES7210 `MIC3P/MIC3N`
 through 0-ohm links, so `MIC3` is the AEC reference channel, not a second user microphone. The
 AFE input must therefore be `MR`, where `M` is the selected MIC1/MIC2 signal and `R` is MIC3.
 
