@@ -290,7 +290,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
             }
         }
         if (!transport_.SendStartListening(
-                VoiceListeningMode::kAutoStop, active_transport_generation)) {
+                VoiceListeningMode::kRealtime, active_transport_generation)) {
             FinishInteraction(
                 VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
             return false;
@@ -383,7 +383,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
         return false;
     }
     if (!transport_.SendStartListening(
-            VoiceListeningMode::kAutoStop, opened_transport_generation)) {
+            VoiceListeningMode::kRealtime, opened_transport_generation)) {
         FinishInteraction(
             VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
         return false;
@@ -1072,7 +1072,7 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
     }
 
     if (!transport_.SendStartListening(
-            VoiceListeningMode::kAutoStop, transport_generation)) {
+                VoiceListeningMode::kRealtime, transport_generation)) {
         FinishInteraction(
             VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
         return false;
