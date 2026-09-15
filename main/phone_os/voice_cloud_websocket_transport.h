@@ -32,6 +32,8 @@ public:
     bool SendWakeWordDetected(const std::string& wake_word,
                               uint32_t expected_generation) override;
     bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation) override;
+    bool SendVadStart(const char* source, uint32_t sequence,
+                      uint32_t trigger_ms, uint32_t expected_generation) override;
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
 

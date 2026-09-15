@@ -45,6 +45,10 @@ bool NoopVoiceAssistantTransport::SendAbortSpeaking(VoiceAbortReason, uint32_t) 
     return Reject("abort speaking");
 }
 
+bool NoopVoiceAssistantTransport::SendVadStart(const char*, uint32_t, uint32_t, uint32_t) {
+    return Reject("vad start");
+}
+
 bool NoopVoiceAssistantTransport::SendMcpMessage(const std::string&, uint32_t) {
     return Reject("mcp message");
 }

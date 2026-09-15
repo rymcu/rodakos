@@ -434,6 +434,9 @@ bool VoiceAssistantService::InterruptSpeaking() {
 
     // Abort first so the server stops generating TTS; then discard already queued
     // samples locally to prevent a late packet from speaking over the new turn.
+    const uint32_t vad_sequence = ++vad_sequence_;
+    transport_.SendVadStart("device", vad_sequence,
+                            static_cast<uint32_t>(esp_timer_get_time() / 1000), generation);
     const bool sent = transport_.SendAbortSpeaking(
         VoiceAbortReason::kWakeWordDetected, generation);
     audio_output_.CloseForOwner(kFocusOwner);

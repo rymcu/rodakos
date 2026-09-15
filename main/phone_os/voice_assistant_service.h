@@ -132,6 +132,7 @@ private:
     bool cleanup_resources_released_ = false;
     uint32_t focus_token_ = 0;
     uint32_t transport_generation_ = 0;
+    uint32_t vad_sequence_ = 0;
     uint32_t interaction_generation_ = 0;
     uint32_t cleanup_generation_ = 0;
     TaskHandle_t start_task_ = nullptr;

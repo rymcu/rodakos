@@ -834,6 +834,26 @@ bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
     return SendText(message, expected_generation, session_id, true);
 }
 
+bool VoiceCloudWebSocketTransport::SendVadStart(const char* source, uint32_t sequence,
+                                                uint32_t trigger_ms,
+                                                uint32_t expected_generation) {
+    std::string session_id;
+    if (!SnapshotSession(expected_generation, session_id)) {
+        SetError("Audio channel is not open");
+        return false;
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
+    cJSON_AddStringToObject(root, "type", "vad");
+    cJSON_AddStringToObject(root, "state", "start");
+    cJSON_AddStringToObject(root, "source", source != nullptr ? source : "device");
+    cJSON_AddNumberToObject(root, "seq", static_cast<double>(sequence));
+    cJSON_AddNumberToObject(root, "trigger_ms", static_cast<double>(trigger_ms));
+    std::string message = JsonToString(root);
+    cJSON_Delete(root);
+    return SendText(message, expected_generation, session_id, true);
+}
+
 bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload,
                                                   uint32_t expected_generation) {
     std::string session_id;
