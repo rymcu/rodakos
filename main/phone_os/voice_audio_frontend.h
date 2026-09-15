@@ -14,6 +14,7 @@
 #include <freertos/task.h>
 #include <esp_mn_iface.h>
 #include <model_path.h>
+#include <esp_afe_sr_iface.h>
 
 namespace rodakos {
 
@@ -92,6 +93,8 @@ private:
     int64_t mic1_power_ = 0;
     int64_t mic2_power_ = 0;
     bool mic_speech_lock_ = false;
+    const esp_afe_sr_iface_t* afe_iface_ = nullptr;
+    esp_afe_sr_data_t* afe_data_ = nullptr;
 };
 
 }  // namespace rodakos

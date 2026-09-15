@@ -9,6 +9,8 @@
 #include <esp_log.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
+#include <esp_afe_sr_models.h>
+#include <esp_afe_config.h>
 #include <esp_mn_speech_commands.h>
 #include <esp_timer.h>
 #include <freertos/idf_additions.h>
@@ -410,6 +412,17 @@ bool VoiceAudioFrontend::InitModelLocked() {
         return false;
     }
 
+    afe_config_t* afe_config = afe_config_init("MR", nullptr, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
+    if (afe_config == nullptr) { SetErrorLocked("AFE configuration failed"); ReleaseModelLocked(); return false; }
+    afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
+    afe_config->vad_mode = VAD_MODE_0;
+    afe_config->vad_min_noise_ms = 100;
+    afe_config->aec_init = true;
+    afe_config->vad_init = true;
+    afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+    afe_iface_ = esp_afe_handle_from_config(afe_config);
+    afe_data_ = afe_iface_ ? afe_iface_->create_from_config(afe_config) : nullptr;
+    if (afe_data_ == nullptr) { SetErrorLocked("AFE initialization failed"); ReleaseModelLocked(); return false; }
     last_error_.clear();
     ESP_LOGI(TAG, "Loaded custom wake command '%s' (%u samples per chunk)",
              kWakeWordCommand, static_cast<unsigned>(wake_chunk_samples_));
@@ -417,6 +430,11 @@ bool VoiceAudioFrontend::InitModelLocked() {
 }
 
 void VoiceAudioFrontend::ReleaseModelLocked() {
+    if (afe_data_ != nullptr && afe_iface_ != nullptr) {
+        afe_iface_->destroy(afe_data_);
+    }
+    afe_data_ = nullptr;
+    afe_iface_ = nullptr;
     if (multinet_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_data_);
     }
