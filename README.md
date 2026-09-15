@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-07-24.
+Last refreshed: 2026-09-04.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -24,20 +24,28 @@ Last refreshed: 2026-07-24.
   96/97-app `All Apps` boundary, and asynchronous active-plus-neighbors residency. The suite reports
   13 tests and 0 failures, including 20 repeated normal runs and an ASan/UBSan run
   with leak detection.
-- The latest protected COM3 refresh reached Home with 11 visible apps and one resident page; final
-  internal SRAM was 65,387 bytes free with a 43,008-byte largest block. This is only a single-page baseline:
-  multi-page swiping is not hardware-verified, GT911/ST7789 interaction and readability still need
-  manual or fixture validation, and true out-of-memory recovery remains unproven while LVGL uses
-  CLIB allocation with malloc assertions enabled.
+- The latest protected COM3 refresh reached Home with 13 visible apps and two resident pages. It
+  proves the multi-page population boots, but not that page swipes, Arrange, page restoration, or
+  GT911/ST7789 interaction work correctly. Two pages also keep both pages inside the active-plus-
+  neighbor window, so far-page release still needs a three-page test population. True out-of-memory
+  recovery remains unproven while LVGL uses CLIB allocation with malloc assertions enabled.
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Current IDF 6 built artifact seen in `build/rodakos.bin`: about 3.30 MiB. The main application slot is
+- Current IDF 6.0.2 built artifact seen in `build/rodakos.bin`: about 5.87 MiB. The main application slot is
   13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
 
-Activate the local ESP-IDF environment, then run any project script directly. The activator prefers the installed ESP-IDF 6.0.2 baseline, and build scripts reject other versions. No global PowerShell profile is required.
+Activate the local ESP-IDF environment, then run any project script directly. The activator prefers
+the installed ESP-IDF 6.0.2 baseline, and the build/package/flash entry scripts reject other
+versions. A direct `idf.py build` assumes this 6.0.2 shell is already active. No global PowerShell
+profile is required.
+
+`main/idf_component.yml` pins the resolved direct component versions plus the Board Manager button
+and camera dependencies that otherwise drift when generated configuration is recreated.
+`dependencies.lock` remains the authoritative complete resolved graph and must be reviewed with any
+intentional dependency upgrade.
 
 ```powershell
 # Activate ESP-IDF (prefer the installed 6.0.2 baseline)

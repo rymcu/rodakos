@@ -89,6 +89,7 @@ constexpr UBaseType_t kIoTaskPriority = 4;
 constexpr TickType_t kIoIdleDelay = 1;
 constexpr int64_t kPlaybackDrainMarginUs = 20 * 1000;
 constexpr int64_t kMaxPlaybackDrainUs = 2 * 1000 * 1000;
+constexpr int64_t kFollowUpControlGraceUs = 100 * 1000;
 
 class ScopeExit {
 public:
@@ -310,6 +311,9 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     trigger_ = trigger;
     last_wake_word_ = wake_word;
     playback_deadline_us_ = 0;
+    follow_up_rearm_pending_ = false;
+    follow_up_rearm_not_before_us_ = 0;
+    conversation_policy_.Reset();
     interaction_generation = ++interaction_generation_;
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     xSemaphoreGive(mutex_);
@@ -551,6 +555,9 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     inbound_events_.clear();
     inbound_event_bytes_ = 0;
     transport_generation_ = 0;
+    follow_up_rearm_pending_ = false;
+    follow_up_rearm_not_before_us_ = 0;
+    conversation_policy_.Reset();
     message_ = "Stopping";
     xSemaphoreGive(mutex_);
 
@@ -795,6 +802,9 @@ void VoiceAssistantService::IoTask() {
     while (true) {
         VoiceInboundEvent event;
         bool has_event = false;
+        bool follow_up_timed_out = false;
+        bool should_rearm_follow_up = false;
+        uint32_t completed_turns = 0;
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool running = io_running_;
         if (running && transport_active_ && !inbound_events_.empty()) {
@@ -802,6 +812,13 @@ void VoiceAssistantService::IoTask() {
             inbound_event_bytes_ -= std::min(inbound_event_bytes_, InboundEventBytes(event));
             inbound_events_.pop_front();
             has_event = true;
+        } else if (running && transport_active_) {
+            const int64_t now_ms = esp_timer_get_time() / 1000;
+            follow_up_timed_out = conversation_policy_.IsFollowUpTimedOut(now_ms);
+            completed_turns = conversation_policy_.completed_turns();
+            should_rearm_follow_up = !follow_up_timed_out &&
+                                     follow_up_rearm_pending_ &&
+                                     esp_timer_get_time() >= follow_up_rearm_not_before_us_;
         }
         xSemaphoreGive(mutex_);
 
@@ -810,6 +827,17 @@ void VoiceAssistantService::IoTask() {
         }
         if (has_event) {
             ProcessInbound(std::move(event));
+            continue;
+        }
+        if (follow_up_timed_out) {
+            ESP_LOGI(TAG,
+                     "Follow-up window timed out after %u completed turn(s)",
+                     static_cast<unsigned>(completed_turns));
+            StopInteraction();
+            continue;
+        }
+        if (should_rearm_follow_up) {
+            BeginFollowUpTurn();
             continue;
         }
         if (!SendNextAudioFrame()) {
@@ -876,10 +904,16 @@ void VoiceAssistantService::HandleInbound(VoiceInboundEvent&& event) {
 void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
     switch (event.type) {
         case VoiceInboundEventType::kSpeakingStarted:
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            conversation_policy_.OnSpeakingStarted();
+            xSemaphoreGive(mutex_);
             StopRecorderForPlayback();
             MarkSpeaking("Speaking");
             break;
         case VoiceInboundEventType::kAudio: {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            conversation_policy_.OnSpeakingStarted();
+            xSemaphoreGive(mutex_);
             StopRecorderForPlayback();
             MarkSpeaking("Speaking");
             const int sample_rate = event.audio.sample_rate;
@@ -904,10 +938,30 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             }
             break;
         }
-        case VoiceInboundEventType::kSpeakingStopped:
+        case VoiceInboundEventType::kSpeakingStopped: {
+            VoiceConversationAction action = VoiceConversationAction::kIgnore;
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            action = conversation_policy_.OnSpeakingStopped(
+                esp_timer_get_time() / 1000);
+            xSemaphoreGive(mutex_);
+            if (action == VoiceConversationAction::kIgnore) {
+                break;
+            }
             DrainPlayback();
-            StopInteraction();
+            audio_output_.CloseForOwner(kFocusOwner);
+            if (audio_codec_ != nullptr) {
+                audio_codec_->Reset();
+            }
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (!stopping_ && phase_ == VoiceAssistantPhase::kSpeaking) {
+                follow_up_rearm_pending_ = true;
+                follow_up_rearm_not_before_us_ =
+                    esp_timer_get_time() + kFollowUpControlGraceUs;
+                message_ = "Preparing follow-up";
+            }
+            xSemaphoreGive(mutex_);
             break;
+        }
         case VoiceInboundEventType::kSessionFinished:
             DrainPlayback();
             StopInteraction();
@@ -920,6 +974,91 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             MarkError(event.payload.empty() ? "Voice transport failed" : event.payload.c_str());
             break;
     }
+}
+
+bool VoiceAssistantService::BeginFollowUpTurn() {
+    uint32_t interaction_generation = 0;
+    uint32_t transport_generation = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool current = initialized_ && !deinitializing_ && !stopping_ &&
+                         io_running_ && transport_active_ &&
+                         phase_ == VoiceAssistantPhase::kSpeaking &&
+                         follow_up_rearm_pending_ &&
+                         !HasTerminalInboundEventLocked();
+    if (current) {
+        interaction_generation = interaction_generation_;
+        transport_generation = transport_generation_;
+        follow_up_rearm_pending_ = false;
+        follow_up_rearm_not_before_us_ = 0;
+    }
+    xSemaphoreGive(mutex_);
+    if (!current) {
+        return false;
+    }
+
+    VoiceRecorderConfig config;
+    config.frame_duration_ms = 60;
+    if (!recorder_.Start(config)) {
+        FinishInteraction(
+            VoiceAssistantPhase::kError, recorder_.last_error(), interaction_generation);
+        return false;
+    }
+
+    bool recorder_accepted = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    recorder_accepted = initialized_ && !deinitializing_ && !stopping_ &&
+                        io_running_ && transport_active_ &&
+                        interaction_generation_ == interaction_generation &&
+                        transport_generation_ == transport_generation &&
+                        phase_ == VoiceAssistantPhase::kSpeaking &&
+                        !HasTerminalInboundEventLocked();
+    if (recorder_accepted) {
+        recorder_active_ = true;
+    }
+    xSemaphoreGive(mutex_);
+    if (!recorder_accepted) {
+        recorder_.Stop();
+        return false;
+    }
+
+    if (!transport_.SendStartListening(
+            VoiceListeningMode::kAutoStop, transport_generation)) {
+        FinishInteraction(
+            VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
+        return false;
+    }
+
+    bool listening = false;
+    uint32_t completed_turns = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    listening = initialized_ && !deinitializing_ && !stopping_ &&
+                interaction_generation_ == interaction_generation &&
+                transport_generation_ == transport_generation &&
+                recorder_active_ && transport_active_;
+    if (listening) {
+        conversation_policy_.OnFollowUpStarted(
+            esp_timer_get_time() / 1000);
+        completed_turns = conversation_policy_.completed_turns();
+        SetPhaseLocked(VoiceAssistantPhase::kListening, "Listening for follow-up");
+    }
+    xSemaphoreGive(mutex_);
+    if (!listening) {
+        return false;
+    }
+
+    ESP_LOGI(TAG,
+             "Follow-up listening started: completed_turns=%u timeout_ms=%u",
+             static_cast<unsigned>(completed_turns),
+             static_cast<unsigned>(VoiceConversationPolicy::follow_up_timeout_ms()));
+    return true;
+}
+
+bool VoiceAssistantService::HasTerminalInboundEventLocked() const {
+    return std::any_of(
+        inbound_events_.begin(), inbound_events_.end(), [](const VoiceInboundEvent& event) {
+            return event.type == VoiceInboundEventType::kSessionFinished ||
+                   event.type == VoiceInboundEventType::kError;
+        });
 }
 
 bool VoiceAssistantService::SendNextAudioFrame() {

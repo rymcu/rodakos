@@ -27,6 +27,10 @@ echo $env:IDF_PATH
 idf.py --version
 ```
 
+The project manifest pins the resolved direct component versions and the observed Board Manager
+button/camera drift points. Keep `dependencies.lock` under review as the authoritative complete
+resolved graph; dependency upgrades must be explicit rather than a side effect of board generation.
+
 ## First Build Or Board Regeneration
 
 ```powershell
@@ -90,6 +94,34 @@ For a quick incremental build:
 
 The former `quick_build.ps1 -Flash` path is intentionally disabled because ESP-IDF selects the
 factory partition for this project layout.
+
+### Three-page Home hardware gate
+
+The production-off `RODAKOS_HOME_HARDWARE_TEST_POPULATION` CMake option adds isolated test tiles
+until Home has 25 visible apps. It uses the separate `home_hwtest` NVS namespace, so Arrange tests
+do not modify the production `home/layout` value. Test packages are marked in `manifest.json`, and
+`flash_and_test.ps1` refuses them unless the explicit allow switch is present.
+
+```powershell
+idf.py -DRODAKOS_HOME_HARDWARE_TEST_POPULATION=ON reconfigure
+idf.py build
+.\build_ota_bundle.ps1 -SkipBuild `
+  -ImmutableRecoveryPackage .\build\packages\ota\<verified-package> `
+  -AllowHomeHardwareTestPopulation
+.\flash_and_test.ps1 -Port COM3 -VerifyOnly -AllowHomeHardwareTestPopulation
+.\flash_and_test.ps1 -Port COM3 -NoMonitor -AllowHomeHardwareTestPopulation
+```
+
+After the gate, restore and rebuild the production flavor before leaving the device in normal use:
+
+```powershell
+idf.py -DRODAKOS_HOME_HARDWARE_TEST_POPULATION=OFF reconfigure
+idf.py build
+.\build_ota_bundle.ps1 -SkipBuild `
+  -ImmutableRecoveryPackage .\build\packages\ota\<verified-package>
+.\flash_and_test.ps1 -Port COM3 -VerifyOnly
+.\flash_and_test.ps1 -Port COM3 -NoMonitor
+```
 
 ## Flash And Monitor
 
@@ -181,7 +213,7 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-Current observed IDF 6 `build\rodakos.bin` size is about 3.30 MiB. The main `ota_0` partition is
+Current observed IDF 6.0.2 `build\rodakos.bin` size is about 5.87 MiB. The main `ota_0` partition is
 13.3125 MiB; the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash

@@ -90,12 +90,13 @@ Cancel/Done persistence, repeated Home, theme rebuilding, keyboard geometry, 96/
 and asynchronous active-plus-neighbors residency. The suite reports 13 tests and 0 failures,
 including 20 consecutive normal runs and ASan/UBSan with leak detection.
 
-The latest device run had 11 visible apps, so it exercised only a one-page `1/1` residency window.
-Multi-page swiping remains unverified on hardware. GT911 touch behavior and ST7789 readability still
-require manual or fixture validation. True out-of-memory recovery is also unproven: LVGL currently
-uses CLIB allocation with malloc assertions enabled, so the SRAM logs provide observability rather
-than evidence of graceful recovery. The host LVGL suite validates Home behavior and object lifetime,
-but it cannot replace those embedded and physical gates.
+The latest device run had 13 visible apps and a two-page `2/2` residency window. That proves the
+multi-page population boots, but page swiping, Arrange, page restoration, GT911 touch behavior, and
+ST7789 readability still require manual or fixture validation. Two pages always fit the active-plus-
+neighbor window, so far-page release needs a three-page test population. True out-of-memory recovery
+is also unproven: LVGL currently uses CLIB allocation with malloc assertions enabled, so the SRAM
+logs provide observability rather than evidence of graceful recovery. The host LVGL suite validates
+Home behavior and object lifetime, but it cannot replace those embedded and physical gates.
 
 ## Phone UI
 
@@ -134,8 +135,11 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
-  audio focus, opens a short Rodak WebSocket turn, streams Opus, drains TTS, disconnects, and re-arms
-  local monitoring. See [Voice assistant integration](voice-assistant.md).
+  audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and restarts
+  capture on that same session; `goodbye`, 30 seconds of follow-up silence, errors, or a
+  connection/listening watchdog disconnect and re-arm local monitoring. Active TTS playback is not
+  terminated by that watchdog. See
+  [Voice assistant integration](voice-assistant.md).
 - WiFi credentials are stored in NVS by `WiFiConfig`; auto-connect starts after PhoneSystem is up so UI boot is not blocked.
 - MotionService exposes a stable app-facing motion API. The BigSmart QMI8658 adapter samples over the shared Board Manager I2C peripheral in a background task so apps never perform I2C work in the LVGL thread.
 - UnifiedMqttService consumes Rodak bootstrap credentials, reports device state, and routes OTA

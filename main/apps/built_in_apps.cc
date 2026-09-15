@@ -16,6 +16,10 @@
 #include "apps/wol/wol_app.h"
 #include "phone_os/phone_app_registry.h"
 
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+#include "apps/home/home_hardware_test_population.h"
+#endif
+
 void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterHomeApp(registry);
     RegisterSettingsApp(registry);
@@ -31,4 +35,7 @@ void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterAssistantApp(registry);
     RegisterSmartApp(registry);
     RegisterWolApp(registry);
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+    RegisterHomeHardwareTestPopulation(registry);
+#endif
 }

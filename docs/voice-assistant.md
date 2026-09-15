@@ -1,8 +1,10 @@
 # Voice Assistant Integration
 
-RodakOS provides a one-turn, Siri-style voice assistant backed by Rodak. The device performs local
-wake monitoring for **"你好达克"** and opens the cloud voice session only after a successful local
-detection.
+RodakOS provides a multi-turn voice assistant backed by Rodak. The device performs local wake
+monitoring for **"你好达克"** and opens the cloud voice session only after a successful local
+detection. One wake continues across replies on the same WebSocket until `goodbye`, 30 seconds of
+follow-up silence, or an error/watchdog ends the session; idle standby never keeps a cloud voice
+session open.
 
 ## Product Boundaries
 
@@ -27,8 +29,10 @@ stateDiagram-v2
   WakeOnly --> Connecting: Local MultiNet match
   Connecting --> Listening: WebSocket hello + listen detect/start
   Listening --> Speaking: Rodak TTS start/audio
-  Speaking --> Draining: Rodak TTS stop/goodbye
-  Draining --> WakeOnly: Close cloud + release focus + re-arm
+  Speaking --> Draining: Rodak TTS stop
+  Draining --> Listening: Drain TTS + listen start
+  Listening --> WakeOnly: 30 s follow-up silence
+  Speaking --> WakeOnly: Rodak goodbye/error
   Connecting --> WakeOnly: Failure/timeout
   Listening --> WakeOnly: Failure/timeout
   Speaking --> WakeOnly: Failure/timeout
@@ -47,7 +51,7 @@ interaction reaches idle.
 | --- | --- | ---: | --- |
 | Local wake monitor | `voice-wake-frontend` | 10 | Runs while enabled and idle |
 | Recorder app | `recording-service` | 20 | Temporarily preempts wake monitoring |
-| Assistant session | `voice-conversation-frontend` | 30 | Preempts wake monitoring for the turn |
+| Assistant session | `voice-conversation-frontend` | 30 | Preempts wake monitoring while the session is active |
 
 Wake and conversation use distinct owners so a stale wake capture iteration cannot lower the active
 conversation priority. A failed open rolls the frontend back to idle instead of retrying outside a
@@ -69,7 +73,13 @@ policy.
 - The device sends `listen:detect` with `text: "你好达克"`, followed by `listen:start` in auto-stop
   mode. Rodak cancels its pending hello auto-greeting when either explicit listen signal arrives.
 - `tts:start` stops microphone upload. Binary TTS frames are decoded and queued to the DAC.
-  `tts:stop` or `goodbye` drains the estimated playback tail before closing the session.
+  `tts:stop` drains the estimated playback tail and closes the DAC. After every non-terminal reply,
+  the device reopens capture and sends another `listen:start` in auto-stop mode on the same
+  WebSocket/session without repeating `listen:detect`.
+- The follow-up window is 30 seconds and is re-armed when capture restarts. A new `tts:start` proves
+  the next turn progressed and clears that deadline. Silence, an error, a connection/listening
+  watchdog, or Rodak's explicit `goodbye` ends the session and restores local wake monitoring.
+  Active TTS playback is not terminated by that watchdog.
 
 The recorder starts before cloud setup and retains the newest 80 frames (about 4.8 seconds) so speech
 that follows the wake phrase can survive normal DNS/TLS/WebSocket setup latency. If setup exceeds the
@@ -111,10 +121,14 @@ On hardware, verify:
 
 - idle startup has no `VoiceWs` connection;
 - enabling the switch loads MultiNet and opens the ADC locally;
-- one utterance of "你好达克" creates exactly one interaction;
+- one utterance of "你好达克" creates exactly one wake-triggered session;
 - WebSocket hello/listen appears only after the local match;
+- at least six consecutive questions work without repeating the wake phrase and retain one WebSocket and
+  session id, with one new `listen:start` after each non-terminal `tts:stop`;
 - Rodak receives valid Opus and returns audible TTS without a clipped final syllable;
-- TTS completion closes the cloud channel and re-arms local monitoring;
+- no intermediate turn releases focus, closes the WebSocket, or re-arms MultiNet;
+- saying "再见" produces `tts:stop`, then explicit `goodbye`, one cleanup, and local wake re-arm;
+- 30 seconds of follow-up silence closes the session safely after any completed reply;
 - music pauses and resumes, while Recorder can temporarily preempt wake monitoring;
 - disabling wake monitoring closes the ADC owner and does not reconnect to the cloud.
 

@@ -10,8 +10,22 @@ param(
     [switch]$VerifyOnly,
     [ValidateRange(5, 120)]
     [int]$CaptureSeconds = 45,
-    [switch]$NoMonitor
+    [switch]$NoMonitor,
+    [switch]$AllowHomeHardwareTestPopulation
 )
+
+function Test-BinaryContainsAscii {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $binaryText = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes($FilePath))
+    return $binaryText.IndexOf($Text, [StringComparison]::Ordinal) -ge 0
+}
 
 # 检查是否已在 ESP-IDF 环境中
 if (-not $env:IDF_PATH) {
@@ -89,6 +103,23 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     exit 1
 }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+$requiredFlavorFields = @('buildFlavor', 'homeHardwareTestPopulation', 'imageType')
+foreach ($field in $requiredFlavorFields) {
+    if ($null -eq $manifest.PSObject.Properties[$field]) {
+        Write-Host "  ❌ manifest 缺少 build flavor 元数据：$field" -ForegroundColor Red
+        exit 1
+    }
+}
+$isHomeHardwareTestPopulation = $manifest.homeHardwareTestPopulation -eq $true
+if (($isHomeHardwareTestPopulation -and
+     ([string]$manifest.buildFlavor -ne 'home-hardware-test' -or
+      [string]$manifest.imageType -ne 'hardware-test')) -or
+    (-not $isHomeHardwareTestPopulation -and
+     ([string]$manifest.buildFlavor -ne 'production' -or
+      [string]$manifest.imageType -ne 'app'))) {
+    Write-Host "  ❌ manifest 的 build flavor 元数据不一致" -ForegroundColor Red
+    exit 1
+}
 $imageMetadata = $manifest.firstFlashImage
 $mainMetadata = $manifest
 $bootloaderMetadata = $manifest.bootloaderImage
@@ -119,6 +150,17 @@ foreach ($artifact in @($mainImage, $bootloaderImage, $recoveryImage, $otaDataIm
         Write-Host "  ❌ 缺少包内刷写产物：$artifact" -ForegroundColor Red
         exit 1
     }
+}
+$testBuildMarker = "RODAKOS_HOME_HARDWARE_TEST_POPULATION_ACTIVE"
+$binaryIsHomeHardwareTestPopulation =
+    Test-BinaryContainsAscii -FilePath $mainImage -Text $testBuildMarker
+if ($binaryIsHomeHardwareTestPopulation -ne $isHomeHardwareTestPopulation) {
+    Write-Host "  ❌ 主应用镜像与 manifest 的 build flavor 不一致" -ForegroundColor Red
+    exit 1
+}
+if ($binaryIsHomeHardwareTestPopulation -and -not $AllowHomeHardwareTestPopulation) {
+    Write-Host "  ❌ Home 硬件测试固件需要显式传入 -AllowHomeHardwareTestPopulation" -ForegroundColor Red
+    exit 1
 }
 
 $expectedHash = [string]$imageMetadata.checksumValue
@@ -286,6 +328,15 @@ python $captureScript --port $Port --baud 115200 --timeout $CaptureSeconds --log
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ❌ 首次启动验证失败；为保护 PENDING_VERIFY 镜像，不会启动 monitor 或再次复位" -ForegroundColor Red
     exit $LASTEXITCODE
+}
+if ($isHomeHardwareTestPopulation) {
+    $capturedBoot = Get-Content -Raw -LiteralPath $bootLog
+    if ($capturedBoot -notmatch 'HomeLayout:.*Reset isolated Home hardware-test layout for this boot' -or
+        $capturedBoot -notmatch 'HomeHwPopulation:.*HOME HARDWARE TEST POPULATION ACTIVE:.*after=25' -or
+        $capturedBoot -notmatch 'HomeApp:.*Rendering 25 visible apps .* across 3 page\(s\)') {
+        Write-Host "  ❌ 测试 flavor 未启动为 25 App / 3 页 Home；不会继续 monitor" -ForegroundColor Red
+        exit 1
+    }
 }
 Write-Host "  ✅ Recovery、主系统、OTA 确认和 Home 启动均已验证" -ForegroundColor Green
 Write-Host ""

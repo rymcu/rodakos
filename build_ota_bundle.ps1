@@ -1,7 +1,8 @@
 param(
     [string]$OutputRoot = "build/packages/ota",
     [string]$ImmutableRecoveryPackage = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$AllowHomeHardwareTestPopulation
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,6 +84,19 @@ function Test-BinaryRegionMatches {
     }
 
     return [System.Linq.Enumerable]::SequenceEqual[byte]($sourceBytes, $regionBytes)
+}
+
+function Test-BinaryContainsAscii {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $binaryText = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes($FilePath))
+    return $binaryText.IndexOf($Text, [StringComparison]::Ordinal) -ge 0
 }
 
 Push-Location $repoRoot
@@ -228,6 +242,29 @@ try {
     if ($otaDataSize -ne $otaDataPartition.Size) {
         throw "OTA data 初始镜像大小 $otaDataSize 与 otadata 分区 $($otaDataPartition.SizeText) 不一致"
     }
+
+    $testBuildMarker = "RODAKOS_HOME_HARDWARE_TEST_POPULATION_ACTIVE"
+    $homeHardwareTestPopulation = Test-BinaryContainsAscii -FilePath $mainBin -Text $testBuildMarker
+    $cmakeCache = Join-Path $repoRoot "build/CMakeCache.txt"
+    $cacheRequestsHardwareTestPopulation = $false
+    if (Test-Path -LiteralPath $cmakeCache) {
+        $cacheRequestsHardwareTestPopulation = $null -ne (Select-String -LiteralPath $cmakeCache `
+            -Pattern '^RODAKOS_HOME_HARDWARE_TEST_POPULATION:BOOL=(ON|TRUE|1)$' |
+            Select-Object -First 1)
+    }
+    if ($cacheRequestsHardwareTestPopulation -ne $homeHardwareTestPopulation) {
+        throw "Home 硬件测试配置与 rodakos.bin 不一致；请在切换 flavor 后重新运行 idf.py build"
+    }
+    if ($homeHardwareTestPopulation -and -not $AllowHomeHardwareTestPopulation) {
+        throw "Home 硬件测试固件需要显式传入 -AllowHomeHardwareTestPopulation 才能打包"
+    }
+    $buildFlavor = if ($homeHardwareTestPopulation) { "home-hardware-test" } else { "production" }
+    $mainImageType = if ($homeHardwareTestPopulation) { "hardware-test" } else { "app" }
+    $mainPackageName = if ($homeHardwareTestPopulation) {
+        "rodakos_home_hardware_test.bin"
+    } else {
+        "rodakos.bin"
+    }
     $partitionSha = (Get-FileHash -LiteralPath $partitionBin -Algorithm SHA256).Hash
     $mainPartitionSha = (Get-FileHash -LiteralPath $mainPartitionBin -Algorithm SHA256).Hash
     if ($partitionSha -ne $mainPartitionSha) {
@@ -292,7 +329,7 @@ try {
     }
 
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
-    Copy-Item -LiteralPath $mainBin -Destination (Join-Path $packageDir "rodakos.bin")
+    Copy-Item -LiteralPath $mainBin -Destination (Join-Path $packageDir $mainPackageName)
     Copy-Item -LiteralPath $recoveryBin -Destination (Join-Path $packageDir "rodakos_recovery.bin")
     Copy-Item -LiteralPath $bootloaderBin -Destination (Join-Path $packageDir "bootloader.bin")
     Copy-Item -LiteralPath $partitionBin -Destination (Join-Path $packageDir "partition-table.bin")
@@ -356,8 +393,10 @@ try {
     $manifest = [ordered]@{
         protocolVersion = 2
         otaJournalSchemaVersion = $journalSchemaVersion
-        imageType = "app"
-        fileName = "rodakos.bin"
+        buildFlavor = $buildFlavor
+        homeHardwareTestPopulation = $homeHardwareTestPopulation
+        imageType = $mainImageType
+        fileName = $mainPackageName
         fileSize = $mainSize
         checksumType = "sha256"
         checksumValue = $mainSha256
@@ -407,19 +446,34 @@ try {
         }
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageDir "manifest.json") -Encoding utf8
-    @(
-        "首次烧录："
-        "python -m esptool --chip esp32s3 -p COM3 erase-flash"
-        "python -m esptool --chip esp32s3 -p COM3 -b 460800 --before default-reset --after hard-reset write-flash 0x0 rodakos_sd_recovery_merged.bin"
-        ""
-        "Rodak OTA：仅上传 rodakos.bin，并使用 manifest.json 中的 fileSize/checksumValue。"
-    ) | Set-Content -LiteralPath (Join-Path $packageDir "flash_args.txt") -Encoding utf8
+    if ($homeHardwareTestPopulation) {
+        $flashInstructions = @(
+            "Home 硬件测试包："
+            "仅使用 flash_and_test.ps1 -AllowHomeHardwareTestPopulation 刷写。"
+            "不要使用裸 esptool 绕过 flavor 门禁。"
+            "仅用于本地 Home 硬件门禁；禁止上传 Rodak OTA 或作为生产固件分发。"
+        )
+    } else {
+        $flashInstructions = @(
+            "首次烧录："
+            "python -m esptool --chip esp32s3 -p COM3 erase-flash"
+            "python -m esptool --chip esp32s3 -p COM3 -b 460800 --before default-reset --after hard-reset write-flash 0x0 rodakos_sd_recovery_merged.bin"
+            ""
+            "Rodak OTA：仅上传 rodakos.bin，并使用 manifest.json 中的 fileSize/checksumValue。"
+        )
+    }
+    $flashInstructions | Set-Content -LiteralPath (Join-Path $packageDir "flash_args.txt") -Encoding utf8
 
     $zipPath = "$packageDir.zip"
     Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -Force
     Write-Host "OTA 包已生成：$packageDir" -ForegroundColor Green
     Write-Host "首次烧录镜像：$mergedBin" -ForegroundColor Green
-    Write-Host "Rodak OTA 应用镜像：$(Join-Path $packageDir 'rodakos.bin')" -ForegroundColor Green
+    if ($homeHardwareTestPopulation) {
+        Write-Host "Home 硬件测试镜像：$(Join-Path $packageDir $mainPackageName)" -ForegroundColor Yellow
+        Write-Host "禁止将此测试 flavor 上传到 Rodak OTA" -ForegroundColor Yellow
+    } else {
+        Write-Host "Rodak OTA 应用镜像：$(Join-Path $packageDir $mainPackageName)" -ForegroundColor Green
+    }
 } finally {
     Pop-Location
 }

@@ -4,6 +4,9 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+#include <nvs.h>
+#endif
 
 #include <limits>
 #include <mutex>
@@ -14,9 +17,44 @@ namespace rodakos {
 namespace {
 
 constexpr const char* TAG = "HomeLayout";
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+constexpr const char* kNamespace = "home_hwtest";
+#else
 constexpr const char* kNamespace = "home";
+#endif
 constexpr const char* kLayoutKey = "layout";
 std::mutex g_store_mutex;
+
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+bool g_test_layout_reset = false;
+
+bool ResetHardwareTestLayoutOnce() {
+    if (g_test_layout_reset) {
+        return true;
+    }
+
+    nvs_handle_t handle = 0;
+    const esp_err_t open_error = nvs_open(kNamespace, NVS_READWRITE, &handle);
+    if (open_error != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot reset isolated Home hardware-test layout: %s",
+                 esp_err_to_name(open_error));
+        return false;
+    }
+
+    const esp_err_t erase_error = nvs_erase_key(handle, kLayoutKey);
+    const bool erased = erase_error == ESP_OK || erase_error == ESP_ERR_NVS_NOT_FOUND;
+    const esp_err_t commit_error = erase_error == ESP_OK ? nvs_commit(handle) : ESP_OK;
+    nvs_close(handle);
+    if (!erased || commit_error != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot reset isolated Home hardware-test layout: erase=%s commit=%s",
+                 esp_err_to_name(erase_error), esp_err_to_name(commit_error));
+        return false;
+    }
+    g_test_layout_reset = true;
+    ESP_LOGW(TAG, "Reset isolated Home hardware-test layout for this boot");
+    return true;
+}
+#endif
 
 HomeLayoutLoadResult FallbackResult(HomeLayoutLoadStatus status,
                                     const std::vector<std::string>& visible_app_ids,
@@ -71,6 +109,13 @@ HomeLayoutLoadResult HomeLayoutStore::Load(
     source_encoded_.clear();
     current_revision_ = 0;
 
+#if RODAKOS_HOME_HARDWARE_TEST_POPULATION
+    if (!ResetHardwareTestLayoutOnce()) {
+        source_state_ = SourceState::kError;
+        return FallbackResult(HomeLayoutLoadStatus::kStorageError, visible_app_ids, false);
+    }
+    ESP_LOGW(TAG, "Using isolated Home hardware-test layout namespace");
+#endif
     Settings settings(kNamespace, false);
     std::string encoded;
     const SettingsStringReadStatus read_status =

@@ -466,14 +466,23 @@ void VoiceWakeService::SupervisorTick() {
     if (assistant_state.stopping || assistant_state.focus_active ||
         assistant_state.phase != VoiceAssistantPhase::kIdle) {
         const TickType_t now = xTaskGetTickCount();
-        if (assistant_active_since_ticks_ == 0) {
+        if (assistant_state.phase == VoiceAssistantPhase::kSpeaking) {
+            // TTS can legitimately exceed the idle-session budget. Refresh the
+            // watchdog while playback is active so a streamed answer is not
+            // truncated before the transport emits its terminal event.
             assistant_active_since_ticks_ = now;
-        } else if ((now - assistant_active_since_ticks_) >= kAssistantSessionTimeoutTicks) {
-            assistant_active_since_ticks_ = 0;
-            SetStatusLocked(VoiceWakeStatus::kError, "Assistant session timed out");
-            xSemaphoreGive(mutex_);
-            assistant_.StopInteraction();
-            return;
+        } else {
+            if (assistant_active_since_ticks_ == 0) {
+                assistant_active_since_ticks_ = now;
+            } else if ((now - assistant_active_since_ticks_) >= kAssistantSessionTimeoutTicks) {
+                assistant_active_since_ticks_ = 0;
+                SetStatusLocked(VoiceWakeStatus::kError, "Assistant session timed out");
+                ESP_LOGW(TAG, "Assistant session watchdog expired during phase=%u",
+                         static_cast<unsigned>(assistant_state.phase));
+                xSemaphoreGive(mutex_);
+                assistant_.StopInteraction();
+                return;
+            }
         }
         if (listening_) {
             StopRuntimeLocked("Assistant active");

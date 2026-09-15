@@ -1,3 +1,9 @@
+option(
+    RODAKOS_HOME_HARDWARE_TEST_POPULATION
+    "Enable the isolated three-page Home hardware test population"
+    OFF
+)
+
 set(SOURCES
     "main.cc"
     "settings.cc"
@@ -29,6 +35,7 @@ set(SOURCES
     "phone_os/time_service.cc"
     "phone_os/voice_audio_frontend.cc"
     "phone_os/voice_assistant_service.cc"
+    "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_assistant_transport.cc"
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_settings.cc"
@@ -84,6 +91,10 @@ set(SOURCES
     "apps/wol/wol_app.cc"
 )
 
+if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
+    list(APPEND SOURCES "apps/home/home_hardware_test_population.cc")
+endif()
+
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS "." "rodakos_adapters" "phone_os" "phone_ui" "apps"
@@ -120,6 +131,16 @@ idf_component_register(
         esp_tinyusb
         esp_new_jpeg
 )
+
+if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
+    target_compile_definitions(
+        ${COMPONENT_LIB}
+        PRIVATE RODAKOS_HOME_HARDWARE_TEST_POPULATION=1
+    )
+    message(WARNING
+        "RodakOS Home hardware-test population is ENABLED; this is not a production build"
+    )
+endif()
 
 # ESP-SR normally flashes models into a dedicated partition. RodakOS has an
 # immutable Recovery layout, so generate the selected MultiNet bundle and embed

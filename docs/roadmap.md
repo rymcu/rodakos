@@ -4,7 +4,7 @@ RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web pro
 
 ## Current Baseline
 
-As of 2026-07-24:
+As of 2026-09-04:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
 - ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
@@ -15,12 +15,12 @@ As of 2026-07-24:
 - App registry/host/navigation model is in place, validates a unique Home role, and gives the host sole ownership of app lifecycle.
 - Native Lock Screen and Control Center overlays are owned by PhoneSystem rather than modeled as apps.
 - Home Phase 4 keeps stable page tile shells while retaining grids/buttons only for the active page
-  and immediate neighbors. Pure policy tests and a production-HomeApp host LVGL suite pass;
-  multi-page hardware validation remains open.
+  and immediate neighbors. Pure policy tests and a production-HomeApp host LVGL suite pass. A
+  13-app/two-page device population boots; physical multi-page interaction remains open.
 - Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
   Music, Recorder, Assistant, Smart, and Wake.
 - Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, and SD-staged OTA.
-- Current IDF 6 app binary is about 3.30 MiB of the 13.3125 MiB main application partition.
+- Current IDF 6.0.2 app binary is about 5.87 MiB of the 13.3125 MiB main application partition.
 
 ## Milestone 0: Hardware And Build Baseline
 
@@ -67,8 +67,9 @@ Next polish:
 - Keep free drag deferred until paging and touch are proven together.
 - Use live service state consistently in status UI.
 - Tighten navigation transitions and back/home behavior across all apps.
-- Add a hardware population that exceeds the current 11 visible apps; the latest device run had only
-  one page (`1/1` resident), so multi-page swiping and lazy page turnover are not yet device-verified.
+- Use the current 13-app/two-page population to verify bidirectional swiping and page restoration.
+  The production-off, isolated 25-app hardware-test population is available for the three-page
+  far-page release and lazy turnover gate.
 - Validate Home Arrange, page restoration, GT911 gestures, ST7789 readability, System Shell
   preferences, and both physical-button paths manually or with an external fixture.
 - Define and execute a true low-memory recovery gate. Current LVGL CLIB allocation with malloc
@@ -106,7 +107,7 @@ Next work:
 
 - Add battery/charging service and replace any placeholder status values.
 - Harden audio codec startup/shutdown and failure recovery.
-- Finish voice recorder/runtime integration beyond the current no-op/unavailable paths.
+- Verify Recorder preemption, resume, and failure recovery across the integrated recording service.
 - Add diagnostics for I2C bus health, SD card status, and memory pressure.
 - Consider moving QMI8658 metadata into the board definition once Board Manager has a first-class IMU device type.
 
@@ -131,33 +132,43 @@ Next work:
 
 ## Milestone 5: Assistant And Cloud
 
-Status: hardware-backed integration implemented; device verification pending.
+Status: non-voice Device Cloud provisioning and credential rotation are hardware-verified; one
+real-person local wake/ASR/agent/TTS turn is verified. Multi-turn follow-up is implemented
+and awaits its device gate.
 
 - Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
-- A wake match acquires audio focus, buffers 16 kHz mono PCM, opens the Rodak WebSocket, uploads
-  60 ms Opus frames, decodes downlink Opus, drains TTS, disconnects, and re-arms local monitoring.
+- A wake match acquires audio focus, buffers 16 kHz mono PCM, opens one Rodak WebSocket, uploads
+  60 ms Opus frames, and decodes downlink Opus. Every non-terminal reply drains TTS and resumes
+  listening on the same session; goodbye, 30 seconds of follow-up silence, errors, or a
+  connection/listening watchdog disconnect and re-arm local monitoring. Active TTS playback is not
+  terminated by that watchdog.
 - Wake, Recorder, and assistant capture use explicit ADC owners and priorities.
 - The Assistant app is a persistent enable/configuration and status surface, not a Talk/Stop page.
 - The selected ESP-SR model bundle is embedded in `ota_0`; the immutable Recovery layout is unchanged.
 
 Next work:
 
-- Complete cloud configuration UX and credential diagnostics.
-- Run the full [voice assistant hardware verification](voice-assistant.md#verification-gates),
-  including music resume, Recorder preemption, repeated wake suppression, and TTS tail playback.
+- Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud gate as a
+  regression check.
+- Run the multi-turn [voice assistant hardware verification](voice-assistant.md#verification-gates),
+  including at least six same-session turns, explicit goodbye, follow-up silence, music resume, Recorder
+  preemption, repeated wake suppression, and TTS tail playback.
 - Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
-- Decide whether a later release should support multi-turn follow-up windows; the current contract is
-  one local wake, one cloud turn, then disconnect.
+- Add TTS-time user interruption only after half-duplex follow-up is hardware-stable; true
+  full duplex remains dependent on AEC and echo-suppression validation.
 
 ## Milestone 6: Rodak Device And OTA Protocol
 
-Status: active.
+Status: active; wired non-voice Device Cloud and MQTT credential-refresh verification is complete.
 
 - Unified MQTT v2 bootstrap, telemetry, reported/desired shadow and OTA notification transport.
 - SD-staged main image download with SHA-256 and a separate factory Recovery writer.
 - Isolated OTA journal, startup confirmation, rollback restore and Rodak result reporting.
 - Wired first-flash Recovery handoff, local image confirmation, and a direct second boot have been
   verified on the COM3 BigSmart device.
+- USB Serial/JTAG WiFi/bootstrap provisioning, NVS persistence, monotonic `token_version` rotation,
+  old-credential rejection, bootstrap refresh, MQTT recovery, telemetry, and health soak have been
+  verified in one COM3 session. This gate does not claim a local MultiNet wake.
 
 Before production rollout:
 

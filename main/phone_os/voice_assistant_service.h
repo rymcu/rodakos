@@ -2,6 +2,7 @@
 
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/voice_assistant_transport.h"
+#include "phone_os/voice_conversation_policy.h"
 #include "phone_os/voice_recorder_service.h"
 
 #include <cstdint>
@@ -97,6 +98,8 @@ private:
     void HandleInbound(VoiceInboundEvent&& event);
     void ProcessInbound(VoiceInboundEvent&& event);
     bool SendNextAudioFrame();
+    bool BeginFollowUpTurn();
+    bool HasTerminalInboundEventLocked() const;
     void StopRecorderForPlayback();
     void RecordPlaybackFrame(int frame_duration_ms);
     void DrainPlayback();
@@ -110,6 +113,7 @@ private:
     TaskHandle_t io_task_ = nullptr;
     bool io_running_ = false;
     int64_t playback_deadline_us_ = 0;
+    int64_t follow_up_rearm_not_before_us_ = 0;
     std::deque<VoiceInboundEvent> inbound_events_;
     size_t inbound_event_bytes_ = 0;
     bool initialized_ = false;
@@ -117,6 +121,7 @@ private:
     bool focus_active_ = false;
     bool transport_active_ = false;
     bool recorder_active_ = false;
+    bool follow_up_rearm_pending_ = false;
     bool stopping_ = false;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;
@@ -128,6 +133,7 @@ private:
     TaskHandle_t cleanup_task_ = nullptr;
     VoiceAssistantPhase cleanup_final_phase_ = VoiceAssistantPhase::kIdle;
     std::string cleanup_message_ = "Ready";
+    VoiceConversationPolicy conversation_policy_;
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
     std::string message_ = "Ready";
