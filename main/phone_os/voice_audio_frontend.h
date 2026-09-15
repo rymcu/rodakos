@@ -58,6 +58,7 @@ private:
     void CaptureTask();
     void ProcessWakeSamples(std::vector<int16_t>& samples);
     void ProcessConversationSamples(const std::vector<int16_t>& samples);
+    void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
     size_t ResolveReadSamples(Mode mode) const;
     void SetErrorLocked(const char* error);
 
@@ -86,6 +87,11 @@ private:
     size_t wake_chunk_samples_ = 0;
     uint32_t wake_generation_ = 0;
     std::string last_error_;
+    int selected_main_mic_ = 2;
+    int mic_switch_frames_ = 0;
+    int64_t mic1_power_ = 0;
+    int64_t mic2_power_ = 0;
+    bool mic_speech_lock_ = false;
 };
 
 }  // namespace rodakos

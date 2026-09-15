@@ -29,7 +29,7 @@ constexpr int kConversationInputPriority = 30;
 constexpr uint32_t kSampleRate = 16000;
 // The Board Manager HAL folds the ES7210 TDM slots into [MIC2(main), MIC3(ref)].
 // Reading four raw slots here would split frames and feed the AFE an invalid layout.
-constexpr uint16_t kInputChannels = 2;
+constexpr uint16_t kInputChannels = 4;
 constexpr uint16_t kMainMicTdmSlot = 2;
 constexpr uint16_t kBitsPerSample = 16;
 // BigSmart raw TDM order is MIC1, MIC3(reference), MIC2, MIC4.
@@ -565,10 +565,12 @@ void VoiceAudioFrontend::CaptureTask() {
             continue;
         }
 
+        std::vector<int16_t> selected_samples;
+        SelectMainMicrophone(samples, selected_samples);
         if (mode == Mode::kWakeOnly) {
-            ProcessWakeSamples(samples);
+            ProcessWakeSamples(selected_samples);
         } else if (mode == Mode::kConversation) {
-            ProcessConversationSamples(samples);
+            ProcessConversationSamples(selected_samples);
         }
     }
 
@@ -579,6 +581,42 @@ void VoiceAudioFrontend::CaptureTask() {
     task_ = nullptr;
     xSemaphoreGive(mutex_);
     vTaskDelete(nullptr);
+}
+
+void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
+                                              std::vector<int16_t>& output) {
+    const size_t count = input.size() / 4;
+    output.resize(count);
+    int64_t p1 = 0, p2 = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t a = input[i * 4];
+        const int32_t b = input[i * 4 + 2];
+        p1 += static_cast<int64_t>(a) * a;
+        p2 += static_cast<int64_t>(b) * b;
+        output[i] = static_cast<int16_t>(selected_main_mic_ == 1 ? a : b);
+    }
+    const int64_t n = static_cast<int64_t>(std::max<size_t>(1, count));
+    mic1_power_ = (mic1_power_ * 7 + (p1 / n) * 3) / 10;
+    mic2_power_ = (mic2_power_ * 7 + (p2 / n) * 3) / 10;
+    if (mic_speech_lock_) {
+        if (std::max(mic1_power_, mic2_power_) < 25000) {
+            mic_speech_lock_ = false;
+            mic_switch_frames_ = 0;
+        }
+        return;
+    }
+    const int64_t current = selected_main_mic_ == 1 ? mic1_power_ : mic2_power_;
+    const int64_t other = selected_main_mic_ == 1 ? mic2_power_ : mic1_power_;
+    if (other > current + 180000) {
+        if (++mic_switch_frames_ >= 5) {
+            selected_main_mic_ = selected_main_mic_ == 1 ? 2 : 1;
+            mic_switch_frames_ = 0;
+            mic_speech_lock_ = true;
+        }
+    } else {
+        mic_switch_frames_ = 0;
+        if (std::max(mic1_power_, mic2_power_) > 25000) mic_speech_lock_ = true;
+    }
 }
 
 void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples) {
