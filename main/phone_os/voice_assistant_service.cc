@@ -1042,9 +1042,13 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
         return false;
     }
 
+    bool recorder_already_active = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    recorder_already_active = recorder_active_;
+    xSemaphoreGive(mutex_);
     VoiceRecorderConfig config;
     config.frame_duration_ms = 60;
-    if (!recorder_.Start(config)) {
+    if (!recorder_already_active && !recorder_.Start(config)) {
         FinishInteraction(
             VoiceAssistantPhase::kError, recorder_.last_error(), interaction_generation);
         return false;
@@ -1062,7 +1066,7 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
         recorder_active_ = true;
     }
     xSemaphoreGive(mutex_);
-    if (!recorder_accepted) {
+    if (!recorder_accepted && !recorder_already_active) {
         recorder_.Stop();
         return false;
     }
@@ -1134,14 +1138,9 @@ bool VoiceAssistantService::SendNextAudioFrame() {
 }
 
 void VoiceAssistantService::StopRecorderForPlayback() {
-    bool should_stop = false;
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        should_stop = recorder_active_;
-        recorder_active_ = false;
-        xSemaphoreGive(mutex_);
-    }
-    StopRecorderIfNeeded(should_stop);
+    // Keep capture alive during TTS. Rodak's server-side binary auto-capture and
+    // device-VAD gate need the uplink (including pre-roll) to detect barge-in.
+    // AEC/VAD must suppress playback echo before this path is enabled on hardware.
 }
 
 void VoiceAssistantService::RecordPlaybackFrame(int frame_duration_ms) {
