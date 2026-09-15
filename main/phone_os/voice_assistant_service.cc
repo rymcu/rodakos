@@ -312,6 +312,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     last_wake_word_ = wake_word;
     playback_deadline_us_ = 0;
     follow_up_rearm_pending_ = false;
+    speaking_interrupted_ = false;
     follow_up_rearm_not_before_us_ = 0;
     conversation_policy_.Reset();
     interaction_generation = ++interaction_generation_;
@@ -417,6 +418,40 @@ void VoiceAssistantService::StopInteraction() {
 
 void VoiceAssistantService::StopInteractionIfCurrent(uint32_t generation) {
     FinishInteraction(VoiceAssistantPhase::kIdle, "Ready", generation);
+}
+
+bool VoiceAssistantService::InterruptSpeaking() {
+    uint32_t generation = 0;
+    bool active = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    active = initialized_ && !deinitializing_ && !stopping_ && transport_active_ &&
+             phase_ == VoiceAssistantPhase::kSpeaking;
+    generation = transport_generation_;
+    xSemaphoreGive(mutex_);
+    if (!active) {
+        return false;
+    }
+
+    // Abort first so the server stops generating TTS; then discard already queued
+    // samples locally to prevent a late packet from speaking over the new turn.
+    const bool sent = transport_.SendAbortSpeaking(
+        VoiceAbortReason::kWakeWordDetected, generation);
+    audio_output_.CloseForOwner(kFocusOwner);
+    if (audio_codec_ != nullptr) {
+        audio_codec_->Reset();
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!stopping_ && transport_generation_ == generation) {
+        playback_deadline_us_ = 0;
+        follow_up_rearm_pending_ = true;
+        follow_up_rearm_not_before_us_ = 0;
+        speaking_interrupted_ = true;
+        SetPhaseLocked(VoiceAssistantPhase::kSpeaking, "Interrupted; listening");
+    }
+    xSemaphoreGive(mutex_);
+    ESP_LOGI(TAG, "TTS interrupted: generation=%" PRIu32 " sent=%s",
+             generation, sent ? "yes" : "no");
+    return sent && BeginFollowUpTurn();
 }
 
 void VoiceAssistantService::MarkConnecting(const char* message) {
@@ -906,14 +941,22 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
         case VoiceInboundEventType::kSpeakingStarted:
             xSemaphoreTake(mutex_, portMAX_DELAY);
             conversation_policy_.OnSpeakingStarted();
+            speaking_interrupted_ = false;
             xSemaphoreGive(mutex_);
             StopRecorderForPlayback();
             MarkSpeaking("Speaking");
             break;
         case VoiceInboundEventType::kAudio: {
             xSemaphoreTake(mutex_, portMAX_DELAY);
-            conversation_policy_.OnSpeakingStarted();
+            const bool discard = speaking_interrupted_ || phase_ != VoiceAssistantPhase::kSpeaking;
+            if (!discard) {
+                conversation_policy_.OnSpeakingStarted();
+            }
             xSemaphoreGive(mutex_);
+            if (discard) {
+                ESP_LOGD(TAG, "Discarding stale TTS audio after interruption");
+                break;
+            }
             StopRecorderForPlayback();
             MarkSpeaking("Speaking");
             const int sample_rate = event.audio.sample_rate;

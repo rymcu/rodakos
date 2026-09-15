@@ -154,8 +154,10 @@ Next work:
   including at least six same-session turns, explicit goodbye, follow-up silence, music resume, Recorder
   preemption, repeated wake suppression, and TTS tail playback.
 - Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
-- Add TTS-time user interruption only after half-duplex follow-up is hardware-stable; true
-  full duplex remains dependent on AEC and echo-suppression validation.
+- TTS-time interruption is now wired through the existing session: an AEC/VAD-confirmed barge-in
+  aborts playback, restarts capture, and rejects late TTS frames without opening a second session.
+  Hardware validation remains required, and true full duplex still depends on AEC and
+  echo-suppression validation.
 
 ## Milestone 6: Rodak Device And OTA Protocol
 

@@ -68,6 +68,10 @@ public:
     void StopInteraction();
     void StopInteractionIfCurrent(uint32_t generation);
 
+    // Interrupt the current TTS turn while keeping the WebSocket session alive.
+    // The caller must only invoke this after an AEC/VAD gate has confirmed user speech.
+    bool InterruptSpeaking();
+
     void MarkConnecting(const char* message = nullptr);
     void MarkListening(const char* message = nullptr);
     void MarkSpeaking(const char* message = nullptr);
@@ -122,6 +126,7 @@ private:
     bool transport_active_ = false;
     bool recorder_active_ = false;
     bool follow_up_rearm_pending_ = false;
+    bool speaking_interrupted_ = false;
     bool stopping_ = false;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;

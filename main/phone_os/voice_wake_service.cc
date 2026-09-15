@@ -250,6 +250,16 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
     bool should_start = false;
     std::string detected = wake_word.empty() ? "wake word" : wake_word;
 
+    // AEC/VAD frontends may report a wake phrase while TTS is active. Treat it
+    // as a barge-in on the existing session instead of opening a second one.
+    const VoiceAssistantState assistant_state = assistant_.GetState();
+    if (assistant_state.phase == VoiceAssistantPhase::kSpeaking) {
+        if (assistant_.InterruptSpeaking()) {
+            ESP_LOGI(TAG, "Wake word interrupted active TTS: %s", detected.c_str());
+        }
+        return;
+    }
+
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (initialized_ && task_running_ && enabled_ && listening_ &&

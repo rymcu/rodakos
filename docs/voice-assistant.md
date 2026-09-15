@@ -81,6 +81,13 @@ policy.
   watchdog, or Rodak's explicit `goodbye` ends the session and restores local wake monitoring.
   Active TTS playback is not terminated by that watchdog.
 
+The service also exposes a speaking-time interruption path for an AEC/VAD frontend. A confirmed
+barge-in sends the transport `abort` message on the existing session, closes local TTS output, and
+discards late audio until the next `tts:start`. The wake service routes this detection to the
+existing interaction instead of opening a second session. This remains gated by validated echo
+cancellation or voice activity detection; the built-in wake runtime still runs only in normal
+listening mode.
+
 The recorder starts before cloud setup and retains the newest 80 frames (about 4.8 seconds) so speech
 that follows the wake phrase can survive normal DNS/TLS/WebSocket setup latency. If setup exceeds the
 buffer, the oldest frames are discarded.
