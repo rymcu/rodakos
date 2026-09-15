@@ -421,6 +421,22 @@ void VoiceAssistantService::StopInteractionIfCurrent(uint32_t generation) {
 }
 
 bool VoiceAssistantService::InterruptSpeaking() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool accepted = initialized_ && !deinitializing_ && !stopping_ &&
+                          io_running_ && transport_active_ &&
+                          phase_ == VoiceAssistantPhase::kSpeaking &&
+                          !interrupt_pending_ && !speaking_interrupted_;
+    if (accepted) {
+        interrupt_pending_ = true;
+    }
+    xSemaphoreGive(mutex_);
+    return accepted;
+}
+
+void VoiceAssistantService::ProcessInterrupt() {
     uint32_t generation = 0;
     bool active = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -429,7 +445,7 @@ bool VoiceAssistantService::InterruptSpeaking() {
     generation = transport_generation_;
     xSemaphoreGive(mutex_);
     if (!active) {
-        return false;
+        return;
     }
 
     // Abort first so the server stops generating TTS; then discard already queued
@@ -454,7 +470,11 @@ bool VoiceAssistantService::InterruptSpeaking() {
     xSemaphoreGive(mutex_);
     ESP_LOGI(TAG, "TTS interrupted: generation=%" PRIu32 " sent=%s",
              generation, sent ? "yes" : "no");
-    return sent && BeginFollowUpTurn();
+    if (!sent) {
+        MarkError(transport_.last_error());
+        return;
+    }
+    BeginFollowUpTurn();
 }
 
 void VoiceAssistantService::MarkConnecting(const char* message) {
@@ -593,6 +613,7 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     inbound_events_.clear();
     inbound_event_bytes_ = 0;
     transport_generation_ = 0;
+    interrupt_pending_ = false;
     follow_up_rearm_pending_ = false;
     follow_up_rearm_not_before_us_ = 0;
     conversation_policy_.Reset();
@@ -840,12 +861,16 @@ void VoiceAssistantService::IoTask() {
     while (true) {
         VoiceInboundEvent event;
         bool has_event = false;
+        bool should_interrupt = false;
         bool follow_up_timed_out = false;
         bool should_rearm_follow_up = false;
         uint32_t completed_turns = 0;
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool running = io_running_;
-        if (running && transport_active_ && !inbound_events_.empty()) {
+        if (running && transport_active_ && interrupt_pending_) {
+            interrupt_pending_ = false;
+            should_interrupt = true;
+        } else if (running && transport_active_ && !inbound_events_.empty()) {
             event = std::move(inbound_events_.front());
             inbound_event_bytes_ -= std::min(inbound_event_bytes_, InboundEventBytes(event));
             inbound_events_.pop_front();
@@ -863,8 +888,14 @@ void VoiceAssistantService::IoTask() {
         if (!running) {
             break;
         }
+        if (should_interrupt) {
+            ProcessInterrupt();
+            continue;
+        }
         if (has_event) {
             ProcessInbound(std::move(event));
+            // A continuous downlink must not starve the microphone uplink.
+            SendNextAudioFrame();
             continue;
         }
         if (follow_up_timed_out) {
@@ -1066,8 +1097,10 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
         recorder_active_ = true;
     }
     xSemaphoreGive(mutex_);
-    if (!recorder_accepted && !recorder_already_active) {
-        recorder_.Stop();
+    if (!recorder_accepted) {
+        if (!recorder_already_active) {
+            recorder_.Stop();
+        }
         return false;
     }
 
