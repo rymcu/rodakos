@@ -27,11 +27,13 @@ constexpr const char* kWakeWordDisplay = "你好达克";
 constexpr int kWakeInputPriority = 10;
 constexpr int kConversationInputPriority = 30;
 constexpr uint32_t kSampleRate = 16000;
-constexpr uint16_t kInputChannels = 4;
+// The Board Manager HAL folds the ES7210 TDM slots into [MIC2(main), MIC3(ref)].
+// Reading four raw slots here would split frames and feed the AFE an invalid layout.
+constexpr uint16_t kInputChannels = 2;
+constexpr uint16_t kMainMicTdmSlot = 2;
 constexpr uint16_t kBitsPerSample = 16;
 // BigSmart raw TDM order is MIC1, MIC3(reference), MIC2, MIC4.
-constexpr uint16_t kMainMicTdmSlot = 2;
-constexpr uint16_t kInputChannelMask = 1U << kMainMicTdmSlot;
+constexpr uint16_t kInputChannelMask = 0;
 constexpr int kInputGain = 30;
 constexpr int kDetectionDurationMs = 3000;
 constexpr float kDetectionThreshold = 0.2F;
