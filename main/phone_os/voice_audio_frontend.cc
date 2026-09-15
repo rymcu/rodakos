@@ -27,8 +27,8 @@ constexpr const char* kWakeWordDisplay = "你好达克";
 constexpr int kWakeInputPriority = 10;
 constexpr int kConversationInputPriority = 30;
 constexpr uint32_t kSampleRate = 16000;
-// The Board Manager HAL folds the ES7210 TDM slots into [MIC2(main), MIC3(ref)].
-// Reading four raw slots here would split frames and feed the AFE an invalid layout.
+// ES7210 TDM: slot0=MIC1, slot1=MIC3 (ES8311 speaker reference), slot2=MIC2, slot3=MIC4.
+// Keep all slots so MIC1/MIC2 can be selected between utterances; MIC3 remains the AEC reference.
 constexpr uint16_t kInputChannels = 4;
 constexpr uint16_t kMainMicTdmSlot = 2;
 constexpr uint16_t kBitsPerSample = 16;

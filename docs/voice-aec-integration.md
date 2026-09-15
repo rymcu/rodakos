@@ -6,9 +6,10 @@ is sent upstream.
 
 ## Device path
 
-The BigSmart ES7210 exposes four TDM slots. The board mapping is `MIC2` as the near-end microphone
-and `MIC3` as the reference microphone. The AFE input format must therefore be `MR`; preserving
-the physical slot order as `RM` causes the echo canceller to learn the wrong signal.
+The BigSmart ES7210 exposes four TDM slots. The schematic shows `MIC1` and `MIC2` as the two
+near-end microphone inputs. ES8311 speaker output `OUTP/OUTN` is wired back to ES7210 `MIC3P/MIC3N`
+through 0-ohm links, so `MIC3` is the AEC reference channel, not a second user microphone. The
+AFE input must therefore be `MR`, where `M` is the selected MIC1/MIC2 signal and `R` is MIC3.
 
 The planned processor follows `D:\workspace\xiaozhi\main\audio\processors\afe_audio_processor.cc`:
 
@@ -29,5 +30,5 @@ device VAD event is sent as `type: "vad"`, `state: "start"`, with `source`, `seq
 followed by `type: "abort"`. Rodak performs ASR and semantic confirmation, filters likely playback
 echo, stops the current TTS turn, and keeps the WebSocket session alive.
 
-Until the AFE processor is integrated and the physical MIC2/MIC3 mapping is verified, realtime mode
+Until the AFE processor is integrated and the physical MIC1/MIC2/MIC3 mapping is verified, realtime mode
 is an integration/diagnostic path and must not be treated as proof of echo-safe production behavior.
