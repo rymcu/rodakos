@@ -1,0 +1,14 @@
+menu "RodakOS voice processing"
+
+config USE_DEVICE_AEC
+    bool "Use ESP-SR device AEC"
+    default y
+    help
+        Run echo cancellation on the BigSmart device before uplink.
+
+config USE_SERVER_AEC
+    bool "Use timestamped server AEC"
+    default n
+    depends on !USE_DEVICE_AEC
+
+endmenu
