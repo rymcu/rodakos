@@ -45,10 +45,21 @@ constexpr TickType_t kIdleDelay = pdMS_TO_TICKS(20);
 constexpr TickType_t kInputRetryDelay = pdMS_TO_TICKS(100);
 constexpr int kIdleCloseIterations = 15;
 
+class LifecycleLock {
+public:
+    explicit LifecycleLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+        xSemaphoreTakeRecursive(mutex_, portMAX_DELAY);
+    }
+    ~LifecycleLock() { xSemaphoreGiveRecursive(mutex_); }
+private:
+    SemaphoreHandle_t mutex_;
+};
+
 }  // namespace
 
 VoiceAudioFrontend::VoiceAudioFrontend(AudioCodecInput& input) : input_(input) {
     mutex_ = xSemaphoreCreateMutex();
+    lifecycle_mutex_ = xSemaphoreCreateRecursiveMutex();
 }
 
 VoiceAudioFrontend::~VoiceAudioFrontend() {
@@ -74,6 +85,9 @@ VoiceAudioFrontend::~VoiceAudioFrontend() {
             xSemaphoreGive(mutex_);
         }
     }
+    if (lifecycle_mutex_ != nullptr) {
+        vSemaphoreDelete(lifecycle_mutex_);
+    }
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -81,9 +95,11 @@ VoiceAudioFrontend::~VoiceAudioFrontend() {
 }
 
 bool VoiceAudioFrontend::Init() {
-    if (mutex_ == nullptr) {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) {
         return false;
     }
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    if (deinitializing_) return false;
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (initialized_) {
@@ -117,10 +133,13 @@ bool VoiceAudioFrontend::Init() {
 }
 
 void VoiceAudioFrontend::Deinit() {
-    if (mutex_ == nullptr) {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) {
         return;
     }
 
+    xSemaphoreTakeRecursive(lifecycle_mutex_, portMAX_DELAY);
+    deinitializing_ = true;
+    Stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     task_running_ = false;
     ++wake_generation_;
@@ -139,9 +158,7 @@ void VoiceAudioFrontend::Deinit() {
 
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stopped = task_ == nullptr &&
-                             !wake_notification_active_ &&
-                             !wake_notification_pending_;
+        const bool stopped = task_ == nullptr;
         xSemaphoreGive(mutex_);
         if (stopped) {
             break;
@@ -154,14 +171,27 @@ void VoiceAudioFrontend::Deinit() {
     ReleaseModelLocked();
     initialized_ = false;
     xSemaphoreGive(mutex_);
+    xSemaphoreGiveRecursive(lifecycle_mutex_);
+    while (true) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool active = wake_notification_active_;
+        xSemaphoreGive(mutex_);
+        if (!active || xTaskGetCurrentTaskHandle() == wake_notification_task_) break;
+        vTaskDelay(1);
+    }
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    deinitializing_ = false;
 }
 
 bool VoiceAudioFrontend::StartListening(
     std::function<void(const std::string&)> on_wake_word) {
+    if (lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
     if (!Init()) {
         return false;
     }
 
+    Stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     ++wake_generation_;
     on_wake_word_ = std::move(on_wake_word);
@@ -192,6 +222,8 @@ bool VoiceAudioFrontend::StartListening(
 }
 
 void VoiceAudioFrontend::StopListening() {
+    if (lifecycle_mutex_ == nullptr) return;
+    LifecycleLock lifecycle(lifecycle_mutex_);
     if (mutex_ == nullptr) {
         return;
     }
@@ -217,6 +249,8 @@ bool VoiceAudioFrontend::IsListening() const {
 }
 
 bool VoiceAudioFrontend::Start(const VoiceRecorderConfig& config) {
+    if (lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
     if (!Init()) {
         return false;
     }
@@ -230,26 +264,20 @@ bool VoiceAudioFrontend::Start(const VoiceRecorderConfig& config) {
         return false;
     }
 
+    StopListening();
+    Stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     recorder_config_ = config;
-    mode_ = Mode::kConversation;
-    ++conversation_generation_;
-    frames_.clear();
-    conversation_samples_.clear();
+    const uint32_t generation = ++conversation_generation_;
     const bool task_started = EnsureCaptureTaskLocked();
     xSemaphoreGive(mutex_);
-    if (afe_iface_ && afe_data_ && !StartAfe(conversation_generation_)) { Stop(); return false; }
+    if (!task_started || !StartAfe(generation)) return false;
 
-    if (!task_started || !EnsureInputForMode(Mode::kConversation)) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (mode_ == Mode::kConversation) {
-            mode_ = Mode::kIdle;
-            frames_.clear();
-            conversation_samples_.clear();
-        }
-        SetErrorLocked("Microphone unavailable for assistant session");
-        xSemaphoreGive(mutex_);
-        input_.CloseForOwner(kConversationAudioInputOwner);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    mode_ = Mode::kConversation;
+    xSemaphoreGive(mutex_);
+    if (!EnsureInputForMode(Mode::kConversation)) {
+        Stop();
         return false;
     }
 
@@ -259,6 +287,8 @@ bool VoiceAudioFrontend::Start(const VoiceRecorderConfig& config) {
 }
 
 void VoiceAudioFrontend::Stop() {
+    if (lifecycle_mutex_ == nullptr) return;
+    LifecycleLock lifecycle(lifecycle_mutex_);
     if (mutex_ == nullptr) {
         return;
     }
@@ -266,6 +296,7 @@ void VoiceAudioFrontend::Stop() {
     if (mode_ == Mode::kConversation) {
         mode_ = Mode::kIdle;
     }
+    ++conversation_generation_;
     frames_.clear();
     conversation_samples_.clear();
     xSemaphoreGive(mutex_);
@@ -416,8 +447,14 @@ bool VoiceAudioFrontend::InitModelLocked() {
         return false;
     }
 
+    return true;
+}
+
+bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
+    // Lifecycle transitions are serialized; workers only see a published instance.
+    xSemaphoreTake(mutex_, portMAX_DELAY);
     afe_config_t* afe_config = afe_config_init("MR", nullptr, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
-    if (afe_config == nullptr) { SetErrorLocked("AFE configuration failed"); ReleaseModelLocked(); return false; }
+    if (afe_config == nullptr) { SetErrorLocked("AFE configuration failed"); xSemaphoreGive(mutex_); return false; }
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
@@ -431,20 +468,30 @@ bool VoiceAudioFrontend::InitModelLocked() {
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_ ? afe_iface_->create_from_config(afe_config) : nullptr;
-    if (afe_data_ == nullptr) { SetErrorLocked("AFE initialization failed"); ReleaseModelLocked(); return false; }
-    last_error_.clear();
-    ESP_LOGI(TAG, "Loaded custom wake command '%s' (%u samples per chunk)",
-             kWakeWordCommand, static_cast<unsigned>(wake_chunk_samples_));
+    afe_config_free(afe_config);
+    if (afe_data_ == nullptr) { afe_iface_ = nullptr; SetErrorLocked("AFE initialization failed"); xSemaphoreGive(mutex_); return false; }
+    if (afe_iface_->get_feed_chunksize(afe_data_) <= 0 ||
+        afe_iface_->get_feed_channel_num(afe_data_) != 2) {
+        afe_iface_->destroy(afe_data_);
+        afe_data_ = nullptr;
+        afe_iface_ = nullptr;
+        SetErrorLocked("Invalid AFE MR input format");
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    afe_generation_ = generation;
+    afe_fetch_stopping_ = false;
+    afe_feed_started_ = false;
+    if (xTaskCreatePinnedToCoreWithCaps(AfeFetchTaskEntry, "afe_fetch", 6144, this, 4,
+                                &afe_fetch_task_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        afe_iface_->destroy(afe_data_); afe_data_ = nullptr; afe_iface_ = nullptr;
+        SetErrorLocked("AFE fetch task creation failed"); xSemaphoreGive(mutex_); return false;
+    }
+    xSemaphoreGive(mutex_);
     return true;
 }
 
 void VoiceAudioFrontend::ReleaseModelLocked() {
-    afe_feed_buffer_.clear();
-    if (afe_data_ != nullptr && afe_iface_ != nullptr) {
-        afe_iface_->destroy(afe_data_);
-    }
-    afe_data_ = nullptr;
-    afe_iface_ = nullptr;
     if (multinet_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_data_);
     }
@@ -469,11 +516,13 @@ bool VoiceAudioFrontend::EnsureCaptureTaskLocked() {
 
     task_running_ = true;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t created = xTaskCreatePinnedToCore(
-        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_, 0);
+    const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t created = xTaskCreate(
-        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_);
+    const BaseType_t created = xTaskCreateWithCaps(
+        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (created != pdPASS) {
         task_running_ = false;
@@ -544,10 +593,14 @@ bool VoiceAudioFrontend::EnsureInputForMode(Mode mode) {
 
 void VoiceAudioFrontend::CaptureTask() {
     int idle_iterations = 0;
+    std::vector<int16_t> afe_feed_buffer;
+    uint32_t feed_generation = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool task_running = task_running_;
         const Mode mode = mode_;
+        const uint32_t generation = conversation_generation_;
+        const uint32_t wake_generation = wake_generation_;
         const size_t read_samples = ResolveReadSamples(mode) * kInputChannels;
         xSemaphoreGive(mutex_);
 
@@ -555,13 +608,15 @@ void VoiceAudioFrontend::CaptureTask() {
             break;
         }
         if (mode == Mode::kIdle || read_samples == 0) {
-            afe_feed_buffer_.clear();
+            afe_feed_buffer.clear();
             ++idle_iterations;
             if (idle_iterations >= kIdleCloseIterations) {
-                input_.CloseForOwner(kWakeAudioInputOwner);
-                input_.CloseForOwner(kConversationAudioInputOwner);
                 xSemaphoreTake(mutex_, portMAX_DELAY);
-                input_open_ = false;
+                if (mode_ == Mode::kIdle) {
+                    input_.CloseForOwner(kWakeAudioInputOwner);
+                    input_.CloseForOwner(kConversationAudioInputOwner);
+                    input_open_ = false;
+                }
                 xSemaphoreGive(mutex_);
                 idle_iterations = 0;
             }
@@ -596,26 +651,36 @@ void VoiceAudioFrontend::CaptureTask() {
 
         std::vector<int16_t> selected_samples;
         SelectMainMicrophone(samples, selected_samples);
-        // Keep standby wake detection lightweight; AEC is armed only after the
-        // wake word opens a conversation, when playback reference is relevant.
-        if (mode == Mode::kConversation && afe_iface_ != nullptr && afe_data_ != nullptr) {
-            const size_t frames = samples.size() / 4;
-            for (size_t i = 0; i < frames; ++i) {
-                afe_feed_buffer_.push_back(selected_main_mic_ == 1 ? samples[i * 4]
-                                                                   : samples[i * 4 + 2]);
-                afe_feed_buffer_.push_back(samples[i * 4 + 1]);
+        if (mode == Mode::kConversation) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool can_feed = mode_ == mode && generation == conversation_generation_ &&
+                                  afe_data_ != nullptr && !afe_fetch_stopping_;
+            if (can_feed) afe_feed_active_ = true;
+            xSemaphoreGive(mutex_);
+            if (can_feed) {
+                if (feed_generation != generation) {
+                    afe_feed_buffer.clear();
+                    feed_generation = generation;
+                }
+                for (size_t i = 0; i < samples.size() / kInputChannels; ++i) {
+                    afe_feed_buffer.push_back(selected_main_mic_ == 1 ? samples[i * 4]
+                                                                                    : samples[i * 4 + 2]);
+                    afe_feed_buffer.push_back(samples[i * 4 + 1]);
+                }
+                const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * 2;
+                while (feed_size > 0 && afe_feed_buffer.size() >= feed_size) {
+                    xSemaphoreTake(mutex_, portMAX_DELAY);
+                    afe_feed_started_ = true;
+                    xSemaphoreGive(mutex_);
+                    afe_iface_->feed(afe_data_, afe_feed_buffer.data());
+                    afe_feed_buffer.erase(afe_feed_buffer.begin(), afe_feed_buffer.begin() + feed_size);
+                }
+                xSemaphoreTake(mutex_, portMAX_DELAY);
+                afe_feed_active_ = false;
+                xSemaphoreGive(mutex_);
             }
-            const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * 2;
-            selected_samples.clear();
-            while (feed_size > 0 && afe_feed_buffer_.size() >= feed_size) {
-                afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
-                afe_feed_buffer_.erase(afe_feed_buffer_.begin(), afe_feed_buffer_.begin() + feed_size);
-            }
-        }
-        if (mode == Mode::kWakeOnly) {
-            ProcessWakeSamples(selected_samples);
-        } else if (mode == Mode::kConversation && (afe_iface_ == nullptr || afe_data_ == nullptr)) {
-            ProcessConversationSamples(selected_samples, conversation_generation_);
+        } else if (mode == Mode::kWakeOnly) {
+            ProcessWakeSamples(selected_samples, wake_generation);
         }
         // Keep IDLE0 watchdog serviceable when the codec returns short/empty blocks.
         vTaskDelay(1);
@@ -627,29 +692,55 @@ void VoiceAudioFrontend::CaptureTask() {
     input_open_ = false;
     task_ = nullptr;
     xSemaphoreGive(mutex_);
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
-bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
-    if (!afe_iface_ || !afe_data_) return false;
-    afe_feed_samples_ = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_));
-    afe_generation_ = generation; afe_fetch_stopping_ = false;
-    if (afe_fetch_task_) return true;
-    return xTaskCreatePinnedToCore(AfeFetchTaskEntry, "afe_fetch", 6144, this, 4, &afe_fetch_task_, 0) == pdPASS;
-}
 void VoiceAudioFrontend::StopAfe() {
-    afe_fetch_stopping_ = true;
-    while (afe_fetch_task_) vTaskDelay(1);
-    afe_feed_buffer_.clear();
-    if (afe_data_ && afe_iface_) afe_iface_->reset_buffer(afe_data_);
-}
-void VoiceAudioFrontend::AfeFetchTask() {
-    while (!afe_fetch_stopping_) {
-        auto* r = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
-        if (afe_fetch_stopping_ || !r || r->ret_value == ESP_FAIL || !r->data) continue;
-        ProcessConversationSamples(std::vector<int16_t>(r->data, r->data + r->data_size / sizeof(int16_t)), afe_generation_);
+    // mode is already idle: no new feed leases. Keep fetch draining until the
+    // last feed returns, without holding the mutex needed by the consumer.
+    while (true) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool feeding = afe_feed_active_;
+        if (!feeding) afe_fetch_stopping_ = true;
+        xSemaphoreGive(mutex_);
+        if (!feeding) break;
+        vTaskDelay(1);
     }
-    afe_fetch_task_ = nullptr; vTaskDelete(nullptr);
+    TaskHandle_t worker = afe_fetch_task_;
+    if (worker != nullptr) {
+        while (eTaskGetState(worker) != eSuspended) vTaskDelay(1);
+        vTaskDeleteWithCaps(worker);
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    afe_fetch_task_ = nullptr;
+    if (afe_data_ != nullptr) afe_iface_->destroy(afe_data_);
+    afe_data_ = nullptr;
+    afe_iface_ = nullptr;
+    xSemaphoreGive(mutex_);
+}
+
+void VoiceAudioFrontend::AfeFetchTask() {
+    while (true) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool stopping = afe_fetch_stopping_;
+        const bool fed = afe_feed_started_;
+        const uint32_t generation = afe_generation_;
+        xSemaphoreGive(mutex_);
+        if (stopping) break;
+        if (!fed) {
+            vTaskDelay(1);
+            continue;
+        }
+        auto* result = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
+        if (result != nullptr && result->ret_value != ESP_FAIL && result->data != nullptr &&
+            result->data_size > 0) {
+            ProcessConversationSamples(std::vector<int16_t>(
+                result->data, result->data + result->data_size / sizeof(int16_t)), generation);
+        }
+        vTaskDelay(1);
+    }
+    // The lifecycle owner joins and deletes this task before destroying AFE.
+    vTaskSuspend(nullptr);
 }
 
 void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
@@ -688,9 +779,10 @@ void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
     }
 }
 
-void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples) {
+void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (mode_ != Mode::kWakeOnly || multinet_ == nullptr || multinet_data_ == nullptr) {
+    if (mode_ != Mode::kWakeOnly || generation != wake_generation_ ||
+        multinet_ == nullptr || multinet_data_ == nullptr) {
         xSemaphoreGive(mutex_);
         return;
     }

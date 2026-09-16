@@ -36,6 +36,8 @@ FAILURE_MARKERS = (
     "assert failed",
     "abort() was called",
     "panic'ed",
+    "task watchdog got triggered",
+    "stack overflow in task",
 )
 
 

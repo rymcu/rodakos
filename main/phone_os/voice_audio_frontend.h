@@ -61,13 +61,15 @@ private:
     bool StartAfe(uint32_t generation);
     void StopAfe();
     void AfeFetchTask();
-    void ProcessWakeSamples(std::vector<int16_t>& samples);
+    void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation);
     void ProcessConversationSamples(const std::vector<int16_t>& samples, uint32_t generation);
     void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
     size_t ResolveReadSamples(Mode mode) const;
     void SetErrorLocked(const char* error);
 
     AudioCodecInput& input_;
+    SemaphoreHandle_t lifecycle_mutex_ = nullptr;
+    bool deinitializing_ = false;
     mutable SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t task_ = nullptr;
     TaskHandle_t wake_notification_task_ = nullptr;
@@ -85,7 +87,6 @@ private:
     std::function<void(const std::string&)> on_wake_word_;
     std::deque<VoicePcmFrame> frames_;
     std::vector<int16_t> conversation_samples_;
-    std::vector<int16_t> afe_feed_buffer_;
     srmodel_list_t* models_ = nullptr;
     esp_mn_iface_t* multinet_ = nullptr;
     model_iface_data_t* multinet_data_ = nullptr;
@@ -104,7 +105,8 @@ private:
     bool afe_fetch_stopping_ = false;
     uint32_t conversation_generation_ = 0;
     uint32_t afe_generation_ = 0;
-    size_t afe_feed_samples_ = 0;
+    bool afe_feed_active_ = false;
+    bool afe_feed_started_ = false;
 };
 
 }  // namespace rodakos

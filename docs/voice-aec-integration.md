@@ -14,7 +14,7 @@ AFE input must therefore be `MR`, where `M` is the selected MIC1/MIC2 signal and
 
 The planned processor follows `D:\workspace\xiaozhi\main\audio\processors\afe_audio_processor.cc`:
 
-1. Read the two-channel 16 kHz PCM frame from `AudioCodecInput`.
+1. Read four-channel 16 kHz TDM from `AudioCodecInput`, then select M and retain R.
 2. Feed it to ESP-SR AFE with `AEC_MODE_VOIP_HIGH_PERF` and `VAD_MODE_0`.
 3. Use the first AFE output channel as the Opus uplink source.
 4. On a confirmed `VAD_SPEECH` transition, call `VoiceWakeService::NotifyWakeWordDetected`.
@@ -33,3 +33,19 @@ echo, stops the current TTS turn, and keeps the WebSocket session alive.
 
 Until the AFE processor is integrated and the physical MIC1/MIC2/MIC3 mapping is verified, realtime mode
 is an integration/diagnostic path and must not be treated as proof of echo-safe production behavior.
+
+## Current lifecycle implementation
+
+Standby loads MultiNet only. Conversation start creates AFE and its independent fetch worker before
+publishing the conversation state. Capture submits interleaved MR blocks of twice the per-channel
+feed chunk size; only fetched AFE PCM enters the conversation queue. Stop invalidates the generation,
+waits for an in-flight feed while fetch drains, joins the fetch worker, then destroys AFE. A subsequent
+conversation creates a new instance. Configuration objects are freed after AFE creation.
+
+Capture and fetch stacks use PSRAM, while provisioning and wake notification retain internal stacks
+for NVS writes. Provisioning retains its original 4096-byte stack. Device AEC currently disables local
+AFE VAD; the VAD-to-interruption wiring described above remains planned, not verified behavior.
+
+Firmware build and configuration-preserving COM3 refresh passed on 2026-09-16, including startup,
+local OTA confirmation, serial readiness, wake monitoring and saved WiFi auto-connect. Repeated
+real-person conversations, AEC attenuation, and current-firmware MQTT recovery still require evidence.

@@ -441,6 +441,10 @@ extern "C" void app_main(void) {
 
     button_binding_service.Init(system.navigation(), ui);
 
+    if (!serial_provisioning_service.Start()) {
+        ESP_LOGW(TAG, "Serial provisioning service failed to start");
+    }
+
     WiFiConfig boot_wifi_config;
     std::string boot_ssid;
     std::string boot_password;
@@ -457,9 +461,6 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "Voice wake service %s: %s",
                  voice_wake_state.enabled ? "enabled" : "disabled",
                  voice_wake_state.message.c_str());
-    }
-    if (!serial_provisioning_service.Start()) {
-        ESP_LOGW(TAG, "Serial provisioning service failed to start");
     }
     // 到达此处即通过本地启动健康门槛；先持久化，再允许 MQTT connected 回调上报。
     if (!ota_update_service.ConfirmRunningImage()) {
