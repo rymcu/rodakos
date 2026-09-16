@@ -101,10 +101,11 @@ bool HasPendingTransaction() {
 
 SerialProvisioningService::SerialProvisioningService(
     WiFiAdapter* wifi, DeviceCloudConfigService& cloud_config,
-    CloudRefreshCallback cloud_refresh)
+    CloudRefreshCallback cloud_refresh, VoiceTestCallback voice_test)
     : wifi_(wifi),
       cloud_config_(cloud_config),
-      cloud_refresh_callback_(std::move(cloud_refresh)) {
+      cloud_refresh_callback_(std::move(cloud_refresh)),
+      voice_test_callback_(std::move(voice_test)) {
     stopped_semaphore_ = xSemaphoreCreateBinaryStatic(&stopped_semaphore_storage_);
 }
 
@@ -309,6 +310,21 @@ void SerialProvisioningService::Run() {
 }
 
 bool SerialProvisioningService::HandleLine(const std::string& line) {
+    constexpr char kVoiceTestPrefix[] = "RODAK_VOICE_TEST_V1 ";
+    if (line.rfind(kVoiceTestPrefix, 0) == 0) {
+        const std::string command = line.substr(sizeof(kVoiceTestPrefix) - 1);
+        const bool valid = command == "wake" || command == "stop" ||
+                           command == "audio_clear" || command.rfind("audio_begin ", 0) == 0 ||
+                           command.rfind("audio_chunk ", 0) == 0;
+        const bool queued = valid && voice_test_callback_ && voice_test_callback_(command);
+        const char* verb = !valid ? "invalid" : command == "wake" ? "wake" :
+                           command == "stop" ? "stop" : command == "audio_clear" ? "audio_clear" :
+                           command.rfind("audio_begin ", 0) == 0 ? "audio_begin" : "audio_chunk";
+        std::fprintf(stdout, "RODAK_VOICE_TEST_RESULT {\"ok\":%s,\"command\":\"%s\"}\n",
+                     queued ? "true" : "false", verb);
+        std::fflush(stdout);
+        return queued;
+    }
     if (line.rfind(kFramePrefix, 0) != 0) {
         // Console input is shared with the monitor; ignore unrelated lines
         // without logging their contents.

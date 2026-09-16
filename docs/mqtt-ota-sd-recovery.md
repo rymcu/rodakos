@@ -107,8 +107,10 @@ establish memory headroom for OTA's separate download/report tasks or active AEC
 
 The main firmware disables `ESP_WIFI_IRAM_OPT` and `ESP_WIFI_RX_IRAM_OPT` to return
 shared SRAM to runtime allocations. IDF documents more than 27 KiB of combined IRAM
-savings at the cost of peak WiFi throughput. Static RX/TX buffers and the receive BA
-window remain unchanged. Reserving the MQTT worker alone was insufficient: WiFi logged
+savings at the cost of peak WiFi throughput. That initial MQTT fix kept static RX/TX
+buffers and the receive BA window unchanged; the subsequent
+[voice session memory work](voice-session-memory.md) reduces static TX to 8.
+Reserving the MQTT worker alone was insufficient: WiFi logged
 `mem fail` / `m f null` and disconnected after the first telemetry report. The serial
 stability checker treats both warnings as allocation failures.
 

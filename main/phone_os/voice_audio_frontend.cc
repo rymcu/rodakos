@@ -55,6 +55,23 @@ private:
     SemaphoreHandle_t mutex_;
 };
 
+bool ParseDiagnosticCount(const std::string& text, size_t& value) {
+    if (text.empty()) return false;
+    value = 0;
+    for (char c : text) {
+        if (c < '0' || c > '9' || value > 160000) return false;
+        value = value * 10 + static_cast<size_t>(c - '0');
+    }
+    return value <= 160000;
+}
+
+int DiagnosticHexDigit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 }  // namespace
 
 VoiceAudioFrontend::VoiceAudioFrontend(AudioCodecInput& input) : input_(input) {
@@ -140,6 +157,7 @@ void VoiceAudioFrontend::Deinit() {
     xSemaphoreTakeRecursive(lifecycle_mutex_, portMAX_DELAY);
     deinitializing_ = true;
     Stop();
+    ClearDiagnosticAudio();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     task_running_ = false;
     ++wake_generation_;
@@ -149,6 +167,7 @@ void VoiceAudioFrontend::Deinit() {
     conversation_samples_.clear();
     wake_notification_pending_ = false;
     pending_wake_callback_ = {};
+    pending_diagnostic_command_ = {};
     pending_wake_word_.clear();
     pending_wake_generation_ = 0;
     xSemaphoreGive(mutex_);
@@ -192,6 +211,7 @@ bool VoiceAudioFrontend::StartListening(
     }
 
     Stop();
+    ClearDiagnosticAudio();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     ++wake_generation_;
     on_wake_word_ = std::move(on_wake_word);
@@ -329,6 +349,106 @@ bool VoiceAudioFrontend::PopFrame(VoicePcmFrame& frame) {
     return true;
 }
 
+void VoiceAudioFrontend::ClearDiagnosticAudio() {
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    heap_caps_free(diagnostic_audio_);
+    diagnostic_audio_ = nullptr;
+    diagnostic_audio_samples_ = 0;
+    diagnostic_audio_loaded_ = 0;
+    diagnostic_audio_position_ = 0;
+    diagnostic_audio_active_ = false;
+    xSemaphoreGive(mutex_);
+}
+
+bool VoiceAudioFrontend::ArmDiagnosticAudio() {
+    if (mutex_ == nullptr) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool ready = mode_ == Mode::kWakeOnly &&
+                       diagnostic_audio_samples_ == diagnostic_audio_loaded_;
+    if (ready) {
+        diagnostic_audio_position_ = 0;
+        diagnostic_audio_active_ = diagnostic_audio_ != nullptr;
+    }
+    xSemaphoreGive(mutex_);
+    if (!ready) ESP_LOGW(TAG, "USB simulated wake rejected: not listening or incomplete audio");
+    return ready;
+}
+
+bool VoiceAudioFrontend::LoadDiagnosticAudio(const std::string& command) {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (!initialized_ || mode_ != Mode::kWakeOnly || diagnostic_audio_active_ ||
+        wake_notification_active_ || wake_notification_pending_ || pending_diagnostic_command_) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    bool accepted = false;
+    if (command == "audio_clear") {
+        heap_caps_free(diagnostic_audio_);
+        diagnostic_audio_ = nullptr;
+        diagnostic_audio_samples_ = diagnostic_audio_loaded_ = diagnostic_audio_position_ = 0;
+        accepted = true;
+    } else if (command.rfind("audio_begin ", 0) == 0) {
+        size_t count = 0;
+        if (ParseDiagnosticCount(command.substr(12), count) && count > 0) {
+            auto* replacement = static_cast<int16_t*>(heap_caps_malloc(
+                count * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (replacement != nullptr) {
+                heap_caps_free(diagnostic_audio_);
+                diagnostic_audio_ = replacement;
+                diagnostic_audio_samples_ = count;
+                diagnostic_audio_loaded_ = diagnostic_audio_position_ = 0;
+                accepted = true;
+            }
+        }
+    } else if (command.rfind("audio_chunk ", 0) == 0) {
+        const size_t separator = command.find(' ', 12);
+        size_t offset = 0;
+        if (separator != std::string::npos &&
+            ParseDiagnosticCount(command.substr(12, separator - 12), offset)) {
+            const size_t hex_length = command.size() - separator - 1;
+            const size_t count = hex_length / 4;
+            bool valid = diagnostic_audio_ != nullptr && offset == diagnostic_audio_loaded_ &&
+                         hex_length > 0 && hex_length <= 1024 && hex_length % 4 == 0 &&
+                         count <= diagnostic_audio_samples_ - diagnostic_audio_loaded_;
+            for (size_t i = separator + 1; valid && i < command.size(); ++i) {
+                valid = DiagnosticHexDigit(command[i]) >= 0;
+            }
+            if (valid) {
+                for (size_t i = 0; i < count; ++i) {
+                    const size_t p = separator + 1 + i * 4;
+                    const uint16_t sample = static_cast<uint16_t>(
+                        (DiagnosticHexDigit(command[p]) << 4) | DiagnosticHexDigit(command[p + 1]) |
+                        (DiagnosticHexDigit(command[p + 2]) << 12) | (DiagnosticHexDigit(command[p + 3]) << 8));
+                    diagnostic_audio_[offset + i] = static_cast<int16_t>(sample);
+                }
+                diagnostic_audio_loaded_ += count;
+                accepted = true;
+            }
+        }
+    }
+    xSemaphoreGive(mutex_);
+    return accepted;
+}
+
+bool VoiceAudioFrontend::QueueDiagnosticCommand(std::function<void()> command) {
+    if (!command || mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool accepted = initialized_ && !deinitializing_ &&
+                          wake_notification_task_ != nullptr &&
+                          !wake_notification_stopping_ && !wake_notification_active_ &&
+                          !wake_notification_pending_ && !pending_diagnostic_command_;
+    if (accepted) {
+        pending_diagnostic_command_ = std::move(command);
+        xTaskNotifyGive(wake_notification_task_);
+    }
+    xSemaphoreGive(mutex_);
+    return accepted;
+}
+
 void VoiceAudioFrontend::CaptureTaskEntry(void* arg) {
     static_cast<VoiceAudioFrontend*>(arg)->CaptureTask();
 }
@@ -345,6 +465,7 @@ void VoiceAudioFrontend::WakeNotificationTaskEntry(void* arg) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         std::function<void(const std::string&)> callback;
+        std::function<void()> diagnostic_command;
         std::string wake_word;
         bool stopping = false;
         bool should_notify = false;
@@ -353,6 +474,7 @@ void VoiceAudioFrontend::WakeNotificationTaskEntry(void* arg) {
             stopping = owner->wake_notification_stopping_;
             if (!stopping) {
                 owner->wake_notification_active_ = true;
+                diagnostic_command = std::move(owner->pending_diagnostic_command_);
             }
             if (!stopping && owner->wake_notification_pending_) {
                 callback = std::move(owner->pending_wake_callback_);
@@ -375,6 +497,12 @@ void VoiceAudioFrontend::WakeNotificationTaskEntry(void* arg) {
             callback(wake_word);
             ESP_LOGI(TAG,
                      "Wake notification handled: stack_min_free=%u bytes",
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
+                                           sizeof(StackType_t)));
+        }
+        if (diagnostic_command) {
+            diagnostic_command();
+            ESP_LOGI(TAG, "USB voice diagnostic handled: stack_min_free=%u bytes",
                      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
                                            sizeof(StackType_t)));
         }
@@ -655,7 +783,19 @@ void VoiceAudioFrontend::CaptureTask() {
             xSemaphoreTake(mutex_, portMAX_DELAY);
             const bool can_feed = mode_ == mode && generation == conversation_generation_ &&
                                   afe_data_ != nullptr && !afe_fetch_stopping_;
-            if (can_feed) afe_feed_active_ = true;
+            if (can_feed) {
+                afe_feed_active_ = true;
+                if (diagnostic_audio_active_) {
+                    for (auto& sample : selected_samples) {
+                        sample = diagnostic_audio_position_ < diagnostic_audio_samples_
+                                     ? diagnostic_audio_[diagnostic_audio_position_++] : 0;
+                    }
+                } else {
+                    for (size_t i = 0; i < selected_samples.size(); ++i) {
+                        selected_samples[i] = samples[i * 4 + (selected_main_mic_ == 1 ? 0 : 2)];
+                    }
+                }
+            }
             xSemaphoreGive(mutex_);
             if (can_feed) {
                 if (feed_generation != generation) {
@@ -663,8 +803,7 @@ void VoiceAudioFrontend::CaptureTask() {
                     feed_generation = generation;
                 }
                 for (size_t i = 0; i < samples.size() / kInputChannels; ++i) {
-                    afe_feed_buffer.push_back(selected_main_mic_ == 1 ? samples[i * 4]
-                                                                                    : samples[i * 4 + 2]);
+                    afe_feed_buffer.push_back(selected_samples[i]);
                     afe_feed_buffer.push_back(samples[i * 4 + 1]);
                 }
                 const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * 2;
@@ -831,6 +970,7 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
         const bool can_notify = wake_generation_ == wake_generation &&
                                 wake_notification_task_ != nullptr &&
                                 !wake_notification_pending_ &&
+                                !pending_diagnostic_command_ &&
                                 !wake_notification_active_;
         if (can_notify) {
             pending_wake_callback_ = std::move(callback);

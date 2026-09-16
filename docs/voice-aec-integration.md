@@ -52,3 +52,44 @@ local OTA confirmation, serial readiness, wake monitoring and saved WiFi auto-co
 was subsequently verified with Rodak connection/shadow events and five consecutive telemetry reports;
 see [MQTT worker resources](mqtt-ota-sd-recovery.md#mqtt-worker-resources). Repeated real-person
 conversations, playback-time VAD interruption and AEC attenuation still require evidence.
+
+## Remote USB diagnostic sessions
+
+`tools/run_serial_voice_test.py` can preload a mono 16 kHz PCM16 WAV and trigger a
+software wake on the physical board. For example:
+
+```powershell
+python tools/run_serial_voice_test.py --port COM3 --wav <speech.wav> --cycles 2 --seconds 45 --log build/logs/voice-usb-test.log
+```
+
+The USB-only `RODAK_VOICE_TEST_V1` commands are `audio_begin <sample_count>`,
+`audio_chunk <sample_offset> <PCM16LE_hex>`, `wake`, `stop`, and `audio_clear`.
+The limit is ten seconds of audio and 256 samples per sequential upload chunk.
+The `RODAK_VOICE_TEST_RESULT` response acknowledges acceptance; wake/stop execution
+must be verified from subsequent runtime logs. No settings are changed.
+
+Preloaded audio resides in PSRAM. Software wake uses the existing internal wake
+notification task. During the test, synthetic PCM replaces only the AFE microphone
+input; the electrical reference stays connected. After the fixture ends, microphone
+input is zero until the session ends. Returning to wake monitoring frees the fixture.
+Use this to test AFE/Opus/WebSocket/TTS memory and repeated session cleanup, and
+cross-check Rodak STT/TTS events. It bypasses acoustic wake recognition and microphone
+pickup, so it cannot establish echo attenuation, double-talk accuracy or VAD quality.
+
+On 2026-09-16 the non-erasing COM3 diagnostic build completed two injected-audio
+sessions (`build/logs/voice-usb-test.log`): AFE AEC/NS, Opus uplink, Rodak STT/TTS,
+playback, and re-arming all occurred. Both transcriptions were incomplete, so this
+is a transport/lifecycle result, not an ASR accuracy pass. A one-second silent
+pre-roll is now the uploader default to avoid feeding speech during startup.
+
+The third attempt (`build/logs/voice-usb-padded.log`) failed before WebSocket
+connection: internal free space was 6,111 bytes and the largest block 5,632 bytes,
+below the 6,144-byte WebSocket stack allocation. The observed internal low-water
+mark across these tests was only 575 bytes. The failed session cleaned up and
+normal wake monitoring resumed. These results supersede any inference that the
+idle 18 KiB SRAM measurement establishes sufficient headroom for device VAD.
+
+Subsequent [session memory optimization](voice-session-memory.md) passed six
+consecutive sessions and raised the internal low-water mark to 10,911 bytes.
+Device VAD remains disabled; incomplete STT and repeated server interruption
+probing observed during synthetic tests still require separate investigation.

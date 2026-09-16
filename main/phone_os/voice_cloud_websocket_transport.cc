@@ -3,9 +3,11 @@
 #include <cJSON.h>
 #include <arpa/inet.h>
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_timer.h>
+#include <freertos/idf_additions.h>
 
 #include <limits>
 #include <cstring>
@@ -32,6 +34,18 @@ constexpr size_t kMaxInboundAudioMessageSize = 8 * 1024;
 constexpr size_t kMaxInboundTextMessageSize = 64 * 1024;
 constexpr uint32_t kCleanupTaskStackSize = 4096;
 constexpr UBaseType_t kCleanupTaskPriority = 3;
+
+void LogTransportMemory(const char* phase) {
+    ESP_LOGI(TAG,
+             "Transport memory %s: internal_free=%u internal_min=%u internal_largest=%u "
+             "psram_free=%u psram_largest=%u",
+             phase,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+}
 
 class RecursiveSemaphoreLock {
 public:
@@ -322,6 +336,7 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
 
     esp_websocket_client_handle_t client = esp_websocket_client_init(&ws_config);
     if (client == nullptr) {
+        LogTransportMemory("client_init_failed");
         SetError("Failed to create websocket client");
         return false;
     }
@@ -348,9 +363,13 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
             CloseAudioChannel();
             return false;
         }
+        LogTransportMemory("before_task_start");
         err = esp_websocket_client_start(client);
     }
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Websocket start failed: %s, required_internal_stack=%d",
+                 esp_err_to_name(err), ws_config.task_stack);
+        LogTransportMemory("task_start_failed");
         SetError(std::string("Websocket start failed: ") + esp_err_to_name(err));
         CloseAudioChannel();
         return false;
@@ -513,9 +532,10 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
         {
             RecursiveSemaphoreLock client_lock(client_mutex_);
             if (client_lock.locked()) {
-                created = xTaskCreate(
+                // Stop/destroy only release network resources; no flash/NVS calls require an internal stack.
+                created = xTaskCreateWithCaps(
                     CleanupTaskEntry, "voice_ws_gc", kCleanupTaskStackSize, this,
-                    kCleanupTaskPriority, &cleanup_task);
+                    kCleanupTaskPriority, &cleanup_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 if (created == pdPASS) {
                     xSemaphoreTake(mutex_, portMAX_DELAY);
                     cleanup_task_ = cleanup_task;
@@ -524,6 +544,7 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
             }
         }
         if (created != pdPASS) {
+            LogTransportMemory("cleanup_task_failed");
             SetError("Voice websocket cleanup task unavailable");
             xSemaphoreTake(mutex_, portMAX_DELAY);
             cleanup_task_ = nullptr;
@@ -545,6 +566,8 @@ void VoiceCloudWebSocketTransport::CleanupTaskEntry(void* arg) {
     auto* owner = static_cast<VoiceCloudWebSocketTransport*>(arg);
     if (owner != nullptr) {
         owner->CleanupDetachedClient();
+        ESP_LOGI(TAG, "Websocket cleanup stack minimum free: %u bytes",
+                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
         if (owner->mutex_ != nullptr) {
             xSemaphoreTake(owner->mutex_, portMAX_DELAY);
             owner->cleanup_task_finished_ = true;
@@ -644,7 +667,7 @@ void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
 
             if (cleanup_task != nullptr) {
                 if (eTaskGetState(cleanup_task) == eSuspended) {
-                    vTaskDelete(cleanup_task);
+                    vTaskDeleteWithCaps(cleanup_task);
                     xSemaphoreTake(mutex_, portMAX_DELAY);
                     if (cleanup_task_ == cleanup_task) {
                         cleanup_task_ = nullptr;

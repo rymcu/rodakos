@@ -386,9 +386,6 @@ extern "C" void app_main(void) {
         device_cloud_config_service, file_service);
     static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service);
-    static rodakos::SerialProvisioningService serial_provisioning_service(
-        wifi, device_cloud_config_service,
-        []() { unified_mqtt_service.RequestCredentialRefresh(); });
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
@@ -399,6 +396,25 @@ extern "C" void app_main(void) {
         audio_output_service);
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
+    static rodakos::SerialProvisioningService serial_provisioning_service(
+        wifi, device_cloud_config_service,
+        []() { unified_mqtt_service.RequestCredentialRefresh(); },
+        [](const std::string& command) {
+            if (command == "wake") {
+                return voice_audio_frontend.QueueDiagnosticCommand([]() {
+                    if (voice_audio_frontend.ArmDiagnosticAudio()) {
+                        voice_wake_service.NotifyWakeWordDetected("USB simulated wake");
+                    }
+                });
+            }
+            if (command == "stop") {
+                return voice_audio_frontend.QueueDiagnosticCommand([]() {
+                    voice_assistant_service.StopInteraction();
+                    voice_audio_frontend.ClearDiagnosticAudio();
+                });
+            }
+            return voice_audio_frontend.LoadDiagnosticAudio(command);
+        });
     static rodakos::WakeOnLanService wake_on_lan_service(wifi);
     if (!rodakos::SerialProvisioningService::RecoverPendingTransaction(
             device_cloud_config_service)) {

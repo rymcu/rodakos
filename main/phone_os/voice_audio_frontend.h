@@ -38,6 +38,12 @@ public:
     bool IsRunning() const override;
     bool PopFrame(VoicePcmFrame& frame) override;
 
+    // USB diagnostics reuse the internal-stack worker because voice startup accesses NVS.
+    bool QueueDiagnosticCommand(std::function<void()> command);
+    bool LoadDiagnosticAudio(const std::string& command);
+    bool ArmDiagnosticAudio();
+    void ClearDiagnosticAudio();
+
     const char* name() const override { return "esp-sr-multinet"; }
     const char* last_error() const override { return last_error_.c_str(); }
 
@@ -77,6 +83,12 @@ private:
     bool wake_notification_active_ = false;
     bool wake_notification_pending_ = false;
     std::function<void(const std::string&)> pending_wake_callback_;
+    std::function<void()> pending_diagnostic_command_;
+    int16_t* diagnostic_audio_ = nullptr;
+    size_t diagnostic_audio_samples_ = 0;
+    size_t diagnostic_audio_loaded_ = 0;
+    size_t diagnostic_audio_position_ = 0;
+    bool diagnostic_audio_active_ = false;
     std::string pending_wake_word_;
     uint32_t pending_wake_generation_ = 0;
     bool initialized_ = false;

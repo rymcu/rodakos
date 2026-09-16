@@ -22,10 +22,12 @@ class DeviceCloudConfigService;
 class SerialProvisioningService {
 public:
     using CloudRefreshCallback = std::function<void()>;
+    using VoiceTestCallback = std::function<bool(const std::string&)>;
 
     SerialProvisioningService(WiFiAdapter* wifi,
                               DeviceCloudConfigService& cloud_config,
-                              CloudRefreshCallback cloud_refresh = {});
+                              CloudRefreshCallback cloud_refresh = {},
+                              VoiceTestCallback voice_test = {});
     ~SerialProvisioningService();
 
     SerialProvisioningService(const SerialProvisioningService&) = delete;
@@ -60,6 +62,7 @@ private:
     WiFiAdapter* wifi_ = nullptr;
     DeviceCloudConfigService& cloud_config_;
     CloudRefreshCallback cloud_refresh_callback_;
+    VoiceTestCallback voice_test_callback_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> cloud_refresh_pending_{false};
