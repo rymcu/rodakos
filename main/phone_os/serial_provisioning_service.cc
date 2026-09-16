@@ -152,7 +152,9 @@ bool SerialProvisioningService::Start() {
 
     cloud_refresh_pending_.store(false);
     running_.store(true);
-    if (xTaskCreatePinnedToCore(TaskEntry, "serial_prov", 4096, this, 2, &task_,
+    // Voice wake/AFE reserves most internal SRAM; provisioning only parses a
+    // bounded 2 KiB frame and can run with a smaller stack.
+    if (xTaskCreatePinnedToCore(TaskEntry, "serial_prov", 3072, this, 2, &task_,
                                 usb_serial_driver_core_) != pdPASS) {
         running_.store(false);
         cloud_refresh_pending_.store(false);
