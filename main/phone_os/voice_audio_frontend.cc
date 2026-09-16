@@ -592,7 +592,9 @@ void VoiceAudioFrontend::CaptureTask() {
 
         std::vector<int16_t> selected_samples;
         SelectMainMicrophone(samples, selected_samples);
-        if (afe_iface_ != nullptr && afe_data_ != nullptr) {
+        // Keep standby wake detection lightweight; AEC is armed only after the
+        // wake word opens a conversation, when playback reference is relevant.
+        if (mode == Mode::kConversation && afe_iface_ != nullptr && afe_data_ != nullptr) {
             const size_t frames = samples.size() / 4;
             for (size_t i = 0; i < frames; ++i) {
                 afe_feed_buffer_.push_back(selected_main_mic_ == 1 ? samples[i * 4]
