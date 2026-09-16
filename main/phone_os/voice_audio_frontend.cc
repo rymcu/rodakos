@@ -430,6 +430,7 @@ bool VoiceAudioFrontend::InitModelLocked() {
 }
 
 void VoiceAudioFrontend::ReleaseModelLocked() {
+    afe_feed_buffer_.clear();
     if (afe_data_ != nullptr && afe_iface_ != nullptr) {
         afe_iface_->destroy(afe_data_);
     }
@@ -545,6 +546,7 @@ void VoiceAudioFrontend::CaptureTask() {
             break;
         }
         if (mode == Mode::kIdle || read_samples == 0) {
+            afe_feed_buffer_.clear();
             ++idle_iterations;
             if (idle_iterations >= kIdleCloseIterations) {
                 input_.CloseForOwner(kWakeAudioInputOwner);
