@@ -49,6 +49,7 @@ private:
     };
 
     static void CaptureTaskEntry(void* arg);
+    static void AfeFetchTaskEntry(void* arg);
     static void WakeNotificationTaskEntry(void* arg);
 
     bool InitModelLocked();
@@ -57,8 +58,11 @@ private:
     bool EnsureWakeNotificationTaskLocked();
     bool EnsureInputForMode(Mode mode);
     void CaptureTask();
+    bool StartAfe(uint32_t generation);
+    void StopAfe();
+    void AfeFetchTask();
     void ProcessWakeSamples(std::vector<int16_t>& samples);
-    void ProcessConversationSamples(const std::vector<int16_t>& samples);
+    void ProcessConversationSamples(const std::vector<int16_t>& samples, uint32_t generation);
     void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
     size_t ResolveReadSamples(Mode mode) const;
     void SetErrorLocked(const char* error);
@@ -96,7 +100,11 @@ private:
     bool mic_speech_lock_ = false;
     const esp_afe_sr_iface_t* afe_iface_ = nullptr;
     esp_afe_sr_data_t* afe_data_ = nullptr;
-    bool afe_processing_enabled_ = false;
+    TaskHandle_t afe_fetch_task_ = nullptr;
+    bool afe_fetch_stopping_ = false;
+    uint32_t conversation_generation_ = 0;
+    uint32_t afe_generation_ = 0;
+    size_t afe_feed_samples_ = 0;
 };
 
 }  // namespace rodakos
