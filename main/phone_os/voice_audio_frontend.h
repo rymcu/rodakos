@@ -96,6 +96,7 @@ private:
     bool mic_speech_lock_ = false;
     const esp_afe_sr_iface_t* afe_iface_ = nullptr;
     esp_afe_sr_data_t* afe_data_ = nullptr;
+    bool afe_processing_enabled_ = false;
 };
 
 }  // namespace rodakos
