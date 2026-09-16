@@ -441,6 +441,12 @@ extern "C" void app_main(void) {
 
     button_binding_service.Init(system.navigation(), ui);
 
+    // Provisioning must claim its small internal-SRAM task before the voice
+    // wake/AEC workers reserve the remaining internal heap.
+    if (!serial_provisioning_service.Start()) {
+        ESP_LOGW(TAG, "Serial provisioning service failed to start");
+    }
+
     const bool voice_wake_started = voice_wake_service.Start();
     const auto voice_wake_state = voice_wake_service.GetState();
     if (!voice_wake_started) {
@@ -475,10 +481,6 @@ extern "C" void app_main(void) {
                 }
             });
         }
-    }
-
-    if (!serial_provisioning_service.Start()) {
-        ESP_LOGW(TAG, "Serial provisioning service failed to start");
     }
 
     ESP_LOGI(TAG, "RodakOS started successfully");
