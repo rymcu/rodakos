@@ -89,6 +89,41 @@ Recovery ABI. Normal OTA images must continue writing v1; changing it requires a
 migration that replaces both Recovery and the main application. The package manifest records the
 required `otaJournalSchemaVersion`.
 
+## MQTT Worker Resources
+
+MQTT reserves one 6 KiB internal-SRAM worker before local wake monitoring starts.
+Bootstrap, credential refresh, connected initialization and message processing reuse this
+worker; telemetry timers only schedule work. NVS access requires an internal stack.
+Incoming messages use an eight-entry queue with explicit overflow diagnostics, while
+connection and refresh work use separate coalesced flags. PUBACK handling remains in the
+MQTT callback so a worker waiting for an acknowledgement cannot block its delivery.
+
+A WiFi IP address alone does not prove MQTT recovery. Check `Unified MQTT connected`,
+incoming PC status and the Rodak device's new connected/shadow events plus at least two
+telemetry reports. The previous per-event 6 KiB task allocation could silently fail when
+the largest free internal block was only 5 KiB, despite saved WiFi connecting successfully.
+Worker reservation failures and stack high-water marks are now logged. This does not
+establish memory headroom for OTA's separate download/report tasks or active AEC.
+
+The main firmware disables `ESP_WIFI_IRAM_OPT` and `ESP_WIFI_RX_IRAM_OPT` to return
+shared SRAM to runtime allocations. IDF documents more than 27 KiB of combined IRAM
+savings at the cost of peak WiFi throughput. Static RX/TX buffers and the receive BA
+window remain unchanged. Reserving the MQTT worker alone was insufficient: WiFi logged
+`mem fail` / `m f null` and disconnected after the first telemetry report. The serial
+stability checker treats both warnings as allocation failures.
+
+Keep internal heap and worker stack diagnostics in the serial `MQTT health` line.
+Adding undeclared telemetry fields causes Rodak thing-model validation warnings; the
+existing telemetry schema is unchanged.
+
+The 2026-09-16 COM3 package `20260916-115916` passed the protected non-erasing
+refresh and boot gates. Rodak observed a new connection at 12:01:08 CST, a reported
+shadow and subsequent 30-second telemetry. Serial logs show incoming PC status,
+internal free space around 18 KiB, a 10 KiB largest block and 3,852 bytes of minimum
+MQTT worker stack headroom. Evidence is in `build/mqtt-final-flash.log` and
+`build/logs/mqtt-final-soak.log`. These are idle-network checks, not active AEC,
+OTA download, credential-rotation or peak-throughput validation.
+
 ## Build Artifacts
 
 Activate ESP-IDF, then run:

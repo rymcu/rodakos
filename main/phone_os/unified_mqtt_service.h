@@ -12,6 +12,8 @@
 #include <mqtt_client.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #include <freertos/timers.h>
 
 namespace rodakos {
@@ -54,10 +56,11 @@ private:
                                     int32_t event_id, void* event_data);
     static void MqttEventHandler(void* arg, esp_event_base_t event_base,
                                  int32_t event_id, void* event_data);
-    static void ConnectionTask(void* arg);
-    static void CredentialRefreshTask(void* arg);
-    static void ConnectedTask(void* arg);
-    static void MessageTask(void* arg);
+    static void WorkerTask(void* arg);
+    void WorkerLoop();
+    void RunConnection();
+    void RefreshCredentials();
+    void OnConnected(uint32_t generation);
     static void TelemetryTimerCallback(TimerHandle_t timer);
 
     void StartConnectionAsync();
@@ -101,7 +104,17 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<bool> reset_scheduled_{false};
     std::atomic<bool> force_refresh_{false};
-    std::atomic<uint32_t> event_worker_count_{0};
+    struct PendingMessage {
+        uint32_t client_generation;
+        std::string topic;
+        std::string payload;
+    };
+    QueueHandle_t message_queue_ = nullptr;
+    TaskHandle_t worker_ = nullptr;
+    std::atomic<bool> worker_running_{false};
+    std::atomic<bool> telemetry_pending_{false};
+    bool connected_pending_ = false;
+    uint32_t connected_pending_generation_ = 0;
 };
 
 }  // namespace rodakos

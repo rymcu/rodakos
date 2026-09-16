@@ -34,18 +34,6 @@ constexpr int kBackgroundTaskPollMs = 50;
 constexpr int kReliablePublishTimeoutMs = 10 * 1000;
 constexpr int kReliablePublishRetryMs = 50;
 
-struct MqttConnectedTaskContext {
-    UnifiedMqttService* service = nullptr;
-    uint32_t client_generation = 0;
-};
-
-struct MqttMessageTaskContext {
-    UnifiedMqttService* service = nullptr;
-    uint32_t client_generation = 0;
-    std::string topic;
-    std::string payload;
-};
-
 std::string EncodeJson(cJSON* root) {
     char* text = cJSON_PrintUnformatted(root);
     if (text == nullptr) {
@@ -196,17 +184,36 @@ bool UnifiedMqttService::Start() {
     if (!started_.compare_exchange_strong(expected, true)) {
         return true;
     }
+    message_queue_ = xQueueCreate(8, sizeof(PendingMessage*));
+    worker_running_.store(true);
+    if (message_queue_ == nullptr ||
+        xTaskCreate(WorkerTask, "mqtt_worker", 6144, this, 4, &worker_) != pdPASS) {
+        worker_running_.store(false);
+        started_.store(false);
+        if (message_queue_ != nullptr) {
+            vQueueDelete(message_queue_);
+            message_queue_ = nullptr;
+        }
+        ESP_LOGE(TAG, "Cannot reserve MQTT worker (stack=6144 internal_free=%u largest=%u)",
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+        return false;
+    }
+    ESP_LOGI(TAG, "Reserved internal MQTT worker: stack=6144 queue=8");
     BindOtaProgressPublisher();
 
     const esp_err_t err = esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, NetworkEventHandler, this, &ip_event_instance_);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register network listener: %s", esp_err_to_name(err));
-        started_.store(false);
-        ota_update_.SetProgressPublisher({});
+        Stop();
         return false;
     }
     ESP_LOGI(TAG, "Waiting for WiFi before starting MQTT");
+    wifi_ap_record_t access_point = {};
+    if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        StartConnectionAsync();
+    }
     return true;
 }
 
@@ -244,9 +251,20 @@ void UnifiedMqttService::Stop() {
         esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_instance_);
         ip_event_instance_ = nullptr;
     }
-    while (connecting_.load() || reset_scheduled_.load() || event_worker_count_.load() > 0) {
+    while (worker_running_.load()) {
         vTaskDelay(pdMS_TO_TICKS(kBackgroundTaskPollMs));
     }
+    PendingMessage* pending = nullptr;
+    while (xQueueReceive(message_queue_, &pending, 0) == pdTRUE) {
+        delete pending;
+    }
+    vQueueDelete(message_queue_);
+    message_queue_ = nullptr;
+    worker_ = nullptr;
+    connecting_.store(false);
+    reset_scheduled_.store(false);
+    telemetry_pending_.store(false);
+    connected_pending_ = false;
     std::lock_guard<std::mutex> reliable_lock(reliable_publish_mutex_);
 }
 
@@ -285,43 +303,83 @@ void UnifiedMqttService::StartConnectionAsync() {
     if (!connecting_.compare_exchange_strong(expected, true)) {
         return;
     }
-    // Keep the bootstrap worker small so the MQTT task can be created while
-    // this worker is still alive. The worker only coordinates NVS/HTTP setup.
-    if (xTaskCreate(ConnectionTask, "mqtt_config", 6144, this, 4, nullptr) != pdPASS) {
-        connecting_.store(false);
-    }
 }
 
-void UnifiedMqttService::ConnectionTask(void* arg) {
+void UnifiedMqttService::WorkerTask(void* arg) {
     auto* service = static_cast<UnifiedMqttService*>(arg);
-    if (service != nullptr) {
-        int retry_delay_ms = kConnectionRetryInitialMs;
-        while (service->started_.load() && !service->HasClient()) {
-            service->Connect();
-            if (service->HasClient() || !service->started_.load()) {
-                break;
-            }
-            ESP_LOGW(TAG, "Unified MQTT setup failed; retrying in %d ms", retry_delay_ms);
-            DelayWhileStarted(service->started_, retry_delay_ms);
-            retry_delay_ms = std::min(retry_delay_ms * 2, kConnectionRetryMaxMs);
-        }
-        service->connecting_.store(false);
-    }
+    service->WorkerLoop();
+    service->worker_running_.store(false);
     vTaskDelete(nullptr);
 }
 
+void UnifiedMqttService::WorkerLoop() {
+    while (started_.load()) {
+        if (reset_scheduled_.load()) {
+            RefreshCredentials();
+        }
+        if (connecting_.load() && started_.load()) {
+            RunConnection();
+        }
+        uint32_t generation = 0;
+        bool connected_work = false;
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            connected_work = connected_pending_;
+            generation = connected_pending_generation_;
+            connected_pending_ = false;
+        }
+        if (connected_work) {
+            OnConnected(generation);
+            ESP_LOGI(TAG, "MQTT worker stack minimum free=%u bytes",
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+        }
+        if (telemetry_pending_.exchange(false) && started_.load()) {
+            PublishTelemetry();
+        }
+        PendingMessage* raw = nullptr;
+        if (xQueueReceive(message_queue_, &raw, pdMS_TO_TICKS(kBackgroundTaskPollMs)) == pdTRUE) {
+            std::unique_ptr<PendingMessage> message(raw);
+            if (IsCurrentClientGeneration(message->client_generation)) {
+                HandleMessage(message->topic, message->payload);
+            }
+        }
+    }
+}
+
+void UnifiedMqttService::RunConnection() {
+    int retry_delay_ms = kConnectionRetryInitialMs;
+    while (started_.load() && !HasClient()) {
+        Connect();
+        if (HasClient() || !started_.load()) {
+            break;
+        }
+        ESP_LOGW(TAG, "Unified MQTT setup failed; retrying in %d ms", retry_delay_ms);
+        DelayWhileStarted(started_, retry_delay_ms);
+        retry_delay_ms = std::min(retry_delay_ms * 2, kConnectionRetryMaxMs);
+    }
+    connecting_.store(false);
+}
+
 void UnifiedMqttService::Connect() {
-    DeviceCloudConfig next_config;
+    auto next = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (next == nullptr) {
+        ESP_LOGE(TAG, "Cannot allocate MQTT bootstrap configuration");
+        return;
+    }
+    DeviceCloudConfig& next_config = *next;
     config_service_.Load(next_config);
     if (force_refresh_.exchange(false) || !next_config.has_mqtt_config ||
         NeedsV2Refresh(next_config)) {
         ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
-        const DeviceCloudConfig cached_config = next_config;
-        DeviceCloudConfig refreshed_config = next_config;
-        const bool refresh_succeeded = config_service_.Refresh(refreshed_config);
-        next_config = refresh_succeeded && refreshed_config.has_mqtt_config
-                          ? std::move(refreshed_config)
-                          : cached_config;
+        auto refreshed = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig(next_config));
+        if (refreshed == nullptr) {
+            ESP_LOGE(TAG, "Cannot allocate MQTT bootstrap refresh configuration");
+            return;
+        }
+        if (config_service_.Refresh(*refreshed) && refreshed->has_mqtt_config) {
+            next_config = std::move(*refreshed);
+        }
     }
     if (!next_config.has_mqtt_config) {
         const std::string config_error = config_service_.last_error();
@@ -410,17 +468,11 @@ void UnifiedMqttService::ScheduleCredentialRefresh() {
     if (!reset_scheduled_.compare_exchange_strong(expected, true)) {
         return;
     }
-    if (xTaskCreate(CredentialRefreshTask, "mqtt_reauth", 6144, this, 4, nullptr) != pdPASS) {
-        reset_scheduled_.store(false);
-        ESP_LOGE(TAG,
-                 "Failed to schedule MQTT credential refresh (internal_free=%u largest=%u)",
-                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
-    }
+    // Coalesced control work cannot be starved by a full message queue.
 }
 
-void UnifiedMqttService::CredentialRefreshTask(void* arg) {
-    auto* service = static_cast<UnifiedMqttService*>(arg);
+void UnifiedMqttService::RefreshCredentials() {
+    auto* service = this;
     MqttCredentialRefreshAction action =
         MqttCredentialRefreshAction::kKeepCurrentClient;
     if (service != nullptr) {
@@ -431,7 +483,17 @@ void UnifiedMqttService::CredentialRefreshTask(void* arg) {
         // bootstrap HTTP request is pending, so do not overwrite a newer event.
         ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
 
-        DeviceCloudConfig refreshed_config;
+        auto refreshed_snapshot = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig);
+        auto active_snapshot = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig);
+        if (refreshed_snapshot == nullptr || active_snapshot == nullptr) {
+            ESP_LOGE(TAG, "Cannot allocate MQTT credential refresh snapshots");
+            reset_scheduled_.store(false);
+            return;
+        }
+        DeviceCloudConfig& refreshed_config = *refreshed_snapshot;
+        DeviceCloudConfig& active_config = *active_snapshot;
         service->config_service_.Load(refreshed_config);
         const bool refreshed = service->config_service_.Refresh(refreshed_config) &&
                                refreshed_config.has_mqtt_config;
@@ -449,7 +511,6 @@ void UnifiedMqttService::CredentialRefreshTask(void* arg) {
                 BuildMqttClientConfig(refreshed_config, broker_uri, client_id);
 
             esp_mqtt_client_handle_t client = nullptr;
-            DeviceCloudConfig active_config;
             bool client_connected = false;
             {
                 std::lock_guard<std::mutex> lock(service->mqtt_mutex_);
@@ -558,7 +619,6 @@ void UnifiedMqttService::CredentialRefreshTask(void* arg) {
         ESP_LOGW(TAG, "Restarting to isolate refreshed MQTT session");
         esp_restart();
     }
-    vTaskDelete(nullptr);
 }
 
 bool UnifiedMqttService::HasClient() const {
@@ -591,7 +651,6 @@ void UnifiedMqttService::MqttEventHandler(void* arg, esp_event_base_t event_base
 
 void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     bool wake_publisher = false;
-    bool schedule_connected = false;
     bool schedule_message = false;
     uint32_t event_generation = 0;
     {
@@ -601,9 +660,8 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
         }
         if (event->event_id == MQTT_EVENT_CONNECTED) {
             connected_.store(true);
-            schedule_connected = true;
-            event_generation = client_generation_;
-            event_worker_count_.fetch_add(1);
+            connected_pending_ = true;
+            connected_pending_generation_ = client_generation_;
         } else if (event->event_id == MQTT_EVENT_DISCONNECTED) {
             connected_.store(false);
         } else if (event->event_id == MQTT_EVENT_PUBLISHED) {
@@ -627,7 +685,6 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                    event->data_len == event->total_data_len) {
             schedule_message = true;
             event_generation = client_generation_;
-            event_worker_count_.fetch_add(1);
         }
     }
     if (wake_publisher && publish_ack_semaphore_ != nullptr) {
@@ -636,18 +693,6 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "Unified MQTT connected");
-            if (schedule_connected) {
-                auto context = std::unique_ptr<MqttConnectedTaskContext>(
-                    new (std::nothrow) MqttConnectedTaskContext{this, event_generation});
-                if (context == nullptr ||
-                    xTaskCreate(ConnectedTask, "mqtt_connected", 6144, context.get(), 4,
-                                nullptr) != pdPASS) {
-                    event_worker_count_.fetch_sub(1);
-                    ESP_LOGE(TAG, "Failed to schedule MQTT connected work");
-                } else {
-                    context.release();
-                }
-            }
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "Unified MQTT disconnected; ESP-MQTT will reconnect");
@@ -659,18 +704,15 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 break;
             }
             {
-                auto context = std::unique_ptr<MqttMessageTaskContext>(
-                    new (std::nothrow) MqttMessageTaskContext{
-                        this,
+                auto context = std::unique_ptr<PendingMessage>(
+                    new (std::nothrow) PendingMessage{
                         event_generation,
                         std::string(event->topic, event->topic_len),
                         std::string(event->data, event->data_len),
                     });
-                if (context == nullptr ||
-                    xTaskCreate(MessageTask, "mqtt_message", 6144, context.get(), 4,
-                                nullptr) != pdPASS) {
-                    event_worker_count_.fetch_sub(1);
-                    ESP_LOGE(TAG, "Failed to schedule MQTT message work");
+                PendingMessage* pending = context.get();
+                if (pending == nullptr || xQueueSend(message_queue_, &pending, 0) != pdTRUE) {
+                    ESP_LOGE(TAG, "MQTT message dropped: worker queue full or allocation failed");
                 } else {
                     context.release();
                 }
@@ -695,11 +737,8 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     }
 }
 
-void UnifiedMqttService::ConnectedTask(void* arg) {
-    std::unique_ptr<MqttConnectedTaskContext> context(
-        static_cast<MqttConnectedTaskContext*>(arg));
-    UnifiedMqttService* service = context != nullptr ? context->service : nullptr;
-    const uint32_t generation = context != nullptr ? context->client_generation : 0;
+void UnifiedMqttService::OnConnected(uint32_t generation) {
+    auto* service = this;
     if (service != nullptr && service->IsCurrentClientGeneration(generation)) {
         service->SubscribeTopics();
         if (service->IsCurrentClientGeneration(generation)) {
@@ -720,26 +759,6 @@ void UnifiedMqttService::ConnectedTask(void* arg) {
             }
         }
     }
-    if (service != nullptr) {
-        service->event_worker_count_.fetch_sub(1);
-    }
-    // FreeRTOS task deletion does not unwind C++ locals, so release the heap context explicitly.
-    context.reset();
-    vTaskDelete(nullptr);
-}
-
-void UnifiedMqttService::MessageTask(void* arg) {
-    std::unique_ptr<MqttMessageTaskContext> context(
-        static_cast<MqttMessageTaskContext*>(arg));
-    if (context != nullptr && context->service != nullptr) {
-        if (context->service->IsCurrentClientGeneration(context->client_generation)) {
-            context->service->HandleMessage(context->topic, context->payload);
-        }
-        context->service->event_worker_count_.fetch_sub(1);
-    }
-    // PC status arrives frequently; leaking this payload context grows PSRAM every message.
-    context.reset();
-    vTaskDelete(nullptr);
 }
 
 void UnifiedMqttService::SubscribeTopics() {
@@ -873,7 +892,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
 void UnifiedMqttService::TelemetryTimerCallback(TimerHandle_t timer) {
     auto* service = static_cast<UnifiedMqttService*>(pvTimerGetTimerID(timer));
     if (service != nullptr && service->started_.load()) {
-        service->PublishTelemetry();
+        service->telemetry_pending_.store(true);
     }
 }
 
@@ -899,6 +918,11 @@ void UnifiedMqttService::PublishTelemetry() {
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);
     Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_telemetry), payload);
+    ESP_LOGI(TAG, "MQTT health: connected=%d internal_free=%u internal_largest=%u stack_min_free=%u",
+             connected_.load(),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 }
 
 void UnifiedMqttService::PublishShadowReport() {

@@ -445,6 +445,13 @@ extern "C" void app_main(void) {
         ESP_LOGW(TAG, "Serial provisioning service failed to start");
     }
 
+    // Reserve the internal MQTT worker stack before the wake model fragments SRAM.
+    // WiFi auto-connect remains below local OTA confirmation.
+    const bool mqtt_started = unified_mqtt_service.Start();
+    if (!mqtt_started) {
+        ESP_LOGW(TAG, "Unified MQTT service failed to start");
+    }
+
     WiFiConfig boot_wifi_config;
     std::string boot_ssid;
     std::string boot_password;
@@ -465,10 +472,6 @@ extern "C" void app_main(void) {
     // 到达此处即通过本地启动健康门槛；先持久化，再允许 MQTT connected 回调上报。
     if (!ota_update_service.ConfirmRunningImage()) {
         ESP_LOGW(TAG, "Local boot confirmation did not complete");
-    }
-    const bool mqtt_started = unified_mqtt_service.Start();
-    if (!mqtt_started) {
-        ESP_LOGW(TAG, "Unified MQTT service failed to start");
     }
 
     // WiFi 自动连接放在系统启动后，避免阻塞 UI

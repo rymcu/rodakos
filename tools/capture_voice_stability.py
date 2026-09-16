@@ -87,7 +87,7 @@ _FAILURE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"out\s+of\s+memory|no\s*mem|esp_err_no_mem|failed to (?:alloc|allocate)\b|"
             r"failed to create .*task|task creation failed|task unavailable:.*(?:free|largest)|"
-            r"heap_caps_.*\b(?:fail|error)\b",
+            r"heap_caps_.*\b(?:fail|error)\b|^(?:mem fail|m f null)\b",
             re.IGNORECASE,
         ),
     ),

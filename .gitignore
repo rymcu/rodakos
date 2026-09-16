@@ -1,4 +1,5 @@
 build/
+/tests/app_model/build-win/
 managed_components/
 sdkconfig.old
 ScreenShot_*.png

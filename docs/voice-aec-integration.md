@@ -31,8 +31,9 @@ device VAD event is sent as `type: "vad"`, `state: "start"`, with `source`, `seq
 followed by `type: "abort"`. Rodak performs ASR and semantic confirmation, filters likely playback
 echo, stops the current TTS turn, and keeps the WebSocket session alive.
 
-Until the AFE processor is integrated and the physical MIC1/MIC2/MIC3 mapping is verified, realtime mode
-is an integration/diagnostic path and must not be treated as proof of echo-safe production behavior.
+The physical MIC1/MIC2/MIC3 mapping is confirmed against the schematics in `images/`, and
+the AFE processor is integrated. Realtime mode still requires VAD wiring and acoustic
+validation before it can be treated as echo-safe production behavior.
 
 ## Current lifecycle implementation
 
@@ -47,5 +48,7 @@ for NVS writes. Provisioning retains its original 4096-byte stack. Device AEC cu
 AFE VAD; the VAD-to-interruption wiring described above remains planned, not verified behavior.
 
 Firmware build and configuration-preserving COM3 refresh passed on 2026-09-16, including startup,
-local OTA confirmation, serial readiness, wake monitoring and saved WiFi auto-connect. Repeated
-real-person conversations, AEC attenuation, and current-firmware MQTT recovery still require evidence.
+local OTA confirmation, serial readiness, wake monitoring and saved WiFi auto-connect. MQTT recovery
+was subsequently verified with Rodak connection/shadow events and five consecutive telemetry reports;
+see [MQTT worker resources](mqtt-ota-sd-recovery.md#mqtt-worker-resources). Repeated real-person
+conversations, playback-time VAD interruption and AEC attenuation still require evidence.
