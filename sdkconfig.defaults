@@ -82,3 +82,7 @@ CONFIG_CODEC_ES7210_SUPPORT=y
 # CONFIG_CODEC_ES8374_SUPPORT is not set
 # CONFIG_CODEC_ES8388_SUPPORT is not set
 # CONFIG_CODEC_TAS5805M_SUPPORT is not set
+
+# Use ESP-SR device AEC for BigSmart playback-time interruption
+CONFIG_USE_DEVICE_AEC=y
+# CONFIG_USE_SERVER_AEC is not set
