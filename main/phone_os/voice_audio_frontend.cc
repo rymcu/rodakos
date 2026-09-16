@@ -548,7 +548,7 @@ void VoiceAudioFrontend::CaptureTask() {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool task_running = task_running_;
         const Mode mode = mode_;
-        const size_t read_samples = ResolveReadSamples(mode);
+        const size_t read_samples = ResolveReadSamples(mode) * kInputChannels;
         xSemaphoreGive(mutex_);
 
         if (!task_running) {
@@ -617,6 +617,8 @@ void VoiceAudioFrontend::CaptureTask() {
         } else if (mode == Mode::kConversation && (afe_iface_ == nullptr || afe_data_ == nullptr)) {
             ProcessConversationSamples(selected_samples, conversation_generation_);
         }
+        // Keep IDLE0 watchdog serviceable when the codec returns short/empty blocks.
+        taskYIELD();
     }
 
     input_.CloseForOwner(kWakeAudioInputOwner);
