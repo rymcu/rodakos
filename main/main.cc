@@ -441,9 +441,16 @@ extern "C" void app_main(void) {
 
     button_binding_service.Init(system.navigation(), ui);
 
-    const bool voice_wake_started = voice_wake_service.Start();
-    const auto voice_wake_state = voice_wake_service.GetState();
-    if (!voice_wake_started) {
+    WiFiConfig boot_wifi_config;
+    std::string boot_ssid;
+    std::string boot_password;
+    const bool has_saved_wifi = boot_wifi_config.LoadCredentials(boot_ssid, boot_password);
+    const bool voice_wake_started = has_saved_wifi && voice_wake_service.Start();
+    const auto voice_wake_state = has_saved_wifi ? voice_wake_service.GetState()
+                                                  : rodakos::VoiceWakeState{};
+    if (!has_saved_wifi) {
+        ESP_LOGI(TAG, "Voice wake deferred until serial WiFi provisioning completes");
+    } else if (!voice_wake_started) {
         ESP_LOGW(TAG, "Voice wake service failed to start: %s",
                  voice_wake_state.message.c_str());
     } else {
