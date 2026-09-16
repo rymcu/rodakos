@@ -91,5 +91,8 @@ idle 18 KiB SRAM measurement establishes sufficient headroom for device VAD.
 
 Subsequent [session memory optimization](voice-session-memory.md) passed six
 consecutive sessions and raised the internal low-water mark to 10,911 bytes.
-Device VAD remains disabled; incomplete STT and repeated server interruption
-probing observed during synthetic tests still require separate investigation.
+Device VAD remains disabled. Subsequent Rodak commit `7ad4de4a` fixed premature
+server segmentation and repeated interruption-probe routing. Three identical
+fixture replays then retained the complete spoken tail and produced one effective
+recognition/reply each. The proper-name recognition error also occurs with the
+original WAV offline and remains an ASR accuracy issue, not proven device loss.

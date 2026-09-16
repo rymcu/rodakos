@@ -90,3 +90,9 @@ a response sentence. All six transcriptions were incomplete. Therefore this is
 a successful memory/lifecycle regression gate, not six successful question-answer
 or acoustic AEC tests. Repeated probing and speech truncation remain separate
 issues to investigate.
+
+Rodak subsequently fixed these two server issues in `7ad4de4a`. The same firmware
+and fixture passed three further replays with complete source-audio coverage,
+one effective recognition/reply per session and no recursive interruption probes.
+See `build/logs/endpoint-probe-fixed.log`. Proper-name ASR accuracy and acoustic
+AEC/device VAD remain outside this memory gate.
