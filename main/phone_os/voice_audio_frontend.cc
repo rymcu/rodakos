@@ -417,8 +417,13 @@ bool VoiceAudioFrontend::InitModelLocked() {
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
+#if CONFIG_USE_DEVICE_AEC
     afe_config->aec_init = true;
+    afe_config->vad_init = false;
+#else
+    afe_config->aec_init = false;
     afe_config->vad_init = true;
+#endif
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_ ? afe_iface_->create_from_config(afe_config) : nullptr;
@@ -595,6 +600,7 @@ void VoiceAudioFrontend::CaptureTask() {
                 afe_feed_buffer_.push_back(samples[i * 4 + 1]);
             }
             const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_));
+            selected_samples.clear();
             while (feed_size > 0 && afe_feed_buffer_.size() >= feed_size) {
                 afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
                 afe_feed_buffer_.erase(afe_feed_buffer_.begin(), afe_feed_buffer_.begin() + feed_size);
