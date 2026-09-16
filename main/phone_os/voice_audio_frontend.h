@@ -81,6 +81,7 @@ private:
     std::function<void(const std::string&)> on_wake_word_;
     std::deque<VoicePcmFrame> frames_;
     std::vector<int16_t> conversation_samples_;
+    std::vector<int16_t> afe_feed_buffer_;
     srmodel_list_t* models_ = nullptr;
     esp_mn_iface_t* multinet_ = nullptr;
     model_iface_data_t* multinet_data_ = nullptr;

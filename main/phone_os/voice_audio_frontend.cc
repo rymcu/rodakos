@@ -585,6 +585,24 @@ void VoiceAudioFrontend::CaptureTask() {
 
         std::vector<int16_t> selected_samples;
         SelectMainMicrophone(samples, selected_samples);
+        if (afe_iface_ != nullptr && afe_data_ != nullptr) {
+            const size_t frames = samples.size() / 4;
+            for (size_t i = 0; i < frames; ++i) {
+                afe_feed_buffer_.push_back(selected_main_mic_ == 1 ? samples[i * 4]
+                                                                   : samples[i * 4 + 2]);
+                afe_feed_buffer_.push_back(samples[i * 4 + 1]);
+            }
+            const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_));
+            while (feed_size > 0 && afe_feed_buffer_.size() >= feed_size) {
+                afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
+                afe_feed_buffer_.erase(afe_feed_buffer_.begin(), afe_feed_buffer_.begin() + feed_size);
+                auto* result = afe_iface_->fetch_with_delay(afe_data_, 0);
+                if (result != nullptr && result->ret_value != ESP_FAIL && result->data != nullptr) {
+                    selected_samples.assign(result->data,
+                                            result->data + result->data_size / sizeof(int16_t));
+                }
+            }
+        }
         if (mode == Mode::kWakeOnly) {
             ProcessWakeSamples(selected_samples);
         } else if (mode == Mode::kConversation) {
