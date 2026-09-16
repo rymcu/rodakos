@@ -605,7 +605,7 @@ void VoiceAudioFrontend::CaptureTask() {
                                                                    : samples[i * 4 + 2]);
                 afe_feed_buffer_.push_back(samples[i * 4 + 1]);
             }
-            const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_));
+            const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * 2;
             selected_samples.clear();
             while (feed_size > 0 && afe_feed_buffer_.size() >= feed_size) {
                 afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
@@ -618,7 +618,7 @@ void VoiceAudioFrontend::CaptureTask() {
             ProcessConversationSamples(selected_samples, conversation_generation_);
         }
         // Keep IDLE0 watchdog serviceable when the codec returns short/empty blocks.
-        taskYIELD();
+        vTaskDelay(1);
     }
 
     input_.CloseForOwner(kWakeAudioInputOwner);
