@@ -158,13 +158,15 @@ void VoiceAudioFrontend::Deinit() {
     deinitializing_ = true;
     Stop();
     ClearDiagnosticAudio();
+    StopAecDiagnosticCapture();
+    ClearAecDiagnosticCapture();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     task_running_ = false;
     ++wake_generation_;
     mode_ = Mode::kIdle;
     on_wake_word_ = {};
     frames_.clear();
-    conversation_samples_.clear();
+    conversation_assembler_.Reset();
     wake_notification_pending_ = false;
     pending_wake_callback_ = {};
     pending_diagnostic_command_ = {};
@@ -217,7 +219,7 @@ bool VoiceAudioFrontend::StartListening(
     on_wake_word_ = std::move(on_wake_word);
     mode_ = Mode::kWakeOnly;
     frames_.clear();
-    conversation_samples_.clear();
+    conversation_assembler_.Reset();
     if (multinet_ != nullptr && multinet_data_ != nullptr) {
         multinet_->clean(multinet_data_);
     }
@@ -295,6 +297,7 @@ bool VoiceAudioFrontend::Start(const VoiceRecorderConfig& config) {
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     mode_ = Mode::kConversation;
+    aec_diagnostic_capture_.Begin(generation);
     xSemaphoreGive(mutex_);
     if (!EnsureInputForMode(Mode::kConversation)) {
         Stop();
@@ -316,9 +319,11 @@ void VoiceAudioFrontend::Stop() {
     if (mode_ == Mode::kConversation) {
         mode_ = Mode::kIdle;
     }
+    if (aec_diagnostic_capture_.GetStatus().state == VoiceAecDiagnosticCapture::State::kCapturing)
+        aec_diagnostic_capture_.Stop();
     ++conversation_generation_;
     frames_.clear();
-    conversation_samples_.clear();
+    conversation_assembler_.Reset();
     xSemaphoreGive(mutex_);
     StopAfe();
     input_.CloseForOwner(kConversationAudioInputOwner);
@@ -349,6 +354,50 @@ bool VoiceAudioFrontend::PopFrame(VoicePcmFrame& frame) {
     return true;
 }
 
+bool VoiceAudioFrontend::ArmAecDiagnosticCapture(uint32_t duration_ms) {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool accepted = initialized_ && !deinitializing_ && !diagnostic_audio_active_ &&
+                          aec_diagnostic_capture_.Arm(duration_ms);
+    if (accepted && mode_ == Mode::kConversation)
+        aec_diagnostic_capture_.Begin(conversation_generation_);
+    xSemaphoreGive(mutex_);
+    return accepted;
+}
+
+void VoiceAudioFrontend::StopAecDiagnosticCapture() {
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    aec_diagnostic_capture_.Stop();
+    xSemaphoreGive(mutex_);
+}
+
+bool VoiceAudioFrontend::ClearAecDiagnosticCapture() {
+    if (mutex_ == nullptr) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool cleared = aec_diagnostic_capture_.Clear();
+    xSemaphoreGive(mutex_);
+    return cleared;
+}
+
+VoiceAecDiagnosticCapture::Status VoiceAudioFrontend::GetAecDiagnosticCaptureStatus() const {
+    if (mutex_ == nullptr) return {};
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const auto status = aec_diagnostic_capture_.GetStatus();
+    xSemaphoreGive(mutex_);
+    return status;
+}
+
+bool VoiceAudioFrontend::ReadAecDiagnosticCaptureChunk(uint8_t channel, size_t offset,
+                                                      size_t count, std::string& hex) const {
+    if (mutex_ == nullptr) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool read = aec_diagnostic_capture_.ReadChunk(channel, offset, count, hex);
+    xSemaphoreGive(mutex_);
+    return read;
+}
+
 void VoiceAudioFrontend::ClearDiagnosticAudio() {
     if (mutex_ == nullptr) return;
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -364,7 +413,10 @@ void VoiceAudioFrontend::ClearDiagnosticAudio() {
 bool VoiceAudioFrontend::ArmDiagnosticAudio() {
     if (mutex_ == nullptr) return false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool ready = mode_ == Mode::kWakeOnly &&
+    const auto capture_state = aec_diagnostic_capture_.GetStatus().state;
+    const bool ready = capture_state != VoiceAecDiagnosticCapture::State::kArmed &&
+                       capture_state != VoiceAecDiagnosticCapture::State::kCapturing &&
+                       mode_ == Mode::kWakeOnly &&
                        diagnostic_audio_samples_ == diagnostic_audio_loaded_;
     if (ready) {
         diagnostic_audio_position_ = 0;
@@ -372,6 +424,28 @@ bool VoiceAudioFrontend::ArmDiagnosticAudio() {
     }
     xSemaphoreGive(mutex_);
     if (!ready) ESP_LOGW(TAG, "USB simulated wake rejected: not listening or incomplete audio");
+    return ready;
+}
+
+bool VoiceAudioFrontend::ReplayDiagnosticAudio() {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const auto capture_state = aec_diagnostic_capture_.GetStatus().state;
+    const bool ready = capture_state != VoiceAecDiagnosticCapture::State::kArmed &&
+                       capture_state != VoiceAecDiagnosticCapture::State::kCapturing &&
+                       initialized_ && !deinitializing_ && mode_ == Mode::kConversation &&
+                       afe_data_ != nullptr && !afe_fetch_stopping_ &&
+                       afe_generation_ == conversation_generation_ &&
+                       diagnostic_audio_ != nullptr && diagnostic_audio_samples_ > 0 &&
+                       diagnostic_audio_samples_ == diagnostic_audio_loaded_ &&
+                       diagnostic_audio_position_ >= diagnostic_audio_samples_;
+    if (ready) {
+        diagnostic_audio_position_ = 0;
+        diagnostic_audio_active_ = true;
+    }
+    xSemaphoreGive(mutex_);
+    if (ready) ESP_LOGI(TAG, "USB diagnostic audio replay started");
     return ready;
 }
 
@@ -585,13 +659,16 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
     if (afe_config == nullptr) { SetErrorLocked("AFE configuration failed"); xSemaphoreGive(mutex_); return false; }
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
     afe_config->vad_mode = VAD_MODE_0;
-    afe_config->vad_min_noise_ms = 100;
+    afe_config->vad_model_name = nullptr;
+    afe_config->vad_min_speech_ms = 128;
+    afe_config->vad_min_noise_ms = 200;
+    afe_config->vad_delay_ms = 128;
+    afe_config->vad_mute_playback = false;
+    afe_config->vad_init = true;
 #if CONFIG_USE_DEVICE_AEC
     afe_config->aec_init = true;
-    afe_config->vad_init = false;
 #else
     afe_config->aec_init = false;
-    afe_config->vad_init = true;
 #endif
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_iface_ = esp_afe_handle_from_config(afe_config);
@@ -706,7 +783,10 @@ bool VoiceAudioFrontend::EnsureInputForMode(Mode mode) {
                                              kInputChannels,
                                              kBitsPerSample,
                                              kInputGain,
-                                             kInputChannelMask);
+                                             kInputChannelMask,
+                                             mode == Mode::kConversation
+                                                 ? AudioCodecInput::InputGainProfile::kAecReference10Db
+                                                 : AudioCodecInput::InputGainProfile::kUniform);
     input_open_ = opened;
     if (opened) {
         last_error_.clear();
@@ -766,6 +846,8 @@ void VoiceAudioFrontend::CaptureTask() {
                                  samples.data(),
                                  static_cast<int>(samples.size() * sizeof(int16_t)))) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (mode == Mode::kConversation)
+                aec_diagnostic_capture_.MarkDiscontinuity(true, generation);
             input_open_ = false;
             if (mode_ == mode) {
                 last_error_ = mode == Mode::kWakeOnly
@@ -777,6 +859,7 @@ void VoiceAudioFrontend::CaptureTask() {
             continue;
         }
 
+        const int64_t raw_observed_us = esp_timer_get_time();
         std::vector<int16_t> selected_samples;
         SelectMainMicrophone(samples, selected_samples);
         if (mode == Mode::kConversation) {
@@ -785,6 +868,8 @@ void VoiceAudioFrontend::CaptureTask() {
                                   afe_data_ != nullptr && !afe_fetch_stopping_;
             if (can_feed) {
                 afe_feed_active_ = true;
+                aec_diagnostic_capture_.AppendRaw(samples.data(), samples.size() / kInputChannels,
+                    generation, raw_observed_us, selected_main_mic_ == 1 ? 0 : 2);
                 if (diagnostic_audio_active_) {
                     for (auto& sample : selected_samples) {
                         sample = diagnostic_audio_position_ < diagnostic_audio_samples_
@@ -859,6 +944,7 @@ void VoiceAudioFrontend::StopAfe() {
 }
 
 void VoiceAudioFrontend::AfeFetchTask() {
+    unsigned fetch_errors = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool stopping = afe_fetch_stopping_;
@@ -871,10 +957,24 @@ void VoiceAudioFrontend::AfeFetchTask() {
             continue;
         }
         auto* result = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
-        if (result != nullptr && result->ret_value != ESP_FAIL && result->data != nullptr &&
-            result->data_size > 0) {
-            ProcessConversationSamples(std::vector<int16_t>(
-                result->data, result->data + result->data_size / sizeof(int16_t)), generation);
+        if (result == nullptr || result->ret_value != ESP_OK || result->data == nullptr ||
+            result->data_size <= 0 || result->data_size % sizeof(int16_t) != 0) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (generation == conversation_generation_) {
+                conversation_assembler_.InvalidateContinuity();
+                aec_diagnostic_capture_.MarkDiscontinuity(false, generation);
+            }
+            xSemaphoreGive(mutex_);
+            if (++fetch_errors == 1 || fetch_errors % 100 == 0) {
+                ESP_LOGW(TAG, "AFE fetch rejected: count=%u status=%d bytes=%d", fetch_errors,
+                         result ? result->ret_value : ESP_FAIL, result ? result->data_size : 0);
+            }
+        } else {
+            const bool vad_valid = result->vad_state == VAD_SILENCE || result->vad_state == VAD_SPEECH;
+            // Every fetch frame, including silence, is retained. vad_cache repeats the
+            // pre-trigger history needed only by consumers that discard non-speech.
+            ProcessConversationSamples(result->data, result->data_size / sizeof(int16_t),
+                                       generation, vad_valid, result->vad_state == VAD_SPEECH);
         }
         vTaskDelay(1);
     }
@@ -1007,30 +1107,18 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
     }
 }
 
-void VoiceAudioFrontend::ProcessConversationSamples(const std::vector<int16_t>& samples, uint32_t generation) {
+void VoiceAudioFrontend::ProcessConversationSamples(const int16_t* samples, size_t count,
+                                                     uint32_t generation, bool vad_valid,
+                                                     bool vad_speech) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (mode_ != Mode::kConversation || generation != conversation_generation_) {
         xSemaphoreGive(mutex_);
         return;
     }
-
-    conversation_samples_.insert(
-        conversation_samples_.end(), samples.begin(), samples.end());
-    const size_t frame_samples = static_cast<size_t>(
-        recorder_config_.sample_rate * recorder_config_.frame_duration_ms / 1000);
-    while (frame_samples > 0 && conversation_samples_.size() >= frame_samples) {
-        VoicePcmFrame frame;
-        frame.config = recorder_config_;
-        frame.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
-        frame.samples.assign(conversation_samples_.begin(),
-                             conversation_samples_.begin() + frame_samples);
-        conversation_samples_.erase(conversation_samples_.begin(),
-                                    conversation_samples_.begin() + frame_samples);
-        if (frames_.size() >= kMaxQueuedFrames) {
-            frames_.pop_front();
-        }
-        frames_.push_back(std::move(frame));
-    }
+    const int64_t observed_us = esp_timer_get_time();
+    aec_diagnostic_capture_.AppendAfe(samples, count, generation, observed_us);
+    conversation_assembler_.Append(samples, count, recorder_config_, observed_us,
+                                   vad_valid, vad_speech, frames_, kMaxQueuedFrames);
     xSemaphoreGive(mutex_);
 }
 

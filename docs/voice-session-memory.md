@@ -60,7 +60,9 @@ MQTT telemetry and absence of allocation errors, resets or watchdogs. Require
 actual server session evidence, not just diagnostic command acknowledgements.
 
 This gate does not measure maximum WiFi throughput, SD OTA under simultaneous
-voice load, acoustic echo attenuation or device VAD. Device VAD remains disabled.
+voice load, acoustic echo attenuation or device VAD. Device VAD was disabled in this historical
+six-session memory baseline; the current firmware enables WebRTC VAD and uses an independent
+validation gate described in [Voice AEC integration](voice-aec-integration.md).
 
 ## COM3 results, 2026-09-16
 
@@ -96,3 +98,13 @@ and fixture passed three further replays with complete source-audio coverage,
 one effective recognition/reply per session and no recursive interruption probes.
 See `build/logs/endpoint-probe-fixed.log`. Proper-name ASR accuracy and acoustic
 AEC/device VAD remain outside this memory gate.
+
+The subsequent VAD-enabled baseline observed `AEC -> NS -> VAD` on hardware and 14,215 bytes
+of lowest internal free heap in one injected conversation. Intermediate runs exposed server-side
+truncation and competing cancellation, both addressed before the final capability-enabled gate.
+Package `20260916-162147` passed three sessions with six accepted, deduplicated interruptions,
+complete source-audio coverage and a 12,823-byte internal low-water mark; each cleanup restored
+a 14,336-byte largest block. Explicit wake interruption also passed. See
+[final VAD evidence](voice-aec-integration.md#current-vad-verification-2026-09-16).
+These are additional VAD results, not a replacement for the historical six-session measurements
+above or proof of acoustic AEC performance.

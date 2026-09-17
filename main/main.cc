@@ -21,6 +21,7 @@
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/voice_audio_frontend.h"
+#include "phone_os/voice_aec_diagnostic_console.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_wake_service.h"
@@ -400,9 +401,22 @@ extern "C" void app_main(void) {
         wifi, device_cloud_config_service,
         []() { unified_mqtt_service.RequestCredentialRefresh(); },
         [](const std::string& command) {
+            if (command.rfind("aec_", 0) == 0) {
+                return rodakos::HandleVoiceAecDiagnosticCommand(voice_audio_frontend, command);
+            }
+            if (command == "audio_replay") {
+                return voice_audio_frontend.ReplayDiagnosticAudio();
+            }
+            if (command == "audio_live") {
+                voice_audio_frontend.ClearDiagnosticAudio();
+                ESP_LOGI(TAG, "USB diagnostic injection disabled; using physical microphones");
+                return true;
+            }
             if (command == "wake") {
                 return voice_audio_frontend.QueueDiagnosticCommand([]() {
-                    if (voice_audio_frontend.ArmDiagnosticAudio()) {
+                    if (voice_assistant_service.GetState().phase ==
+                            rodakos::VoiceAssistantPhase::kSpeaking ||
+                        voice_audio_frontend.ArmDiagnosticAudio()) {
                         voice_wake_service.NotifyWakeWordDetected("USB simulated wake");
                     }
                 });

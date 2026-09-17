@@ -10,6 +10,7 @@ namespace rodakos {
 
 class AudioCodecInput {
 public:
+    enum class InputGainProfile { kUniform, kAecReference10Db };
     AudioCodecInput();
     ~AudioCodecInput();
 
@@ -31,7 +32,8 @@ public:
                       uint16_t channels,
                       uint16_t bits_per_sample,
                       int gain,
-                      uint16_t channel_mask = 0);
+                      uint16_t channel_mask = 0,
+                      InputGainProfile gain_profile = InputGainProfile::kUniform);
     void CloseForOwner(const char* owner);
     bool ReadForOwner(const char* owner, void* data, int bytes);
 
@@ -41,7 +43,7 @@ public:
 private:
     bool InitLocked();
     void CloseLocked();
-    bool SetGainLocked(int gain);
+    bool SetGainLocked(int gain, InputGainProfile gain_profile);
     bool MatchesOpenFormat(uint32_t sample_rate,
                            uint16_t channels,
                            uint16_t bits_per_sample,
@@ -55,6 +57,7 @@ private:
     uint16_t bits_per_sample_ = 0;
     uint16_t channel_mask_ = 0;
     int gain_ = 0;
+    InputGainProfile gain_profile_ = InputGainProfile::kUniform;
     bool gain_configured_ = false;
     void* adc_handle_ = nullptr;
     mutable SemaphoreHandle_t mutex_ = nullptr;

@@ -115,7 +115,8 @@ bool AudioCodecInput::OpenForOwner(const char* owner,
                                    uint16_t channels,
                                    uint16_t bits_per_sample,
                                    int gain,
-                                   uint16_t channel_mask) {
+                                   uint16_t channel_mask,
+                                   InputGainProfile gain_profile) {
     if (mutex_ == nullptr || owner == nullptr || owner[0] == '\0') {
         return false;
     }
@@ -139,7 +140,8 @@ bool AudioCodecInput::OpenForOwner(const char* owner,
     if (codec_open_ && MatchesOpenFormat(sample_rate, channels, bits_per_sample, channel_mask)) {
         owner_ = owner;
         owner_priority_ = priority;
-        const bool gain_set = SetGainLocked(gain);
+        const bool gain_set = SetGainLocked(gain, gain_profile);
+        if (!gain_set) CloseLocked();
         xSemaphoreGive(mutex_);
         return gain_set;
     }
@@ -180,7 +182,8 @@ bool AudioCodecInput::OpenForOwner(const char* owner,
     channel_mask_ = channel_mask;
     owner_ = owner;
     owner_priority_ = priority;
-    const bool gain_set = SetGainLocked(gain);
+    const bool gain_set = SetGainLocked(gain, gain_profile);
+    if (!gain_set) CloseLocked();
     xSemaphoreGive(mutex_);
     return gain_set;
 }
@@ -246,26 +249,41 @@ bool AudioCodecInput::SetGain(int gain) {
         return false;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool gain_set = SetGainLocked(gain);
+    const bool gain_set = SetGainLocked(gain, gain_profile_);
     xSemaphoreGive(mutex_);
     return gain_set;
 }
 
-bool AudioCodecInput::SetGainLocked(int gain) {
+bool AudioCodecInput::SetGainLocked(int gain, InputGainProfile gain_profile) {
     esp_codec_dev_handle_t codec = CodecFromHandle(adc_handle_);
     if (!codec_open_ || codec == nullptr) {
         return true;
     }
-    if (gain_configured_ && gain_ == gain) {
+    if (gain_configured_ && gain_ == gain && gain_profile_ == gain_profile) {
         return true;
     }
 
+    gain_configured_ = false;
     const int ret = esp_codec_dev_set_in_gain(codec, gain);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set input gain to %d", gain);
         return false;
     }
+    if (gain_profile == InputGainProfile::kAecReference10Db) {
+        // ES7210 gain masks address physical ADC channels: MIC3 is channel 2,
+        // although its PCM is TDM slot 1. ESP codec_dev quantizes 10 dB to 9 dB
+        // on this ES7210; its wrapper does not propagate register-write errors.
+        const int reference_ret = esp_codec_dev_set_in_channel_gain(
+            codec, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), 10.0F);
+        if (reference_ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGW(TAG, "Failed to request AEC reference gain: %d", reference_ret);
+            return false;
+        }
+        ESP_LOGI(TAG, "Input gain requested: microphones=%d dB, MIC3 reference=10 dB (ADC channel 2)",
+                 gain);
+    }
     gain_ = gain;
+    gain_profile_ = gain_profile;
     gain_configured_ = true;
     return true;
 }
@@ -298,6 +316,7 @@ void AudioCodecInput::ClearOpenFormat() {
     bits_per_sample_ = 0;
     channel_mask_ = 0;
     gain_ = 0;
+    gain_profile_ = InputGainProfile::kUniform;
     gain_configured_ = false;
 }
 

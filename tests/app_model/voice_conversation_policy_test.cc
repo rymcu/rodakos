@@ -77,6 +77,23 @@ RODAK_TEST("voice conversation timeout is suppressed while speaking is active") 
     RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
 }
 
+RODAK_TEST("voice conversation rejects old follow-up rearm after a queued reply starts") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted();
+    RODAK_CHECK_EQ(policy.OnSpeakingStopped(43565), VoiceConversationAction::kContinue);
+    policy.OnSpeakingStarted();
+
+    // The prior stop's deferred rearm arrives while the next reply is active.
+    policy.OnFollowUpStarted(44481);
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
+    RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(74481));
+
+    RODAK_CHECK_EQ(policy.OnSpeakingStopped(80000), VoiceConversationAction::kContinue);
+    RODAK_CHECK(policy.waiting_for_follow_up());
+    policy.OnFollowUpStarted(80100);
+    RODAK_CHECK_EQ(policy.follow_up_deadline_ms(), 110100);
+}
+
 RODAK_TEST("voice conversation ignores duplicate speaking stop events") {
     VoiceConversationPolicy policy;
 
@@ -86,6 +103,31 @@ RODAK_TEST("voice conversation ignores duplicate speaking stop events") {
     RODAK_CHECK_EQ(policy.OnSpeakingStopped(200), VoiceConversationAction::kIgnore);
     RODAK_CHECK_EQ(policy.completed_turns(), uint32_t{1});
     RODAK_CHECK_EQ(policy.follow_up_deadline_ms(), deadline_ms);
+}
+
+RODAK_TEST("voice conversation lets speech near idle deadline finish") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted();
+    policy.OnSpeakingStopped(1000);
+    policy.OnFollowUpStarted(1100);
+    policy.OnUserSpeech(30700);
+    RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(31100));
+    policy.OnUserSpeech(33000);
+    RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(62999));
+    RODAK_CHECK(policy.IsFollowUpTimedOut(63000));
+    policy.OnUserSpeech(64000);
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
+}
+
+RODAK_TEST("voice conversation user speech cannot arm idle or playing sessions") {
+    VoiceConversationPolicy policy;
+    policy.OnUserSpeech(100);
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
+    policy.OnSpeakingStarted();
+    policy.OnSpeakingStopped(1000);
+    policy.OnSpeakingStarted();
+    policy.OnUserSpeech(2000);
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
 }
 
 RODAK_TEST("voice conversation reset clears turns deadline and speaking state") {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "phone_os/voice_recorder_service.h"
+#include "phone_os/voice_pcm_assembler.h"
+#include "phone_os/voice_aec_diagnostic_capture.h"
 #include "phone_os/voice_wake_service.h"
 
 #include <cstdint>
@@ -42,7 +44,14 @@ public:
     bool QueueDiagnosticCommand(std::function<void()> command);
     bool LoadDiagnosticAudio(const std::string& command);
     bool ArmDiagnosticAudio();
+    bool ReplayDiagnosticAudio();
     void ClearDiagnosticAudio();
+    bool ArmAecDiagnosticCapture(uint32_t duration_ms = 6000);
+    void StopAecDiagnosticCapture();
+    bool ClearAecDiagnosticCapture();
+    VoiceAecDiagnosticCapture::Status GetAecDiagnosticCaptureStatus() const;
+    bool ReadAecDiagnosticCaptureChunk(uint8_t channel, size_t offset, size_t count,
+                                       std::string& hex) const;
 
     const char* name() const override { return "esp-sr-multinet"; }
     const char* last_error() const override { return last_error_.c_str(); }
@@ -68,12 +77,14 @@ private:
     void StopAfe();
     void AfeFetchTask();
     void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation);
-    void ProcessConversationSamples(const std::vector<int16_t>& samples, uint32_t generation);
+    void ProcessConversationSamples(const int16_t* samples, size_t count, uint32_t generation,
+                                    bool vad_valid, bool vad_speech);
     void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
     size_t ResolveReadSamples(Mode mode) const;
     void SetErrorLocked(const char* error);
 
     AudioCodecInput& input_;
+    VoiceAecDiagnosticCapture aec_diagnostic_capture_;
     SemaphoreHandle_t lifecycle_mutex_ = nullptr;
     bool deinitializing_ = false;
     mutable SemaphoreHandle_t mutex_ = nullptr;
@@ -98,7 +109,7 @@ private:
     VoiceRecorderConfig recorder_config_;
     std::function<void(const std::string&)> on_wake_word_;
     std::deque<VoicePcmFrame> frames_;
-    std::vector<int16_t> conversation_samples_;
+    VoicePcmAssembler conversation_assembler_;
     srmodel_list_t* models_ = nullptr;
     esp_mn_iface_t* multinet_ = nullptr;
     model_iface_data_t* multinet_data_ = nullptr;

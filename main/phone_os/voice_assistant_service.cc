@@ -60,10 +60,14 @@ public:
 
     void Reset() {
         encoder_.reset();
-        decoder_.reset();
         encoder_sample_rate_ = 0;
         encoder_channels_ = 0;
         encoder_frame_duration_ms_ = 0;
+        ResetDecoder();
+    }
+
+    void ResetDecoder() {
+        decoder_.reset();
         decoder_sample_rate_ = 0;
         decoder_frame_duration_ms_ = 0;
     }
@@ -315,6 +319,14 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     speaking_interrupted_ = false;
     follow_up_rearm_not_before_us_ = 0;
     conversation_policy_.Reset();
+    barge_in_policy_.Reset();
+    vad_end_policy_.Reset();
+    vad_end_sequence_ = 0;
+    vad_end_epoch_ = 0;
+    playback_vad_started_ = false;
+    interrupt_onset_ms_ = 0;
+    interrupt_manual_ = false;
+    playback_epoch_policy_.Reset();
     interaction_generation = ++interaction_generation_;
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     xSemaphoreGive(mutex_);
@@ -431,6 +443,8 @@ bool VoiceAssistantService::InterruptSpeaking() {
                           !interrupt_pending_ && !speaking_interrupted_;
     if (accepted) {
         interrupt_pending_ = true;
+        interrupt_manual_ = true;
+        interrupt_onset_ms_ = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     }
     xSemaphoreGive(mutex_);
     return accepted;
@@ -438,43 +452,69 @@ bool VoiceAssistantService::InterruptSpeaking() {
 
 void VoiceAssistantService::ProcessInterrupt() {
     uint32_t generation = 0;
+    uint32_t onset_ms = 0;
+    uint32_t playback_epoch = 0;
+    bool manual = false;
     bool active = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
     active = initialized_ && !deinitializing_ && !stopping_ && transport_active_ &&
              phase_ == VoiceAssistantPhase::kSpeaking;
     generation = transport_generation_;
+    onset_ms = interrupt_onset_ms_;
+    playback_epoch = playback_epoch_policy_.current_epoch();
+    manual = interrupt_manual_;
     xSemaphoreGive(mutex_);
     if (!active) {
         return;
     }
 
-    // Abort first so the server stops generating TTS; then discard already queued
-    // samples locally to prevent a late packet from speaking over the new turn.
-    const uint32_t vad_sequence = ++vad_sequence_;
-    transport_.SendVadStart("device", vad_sequence,
-                            static_cast<uint32_t>(esp_timer_get_time() / 1000), generation);
+    const bool device_vad = !manual && playback_epoch != 0;
+    const uint32_t vad_sequence = device_vad ? ++vad_sequence_ : 0;
+    const bool vad_sent = !device_vad || transport_.SendVadStart(
+        "esp-sr", vad_sequence, onset_ms, generation, playback_epoch);
     const bool sent = transport_.SendAbortSpeaking(
-        VoiceAbortReason::kWakeWordDetected, generation);
+        device_vad ? VoiceAbortReason::kVadDetected : VoiceAbortReason::kWakeWordDetected,
+        generation, playback_epoch);
     audio_output_.CloseForOwner(kFocusOwner);
     if (audio_codec_ != nullptr) {
-        audio_codec_->Reset();
+        audio_codec_->ResetDecoder();
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (!stopping_ && transport_generation_ == generation) {
         playback_deadline_us_ = 0;
-        follow_up_rearm_pending_ = true;
+        barge_in_policy_.StopPlayback();
+        playback_vad_started_ = false;
+        playback_epoch_policy_.Interrupt();
+        if (device_vad && vad_sent && sent) {
+            vad_end_sequence_ = vad_sequence;
+            vad_end_epoch_ = playback_epoch;
+            vad_end_policy_.Start(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+        }
+        follow_up_rearm_pending_ = !device_vad;
         follow_up_rearm_not_before_us_ = 0;
         speaking_interrupted_ = true;
-        SetPhaseLocked(VoiceAssistantPhase::kSpeaking, "Interrupted; listening");
+        conversation_policy_.OnSpeakingStopped(esp_timer_get_time() / 1000);
+        conversation_policy_.OnFollowUpStarted(esp_timer_get_time() / 1000);
+        SetPhaseLocked(device_vad ? VoiceAssistantPhase::kListening : VoiceAssistantPhase::kSpeaking,
+                       "Interrupted; listening");
     }
     xSemaphoreGive(mutex_);
-    ESP_LOGI(TAG, "TTS interrupted: generation=%" PRIu32 " sent=%s",
-             generation, sent ? "yes" : "no");
-    if (!sent) {
+    ESP_LOGI(TAG, "TTS interrupted: generation=%" PRIu32 " sequence=%" PRIu32
+             " onset_ms=%" PRIu32 " vad_sent=%s abort_sent=%s source=%s",
+             generation, vad_sequence, onset_ms,
+             device_vad ? (vad_sent ? "yes" : "no") : "not-needed",
+             sent ? "yes" : "no", manual ? "wake-word" : "esp-sr");
+    if (!sent || !vad_sent) {
         MarkError(transport_.last_error());
         return;
     }
-    BeginFollowUpTurn();
+    // The realtime uplink is already running. Another listen/start would risk
+    // resetting the server's capture buffer and losing the new utterance onset.
+    // Explicit wake keeps its existing abort/listen contract and never replaces
+    // an outstanding VAD end identity while the previous utterance is active.
+    if (!device_vad) {
+        BeginFollowUpTurn();
+    }
 }
 
 void VoiceAssistantService::MarkConnecting(const char* message) {
@@ -614,6 +654,14 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     inbound_event_bytes_ = 0;
     transport_generation_ = 0;
     interrupt_pending_ = false;
+    interrupt_manual_ = false;
+    interrupt_onset_ms_ = 0;
+    barge_in_policy_.Reset();
+    vad_end_policy_.Reset();
+    vad_end_sequence_ = 0;
+    vad_end_epoch_ = 0;
+    playback_epoch_policy_.Reset();
+    playback_vad_started_ = false;
     follow_up_rearm_pending_ = false;
     follow_up_rearm_not_before_us_ = 0;
     conversation_policy_.Reset();
@@ -971,10 +1019,52 @@ void VoiceAssistantService::HandleInbound(VoiceInboundEvent&& event) {
 }
 
 void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool current = !stopping_ && io_running_ && transport_active_ &&
+                         transport_generation_ != 0 &&
+                         event.transport_generation == transport_generation_;
+    xSemaphoreGive(mutex_);
+    if (!current) {
+        return;
+    }
+    if (event.type == VoiceInboundEventType::kSpeakingStarted ||
+        event.type == VoiceInboundEventType::kSpeakingStopped ||
+        event.type == VoiceInboundEventType::kAudio) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (stopping_ || !io_running_ || event.transport_generation != transport_generation_) {
+            xSemaphoreGive(mutex_);
+            return;
+        }
+        const uint32_t previous_epoch = playback_epoch_policy_.current_epoch();
+        const bool accepted = event.type == VoiceInboundEventType::kSpeakingStarted
+            ? playback_epoch_policy_.AcceptStart(event.playback_epoch)
+            : playback_epoch_policy_.AcceptAudioOrStop(event.playback_epoch);
+        if (accepted && previous_epoch != playback_epoch_policy_.current_epoch()) {
+            barge_in_policy_.StopPlayback();
+            playback_vad_started_ = false;
+        }
+        xSemaphoreGive(mutex_);
+        if (!accepted) {
+            ESP_LOGD(TAG, "Discarding stale TTS event: epoch=%" PRIu32,
+                     event.playback_epoch);
+            return;
+        }
+    }
     switch (event.type) {
         case VoiceInboundEventType::kSpeakingStarted:
             xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (stopping_ || !io_running_ || event.transport_generation != transport_generation_) {
+                xSemaphoreGive(mutex_);
+                break;
+            }
             conversation_policy_.OnSpeakingStarted();
+            playback_audio_events_ = 0;
+            playback_decoded_frames_ = 0;
+            playback_decoded_pcm_bytes_ = 0;
+            playback_write_failures_ = 0;
+            // A queued reply supersedes the previous stop's delayed listen rearm.
+            follow_up_rearm_pending_ = false;
+            follow_up_rearm_not_before_us_ = 0;
             speaking_interrupted_ = false;
             xSemaphoreGive(mutex_);
             StopRecorderForPlayback();
@@ -982,7 +1072,8 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             break;
         case VoiceInboundEventType::kAudio: {
             xSemaphoreTake(mutex_, portMAX_DELAY);
-            const bool discard = speaking_interrupted_ || phase_ != VoiceAssistantPhase::kSpeaking;
+            const bool discard = stopping_ || !io_running_ ||
+                                 speaking_interrupted_ || phase_ != VoiceAssistantPhase::kSpeaking;
             if (!discard) {
                 conversation_policy_.OnSpeakingStarted();
             }
@@ -1000,6 +1091,9 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                 MarkError("Failed to decode assistant audio");
                 break;
             }
+            ++playback_audio_events_;
+            ++playback_decoded_frames_;
+            playback_decoded_pcm_bytes_ += pcm.size() * sizeof(int16_t);
             if (!audio_output_.IsOpenForOwner(kFocusOwner) &&
                 !audio_output_.OpenForOwner(
                     kFocusOwner, static_cast<uint32_t>(sample_rate), 1, 16)) {
@@ -1010,24 +1104,41 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                 !audio_output_.WriteForOwner(
                     kFocusOwner, pcm.data(), static_cast<int>(pcm.size() * sizeof(int16_t)))) {
                 MarkError("Assistant audio playback failed");
+                ++playback_write_failures_;
             } else if (!pcm.empty()) {
                 RecordPlaybackFrame(frame_duration_ms);
             }
             break;
         }
         case VoiceInboundEventType::kSpeakingStopped: {
+            ESP_LOGI(TAG, "Playback audio stats: packets=%" PRIu32
+                     " decoded_frames=%" PRIu32 " pcm_bytes=%" PRIu64
+                     " write_failures=%" PRIu32,
+                     playback_audio_events_, playback_decoded_frames_,
+                     playback_decoded_pcm_bytes_, playback_write_failures_);
             VoiceConversationAction action = VoiceConversationAction::kIgnore;
             xSemaphoreTake(mutex_, portMAX_DELAY);
+            barge_in_policy_.StopPlayback();
+            playback_vad_started_ = false;
             action = conversation_policy_.OnSpeakingStopped(
                 esp_timer_get_time() / 1000);
             xSemaphoreGive(mutex_);
             if (action == VoiceConversationAction::kIgnore) {
                 break;
             }
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool can_play = !stopping_ && io_running_ && transport_active_ &&
+                                  event.transport_generation == transport_generation_ &&
+                                  phase_ == VoiceAssistantPhase::kSpeaking &&
+                                  !speaking_interrupted_;
+            xSemaphoreGive(mutex_);
+            if (!can_play) {
+                break;
+            }
             DrainPlayback();
             audio_output_.CloseForOwner(kFocusOwner);
             if (audio_codec_ != nullptr) {
-                audio_codec_->Reset();
+                audio_codec_->ResetDecoder();
             }
             xSemaphoreTake(mutex_, portMAX_DELAY);
             if (!stopping_ && phase_ == VoiceAssistantPhase::kSpeaking) {
@@ -1061,6 +1172,7 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
                          io_running_ && transport_active_ &&
                          phase_ == VoiceAssistantPhase::kSpeaking &&
                          follow_up_rearm_pending_ &&
+                         conversation_policy_.waiting_for_follow_up() &&
                          !HasTerminalInboundEventLocked();
     if (current) {
         interaction_generation = interaction_generation_;
@@ -1160,6 +1272,48 @@ bool VoiceAssistantService::SendNextAudioFrame() {
         return false;
     }
 
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    uint32_t onset_ms = 0;
+    const int32_t frame_age_ms = static_cast<int32_t>(
+        static_cast<uint32_t>(esp_timer_get_time() / 1000) - frame.timestamp_ms);
+    const bool fresh_vad = frame.vad_valid && frame_age_ms >= -30 && frame_age_ms <= 300;
+    const uint32_t pcm_power = VoiceBargeInPolicy::CalculatePcmPower(
+        frame.samples.data(), frame.samples.size());
+    if (!stopping_ && phase_ == VoiceAssistantPhase::kListening &&
+        fresh_vad && frame.vad_speech) {
+        // Follow-up timeout measures inactivity, not time since the last TTS stop.
+        conversation_policy_.OnUserSpeech(esp_timer_get_time() / 1000);
+    }
+    const bool send_vad_end = !stopping_ &&
+        vad_end_policy_.Observe(frame.timestamp_ms, frame.config.frame_duration_ms,
+                                fresh_vad, frame.vad_speech);
+    const uint32_t vad_end_sequence = vad_end_sequence_;
+    const uint32_t vad_end_epoch = vad_end_epoch_;
+    if (!stopping_ && phase_ == VoiceAssistantPhase::kSpeaking &&
+        playback_epoch_policy_.current_epoch() != 0 &&
+        !vad_end_policy_.pending() &&
+        !speaking_interrupted_ && !interrupt_pending_ &&
+        barge_in_policy_.Observe(frame.timestamp_ms, frame.config.frame_duration_ms,
+                                 fresh_vad,
+                                 frame.vad_speech, pcm_power, onset_ms)) {
+        interrupt_pending_ = true;
+        interrupt_manual_ = false;
+        interrupt_onset_ms_ = onset_ms;
+        ESP_LOGI(TAG, "AFE VAD confirmed: onset_ms=%" PRIu32 " frame_age_ms=%" PRId32
+                     " pcm_power=%" PRIu32, onset_ms, frame_age_ms, pcm_power);
+    }
+    xSemaphoreGive(mutex_);
+
+    if (send_vad_end) {
+        if (!transport_.SendVadEnd("esp-sr", vad_end_sequence, frame.timestamp_ms,
+                                  transport_generation, vad_end_epoch)) {
+            MarkError(transport_.last_error());
+            return true;
+        }
+        ESP_LOGI(TAG, "VAD end sent: sequence=%" PRIu32 " epoch=%" PRIu32,
+                 vad_end_sequence, vad_end_epoch);
+    }
+
     VoiceAudioPacket packet;
     if (audio_codec_ == nullptr || !audio_codec_->Encode(std::move(frame), packet)) {
         return true;
@@ -1173,7 +1327,6 @@ bool VoiceAssistantService::SendNextAudioFrame() {
 void VoiceAssistantService::StopRecorderForPlayback() {
     // Keep capture alive during TTS. Rodak's server-side binary auto-capture and
     // device-VAD gate need the uplink (including pre-roll) to detect barge-in.
-    // AEC/VAD must suppress playback echo before this path is enabled on hardware.
 }
 
 void VoiceAssistantService::RecordPlaybackFrame(int frame_duration_ms) {
@@ -1182,6 +1335,17 @@ void VoiceAssistantService::RecordPlaybackFrame(int frame_duration_ms) {
     }
     const int64_t now_us = esp_timer_get_time();
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (stopping_ || !io_running_ || !transport_active_ || transport_generation_ == 0 ||
+        phase_ != VoiceAssistantPhase::kSpeaking || speaking_interrupted_) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    if (!playback_vad_started_) {
+        barge_in_policy_.StartPlayback(static_cast<uint32_t>(now_us / 1000));
+        playback_vad_started_ = true;
+        ESP_LOGI(TAG, "Playback started: playback_epoch=%" PRIu32,
+                 playback_epoch_policy_.current_epoch());
+    }
     playback_deadline_us_ = std::max(playback_deadline_us_, now_us) +
                             static_cast<int64_t>(frame_duration_ms) * 1000;
     xSemaphoreGive(mutex_);

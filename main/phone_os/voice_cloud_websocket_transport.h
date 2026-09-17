@@ -31,9 +31,14 @@ public:
     bool SendStopListening(uint32_t expected_generation) override;
     bool SendWakeWordDetected(const std::string& wake_word,
                               uint32_t expected_generation) override;
-    bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation) override;
+    bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation,
+                          uint32_t playback_epoch = 0) override;
     bool SendVadStart(const char* source, uint32_t sequence,
-                      uint32_t trigger_ms, uint32_t expected_generation) override;
+                      uint32_t trigger_ms, uint32_t expected_generation,
+                      uint32_t playback_epoch = 0) override;
+    bool SendVadEnd(const char* source, uint32_t sequence,
+                    uint32_t trigger_ms, uint32_t expected_generation,
+                    uint32_t playback_epoch = 0) override;
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
 
@@ -41,6 +46,8 @@ public:
     std::string last_error() const override;
 
 private:
+    bool SendVadState(const char* state, const char* source, uint32_t sequence,
+                      uint32_t trigger_ms, uint32_t expected_generation, uint32_t playback_epoch);
     static void EventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void CleanupTaskEntry(void* arg);
 
@@ -92,6 +99,7 @@ private:
     bool cleanup_task_finished_ = false;
     TaskHandle_t cleanup_task_ = nullptr;
     uint32_t connection_generation_ = 0;
+    uint32_t inbound_playback_epoch_ = 0;
 };
 
 }  // namespace rodakos

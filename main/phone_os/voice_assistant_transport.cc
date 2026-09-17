@@ -41,12 +41,16 @@ bool NoopVoiceAssistantTransport::SendWakeWordDetected(const std::string&, uint3
     return Reject("wake word");
 }
 
-bool NoopVoiceAssistantTransport::SendAbortSpeaking(VoiceAbortReason, uint32_t) {
+bool NoopVoiceAssistantTransport::SendAbortSpeaking(VoiceAbortReason, uint32_t, uint32_t) {
     return Reject("abort speaking");
 }
 
-bool NoopVoiceAssistantTransport::SendVadStart(const char*, uint32_t, uint32_t, uint32_t) {
+bool NoopVoiceAssistantTransport::SendVadStart(const char*, uint32_t, uint32_t, uint32_t, uint32_t) {
     return Reject("vad start");
+}
+
+bool NoopVoiceAssistantTransport::SendVadEnd(const char*, uint32_t, uint32_t, uint32_t, uint32_t) {
+    return Reject("vad end");
 }
 
 bool NoopVoiceAssistantTransport::SendMcpMessage(const std::string&, uint32_t) {

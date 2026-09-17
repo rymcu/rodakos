@@ -40,6 +40,12 @@ void VoiceConversationPolicy::OnFollowUpStarted(int64_t now_ms) {
     ArmFollowUpDeadline(now_ms);
 }
 
+void VoiceConversationPolicy::OnUserSpeech(int64_t now_ms) {
+    if (!finished_ && !speaking_active_ && follow_up_deadline_active_) {
+        ArmFollowUpDeadline(now_ms);
+    }
+}
+
 bool VoiceConversationPolicy::IsFollowUpTimedOut(int64_t now_ms) {
     // A delayed speaking-start event must never allow the old follow-up
     // deadline to terminate an interaction while TTS is still active.

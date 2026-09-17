@@ -313,12 +313,18 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
     constexpr char kVoiceTestPrefix[] = "RODAK_VOICE_TEST_V1 ";
     if (line.rfind(kVoiceTestPrefix, 0) == 0) {
         const std::string command = line.substr(sizeof(kVoiceTestPrefix) - 1);
-        const bool valid = command == "wake" || command == "stop" ||
+        const bool aec_command = command == "aec_status" || command == "aec_stop" ||
+                                 command == "aec_clear" || command.rfind("aec_arm ", 0) == 0 ||
+                                 command.rfind("aec_read ", 0) == 0;
+        const bool valid = aec_command || command == "wake" || command == "stop" || command == "audio_replay" ||
+                           command == "audio_live" ||
                            command == "audio_clear" || command.rfind("audio_begin ", 0) == 0 ||
                            command.rfind("audio_chunk ", 0) == 0;
         const bool queued = valid && voice_test_callback_ && voice_test_callback_(command);
-        const char* verb = !valid ? "invalid" : command == "wake" ? "wake" :
-                           command == "stop" ? "stop" : command == "audio_clear" ? "audio_clear" :
+        const char* verb = !valid ? "invalid" : aec_command ? "aec" : command == "wake" ? "wake" :
+                           command == "stop" ? "stop" : command == "audio_replay" ? "audio_replay" :
+                           command == "audio_live" ? "audio_live" :
+                           command == "audio_clear" ? "audio_clear" :
                            command.rfind("audio_begin ", 0) == 0 ? "audio_begin" : "audio_chunk";
         std::fprintf(stdout, "RODAK_VOICE_TEST_RESULT {\"ok\":%s,\"command\":\"%s\"}\n",
                      queued ? "true" : "false", verb);

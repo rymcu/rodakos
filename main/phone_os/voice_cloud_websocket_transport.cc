@@ -840,7 +840,8 @@ bool VoiceCloudWebSocketTransport::SendWakeWordDetected(const std::string& wake_
 }
 
 bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
-                                                     uint32_t expected_generation) {
+                                                     uint32_t expected_generation,
+                                                     uint32_t playback_epoch) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
@@ -851,6 +852,9 @@ bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
     cJSON_AddStringToObject(root, "type", "abort");
     if (reason == VoiceAbortReason::kWakeWordDetected) {
         cJSON_AddStringToObject(root, "reason", "wake_word_detected");
+    } else if (reason == VoiceAbortReason::kVadDetected) {
+        cJSON_AddStringToObject(root, "reason", "vad_detected");
+        cJSON_AddNumberToObject(root, "playback_epoch", playback_epoch);
     }
     std::string message = JsonToString(root);
     cJSON_Delete(root);
@@ -859,7 +863,21 @@ bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
 
 bool VoiceCloudWebSocketTransport::SendVadStart(const char* source, uint32_t sequence,
                                                 uint32_t trigger_ms,
-                                                uint32_t expected_generation) {
+                                                uint32_t expected_generation,
+                                                uint32_t playback_epoch) {
+    return SendVadState("start", source, sequence, trigger_ms, expected_generation, playback_epoch);
+}
+
+bool VoiceCloudWebSocketTransport::SendVadEnd(const char* source, uint32_t sequence,
+                                              uint32_t trigger_ms, uint32_t expected_generation,
+                                              uint32_t playback_epoch) {
+    return SendVadState("end", source, sequence, trigger_ms, expected_generation, playback_epoch);
+}
+
+bool VoiceCloudWebSocketTransport::SendVadState(const char* state, const char* source,
+                                                uint32_t sequence, uint32_t trigger_ms,
+                                                uint32_t expected_generation,
+                                                uint32_t playback_epoch) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
@@ -868,10 +886,13 @@ bool VoiceCloudWebSocketTransport::SendVadStart(const char* source, uint32_t seq
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id.c_str());
     cJSON_AddStringToObject(root, "type", "vad");
-    cJSON_AddStringToObject(root, "state", "start");
+    cJSON_AddStringToObject(root, "state", state);
     cJSON_AddStringToObject(root, "source", source != nullptr ? source : "device");
     cJSON_AddNumberToObject(root, "seq", static_cast<double>(sequence));
     cJSON_AddNumberToObject(root, "trigger_ms", static_cast<double>(trigger_ms));
+    if (playback_epoch != 0) {
+        cJSON_AddNumberToObject(root, "playback_epoch", playback_epoch);
+    }
     std::string message = JsonToString(root);
     cJSON_Delete(root);
     return SendText(message, expected_generation, session_id, true);
@@ -1118,6 +1139,9 @@ std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
 
     cJSON* features = cJSON_CreateObject();
     cJSON_AddBoolToObject(features, "mcp", false);
+#if CONFIG_USE_DEVICE_AEC
+    cJSON_AddNumberToObject(features, "device_vad_epoch", 1);
+#endif
     cJSON_AddItemToObject(root, "features", features);
 
     cJSON* audio_params = cJSON_CreateObject();
@@ -1150,16 +1174,43 @@ void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
     if (cJSON_IsString(type) && std::strcmp(type->valuestring, "hello") == 0) {
         ParseServerHello(payload, generation);
     } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "tts") == 0) {
+        const cJSON* epoch_value = cJSON_GetObjectItemCaseSensitive(root, "playback_epoch");
+        uint32_t epoch = 0;
+        if (epoch_value != nullptr) {
+            if (!cJSON_IsNumber(epoch_value) || !(epoch_value->valuedouble >= 1 &&
+                epoch_value->valuedouble <= UINT32_MAX)) {
+                cJSON_Delete(root);
+                ESP_LOGW(TAG, "Invalid TTS playback epoch");
+                return;
+            }
+            epoch = static_cast<uint32_t>(epoch_value->valuedouble);
+            if (epoch_value->valuedouble != static_cast<double>(epoch)) {
+                cJSON_Delete(root);
+                return;
+            }
+        }
         cJSON* state = cJSON_GetObjectItem(root, "state");
         if (cJSON_IsString(state) && std::strcmp(state->valuestring, "start") == 0) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (closing_ || connection_generation_ != generation ||
+                epoch < inbound_playback_epoch_) {
+                xSemaphoreGive(mutex_);
+                cJSON_Delete(root);
+                return;
+            }
+            inbound_playback_epoch_ = epoch;
+            xSemaphoreGive(mutex_);
+            ESP_LOGI(TAG, "Received tts:start: playback_epoch=%u", static_cast<unsigned>(epoch));
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStarted,
+                .playback_epoch = epoch,
                 .audio = {},
                 .payload = {},
             }, generation);
         } else if (cJSON_IsString(state) && std::strcmp(state->valuestring, "stop") == 0) {
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStopped,
+                .playback_epoch = epoch,
                 .audio = {},
                 .payload = {},
             }, generation);
@@ -1192,8 +1243,14 @@ void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
                                                      size_t size,
                                                      uint32_t generation) {
     VoiceAudioPacket packet;
+    uint32_t playback_epoch = 0;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (closing_ || connection_generation_ != generation) {
+            xSemaphoreGive(mutex_);
+            return;
+        }
+        playback_epoch = inbound_playback_epoch_;
         packet.sample_rate = server_sample_rate_;
         packet.frame_duration_ms = server_frame_duration_ms_;
         xSemaphoreGive(mutex_);
@@ -1212,6 +1269,7 @@ void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
     }
     EmitInbound(VoiceInboundEvent{
         .type = VoiceInboundEventType::kAudio,
+        .playback_epoch = playback_epoch,
         .audio = std::move(packet),
         .payload = {},
     }, generation);
@@ -1283,6 +1341,7 @@ void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload,
             return;
         }
         session_id_ = negotiated_session_id;
+        inbound_playback_epoch_ = 0;
         server_sample_rate_ = negotiated_sample_rate;
         server_frame_duration_ms_ = negotiated_frame_duration;
         xSemaphoreGive(mutex_);

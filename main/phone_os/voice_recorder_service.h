@@ -17,6 +17,8 @@ struct VoicePcmFrame {
     VoiceRecorderConfig config;
     uint32_t timestamp_ms = 0;
     std::vector<int16_t> samples;
+    bool vad_valid = false;
+    bool vad_speech = false;
 };
 
 class VoiceRecorderService {

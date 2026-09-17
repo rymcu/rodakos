@@ -17,6 +17,7 @@ public:
     void OnSpeakingStarted();
     VoiceConversationAction OnSpeakingStopped(int64_t now_ms);
     void OnFollowUpStarted(int64_t now_ms);
+    void OnUserSpeech(int64_t now_ms);
     bool IsFollowUpTimedOut(int64_t now_ms);
 
     uint32_t completed_turns() const { return completed_turns_; }

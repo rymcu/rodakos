@@ -16,6 +16,7 @@ enum class VoiceListeningMode {
 enum class VoiceAbortReason {
     kNone,
     kWakeWordDetected,
+    kVadDetected,
 };
 
 struct VoiceAudioPacket {
@@ -37,6 +38,7 @@ enum class VoiceInboundEventType {
 struct VoiceInboundEvent {
     VoiceInboundEventType type = VoiceInboundEventType::kError;
     uint32_t transport_generation = 0;
+    uint32_t playback_epoch = 0;
     VoiceAudioPacket audio;
     std::string payload;
 };
@@ -60,9 +62,14 @@ public:
     virtual bool SendStopListening(uint32_t expected_generation) = 0;
     virtual bool SendWakeWordDetected(const std::string& wake_word,
                                       uint32_t expected_generation) = 0;
-    virtual bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation) = 0;
+    virtual bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation,
+                                  uint32_t playback_epoch = 0) = 0;
     virtual bool SendVadStart(const char* source, uint32_t sequence,
-                              uint32_t trigger_ms, uint32_t expected_generation) = 0;
+                              uint32_t trigger_ms, uint32_t expected_generation,
+                              uint32_t playback_epoch = 0) = 0;
+    virtual bool SendVadEnd(const char* source, uint32_t sequence,
+                            uint32_t trigger_ms, uint32_t expected_generation,
+                            uint32_t playback_epoch = 0) = 0;
     virtual bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) = 0;
     virtual void SetInboundHandler(VoiceInboundHandler handler) = 0;
 
@@ -84,9 +91,14 @@ public:
     bool SendStopListening(uint32_t expected_generation) override;
     bool SendWakeWordDetected(const std::string& wake_word,
                               uint32_t expected_generation) override;
-    bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation) override;
+    bool SendAbortSpeaking(VoiceAbortReason reason, uint32_t expected_generation,
+                          uint32_t playback_epoch = 0) override;
     bool SendVadStart(const char* source, uint32_t sequence,
-                      uint32_t trigger_ms, uint32_t expected_generation) override;
+                      uint32_t trigger_ms, uint32_t expected_generation,
+                      uint32_t playback_epoch = 0) override;
+    bool SendVadEnd(const char* source, uint32_t sequence,
+                    uint32_t trigger_ms, uint32_t expected_generation,
+                    uint32_t playback_epoch = 0) override;
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
 

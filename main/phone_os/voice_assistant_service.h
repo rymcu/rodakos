@@ -3,6 +3,7 @@
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_conversation_policy.h"
+#include "phone_os/voice_barge_in_policy.h"
 #include "phone_os/voice_recorder_service.h"
 
 #include <cstdint>
@@ -128,12 +129,16 @@ private:
     bool follow_up_rearm_pending_ = false;
     bool speaking_interrupted_ = false;
     bool interrupt_pending_ = false;
+    bool interrupt_manual_ = false;
     bool stopping_ = false;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;
     uint32_t focus_token_ = 0;
     uint32_t transport_generation_ = 0;
     uint32_t vad_sequence_ = 0;
+    uint32_t interrupt_onset_ms_ = 0;
+    uint32_t vad_end_sequence_ = 0;
+    uint32_t vad_end_epoch_ = 0;
     uint32_t interaction_generation_ = 0;
     uint32_t cleanup_generation_ = 0;
     TaskHandle_t start_task_ = nullptr;
@@ -141,6 +146,14 @@ private:
     VoiceAssistantPhase cleanup_final_phase_ = VoiceAssistantPhase::kIdle;
     std::string cleanup_message_ = "Ready";
     VoiceConversationPolicy conversation_policy_;
+    VoiceBargeInPolicy barge_in_policy_;
+    VoiceVadEndPolicy vad_end_policy_;
+    VoicePlaybackEpochPolicy playback_epoch_policy_;
+    bool playback_vad_started_ = false;
+    uint32_t playback_audio_events_ = 0;
+    uint32_t playback_decoded_frames_ = 0;
+    uint64_t playback_decoded_pcm_bytes_ = 0;
+    uint32_t playback_write_failures_ = 0;
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
     std::string message_ = "Ready";
