@@ -18,6 +18,7 @@ add_executable(rodakos_app_model_tests
     voice_wake_settings_test.cc
     serial_provisioning_frame_test.cc
     mqtt_credential_refresh_policy_test.cc
+    battery_level_model_test.cc
     wifi_connection_policy_test.cc
     ../../main/phone_os/phone_app_registry.cc
     ../../main/phone_os/phone_app_host.cc
@@ -34,6 +35,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/voice_wake_settings.cc
     ../../main/phone_os/serial_provisioning_protocol.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
+    ../../main/phone_os/battery_level_model.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
 )
 

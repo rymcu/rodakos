@@ -25,11 +25,16 @@ public:
  */
 class BatteryMonitor final : public BatteryStateProvider {
 public:
+    BatteryMonitor() = default;
+    ~BatteryMonitor() override;
+
     BatterySnapshot Read() override;
 
 private:
-    bool ReadAveragedAdc(const char* peripheral_name, int& reading) const;
-    int EstimateBatteryLevel(float battery_voltage) const;
+    bool ReadAveragedMillivolts(const char* peripheral_name,
+                                void*& calibration_handle,
+                                bool& calibration_attempted,
+                                int& millivolts);
     int StabilizeBatteryLevel(float estimated_level);
 
     bool is_charging_ = false;
@@ -38,6 +43,10 @@ private:
     bool has_filtered_level_ = false;
     float filtered_battery_level_ = 100.0f;
     int battery_level_percent_ = -1;
+    void* charge_calibration_handle_ = nullptr;
+    void* voltage_calibration_handle_ = nullptr;
+    bool charge_calibration_attempted_ = false;
+    bool voltage_calibration_attempted_ = false;
     mutable std::mutex mutex_;
 };
 

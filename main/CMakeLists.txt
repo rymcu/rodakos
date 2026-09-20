@@ -47,6 +47,7 @@ set(SOURCES
     "phone_os/wake_on_lan_packet.cc"
     "phone_os/wake_on_lan_service.cc"
     "phone_os/device_cloud_config.cc"
+    "phone_os/battery_level_model.cc"
     "phone_os/battery_monitor.cc"
     "phone_os/serial_provisioning_protocol.cc"
     "phone_os/serial_provisioning_service.cc"
@@ -108,6 +109,7 @@ idf_component_register(
         esp_lvgl_port
         nvs_flash
         esp_wifi
+        esp_adc
         esp_http_server
         esp_http_client
         mqtt
