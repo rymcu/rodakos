@@ -112,7 +112,9 @@ chains. With no valid explicit entry, the old ID is removed and the new app is a
   callback before navigation destruction or theme rebuilding invalidates Home or its LVGL objects.
 - Each window refresh logs resident/total pages, internal-SRAM free space, and largest free internal
   block. Home also logs final free/largest values after the remaining UI overlays are created.
-- Icon colors derive from stable app ID hashes. Battery information is hidden until a real service exists.
+- Icon colors derive from stable app ID hashes. Battery information is not part of the persisted
+  native Home layout; the Home status bar and device cloud expose the shared board-backed
+  battery/charging telemetry instead.
 
 ## Delivery Phases
 

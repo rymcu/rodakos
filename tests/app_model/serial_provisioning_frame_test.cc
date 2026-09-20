@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_protocol.h"
 
 #include <string>
@@ -19,6 +20,12 @@ SerialProvisioningFrameResult Feed(const std::string& bytes, std::string& line) 
 }
 
 }  // namespace
+
+RODAK_TEST("Rodak BigSmart cloud identity is independent from Board Manager naming") {
+    RODAK_CHECK_EQ(std::string(rodakos::kRodakBigSmartProductKey), "rymcu-bigsmart");
+    RODAK_CHECK_EQ(std::string(rodakos::kRodakAiotProtocol), "rodak-aiot");
+    RODAK_CHECK_EQ(rodakos::kRodakAiotProtocolVersion, 1);
+}
 
 RODAK_TEST("Serial provisioning accepts a frame exactly at the wire limit") {
     const size_t line_bytes = rodakos::kSerialProvisioningMaxFrameBytes - 1;

@@ -15,6 +15,7 @@
 #include "phone_os/motion_service.h"
 #include "phone_os/button_binding_service.h"
 #include "phone_os/time_service.h"
+#include "phone_os/battery_monitor.h"
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_service.h"
 #include "phone_os/ota_update_service.h"
@@ -385,8 +386,10 @@ extern "C" void app_main(void) {
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::OtaUpdateService ota_update_service(
         device_cloud_config_service, file_service);
+    static rodakos::BatteryMonitor battery_monitor;
     static rodakos::UnifiedMqttService unified_mqtt_service(
-        device_cloud_config_service, ota_update_service, &audio_output_service);
+        device_cloud_config_service, ota_update_service, &audio_output_service,
+        &battery_monitor);
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
@@ -446,6 +449,7 @@ extern "C" void app_main(void) {
     static PhoneServices services;
     services.SetBacklight(&backlight);
     services.SetWiFi(wifi);
+    services.SetBattery(&battery_monitor);
     services.SetFileService(file_service);
     services.SetAudio(&audio_service);
     services.SetAudioOutput(&audio_output_service);

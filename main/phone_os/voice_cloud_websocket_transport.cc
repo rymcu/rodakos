@@ -294,9 +294,14 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
         return false;
     }
 
-    if (!config_service_.Load(config_)) {
+    config_service_.Load(config_);
+    if (config_.has_aiot_config) {
+        SetError("Rodak AIoT mode does not provide a legacy voice websocket");
+        return false;
+    }
+    if (!config_.has_websocket_config) {
         const std::string error = config_service_.last_error();
-        SetError(error.empty() ? "Voice cloud config unavailable" : error);
+        SetError(error.empty() ? "Voice cloud websocket is not configured" : error);
         return false;
     }
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {

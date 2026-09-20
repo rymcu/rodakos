@@ -127,6 +127,7 @@ private:
         std::string value = {});
     void CancelPendingEditAction();
     void UpdatePageIndicator();
+    void UpdateBatteryStatus();
     void BindTileAction(
         lv_obj_t* object,
         TileAction action,
@@ -184,6 +185,8 @@ private:
     lv_obj_t* clock_label_ = nullptr;
     lv_obj_t* status_cluster_ = nullptr;
     lv_obj_t* wifi_label_ = nullptr;
+    lv_obj_t* battery_icon_ = nullptr;
+    lv_obj_t* battery_label_ = nullptr;
     lv_timer_t* clock_timer_ = nullptr;
     DeferredEditPayload* pending_edit_ = nullptr;
     DeferredLaunchPayload* pending_launch_ = nullptr;
@@ -192,6 +195,7 @@ private:
     bool page_window_refresh_pending_ = false;
     size_t pending_page_window_ = 0;
     bool editor_locked_ = false;
+    int battery_refresh_ticks_ = 0;
     std::optional<LayoutEditTarget> editing_target_;
     std::optional<rodakos::HomeRootItemKey> editor_focus_item_;
     std::optional<rodakos::HomeLayoutSaveStatus> editor_error_status_;

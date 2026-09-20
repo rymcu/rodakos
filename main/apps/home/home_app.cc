@@ -40,6 +40,7 @@ constexpr lv_coord_t kGapY = 6;
 constexpr lv_coord_t kIconSize = 46;
 constexpr int32_t kTileTapSlop = 10;
 constexpr int32_t kTileTapSlopSquared = kTileTapSlop * kTileTapSlop;
+constexpr int kBatteryRefreshTicks = 30;
 
 const std::vector<rodakos::HomeAppIdMigration> kHomeAppIdMigrations;
 rodakos::HomePageSession g_home_page_session;
@@ -91,6 +92,25 @@ void ClockTimerCallback(lv_timer_t* timer) {
     if (self != nullptr) {
         self->UpdateClock();
     }
+}
+
+const char* BatteryIconForLevel(int level_percent, bool charging) {
+    if (charging) {
+        return FONT_AWESOME_BATTERY_BOLT;
+    }
+    if (level_percent >= 80) {
+        return FONT_AWESOME_BATTERY_FULL;
+    }
+    if (level_percent >= 55) {
+        return FONT_AWESOME_BATTERY_THREE_QUARTERS;
+    }
+    if (level_percent >= 30) {
+        return FONT_AWESOME_BATTERY_HALF;
+    }
+    if (level_percent > 0) {
+        return FONT_AWESOME_BATTERY_QUARTER;
+    }
+    return FONT_AWESOME_BATTERY_EMPTY;
 }
 
 }  // namespace
@@ -372,7 +392,7 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
 
     status_cluster_ = lv_obj_create(header);
     lv_obj_remove_style_all(status_cluster_);
-    lv_obj_set_size(status_cluster_, 40, 22);
+    lv_obj_set_size(status_cluster_, 92, 22);
     lv_obj_align(status_cluster_, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_layout(status_cluster_, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(status_cluster_, LV_FLEX_FLOW_ROW);
@@ -385,6 +405,16 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     lv_label_set_text(wifi_label_, FONT_AWESOME_WIFI_SLASH);
     lv_obj_set_style_text_color(wifi_label_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(wifi_label_, PhoneIconFont(), 0);
+
+    battery_icon_ = lv_label_create(status_cluster_);
+    lv_label_set_text(battery_icon_, FONT_AWESOME_BATTERY_SLASH);
+    lv_obj_set_style_text_color(battery_icon_, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(battery_icon_, PhoneIconFont(), 0);
+
+    battery_label_ = lv_label_create(status_cluster_);
+    lv_label_set_text(battery_label_, "--%");
+    lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
 
     // ===== BODY 区域 =====
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
@@ -2155,6 +2185,9 @@ void HomeApp::ResetUiPointers() {
     clock_label_ = nullptr;
     status_cluster_ = nullptr;
     wifi_label_ = nullptr;
+    battery_icon_ = nullptr;
+    battery_label_ = nullptr;
+    battery_refresh_ticks_ = 0;
     page_tiles_.clear();
     page_populated_.clear();
     page_window_refresh_pending_ = false;
@@ -2186,6 +2219,46 @@ void HomeApp::UpdateClock() {
         lv_obj_set_style_text_color(wifi_label_,
                                     connected ? rodakos_theme_text_primary() : rodakos_theme_text_tertiary(), 0);
     }
+
+    if (battery_refresh_ticks_ == 0) {
+        UpdateBatteryStatus();
+    }
+    battery_refresh_ticks_ = (battery_refresh_ticks_ + 1) % kBatteryRefreshTicks;
+}
+
+void HomeApp::UpdateBatteryStatus() {
+    if (battery_icon_ == nullptr || battery_label_ == nullptr) {
+        return;
+    }
+
+    rodakos::BatterySnapshot snapshot;
+    auto* battery = context_ != nullptr ? context_->services().battery() : nullptr;
+    if (battery != nullptr) {
+        snapshot = battery->Read();
+    }
+
+    const bool available = snapshot.level_percent >= 0;
+    if (!available) {
+        lv_label_set_text(battery_icon_, FONT_AWESOME_BATTERY_SLASH);
+        lv_label_set_text(battery_label_, "--%");
+        lv_obj_set_style_text_color(battery_icon_, rodakos_theme_text_tertiary(), 0);
+        lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
+        return;
+    }
+
+    const int level = std::clamp(snapshot.level_percent, 0, 100);
+    lv_label_set_text(battery_icon_, BatteryIconForLevel(level, snapshot.charging_valid && snapshot.charging));
+    char battery_text[8] = {};
+    std::snprintf(battery_text, sizeof(battery_text), "%d%%", level);
+    lv_label_set_text(battery_label_, battery_text);
+
+    const lv_color_t color = level <= 15
+                                 ? rodakos_theme_error()
+                                 : (snapshot.charging_valid && snapshot.charging
+                                        ? rodakos_theme_success()
+                                        : rodakos_theme_text_primary());
+    lv_obj_set_style_text_color(battery_icon_, color, 0);
+    lv_obj_set_style_text_color(battery_label_, color, 0);
 }
 
 void RegisterHomeApp(PhoneAppRegistry& registry) {

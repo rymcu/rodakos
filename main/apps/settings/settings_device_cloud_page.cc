@@ -185,12 +185,17 @@ void SettingsApp::UpdateDeviceCloudPage() {
     rodakos::DeviceCloudConfig config;
     device_cloud->Load(config);
     lv_label_set_text(cloud_status_label_,
-                      config.has_websocket_config ? "Ready" : "Refresh required");
+                      (config.has_aiot_config || config.has_websocket_config)
+                          ? "Ready"
+                          : "Refresh required");
     lv_label_set_text(cloud_url_label_, config.provisioning_url.c_str());
     const std::string client_id = "Device ID: " + device_cloud->GetClientId();
     lv_label_set_text(cloud_client_id_label_, client_id.c_str());
-    lv_label_set_text_fmt(cloud_websocket_label_, "Realtime service: %s",
-                          config.has_websocket_config ? "configured" : "not configured");
+    lv_label_set_text_fmt(
+        cloud_websocket_label_, "Device protocol: %s",
+        config.has_aiot_config ? "Rodak AIoT configured"
+                               : (config.has_websocket_config ? "legacy websocket configured"
+                                                              : "not configured"));
     if (config.has_activation_code) {
         lv_label_set_text_fmt(cloud_activation_label_, "Activation: %s",
                               config.activation_code.c_str());
@@ -264,7 +269,10 @@ void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
     if (ok) {
         ui_->ShowToastUnlocked("Device services updated");
         if (cloud_status_label_ != nullptr) {
-            lv_label_set_text(cloud_status_label_, "Ready");
+            lv_label_set_text(cloud_status_label_,
+                              (config.has_aiot_config || config.has_websocket_config)
+                                  ? "Ready"
+                                  : "Refresh required");
         }
     } else {
         ui_->ShowToastUnlocked("Device services failed");

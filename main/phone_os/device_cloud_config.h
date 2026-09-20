@@ -6,8 +6,23 @@
 
 namespace rodakos {
 
+// These are the external Rodak device identity values. Board Manager keeps
+// its internal board name as `rymcu_bigsmart`; that build-time identifier is
+// intentionally not reused as the cloud product key.
+inline constexpr char kRodakBigSmartProductKey[] = "rymcu-bigsmart";
+inline constexpr char kRodakAiotProtocol[] = "rodak-aiot";
+inline constexpr int kRodakAiotProtocolVersion = 1;
+
 struct DeviceCloudConfig {
     std::string provisioning_url;
+    // Autonomous Rodak AIoT identity. These values are persisted separately
+    // from the legacy XiaoZhi websocket cache and are the source of truth for
+    // MQTT/HTTP device authentication.
+    std::string aiot_device_secret;
+    std::string aiot_access_token;
+    bool aiot_registered = false;
+    bool aiot_activated = false;
+    bool aiot_pending = false;
     std::string websocket_url;
     std::string websocket_token;
     int websocket_version = 1;
@@ -32,6 +47,7 @@ struct DeviceCloudConfig {
     std::string activation_message;
     bool has_websocket_config = false;
     bool has_mqtt_config = false;
+    bool has_aiot_config = false;
     bool has_activation_code = false;
 };
 
@@ -60,6 +76,7 @@ public:
 
 private:
     bool ParseProvisioningResponse(const std::string& response, DeviceCloudConfig& config);
+    bool RefreshAiot(DeviceCloudConfig& config);
     std::string BuildSystemInfoJson();
     std::string BuildBoardJson();
     void SetError(const std::string& message);

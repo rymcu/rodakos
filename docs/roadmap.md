@@ -105,7 +105,8 @@ Status: partially implemented.
 
 Next work:
 
-- Add battery/charging service and replace any placeholder status values.
+- Verify the BigSmart battery/charging telemetry on hardware and keep placeholder status values
+  out of user-facing device data.
 - Harden audio codec startup/shutdown and failure recovery.
 - Verify Recorder preemption, resume, and failure recovery across the integrated recording service.
 - Add diagnostics for I2C bus health, SD card status, and memory pressure.

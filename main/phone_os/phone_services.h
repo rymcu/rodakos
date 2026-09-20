@@ -1,5 +1,7 @@
 #pragma once
 
+#include "phone_os/battery_monitor.h"
+
 class BacklightAdapter;
 class WiFiAdapter;
 
@@ -29,6 +31,9 @@ public:
 
     void SetWiFi(WiFiAdapter* wifi) { wifi_ = wifi; }
     WiFiAdapter* wifi() { return wifi_; }
+
+    void SetBattery(rodakos::BatteryStateProvider* battery) { battery_ = battery; }
+    rodakos::BatteryStateProvider* battery() { return battery_; }
 
     void SetFileService(rodakos::FileService* file_service) { file_service_ = file_service; }
     rodakos::FileService* file_service() { return file_service_; }
@@ -83,6 +88,7 @@ public:
 private:
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
+    rodakos::BatteryStateProvider* battery_ = nullptr;
     rodakos::FileService* file_service_ = nullptr;
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;

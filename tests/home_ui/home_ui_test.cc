@@ -23,6 +23,7 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_theme.h"
 #include "settings.h"
 
@@ -244,6 +245,17 @@ struct HomeFixture {
     HomeApp home;
 };
 
+class FixedBatteryProvider final : public rodakos::BatteryStateProvider {
+public:
+    explicit FixedBatteryProvider(rodakos::BatterySnapshot snapshot)
+        : snapshot_(snapshot) {}
+
+    rodakos::BatterySnapshot Read() override { return snapshot_; }
+
+private:
+    rodakos::BatterySnapshot snapshot_;
+};
+
 void EnterArrange(HomeFixture& fixture) {
     LongPress(HomeButton(fixture.home));
     RODAK_CHECK(fixture.home.HasEditingTarget());
@@ -260,6 +272,25 @@ RODAK_TEST("long press enters Arrange through the LVGL pointer input") {
     HomeFixture fixture(4);
 
     EnterArrange(fixture);
+}
+
+RODAK_TEST("status bar displays the current battery level") {
+    ResetScreen();
+    ResetSettings();
+    FixedBatteryProvider battery(rodakos::BatterySnapshot{
+        .level_percent = 86,
+        .voltage_mv = 4100,
+        .charging = false,
+        .charging_valid = true,
+    });
+    HomeFixture fixture(4);
+    fixture.services.SetBattery(&battery);
+
+    fixture.home.UpdateBatteryStatus();
+
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_label_)), "86%");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_icon_)),
+                   FONT_AWESOME_BATTERY_FULL);
 }
 
 RODAK_TEST("tap slop launches but one-page drags over an app do not") {

@@ -163,8 +163,12 @@ void DeleteTimerAndWait(TimerHandle_t timer) {
 
 UnifiedMqttService::UnifiedMqttService(DeviceCloudConfigService& config_service,
                                        OtaUpdateService& ota_update,
-                                       AudioOutputService* audio_output)
-    : config_service_(config_service), ota_update_(ota_update), audio_output_(audio_output) {
+                                       AudioOutputService* audio_output,
+                                       BatteryStateProvider* battery_provider)
+    : config_service_(config_service),
+      ota_update_(ota_update),
+      audio_output_(audio_output),
+      battery_provider_(battery_provider) {
     publish_ack_semaphore_ = xSemaphoreCreateBinaryStatic(&publish_ack_semaphore_storage_);
 }
 
@@ -910,6 +914,15 @@ void UnifiedMqttService::PublishTelemetry() {
     if (audio_output_ != nullptr) {
         cJSON_AddNumberToObject(root, "volume", audio_output_->volume());
     }
+    const BatterySnapshot battery = battery_provider_ != nullptr
+                                        ? battery_provider_->Read()
+                                        : fallback_battery_monitor_.Read();
+    if (battery.level_percent >= 0) {
+        cJSON_AddNumberToObject(root, "battery", battery.level_percent);
+    }
+    if (battery.charging_valid) {
+        cJSON_AddBoolToObject(root, "charging", battery.charging);
+    }
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "minimum_free_heap_size", esp_get_minimum_free_heap_size());
     cJSON_AddNumberToObject(root, "uptime_ms",
@@ -931,6 +944,15 @@ void UnifiedMqttService::PublishShadowReport() {
     cJSON_AddStringToObject(root, "firmware", app != nullptr ? app->version : "unknown");
     if (audio_output_ != nullptr) {
         cJSON_AddNumberToObject(root, "volume", audio_output_->volume());
+    }
+    const BatterySnapshot battery = battery_provider_ != nullptr
+                                        ? battery_provider_->Read()
+                                        : fallback_battery_monitor_.Read();
+    if (battery.level_percent >= 0) {
+        cJSON_AddNumberToObject(root, "battery", battery.level_percent);
+    }
+    if (battery.charging_valid) {
+        cJSON_AddBoolToObject(root, "charging", battery.charging);
     }
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);

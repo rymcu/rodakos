@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/battery_monitor.h"
 
 #include <array>
 #include <atomic>
@@ -26,7 +27,8 @@ class UnifiedMqttService {
 public:
     UnifiedMqttService(DeviceCloudConfigService& config_service,
                        OtaUpdateService& ota_update,
-                       AudioOutputService* audio_output);
+                       AudioOutputService* audio_output,
+                       BatteryStateProvider* battery_provider = nullptr);
     ~UnifiedMqttService();
 
     bool Start();
@@ -83,6 +85,8 @@ private:
     DeviceCloudConfigService& config_service_;
     OtaUpdateService& ota_update_;
     AudioOutputService* audio_output_ = nullptr;
+    BatteryStateProvider* battery_provider_ = nullptr;
+    BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     esp_mqtt_client_handle_t client_ = nullptr;
     esp_event_handler_instance_t ip_event_instance_ = nullptr;

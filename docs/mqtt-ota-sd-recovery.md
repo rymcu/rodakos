@@ -24,7 +24,33 @@ image does not.
 
 ## Bootstrap And MQTT
 
-The device posts its system information to `/xiaozhi/ota/`. Rodak returns `unifiedMqtt` v2 with:
+RodakOS declares the BigSmart device's autonomous product identity with the product key
+`rymcu-bigsmart` and protocol marker `rodak-aiot` (version 1). The Board Manager hardware
+discriminator remains `board.type = rymcu_bigsmart`; it is deliberately separate from the cloud
+product key. The request also includes the device MAC and stable client UUID. A legacy-compatible
+server route may still classify the request under its historical protocol until it consumes these
+explicit fields.
+
+The firmware now performs the autonomous onboarding lifecycle against the configured server:
+
+```text
+GET  /api/v1/aiot/devices/bootstrap
+POST /api/v1/aiot/devices/register
+POST /api/v1/aiot/devices/activate
+POST /api/v1/aiot/devices/auth/token
+```
+
+The generated device secret is persisted before the first register request, so a reset between
+register and token exchange can safely retry with the same credential. The returned access token is
+used as the MQTT password and HTTP Bearer credential. `unifiedMqtt` and `mqttConnectInfo` are both
+accepted for the broker/topics payload, with the server origin and standard device topics used as
+fallbacks. `/xiaozhi/ota/` and its `Activation-Version` header remain a legacy compatibility path;
+they are attempted only when an autonomous endpoint is unavailable and are never required for the
+Rodak AIoT path. AIoT and MQTT credentials are committed under a pending marker; boot ignores a
+candidate pair left incomplete by a reset and retries enrollment. A successful AIoT enrollment
+also clears the legacy voice-websocket cache, so the two credential paths cannot race each other.
+
+The configured bootstrap endpoint returns `unifiedMqtt` v2 with:
 
 - broker address, port, username, JWT password, keepalive and device key;
 - OTA HTTP base URL and the same JWT as the HTTP Bearer credential;
@@ -33,6 +59,12 @@ The device posts its system information to `/xiaozhi/ota/`. Rodak returns `unifi
 RodakOS stores these values in the `unified_mqtt` NVS namespace. ESP-MQTT connects after WiFi gets
 an address, publishes telemetry every 30 seconds, publishes the reported shadow, subscribes to the
 desired shadow and OTA notification topics, and relies on ESP-MQTT auto-reconnect.
+
+On the BigSmart board, telemetry includes the board-backed `battery` percentage and `charging`
+state when the ADC readings are valid. The battery divider is sampled from ADC2 CH0 (GPIO11)
+through the board's 2:1 divider; the charge detector is ADC1 CH2 (GPIO3), active below the
+charging threshold. If an ADC read fails, its field is omitted rather than reporting a guessed
+value. `wifi_rssi`, `volume`, firmware and health counters remain part of the regular report.
 
 MQTT is currently plain TCP on the local network. Do not expose port 1883 beyond the trusted LAN.
 
@@ -114,9 +146,9 @@ Reserving the MQTT worker alone was insufficient: WiFi logged
 `mem fail` / `m f null` and disconnected after the first telemetry report. The serial
 stability checker treats both warnings as allocation failures.
 
-Keep internal heap and worker stack diagnostics in the serial `MQTT health` line.
-Adding undeclared telemetry fields causes Rodak thing-model validation warnings; the
-existing telemetry schema is unchanged.
+Keep internal heap and worker stack diagnostics in the serial `MQTT health` line. Battery and
+charging are declared read-only properties in the `rymcu-bigsmart` thing model; adding any other
+undeclared telemetry fields causes Rodak validation warnings.
 
 The 2026-09-16 COM3 package `20260916-115916` passed the protected non-erasing
 refresh and boot gates. Rodak observed a new connection at 12:01:08 CST, a reported
