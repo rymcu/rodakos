@@ -26,10 +26,13 @@ struct CameraCaptureGuard {
 
 namespace {
 constexpr const char* TAG = "CameraApp";
-constexpr lv_coord_t kPreviewBoxWidth = 304;
-constexpr lv_coord_t kPreviewBoxHeight = 154;
+// Keep only a small edge margin; the 4:3 sensor image is height-limited by
+// the 240px display once the app header is reserved.
+constexpr lv_coord_t kPreviewBoxWidth = 312;
+constexpr lv_coord_t kPreviewBoxHeight = 184;
 constexpr lv_coord_t kCaptureButtonSize = 54;
 constexpr uint32_t kCaptureTaskStackBytes = 4096;
+constexpr uint32_t kPreviewStartDelayMs = 30;
 
 struct CameraCapturePayload {
     std::shared_ptr<CameraCaptureGuard> guard;
@@ -128,9 +131,6 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     audio_focus_ = context.services().audio_focus();
     capture_guard_ = std::make_shared<CameraCaptureGuard>();
     capture_guard_->app.store(this);
-    RequestAudioResources();
-
-    const bool preview_started = camera_ != nullptr && camera_->StartPreview();
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -160,7 +160,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     preview_box_ = lv_obj_create(root_);
     lv_obj_remove_style_all(preview_box_);
     lv_obj_set_size(preview_box_, kPreviewBoxWidth, kPreviewBoxHeight);
-    lv_obj_align(preview_box_, LV_ALIGN_TOP_MID, 0, kRodakosAppHeaderHeight + 6);
+    lv_obj_align(preview_box_, LV_ALIGN_TOP_MID, 0, kRodakosAppHeaderHeight + 4);
     lv_obj_set_style_bg_color(preview_box_, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(preview_box_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(preview_box_, 8, 0);
@@ -171,7 +171,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     lv_obj_center(preview_image_);
 
     placeholder_label_ = lv_label_create(preview_box_);
-    lv_label_set_text(placeholder_label_, preview_started ? "Starting preview..." : "Camera unavailable");
+    lv_label_set_text(placeholder_label_, "Starting preview...");
     lv_obj_set_width(placeholder_label_, kPreviewBoxWidth - 28);
     lv_label_set_long_mode(placeholder_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(placeholder_label_, LV_TEXT_ALIGN_CENTER, 0);
@@ -194,15 +194,15 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     }, LV_EVENT_CLICKED, this);
     lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
 
-    if (preview_started) {
-        UpdateStatus("Waiting for preview...");
-        preview_timer_ = lv_timer_create(PreviewTimerCallback, 120, this);
-    } else {
-        const char* error = camera_ != nullptr ? camera_->last_error() : "Camera service is not available";
-        UpdateStatus(error, true);
+    UpdateStatus("Starting camera...");
+    preview_start_timer_ = lv_timer_create(PreviewStartTimerCallback, kPreviewStartDelayMs, this);
+    if (preview_start_timer_ == nullptr) {
+        UpdateStatus("Failed to schedule camera startup", true);
+        return false;
     }
+    lv_timer_set_repeat_count(preview_start_timer_, 1);
 
-    ESP_LOGI(TAG, "Camera app created, preview=%d", preview_started ? 1 : 0);
+    ESP_LOGI(TAG, "Camera app created; preview startup deferred");
     return true;
 }
 
@@ -215,6 +215,10 @@ void CameraApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            if (preview_start_timer_ != nullptr) {
+                lv_timer_delete(preview_start_timer_);
+                preview_start_timer_ = nullptr;
+            }
             if (preview_timer_ != nullptr) {
                 lv_timer_delete(preview_timer_);
                 preview_timer_ = nullptr;
@@ -242,6 +246,37 @@ void CameraApp::OnDestroy() {
     audio_focus_ = nullptr;
     context_ = nullptr;
     ui_ = nullptr;
+}
+
+void CameraApp::PreviewStartTimerCallback(lv_timer_t* timer) {
+    auto* self = static_cast<CameraApp*>(lv_timer_get_user_data(timer));
+    if (self != nullptr) {
+        self->preview_start_timer_ = nullptr;
+        self->StartPreview();
+    }
+}
+
+void CameraApp::StartPreview() {
+    RequestAudioResources();
+    if (camera_ == nullptr || !camera_->StartPreview()) {
+        const std::string error = camera_ != nullptr
+                                      ? camera_->last_error()
+                                      : "Camera service is not available";
+        UpdateStatus(error.c_str(), true);
+        if (placeholder_label_ != nullptr) {
+            lv_label_set_text(placeholder_label_, "Camera unavailable");
+        }
+        ReleaseAudioResources();
+        return;
+    }
+
+    UpdateStatus("Waiting for preview...");
+    preview_timer_ = lv_timer_create(PreviewTimerCallback, 120, this);
+    if (preview_timer_ == nullptr) {
+        camera_->StopPreview();
+        ReleaseAudioResources();
+        UpdateStatus("Failed to monitor camera preview", true);
+    }
 }
 
 void CameraApp::CapturePhoto() {
@@ -316,7 +351,22 @@ void CameraApp::UpdatePreview() {
     }
 
     rodakos::CameraFrame frame;
-    if (!camera_->GetLatestFrame(frame) || frame.sequence == displayed_sequence_) {
+    if (!camera_->GetLatestFrame(frame)) {
+        const auto state = camera_->GetState();
+        if (!state.preview_running && !state.last_error.empty()) {
+            UpdateStatus(state.last_error.c_str(), true);
+            if (placeholder_label_ != nullptr) {
+                lv_label_set_text(placeholder_label_, "Camera unavailable");
+            }
+            if (preview_timer_ != nullptr) {
+                lv_timer_delete(preview_timer_);
+                preview_timer_ = nullptr;
+            }
+            ReleaseAudioResources();
+        }
+        return;
+    }
+    if (frame.sequence == displayed_sequence_) {
         return;
     }
     if (frame.width <= 0 || frame.height <= 0 || frame.stride <= 0 || frame.rgb565.empty()) {
@@ -340,7 +390,9 @@ void CameraApp::UpdatePreview() {
 
     const int32_t scale_w = (kPreviewBoxWidth * LV_SCALE_NONE) / frame.width;
     const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / frame.height;
-    const int32_t scale = std::max<int32_t>(1, std::min(scale_w, scale_h));
+    // Fill the widescreen preview box. The sensor is 4:3, so this crops a
+    // small amount from the top and bottom instead of leaving wide side bars.
+    const int32_t scale = std::max<int32_t>(1, std::max(scale_w, scale_h));
     lv_image_set_scale(preview_image_, static_cast<uint32_t>(scale));
     lv_obj_center(preview_image_);
 

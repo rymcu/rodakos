@@ -30,8 +30,10 @@ public:
     void OnCaptureComplete(bool ok, const std::string& saved_path, const std::string& error, uint32_t generation);
 
 private:
+    static void PreviewStartTimerCallback(lv_timer_t* timer);
     static void PreviewTimerCallback(lv_timer_t* timer);
 
+    void StartPreview();
     void UpdatePreview();
     void UpdateStatus(const char* text, bool error = false);
     void RequestAudioResources();
@@ -50,6 +52,7 @@ private:
     lv_obj_t* placeholder_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* capture_button_ = nullptr;
+    lv_timer_t* preview_start_timer_ = nullptr;
     lv_timer_t* preview_timer_ = nullptr;
     lv_image_dsc_t preview_dsc_ = {};
     std::vector<uint8_t> preview_pixels_;

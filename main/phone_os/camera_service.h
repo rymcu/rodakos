@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,7 @@ public:
     bool CapturePhoto(std::string& saved_path);
     CameraState GetState() const;
     bool IsAvailable() const;
-    const char* last_error() const { return last_error_.c_str(); }
+    std::string last_error() const;
 
 private:
     struct VideoBuffer {
@@ -64,6 +65,7 @@ private:
 
     FileService* file_service_ = nullptr;
     CameraDevice camera_device_;
+    std::mutex lifecycle_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t preview_task_ = nullptr;
     bool preview_running_ = false;

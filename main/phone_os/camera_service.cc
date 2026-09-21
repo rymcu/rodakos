@@ -19,10 +19,12 @@
 #include <esp_timer.h>
 
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+#include <esp_video_ioctl.h>
 #include <fcntl.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -32,6 +34,9 @@ constexpr const char* TAG = "CameraService";
 constexpr const char* kPhotoDir = "/photos";
 constexpr int kBufferCount = 2;
 constexpr uint32_t kPreviewTaskStackSize = 4096;
+constexpr int64_t kFirstFrameTimeoutUs = 3000000;
+constexpr int kMaxConsecutiveDequeueFailures = 10;
+constexpr suseconds_t kDequeueTimeoutUs = 200000;
 constexpr uint8_t kJpegQuality = 82;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
@@ -211,6 +216,7 @@ bool CameraService::IsAvailable() const {
 }
 
 bool CameraService::StartPreview(int width, int height) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     if (!IsAvailable()) {
         SetError("Camera device is not configured");
         return false;
@@ -289,6 +295,7 @@ bool CameraService::StartPreview(int width, int height) {
 }
 
 void CameraService::StopPreview() {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     bool should_wait = false;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -332,6 +339,16 @@ bool CameraService::GetLatestFrame(CameraFrame& frame) {
     }
     xSemaphoreGive(mutex_);
     return ok;
+}
+
+std::string CameraService::last_error() const {
+    if (mutex_ == nullptr) {
+        return last_error_;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    std::string error = last_error_;
+    xSemaphoreGive(mutex_);
+    return error;
 }
 
 bool CameraService::CapturePhoto(std::string& saved_path) {
@@ -452,23 +469,39 @@ void CameraService::PreviewTask() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     const size_t frame_size = static_cast<size_t>(active_stride_) * active_height_;
+    const int64_t started_at_us = esp_timer_get_time();
+    int consecutive_dequeue_failures = 0;
+    bool received_frame = false;
 
     while (!ShouldStopPreview()) {
         v4l2_buffer buf = {};
         buf.type = type;
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(fd_, VIDIOC_DQBUF, &buf) != 0) {
-            if (errno != EAGAIN && errno != EINTR) {
-                ESP_LOGW(TAG, "Camera dequeue failed: %s", ErrnoName());
+            if (ShouldStopPreview()) {
+                break;
             }
-            vTaskDelay(pdMS_TO_TICKS(10));
+            ++consecutive_dequeue_failures;
+            const bool first_frame_timed_out =
+                !received_frame && esp_timer_get_time() - started_at_us >= kFirstFrameTimeoutUs;
+            if (first_frame_timed_out) {
+                SetError("Camera preview timed out waiting for the first frame");
+                break;
+            }
+            if (received_frame &&
+                consecutive_dequeue_failures >= kMaxConsecutiveDequeueFailures) {
+                SetError(std::string("Camera preview dequeue failed: ") + ErrnoName());
+                break;
+            }
             continue;
         }
+        consecutive_dequeue_failures = 0;
 
         if ((buf.flags & V4L2_BUF_FLAG_DONE) != 0 &&
             buf.index < buffers_.size() &&
             buffers_[buf.index].data != nullptr &&
-            buffers_[buf.index].length >= frame_size) {
+            buffers_[buf.index].length >= frame_size &&
+            buf.bytesused >= frame_size) {
             CameraFrame frame;
             frame.width = active_width_;
             frame.height = active_height_;
@@ -485,12 +518,19 @@ void CameraService::PreviewTask() {
                 has_frame_ = true;
                 frame_count_++;
                 xSemaphoreGive(mutex_);
+                received_frame = true;
             }
         }
 
         if (ioctl(fd_, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGW(TAG, "Camera requeue failed: %s", ErrnoName());
-            vTaskDelay(pdMS_TO_TICKS(20));
+            SetError(std::string("Camera requeue failed: ") + ErrnoName());
+            break;
+        }
+
+        if (!received_frame &&
+            esp_timer_get_time() - started_at_us >= kFirstFrameTimeoutUs) {
+            SetError("Camera preview timed out waiting for the first frame");
+            break;
         }
     }
 #endif
@@ -599,6 +639,13 @@ bool CameraService::OpenStream(int width, int height) {
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (StreamOnSuppressingBenignGpioIsrLog(fd_, &type) != 0) {
         SetError(std::string("Failed to start camera stream: ") + ErrnoName());
+        return false;
+    }
+
+    timeval dequeue_timeout = {};
+    dequeue_timeout.tv_usec = kDequeueTimeoutUs;
+    if (ioctl(fd_, VIDIOC_S_DQBUF_TIMEOUT, &dequeue_timeout) != 0) {
+        SetError(std::string("Failed to configure camera dequeue timeout: ") + ErrnoName());
         return false;
     }
 
