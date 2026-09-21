@@ -1,4 +1,6 @@
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/device_pairing_policy.h"
+#include "phone_os/device_pairing_protocol.h"
 
 #include "settings.h"
 
@@ -46,6 +48,13 @@ constexpr const char* kAiotTokenKey = "access_token";
 constexpr const char* kAiotRegisteredKey = "registered";
 constexpr const char* kAiotActivatedKey = "activated";
 constexpr const char* kAiotPendingKey = "pending";
+constexpr const char* kUnbindPendingKey = "unbind_pending";
+constexpr const char* kUnbindAckKey = "unbind_ack";
+constexpr const char* kPairingRequestIdKey = "pair_req_id";
+constexpr const char* kPairingRequestTokenKey = "pair_req_token";
+constexpr const char* kPairingCodeKey = "pair_code";
+constexpr const char* kPairingExpiresAtKey = "pair_expires";
+constexpr const char* kPairingStatusKey = "pair_status";
 constexpr const char* kMqttProtocolVersionKey = "protocol_ver";
 constexpr const char* kMqttBrokerAddressKey = "broker_address";
 constexpr const char* kMqttBrokerPortKey = "broker_port";
@@ -71,14 +80,28 @@ constexpr size_t kMaxProvisioningResponseBytes = 8192;
 constexpr size_t kMaxAiotResponseBytes = 16384;
 
 constexpr const char* kAiotBootstrapPath = "/api/v1/aiot/devices/bootstrap";
-constexpr const char* kAiotRegisterPath = "/api/v1/aiot/devices/register";
-constexpr const char* kAiotActivatePath = "/api/v1/aiot/devices/activate";
 constexpr const char* kAiotTokenPath = "/api/v1/aiot/devices/auth/token";
+constexpr const char* kAiotBindingRequestPath = "/api/v1/aiot/devices/binding/request";
+constexpr const char* kAiotBindingStatusPrefix =
+    "/api/v1/aiot/devices/binding/requests/";
+constexpr const char* kAiotUnbindPath = "/api/v1/aiot/devices/binding/unbind";
 
 struct HttpResponse {
     int status_code = 0;
     std::string body;
 };
+
+int ResponseBusinessCode(const HttpResponse& response) {
+    cJSON* root = cJSON_Parse(response.body.c_str());
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return 0;
+    }
+    const cJSON* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    const int value = cJSON_IsNumber(code) ? code->valueint : 0;
+    cJSON_Delete(root);
+    return value;
+}
 
 std::string MacAddress() {
     uint8_t mac[6] = {};
@@ -386,6 +409,15 @@ void ResetAiotCredentials(DeviceCloudConfig& config) {
     config.has_aiot_config = false;
 }
 
+void ResetPairingRequest(DeviceCloudConfig& config) {
+    config.pairing_request_id.clear();
+    config.pairing_request_token.clear();
+    config.pairing_code.clear();
+    config.pairing_expires_at.clear();
+    config.pairing_status.clear();
+    config.has_pairing_request = false;
+}
+
 bool HasCompleteAiotConfig(const DeviceCloudConfig& config) {
     return !config.aiot_device_secret.empty() &&
            !config.aiot_access_token.empty() &&
@@ -399,7 +431,14 @@ bool PersistAiotIdentity(const DeviceCloudConfig& config) {
                          settings.SetString(kAiotTokenKey, config.aiot_access_token) &&
                          settings.SetBool(kAiotRegisteredKey, config.aiot_registered) &&
                          settings.SetBool(kAiotActivatedKey, config.aiot_activated) &&
-                         settings.SetBool(kAiotPendingKey, config.aiot_pending);
+                         settings.SetBool(kAiotPendingKey, config.aiot_pending) &&
+                         settings.SetBool(kUnbindPendingKey, config.unbind_pending) &&
+                         settings.SetBool(kUnbindAckKey, config.unbind_server_acknowledged) &&
+                         settings.SetString(kPairingRequestIdKey, config.pairing_request_id) &&
+                         settings.SetString(kPairingRequestTokenKey, config.pairing_request_token) &&
+                         settings.SetString(kPairingCodeKey, config.pairing_code) &&
+                         settings.SetString(kPairingExpiresAtKey, config.pairing_expires_at) &&
+                         settings.SetString(kPairingStatusKey, config.pairing_status);
     if (!written || !settings.Commit()) {
         (void)settings.Commit();
         return false;
@@ -508,6 +547,16 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     config.aiot_registered = cloud_settings.GetBool(kAiotRegisteredKey, false);
     config.aiot_activated = cloud_settings.GetBool(kAiotActivatedKey, false);
     config.aiot_pending = cloud_settings.GetBool(kAiotPendingKey, false);
+    config.unbind_pending = cloud_settings.GetBool(kUnbindPendingKey, false);
+    config.unbind_server_acknowledged = cloud_settings.GetBool(kUnbindAckKey, false);
+    config.pairing_request_id = cloud_settings.GetString(kPairingRequestIdKey, "");
+    config.pairing_request_token = cloud_settings.GetString(kPairingRequestTokenKey, "");
+    config.pairing_code = cloud_settings.GetString(kPairingCodeKey, "");
+    config.pairing_expires_at = cloud_settings.GetString(kPairingExpiresAtKey, "");
+    config.pairing_status = cloud_settings.GetString(kPairingStatusKey, "");
+    config.has_pairing_request = !config.pairing_request_id.empty() &&
+                                 !config.pairing_request_token.empty() &&
+                                 !config.pairing_code.empty();
     config.provisioning_url = cloud_settings.GetString(kProvisioningUrlKey, "");
     bool should_migrate_provisioning_url = false;
     if (config.provisioning_url.empty()) {
@@ -565,6 +614,10 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     // the next refresh must establish a complete pair again.
     if (config.aiot_pending) {
         config.has_mqtt_config = false;
+        // A partially committed pairing or unbind transaction must fail
+        // closed across every cloud transport, including the legacy voice
+        // WebSocket namespace.
+        config.has_websocket_config = false;
     }
     config.has_aiot_config = HasCompleteAiotConfig(config);
     return config.has_websocket_config || config.has_aiot_config;
@@ -628,9 +681,6 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
 
     int protocol_version = 0;
     int mqtt_port = 0;
-    std::string register_path = kAiotRegisterPath;
-    std::string activate_path = kAiotActivatePath;
-    std::string token_path = kAiotTokenPath;
     std::string mqtt_host;
     int mqtt_protocol = 0;
     std::string mqtt_http_base_url;
@@ -668,59 +718,235 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
         mqtt_port = kDefaultMqttBrokerPort;
     }
 
-    auto readEndpoint = [&](const char* key, std::string& output, const char* fallback) {
-        const cJSON* endpoints = cJSON_GetObjectItemCaseSensitive(bootstrap_data, "endpoints");
-        if (cJSON_IsObject(endpoints)) {
-            AddStringAlias(const_cast<cJSON*>(endpoints), key, output);
+    cJSON* token_root = nullptr;
+    cJSON* token_data = nullptr;
+    const std::string device_key = MacAddress();
+    const std::string client_id = GetClientId();
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const std::string firmware_version = app_desc != nullptr ? app_desc->version : "unknown";
+
+    // A device that already completed manual pairing may rotate an expired
+    // token with its persisted secret. Requiring another short-code challenge
+    // for routine MQTT recovery would make token expiry strand bound devices.
+    if (config.aiot_registered && config.aiot_activated &&
+        !config.aiot_device_secret.empty() && !config.has_pairing_request) {
+        cJSON* token_body = cJSON_CreateObject();
+        cJSON_AddStringToObject(token_body, "protocol", kRodakAiotProtocol);
+        cJSON_AddStringToObject(token_body, "productKey", kRodakBigSmartProductKey);
+        cJSON_AddStringToObject(token_body, "deviceKey", device_key.c_str());
+        cJSON_AddStringToObject(token_body, "credentialSecret",
+                                config.aiot_device_secret.c_str());
+        const std::string token_json = JsonToString(token_body);
+        cJSON_Delete(token_body);
+
+        HttpResponse token_response;
+        if (!PerformHttpRequest(origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
+                                kMaxAiotResponseBytes, token_response, error)) {
+            SetError(error);
+            cJSON_Delete(bootstrap_root);
+            return false;
         }
-        if (output.empty()) {
-            output = fallback;
+        const int business_code = ResponseBusinessCode(token_response);
+        if (token_response.status_code == 401 || token_response.status_code == 403 ||
+            token_response.status_code == 404 || business_code == 401 ||
+            business_code == 403 || business_code == 404) {
+            // The server no longer accepts this identity (for example after a
+            // remote unbind). Fail closed and fall through to a new challenge.
+            ResetAiotCredentials(config);
+            ResetMqttConfig(config);
+        } else if (!ParseResponse(token_response, token_root, token_data, error)) {
+            SetError("AIoT token refresh failed: " + error);
+            cJSON_Delete(bootstrap_root);
+            return false;
         }
-    };
-    readEndpoint("register", register_path, kAiotRegisterPath);
-    readEndpoint("activate", activate_path, kAiotActivatePath);
-    readEndpoint("token", token_path, kAiotTokenPath);
-    // Some deployments use explicit names for the token endpoint.
-    if (token_path == kAiotTokenPath) {
-        readEndpoint("authToken", token_path, kAiotTokenPath);
-        readEndpoint("auth_token", token_path, kAiotTokenPath);
     }
 
-    auto resolveEndpoint = [&](const std::string& endpoint) {
-        if (endpoint.rfind("http://", 0) == 0 || endpoint.rfind("https://", 0) == 0) {
-            // Bootstrap is unauthenticated and must not be able to redirect
-            // the device secret to an unrelated host. Custom endpoints may
-            // still be used, but only on the exact bootstrap origin.
-            return Lowercase(UrlOrigin(endpoint)) == Lowercase(origin) ? endpoint : std::string();
+    if (token_data == nullptr) {
+    // Pairing is an explicit user-mediated gate. The device may prepare a
+    // random secret and display a short code, but must not obtain cloud
+    // credentials until the owner confirms that code in Rodak.
+    if (config.aiot_device_secret.empty()) {
+        config.aiot_device_secret = GenerateDeviceSecret();
+    }
+    config.aiot_pending = true;
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        if (!PersistAiotIdentity(config)) {
+            SetError("Failed to persist AIoT device secret");
+            cJSON_Delete(bootstrap_root);
+            return false;
         }
-        if (endpoint.empty() || endpoint.rfind("//", 0) == 0) {
-            return std::string();
-        }
-        if (endpoint.front() != '/') {
-            return origin + "/" + endpoint;
-        }
-        return origin + endpoint;
-    };
+    }
 
-    const std::string register_url = resolveEndpoint(register_path);
-    const std::string activate_url = resolveEndpoint(activate_path);
-    const std::string token_url = resolveEndpoint(token_path);
-    if (register_url.empty() || activate_url.empty() || token_url.empty()) {
-        SetError("AIoT bootstrap returned an endpoint outside its origin");
+    std::string pairing_status;
+    if (config.pairing_request_id.empty() || config.pairing_request_token.empty()) {
+        cJSON* request_body = cJSON_CreateObject();
+        cJSON_AddStringToObject(request_body, "protocol", kRodakAiotProtocol);
+        cJSON_AddNumberToObject(request_body, "protocolVersion", kRodakAiotProtocolVersion);
+        cJSON_AddStringToObject(request_body, "productKey", kRodakBigSmartProductKey);
+        cJSON_AddStringToObject(request_body, "product_key", kRodakBigSmartProductKey);
+        cJSON_AddStringToObject(request_body, "deviceCode", device_key.c_str());
+        cJSON_AddStringToObject(request_body, "deviceKey", device_key.c_str());
+        cJSON_AddStringToObject(request_body, "deviceSecret", config.aiot_device_secret.c_str());
+        cJSON_AddStringToObject(request_body, "credentialSecret", config.aiot_device_secret.c_str());
+        cJSON_AddStringToObject(request_body, "deviceName", "RodakOS RYMCU BigSmart");
+        cJSON_AddStringToObject(request_body, "clientId", client_id.c_str());
+        cJSON_AddStringToObject(request_body, "firmwareVersion", firmware_version.c_str());
+        cJSON_AddStringToObject(request_body, "hardwareVersion", "rymcu_bigsmart");
+        const std::string legacy_secret =
+            std::string(kRodakAiotProtocol) + ":" + device_key + ":" + client_id;
+        cJSON_AddStringToObject(request_body, "legacyCredentialSecret",
+                                legacy_secret.c_str());
+        cJSON* application = cJSON_CreateObject();
+        cJSON_AddStringToObject(application, "name", "rodakos");
+        cJSON_AddStringToObject(application, "version", firmware_version.c_str());
+        cJSON_AddItemToObject(request_body, "application", application);
+        cJSON* board = cJSON_CreateObject();
+        cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
+        cJSON_AddStringToObject(board, "productKey", kRodakBigSmartProductKey);
+        cJSON_AddItemToObject(request_body, "board", board);
+        const std::string request_json = JsonToString(request_body);
+        cJSON_Delete(request_body);
+        const std::string pairing_url = origin + kAiotBindingRequestPath;
+        HttpResponse response;
+        if (!PerformHttpRequest(pairing_url, HTTP_METHOD_POST, request_json, {},
+                                kMaxAiotResponseBytes, response, error)) {
+            SetError(error);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        if (response.status_code < 200 || response.status_code >= 300) {
+            SetError("AIoT pairing request failed: HTTP status " +
+                     std::to_string(response.status_code));
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        DevicePairingResponse pairing_response;
+        if (!ParseDevicePairingResponse(response.body,
+                                        DevicePairingResponseType::kCreateRequest,
+                                        pairing_response, error)) {
+            SetError("AIoT pairing request failed: " + error);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        config.pairing_request_id = pairing_response.request_id;
+        config.pairing_request_token = pairing_response.request_token;
+        config.pairing_code = pairing_response.pairing_code;
+        config.pairing_expires_at = pairing_response.expires_at;
+        pairing_status = pairing_response.raw_status;
+    } else {
+        const std::string status_url = origin + kAiotBindingStatusPrefix +
+                                       config.pairing_request_id + "/status";
+        HttpResponse response;
+        if (!PerformHttpRequest(status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
+                                kMaxAiotResponseBytes, response, error)) {
+            SetError(error);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        const int business_code = ResponseBusinessCode(response);
+        if (response.status_code == 401 || response.status_code == 404 ||
+            response.status_code == 410 || business_code == 401 ||
+            business_code == 404 || business_code == 410) {
+            ResetPairingRequest(config);
+            bool cleared = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+                cleared = PersistAiotIdentity(config);
+            }
+            SetError(cleared ? "配对申请已失效，请重新发起绑定"
+                             : "配对申请已失效，但本地状态清理失败");
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        if (response.status_code < 200 || response.status_code >= 300) {
+            SetError("AIoT pairing status failed: HTTP status " +
+                     std::to_string(response.status_code));
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        DevicePairingResponse pairing_response;
+        if (!ParseDevicePairingResponse(response.body,
+                                        DevicePairingResponseType::kStatus,
+                                        pairing_response, error)) {
+            SetError("AIoT pairing status failed: " + error);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        pairing_status = pairing_response.raw_status;
+        if (!pairing_response.expires_at.empty()) {
+            config.pairing_expires_at = pairing_response.expires_at;
+        }
+        cJSON* root = nullptr;
+        cJSON* data = nullptr;
+        if (!ParseResponse(response, root, data, error)) {
+            SetError("AIoT pairing status failed: " + error);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        token_root = root;
+        token_data = data;
+    }
+    if (config.pairing_request_id.empty() || config.pairing_request_token.empty() ||
+        config.pairing_code.empty()) {
+        ResetPairingRequest(config);
+        SetError("AIoT pairing response is incomplete");
+        cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
+    }
+    bool pairing_persisted = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        config.pairing_status = Lowercase(pairing_status);
+        config.has_pairing_request = !config.pairing_request_id.empty() &&
+                                     !config.pairing_request_token.empty() &&
+                                     !config.pairing_code.empty();
+        if (config.has_pairing_request) {
+            pairing_persisted = PersistAiotIdentity(config);
+        }
+    }
+    if (!pairing_persisted) {
+        SetError("Failed to persist pairing request");
+        cJSON_Delete(token_root);
+        cJSON_Delete(bootstrap_root);
+        return false;
+    }
+    const DevicePairingStatus classified_status =
+        ClassifyDevicePairingStatus(config.pairing_status);
+    if (!MayEnableDeviceCloud(classified_status)) {
+        if (ShouldResetDevicePairingRequest(classified_status)) {
+            ResetPairingRequest(config);
+            bool cleared = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+                cleared = PersistAiotIdentity(config);
+            }
+            SetError(!cleared ? "配对终态清理失败，请重试"
+                              : (classified_status == DevicePairingStatus::kRejected
+                                     ? "配对申请已拒绝，请重新发起绑定"
+                                     : "配对申请已过期，请重新发起绑定"));
+            cJSON_Delete(token_root);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        SetError(config.pairing_code.empty()
+                     ? "等待设备绑定确认"
+                     : "等待设备绑定确认，配对码：" + config.pairing_code);
+        cJSON_Delete(token_root);
+        cJSON_Delete(bootstrap_root);
+        return false;
+    }
     }
 
     if (config.aiot_device_secret.empty()) {
         config.aiot_device_secret = GenerateDeviceSecret();
     }
-    // Keep the cached identity unusable until the full register/activate/token
-    // exchange and the paired MQTT commit complete. This also makes a reset
-    // during the network phase safe: the next boot retries enrollment.
+    // Keep the confirmed candidate unusable until its token and MQTT settings
+    // have committed together. A reset during this phase retries from NVS.
     config.aiot_pending = true;
-    // Persist a generated secret before the first network call. If power is
-    // lost after register succeeds, the retry must use the same credential;
-    // otherwise the server correctly rejects the second secret as a conflict.
+    // Preserve the same secret across a reset so a retried status exchange can
+    // still prove the identity represented by the confirmed request.
     bool secret_persisted = false;
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
@@ -728,142 +954,20 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
     }
     if (!secret_persisted) {
         SetError("Failed to persist AIoT device secret");
+        cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
     }
-    // Never let a cached token win over the token returned by this enrollment.
-    // Keep the old value in NVS until the new exchange has completed so a
-    // transient network failure can continue using the active MQTT session.
+    // Never let a cached token win over the candidate returned by this exchange.
     config.aiot_access_token.clear();
     config.aiot_registered = false;
     config.aiot_activated = false;
-    const std::string device_key = MacAddress();
-    const std::string client_id = GetClientId();
-    const esp_app_desc_t* app_desc = esp_app_get_description();
-    const std::string firmware_version = app_desc != nullptr ? app_desc->version : "unknown";
-
-    cJSON* register_body = cJSON_CreateObject();
-    cJSON_AddStringToObject(register_body, "protocol", kRodakAiotProtocol);
-    cJSON_AddNumberToObject(register_body, "protocolVersion", kRodakAiotProtocolVersion);
-    cJSON_AddNumberToObject(register_body, "protocol_version", kRodakAiotProtocolVersion);
-    cJSON_AddStringToObject(register_body, "productKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(register_body, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(register_body, "deviceCode", device_key.c_str());
-    cJSON_AddStringToObject(register_body, "deviceKey", device_key.c_str());
-    cJSON_AddStringToObject(register_body, "deviceName", "RodakOS RYMCU BigSmart");
-    cJSON_AddStringToObject(register_body, "credentialKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(register_body, "credentialSecret", config.aiot_device_secret.c_str());
-    // Existing XiaoZhi-era records derive their first secret from these stable
-    // values. Sending the proof lets the server perform a safe one-time
-    // legacy -> Rodak migration before replacing it with the random secret.
-    const std::string legacy_secret =
-        std::string("xiaozhi-chatbot:") + device_key + ":" + client_id;
-    cJSON_AddStringToObject(register_body, "legacyProductKey",
-                            "xiaozhi-rymcu-bigsmart");
-    cJSON_AddStringToObject(register_body, "legacyCredentialSecret", legacy_secret.c_str());
-    cJSON_AddStringToObject(register_body, "clientId", client_id.c_str());
-    cJSON_AddStringToObject(register_body, "firmwareVersion", firmware_version.c_str());
-    cJSON_AddStringToObject(register_body, "hardwareVersion", "rymcu_bigsmart");
-
-    cJSON* application = cJSON_CreateObject();
-    cJSON_AddStringToObject(application, "name", "rodakos");
-    cJSON_AddStringToObject(application, "version", firmware_version.c_str());
-    cJSON_AddItemToObject(register_body, "application", application);
-    cJSON* board = cJSON_CreateObject();
-    cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
-    cJSON_AddStringToObject(board, "name", "RodakOS RYMCU BigSmart");
-    cJSON_AddStringToObject(board, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(board, "protocol", kRodakAiotProtocol);
-    cJSON_AddItemToObject(register_body, "board", board);
-    cJSON* board_payload = cJSON_CreateObject();
-    cJSON_AddItemToObject(board_payload, "application", cJSON_Duplicate(application, true));
-    cJSON_AddItemToObject(board_payload, "board", cJSON_Duplicate(board, true));
-    cJSON_AddStringToObject(board_payload, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(board_payload, "protocol", kRodakAiotProtocol);
-    cJSON_AddItemToObject(register_body, "boardPayload", board_payload);
-    const std::string register_json = JsonToString(register_body);
-    cJSON_Delete(register_body);
-
-    HttpResponse register_response;
-    if (!PerformHttpRequest(register_url, HTTP_METHOD_POST, register_json, {},
-                            kMaxAiotResponseBytes, register_response, error)) {
-        SetError(error);
+    if (token_data == nullptr) {
+        SetError("AIoT pairing confirmation did not include credentials");
+        cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
     }
-    cJSON* register_root = nullptr;
-    cJSON* register_data = nullptr;
-    if (!ParseResponse(register_response, register_root, register_data, error)) {
-        SetError("AIoT register failed: " + error);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
-    AddStringAlias(register_data, "activationCode", activation_code);
-    AddStringAlias(register_data, "activation_code", activation_code);
-    AddStringAlias(register_data, "activationMessage", activation_message);
-    AddStringAlias(register_data, "activation_message", activation_message);
-    cJSON_Delete(register_root);
-
-    cJSON* activate_body = cJSON_CreateObject();
-    cJSON_AddStringToObject(activate_body, "protocol", kRodakAiotProtocol);
-    cJSON_AddStringToObject(activate_body, "productKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(activate_body, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(activate_body, "deviceCode", device_key.c_str());
-    cJSON_AddStringToObject(activate_body, "deviceKey", device_key.c_str());
-    cJSON_AddStringToObject(activate_body, "credentialKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(activate_body, "credentialSecret", config.aiot_device_secret.c_str());
-    if (!activation_code.empty()) {
-        cJSON_AddStringToObject(activate_body, "activationCode", activation_code.c_str());
-    }
-    const std::string activate_json = JsonToString(activate_body);
-    cJSON_Delete(activate_body);
-
-    HttpResponse activate_response;
-    if (!PerformHttpRequest(activate_url, HTTP_METHOD_POST, activate_json, {},
-                            kMaxAiotResponseBytes, activate_response, error)) {
-        SetError(error);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
-    cJSON* activate_root = nullptr;
-    cJSON* activate_data = nullptr;
-    if (!ParseResponse(activate_response, activate_root, activate_data, error)) {
-        SetError("AIoT activate failed: " + error);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
-    AddStringAlias(activate_data, "activationCode", activation_code);
-    AddStringAlias(activate_data, "activation_code", activation_code);
-    AddStringAlias(activate_data, "activationMessage", activation_message);
-    AddStringAlias(activate_data, "activation_message", activation_message);
-    cJSON_Delete(activate_root);
-
-    cJSON* token_body = cJSON_CreateObject();
-    cJSON_AddStringToObject(token_body, "protocol", kRodakAiotProtocol);
-    cJSON_AddStringToObject(token_body, "productKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(token_body, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(token_body, "deviceCode", device_key.c_str());
-    cJSON_AddStringToObject(token_body, "deviceKey", device_key.c_str());
-    cJSON_AddStringToObject(token_body, "credentialKey", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(token_body, "credentialSecret", config.aiot_device_secret.c_str());
-    const std::string token_json = JsonToString(token_body);
-    cJSON_Delete(token_body);
-
-    HttpResponse token_response;
-    if (!PerformHttpRequest(token_url, HTTP_METHOD_POST, token_json, {},
-                            kMaxAiotResponseBytes, token_response, error)) {
-        SetError(error);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
-    cJSON* token_root = nullptr;
-    cJSON* token_data = nullptr;
-    if (!ParseResponse(token_response, token_root, token_data, error)) {
-        SetError("AIoT token request failed: " + error);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
-
     AddStringAlias(token_data, "deviceToken", config.aiot_access_token);
     AddStringAlias(token_data, "accessToken", config.aiot_access_token);
     AddStringAlias(token_data, "token", config.aiot_access_token);
@@ -990,6 +1094,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
     config.has_activation_code = !activation_code.empty();
     config.aiot_registered = true;
     config.aiot_activated = true;
+    ResetPairingRequest(config);
     FinalizeMqttConfig(config);
     config.has_aiot_config = HasCompleteAiotConfig(config);
 
@@ -1286,6 +1391,99 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
 
     last_error_.clear();
     return ProvisioningUrlSaveResult::kSaved;
+}
+
+bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
+    std::lock_guard<std::mutex> refresh_lock(refresh_mutex_);
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        Load(config);
+    }
+    const auto initial_action = GetDeviceUnbindRecoveryAction(
+        config.unbind_pending, config.unbind_server_acknowledged,
+        !config.aiot_access_token.empty());
+    const std::string origin = UrlOrigin(config.provisioning_url);
+    if (initial_action == DeviceUnbindRecoveryAction::kAlreadyClean) {
+        SetError("设备尚未完成绑定");
+        return false;
+    }
+    if (initial_action == DeviceUnbindRecoveryAction::kRequestServer) {
+        HttpResponse response;
+        std::string error;
+        const bool request_ok = PerformHttpRequest(origin + kAiotUnbindPath, HTTP_METHOD_POST,
+                                                   "{}", config.aiot_access_token,
+                                                   kMaxAiotResponseBytes, response, error);
+        const int business_code = request_ok ? ResponseBusinessCode(response) : 0;
+        const bool already_unbound = request_ok &&
+            (response.status_code == 401 || response.status_code == 403 ||
+             response.status_code == 404 || response.status_code == 410 ||
+             business_code == 401 || business_code == 403 ||
+             business_code == 404 || business_code == 410);
+        if (!request_ok && !already_unbound) {
+            SetError(error);
+            return false;
+        }
+        if (request_ok && !already_unbound &&
+            (response.status_code < 200 || response.status_code >= 300)) {
+            SetError("设备解绑失败：HTTP status " +
+                     std::to_string(response.status_code));
+            return false;
+        }
+        if (request_ok && !already_unbound && response.status_code >= 200 &&
+            response.status_code < 300 && !response.body.empty()) {
+            cJSON* root = nullptr;
+            cJSON* data = nullptr;
+            if (!ParseResponse(response, root, data, error)) {
+                // A successful HTTP response with an empty/unknown envelope
+                // is treated as an idempotent server acknowledgement. Local
+                // invalidation is still required and can be retried safely.
+                if (response.status_code < 200 || response.status_code >= 300) {
+                    SetError("设备解绑失败：" + error);
+                    return false;
+                }
+            }
+            cJSON_Delete(root);
+        }
+        config.unbind_server_acknowledged = true;
+        config.unbind_pending = true;
+        {
+            std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+            if (!PersistAiotIdentity(config)) {
+                SetError("设备解绑确认状态持久化失败");
+                return false;
+            }
+        }
+    }
+
+    DeviceCloudConfig empty;
+    empty.provisioning_url = config.provisioning_url;
+    empty.websocket_version = 1;
+    ResetMqttConfig(empty);
+    ResetAiotCredentials(empty);
+    ResetPairingRequest(empty);
+    // Make a reset during multi-namespace cleanup fail closed. Load() rejects
+    // every cloud credential while this marker remains set.
+    empty.aiot_pending = true;
+    empty.unbind_pending = true;
+    empty.unbind_server_acknowledged = true;
+    const bool aiot_invalidated = PersistAiotIdentity(empty);
+    const bool mqtt_cleared = aiot_invalidated && PersistMqttConfig(empty);
+    const bool websocket_cleared = mqtt_cleared && PersistWebsocketConfig(empty);
+    bool cleanup_committed = false;
+    if (websocket_cleared) {
+        empty.aiot_pending = false;
+        empty.unbind_pending = false;
+        empty.unbind_server_acknowledged = false;
+        cleanup_committed = PersistAiotIdentity(empty);
+    }
+    if (!cleanup_committed) {
+        SetError("设备解绑后清理本地凭据失败");
+        config = empty;
+        return false;
+    }
+    config = empty;
+    last_error_.clear();
+    return true;
 }
 
 std::string DeviceCloudConfigService::GetClientId() {

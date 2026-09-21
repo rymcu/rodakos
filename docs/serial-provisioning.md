@@ -2,7 +2,8 @@
 
 This document defines the USB serial provisioning path for WiFi and
 Device Cloud bootstrap configuration. It is intentionally separate from the
-runtime voice protocol and from the Rodak server API.
+runtime voice protocol. Device binding begins only after serial provisioning
+has supplied enough network configuration to reach the Rodak server API.
 
 ## Scope
 
@@ -28,6 +29,7 @@ The service label is **Device Cloud**, but the persisted NVS namespace is
 | -------------- | ---------------------------------- | --------------------------- |
 | `wifi`         | `ssid`, `password`                 | Serial provisioning request |
 | `device_cloud` | `prov_url`                         | Serial provisioning request |
+| `device_cloud` | AIoT identity and pairing state    | Device-owned binding flow   |
 | `websocket`    | `url`, `token`, `version`          | Bootstrap response          |
 | `unified_mqtt` | Broker, credential, and topic keys | Bootstrap response          |
 
@@ -134,9 +136,10 @@ next normal boot can use them.
 The serial link is assumed to be physically local. It is not an authenticated
 remote management channel. The sender must require an explicit operator action
 and should use a short-lived provisioning session. The device must not echo the
-WiFi password, MQTT password, JWT, or WebSocket token. Production deployments
-should add an operator confirmation or pairing challenge before enabling the
-receiver continuously.
+WiFi password, MQTT password, JWT, or WebSocket token. Serial provisioning does
+not authorize Device Cloud access. RodakOS requires a separate short-code
+confirmation before it obtains an AIoT access token or enables MQTT and
+WebSocket credentials.
 
 RodakOS reuses the ESP-IDF USB Serial/JTAG console VFS; it does not create a
 second serial or USB interface. The service backs that VFS with Espressif's
@@ -149,6 +152,65 @@ using the console VFS on the same COM port. RodakOS refuses to take over a USB
 Serial/JTAG driver already installed by another service. The provisioning task
 is pinned to the core that installs the driver so its shutdown path can drain
 and uninstall the driver on the same core, as required by ESP-IDF.
+
+## Device Binding
+
+The binding flow is device-owned and starts after WiFi is connected. Secrets
+are never copied from Rodak over serial.
+
+1. RodakOS generates a random device secret on first use and commits it to the
+   `device_cloud` namespace before sending it to a server.
+2. It posts the device identity to
+   `/api/v1/aiot/devices/binding/request`. A successful response supplies a
+   request ID, request token, 8-digit pairing code, expiry time, and optional
+   status. Both camel-case and snake-case response field names are accepted.
+3. RodakOS persists the request fields and shows the pairing code on the
+   Settings Device Cloud page. A reset can therefore resume the same request
+   without generating another secret or code.
+4. Device Cloud refresh polls
+   `/api/v1/aiot/devices/binding/requests/{requestId}/status`, authenticating
+   with the request token. `pending` keeps cloud access disabled.
+5. Only `confirmed` or `approved` may consume the access token and MQTT
+   configuration returned by the status endpoint and commit them transactionally.
+   Unknown status values fail closed.
+6. An expired request, including HTTP 404 or 410 from the status endpoint,
+   clears the saved request so Settings can start a new one. A rejected or
+   revoked request is shown as rejected and must also be explicitly restarted;
+   it must never reuse the rejected request to enable cloud access.
+
+The request token authorizes only status lookup. The device access token is
+issued after owner confirmation and is the credential used for authenticated
+device operations. Neither token nor the device secret is displayed in Settings
+or written to logs.
+
+### Unbinding
+
+Settings offers **解除设备绑定** only after AIoT configuration is complete. With
+WiFi connected, RodakOS posts to `/api/v1/aiot/devices/binding/unbind` using the
+current device access token. It clears local AIoT access state, pairing request,
+MQTT credentials, and WebSocket credentials only after the server confirms the
+request. WiFi credentials and the configured provisioning URL remain available
+so the operator can bind the same device again.
+
+If the network request or server response fails, RodakOS keeps the local
+credentials and reports the failure. If the server succeeds but local NVS
+cleanup fails, Settings reports that cleanup failed; this state requires a
+retry or recovery rather than claiming a successful local unbind.
+
+### Binding Response Host Tests
+
+`tests/app_model/device_pairing_protocol_test.cc` exercises the production
+pairing response parser without ESP-IDF hardware. It covers the standard Rodak
+response envelope, flat responses, camel-case and snake-case aliases, status
+normalization, required create/status fields, server rejection, malformed JSON,
+and failure without partial output mutation. `device_pairing_policy_test.cc`
+separately verifies that only confirmed/approved states can enable Device Cloud.
+
+These tests do not replace an HTTP/NVS integration fixture or the hardware gate.
+The remaining integration coverage should inject a fake HTTP transport and NVS
+store into `DeviceCloudConfigService`, then verify request persistence across a
+service restart, pending-to-confirmed polling, rejected/expired restart, the
+transactional credential commit, and server-confirmed unbind cleanup.
 
 ## Rodak Integration
 

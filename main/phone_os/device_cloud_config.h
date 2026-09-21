@@ -23,6 +23,13 @@ struct DeviceCloudConfig {
     bool aiot_registered = false;
     bool aiot_activated = false;
     bool aiot_pending = false;
+    bool unbind_pending = false;
+    bool unbind_server_acknowledged = false;
+    std::string pairing_request_id;
+    std::string pairing_request_token;
+    std::string pairing_code;
+    std::string pairing_expires_at;
+    std::string pairing_status;
     std::string websocket_url;
     std::string websocket_token;
     int websocket_version = 1;
@@ -49,6 +56,7 @@ struct DeviceCloudConfig {
     bool has_mqtt_config = false;
     bool has_aiot_config = false;
     bool has_activation_code = false;
+    bool has_pairing_request = false;
 };
 
 enum class ProvisioningUrlSaveResult {
@@ -68,6 +76,7 @@ class DeviceCloudConfigService {
 public:
     bool Load(DeviceCloudConfig& config);
     bool Refresh(DeviceCloudConfig& config);
+    bool Unbind(DeviceCloudConfig& config);
     ProvisioningUrlSaveResult SaveProvisioningUrl(const std::string& url);
     std::string GetClientId();
     std::string last_error() const;
