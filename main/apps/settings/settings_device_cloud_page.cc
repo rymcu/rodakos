@@ -141,6 +141,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     cloud_pairing_button_label_ = lv_label_create(cloud_pairing_button_);
     lv_label_set_text(cloud_pairing_button_label_, "开始连接");
     lv_obj_set_style_text_color(cloud_pairing_button_label_, lv_color_white(), 0);
+    lv_obj_set_style_text_font(cloud_pairing_button_label_, &phone_font_14, 0);
     lv_obj_center(cloud_pairing_button_label_);
     lv_obj_add_event_cb(cloud_pairing_button_, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->RefreshDeviceCloud();
@@ -248,6 +249,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_bg_color(cloud_unbind_button_, lv_palette_main(LV_PALETTE_RED), 0);
     auto* unbind_label = lv_label_create(cloud_unbind_button_);
     lv_label_set_text(unbind_label, "解除与 Rodak 的连接");
+    lv_obj_set_style_text_font(unbind_label, &phone_font_12, 0);
     lv_obj_center(unbind_label);
     lv_obj_add_event_cb(cloud_unbind_button_, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowDeviceCloudUnbindDialog();
@@ -398,6 +400,7 @@ void SettingsApp::ShowDeviceCloudUnbindDialog() {
     auto* cancel_label = lv_label_create(cancel);
     lv_label_set_text(cancel_label, "取消");
     lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
     lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseDeviceCloudUnbindDialog();
@@ -412,6 +415,7 @@ void SettingsApp::ShowDeviceCloudUnbindDialog() {
     auto* confirm_label = lv_label_create(confirm);
     lv_label_set_text(confirm_label, "确认解除");
     lv_obj_set_style_text_color(confirm_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(confirm_label, &phone_font_14, 0);
     lv_obj_center(confirm_label);
     lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
