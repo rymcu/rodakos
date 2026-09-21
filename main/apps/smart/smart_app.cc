@@ -263,14 +263,15 @@ void SmartApp::RebuildLightList() {
         selected_index_ = 0;
     }
 
-    const auto& lights = lights_->ListLights();
+    const auto lights = lights_->ListLights();
     for (size_t i = 0; i < lights.size(); ++i) {
         CreateLightButton(light_list_, i);
     }
 }
 
 void SmartApp::CreateLightButton(lv_obj_t* parent, size_t light_index) {
-    const auto* light = lights_ != nullptr ? lights_->GetLight(light_index) : nullptr;
+    rodakos::LightState light_state;
+    const bool has_light = lights_ != nullptr && lights_->GetLight(light_index, light_state);
     auto* btn = lv_btn_create(parent);
     lv_obj_remove_style_all(btn);
     lv_obj_set_size(btn, 94, 30);
@@ -281,7 +282,7 @@ void SmartApp::CreateLightButton(lv_obj_t* parent, size_t light_index) {
     lv_obj_set_style_pad_ver(btn, 0, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* text = CreateText(btn, light != nullptr ? light->title.c_str() : "Light",
+    auto* text = CreateText(btn, has_light ? light_state.title.c_str() : "Light",
                             &phone_font_12, rodakos_theme_text_primary());
     lv_obj_set_width(text, 78);
     lv_label_set_long_mode(text, LV_LABEL_LONG_DOT);
@@ -338,15 +339,13 @@ void SmartApp::SelectLight(size_t index) {
     Refresh();
 }
 
-const rodakos::LightState* SmartApp::SelectedLight() const {
-    if (lights_ == nullptr || selected_index_ >= lights_->ListLights().size()) {
-        return nullptr;
-    }
-    return lights_->GetLight(selected_index_);
+bool SmartApp::SelectedLight(rodakos::LightState& state) const {
+    return lights_ != nullptr && lights_->GetLight(selected_index_, state);
 }
 
 bool SmartApp::HasSelectedLight() const {
-    return SelectedLight() != nullptr;
+    rodakos::LightState state;
+    return SelectedLight(state);
 }
 
 void SmartApp::SetControlsDisabled(bool disabled) {
@@ -382,8 +381,9 @@ void SmartApp::Refresh() {
         selected_index_ = 0;
     }
 
-    const auto* state = SelectedLight();
-    SetControlsDisabled(state == nullptr);
+    rodakos::LightState state;
+    const bool has_state = SelectedLight(state);
+    SetControlsDisabled(!has_state);
 
     for (size_t i = 0; i < light_buttons_.size(); ++i) {
         auto* btn = light_buttons_[i];
@@ -405,7 +405,7 @@ void SmartApp::Refresh() {
         }
     }
 
-    if (state == nullptr) {
+    if (!has_state) {
         if (light_title_label_ != nullptr) {
             lv_label_set_text(light_title_label_, "No lights");
         }
@@ -431,37 +431,37 @@ void SmartApp::Refresh() {
     }
 
     if (light_title_label_ != nullptr) {
-        lv_label_set_text(light_title_label_, state->title.c_str());
+        lv_label_set_text(light_title_label_, state.title.c_str());
     }
     if (power_switch_ != nullptr) {
-        if (state->enabled) {
+        if (state.enabled) {
             lv_obj_add_state(power_switch_, LV_STATE_CHECKED);
         } else {
             lv_obj_remove_state(power_switch_, LV_STATE_CHECKED);
         }
     }
     if (brightness_slider_ != nullptr) {
-        lv_slider_set_value(brightness_slider_, state->brightness_percent, LV_ANIM_OFF);
+        lv_slider_set_value(brightness_slider_, state.brightness_percent, LV_ANIM_OFF);
     }
     if (brightness_label_ != nullptr) {
         lv_label_set_text_fmt(brightness_label_, "%u%%",
-                              static_cast<unsigned>(state->brightness_percent));
+                              static_cast<unsigned>(state.brightness_percent));
     }
     if (color_preview_ != nullptr) {
-        lv_obj_set_style_bg_color(color_preview_, ToLvColor(state->color), 0);
+        lv_obj_set_style_bg_color(color_preview_, ToLvColor(state.color), 0);
         lv_obj_set_style_bg_opa(color_preview_,
-                                state->enabled && state->available ? LV_OPA_COVER : LV_OPA_40,
+                                state.enabled && state.available ? LV_OPA_COVER : LV_OPA_40,
                                 0);
     }
     if (status_label_ != nullptr) {
-        if (!state->available) {
+        if (!state.available) {
             lv_label_set_text_fmt(status_label_, "Unavailable: %s",
-                                  esp_err_to_name(state->last_error));
+                                  esp_err_to_name(state.last_error));
             lv_obj_set_style_text_color(status_label_, rodakos_theme_warning(), 0);
         } else {
-            lv_label_set_text(status_label_, state->enabled ? "On" : "Off");
+            lv_label_set_text(status_label_, state.enabled ? "On" : "Off");
             lv_obj_set_style_text_color(status_label_,
-                                        state->enabled ? rodakos_theme_primary()
+                                        state.enabled ? rodakos_theme_primary()
                                                        : rodakos_theme_text_secondary(),
                                         0);
         }

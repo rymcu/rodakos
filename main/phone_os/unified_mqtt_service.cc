@@ -164,11 +164,13 @@ void DeleteTimerAndWait(TimerHandle_t timer) {
 UnifiedMqttService::UnifiedMqttService(DeviceCloudConfigService& config_service,
                                        OtaUpdateService& ota_update,
                                        AudioOutputService* audio_output,
-                                       BatteryStateProvider* battery_provider)
+                                       BatteryStateProvider* battery_provider,
+                                       LightService* light_service)
     : config_service_(config_service),
       ota_update_(ota_update),
       audio_output_(audio_output),
-      battery_provider_(battery_provider) {
+      battery_provider_(battery_provider),
+      light_service_(light_service) {
     publish_ack_semaphore_ = xSemaphoreCreateBinaryStatic(&publish_ack_semaphore_storage_);
 }
 
@@ -831,9 +833,45 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
                         : nullptr;
     if (cJSON_IsNumber(volume) && audio_output_ != nullptr) {
         audio_output_->SetVolume(std::clamp(volume->valueint, 0, 100));
-        PublishShadowReport();
     }
+    cJSON* light = cJSON_IsObject(desired)
+                       ? cJSON_GetObjectItemCaseSensitive(desired, "light")
+                       : nullptr;
+    if (cJSON_IsObject(light) && light_service_ != nullptr) {
+        LightState current;
+        if (light_service_->GetLight(0, current)) {
+            bool enabled = current.enabled;
+            uint8_t brightness = current.brightness_percent;
+            RgbColor color = current.color;
+            const cJSON* enabled_json = cJSON_GetObjectItemCaseSensitive(light, "enabled");
+            const cJSON* brightness_json = cJSON_GetObjectItemCaseSensitive(light, "brightness");
+            const cJSON* color_json = cJSON_GetObjectItemCaseSensitive(light, "color");
+            if (cJSON_IsBool(enabled_json)) enabled = cJSON_IsTrue(enabled_json);
+            if (cJSON_IsNumber(brightness_json)) {
+                brightness = static_cast<uint8_t>(std::clamp(brightness_json->valueint, 0, 100));
+            }
+            if (cJSON_IsObject(color_json)) {
+                const cJSON* red = cJSON_GetObjectItemCaseSensitive(color_json, "r");
+                const cJSON* green = cJSON_GetObjectItemCaseSensitive(color_json, "g");
+                const cJSON* blue = cJSON_GetObjectItemCaseSensitive(color_json, "b");
+                if (cJSON_IsNumber(red)) color.red = static_cast<uint8_t>(std::clamp(red->valueint, 0, 255));
+                if (cJSON_IsNumber(green)) color.green = static_cast<uint8_t>(std::clamp(green->valueint, 0, 255));
+                if (cJSON_IsNumber(blue)) color.blue = static_cast<uint8_t>(std::clamp(blue->valueint, 0, 255));
+            }
+            if (!light_service_->SetState(0, enabled, brightness, color)) {
+                ESP_LOGW(TAG, "Failed to apply desired light state");
+            }
+        }
+    }
+    if (cJSON_IsNumber(volume) || cJSON_IsObject(light)) PublishShadowReport();
     cJSON_Delete(root);
+}
+
+void UnifiedMqttService::ReconnectAfterCredentialChange() {
+    if (!started_.load()) {
+        return;
+    }
+    StartConnectionAsync();
 }
 
 void UnifiedMqttService::HandlePcStatus(const std::string& payload) {
@@ -944,6 +982,21 @@ void UnifiedMqttService::PublishShadowReport() {
     cJSON_AddStringToObject(root, "firmware", app != nullptr ? app->version : "unknown");
     if (audio_output_ != nullptr) {
         cJSON_AddNumberToObject(root, "volume", audio_output_->volume());
+    }
+    if (light_service_ != nullptr) {
+        LightState light;
+        if (light_service_->GetLight(0, light)) {
+            cJSON* light_json = cJSON_CreateObject();
+            cJSON_AddStringToObject(light_json, "id", light.id.c_str());
+            cJSON_AddBoolToObject(light_json, "enabled", light.enabled);
+            cJSON_AddNumberToObject(light_json, "brightness", light.brightness_percent);
+            cJSON* color = cJSON_CreateObject();
+            cJSON_AddNumberToObject(color, "r", light.color.red);
+            cJSON_AddNumberToObject(color, "g", light.color.green);
+            cJSON_AddNumberToObject(color, "b", light.color.blue);
+            cJSON_AddItemToObject(light_json, "color", color);
+            cJSON_AddItemToObject(root, "light", light_json);
+        }
     }
     const BatterySnapshot battery = battery_provider_ != nullptr
                                         ? battery_provider_->Read()

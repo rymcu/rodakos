@@ -13,6 +13,7 @@ constexpr const char* TAG = "LightService";
 }  // namespace
 
 bool LightService::Init() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (initialized_) {
         return IsAvailable();
     }
@@ -40,14 +41,27 @@ bool LightService::Init() {
     return IsAvailable();
 }
 
-const LightState* LightService::GetLight(size_t index) const {
+bool LightService::IsAvailable() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return !lights_.empty();
+}
+
+std::vector<LightState> LightService::ListLights() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return lights_;
+}
+
+bool LightService::GetLight(size_t index, LightState& state) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= lights_.size()) {
-        return nullptr;
+        return false;
     }
-    return &lights_[index];
+    state = lights_[index];
+    return true;
 }
 
 bool LightService::SetEnabled(size_t index, bool enabled) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= lights_.size()) {
         return false;
     }
@@ -56,6 +70,7 @@ bool LightService::SetEnabled(size_t index, bool enabled) {
 }
 
 bool LightService::Toggle(size_t index) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= lights_.size()) {
         return false;
     }
@@ -63,6 +78,7 @@ bool LightService::Toggle(size_t index) {
 }
 
 bool LightService::SetBrightness(size_t index, uint8_t brightness_percent) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= lights_.size()) {
         return false;
     }
@@ -71,6 +87,7 @@ bool LightService::SetBrightness(size_t index, uint8_t brightness_percent) {
 }
 
 bool LightService::SetColor(size_t index, RgbColor color) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= lights_.size()) {
         return false;
     }
@@ -81,7 +98,20 @@ bool LightService::SetColor(size_t index, RgbColor color) {
     return ApplyLocked(index);
 }
 
+bool LightService::SetState(size_t index, bool enabled, uint8_t brightness_percent,
+                            RgbColor color) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (index >= lights_.size()) {
+        return false;
+    }
+    lights_[index].enabled = enabled;
+    lights_[index].brightness_percent = std::min<uint8_t>(brightness_percent, 100);
+    lights_[index].color = color;
+    return ApplyLocked(index);
+}
+
 bool LightService::Apply(size_t index) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return ApplyLocked(index);
 }
 

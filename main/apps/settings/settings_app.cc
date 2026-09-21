@@ -136,9 +136,14 @@ void SettingsApp::DestroyUi() {
     usb_disk_hint_page_ = nullptr;
     CloseNtpServerDialog();
     CloseCloudProvisioningUrlDialog();
+    CloseDeviceCloudUnbindDialog();
     if (time_sync_timer_ != nullptr) {
         lv_timer_delete(time_sync_timer_);
         time_sync_timer_ = nullptr;
+    }
+    if (cloud_pairing_timer_ != nullptr) {
+        lv_timer_delete(cloud_pairing_timer_);
+        cloud_pairing_timer_ = nullptr;
     }
     if (root_ != nullptr && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
@@ -173,12 +178,20 @@ void SettingsApp::ResetUiPointers() {
     time_sync_in_progress_ = false;
     time_sync_poll_count_ = 0;
     cloud_status_label_ = nullptr;
+    cloud_guide_label_ = nullptr;
     cloud_url_label_ = nullptr;
     cloud_client_id_label_ = nullptr;
     cloud_websocket_label_ = nullptr;
     cloud_activation_label_ = nullptr;
+    cloud_pairing_button_ = nullptr;
+    cloud_pairing_button_label_ = nullptr;
+    cloud_unbind_button_ = nullptr;
+    cloud_unbind_dialog_ = nullptr;
+    cloud_pairing_timer_ = nullptr;
     cloud_url_dialog_ = nullptr;
     cloud_url_textarea_ = nullptr;
+    cloud_pairing_error_.clear();
+    cloud_pairing_code_.clear();
     web_files_page_.Reset();
     wifi_status_label_ = nullptr;
     wifi_list_container_ = nullptr;
@@ -197,6 +210,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
 
     CloseButtonActionDialog();
     current_page_ = page;
+    if (cloud_pairing_timer_ != nullptr && page != SettingsPage::kDeviceCloud) {
+        lv_timer_pause(cloud_pairing_timer_);
+    }
 
     // 隐藏所有页面
     if (main_body_ != nullptr) {
@@ -292,7 +308,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "Device Services");
+                lv_label_set_text(header_title_label_, "连接与云服务");
             }
             UpdateDeviceCloudPage();
             break;

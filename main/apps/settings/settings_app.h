@@ -56,6 +56,9 @@ public:
                                       const rodakos::DeviceCloudConfig& config,
                                       const std::string& error,
                                       uint32_t generation);
+    void OnDeviceCloudUnbindComplete(bool ok,
+                                     const std::string& error,
+                                     uint32_t generation);
     void ReloadUiForTheme();
     void OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results);
     void OnWiFiConnectAsyncComplete(WiFiStatus status,
@@ -82,6 +85,9 @@ private:
     void CreateDeviceCloudPage();
     void UpdateDeviceCloudPage();
     void RefreshDeviceCloud();
+    void ShowDeviceCloudUnbindDialog();
+    void CloseDeviceCloudUnbindDialog();
+    void UnbindDeviceCloud();
     void ShowCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
@@ -146,12 +152,20 @@ private:
     // 设备云配置页面控件
     lv_obj_t* device_cloud_body_ = nullptr;
     lv_obj_t* cloud_status_label_ = nullptr;
+    lv_obj_t* cloud_guide_label_ = nullptr;
     lv_obj_t* cloud_url_label_ = nullptr;
     lv_obj_t* cloud_client_id_label_ = nullptr;
     lv_obj_t* cloud_websocket_label_ = nullptr;
     lv_obj_t* cloud_activation_label_ = nullptr;
+    lv_obj_t* cloud_pairing_button_ = nullptr;
+    lv_obj_t* cloud_pairing_button_label_ = nullptr;
+    lv_obj_t* cloud_unbind_button_ = nullptr;
+    lv_obj_t* cloud_unbind_dialog_ = nullptr;
+    lv_timer_t* cloud_pairing_timer_ = nullptr;
     lv_obj_t* cloud_url_dialog_ = nullptr;
     lv_obj_t* cloud_url_textarea_ = nullptr;
+    std::string cloud_pairing_error_;
+    std::string cloud_pairing_code_;
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
 
     // Web 上传页面控件

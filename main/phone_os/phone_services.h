@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/battery_monitor.h"
+#include <functional>
 
 class BacklightAdapter;
 class WiFiAdapter;
@@ -85,6 +86,23 @@ public:
     void SetCamera(rodakos::CameraService* camera) { camera_ = camera; }
     rodakos::CameraService* camera() { return camera_; }
 
+    void SetDeviceCloudUnboundCallback(std::function<void()> callback) {
+        device_cloud_unbound_callback_ = std::move(callback);
+    }
+    void NotifyDeviceCloudUnbound() {
+        if (device_cloud_unbound_callback_) {
+            device_cloud_unbound_callback_();
+        }
+    }
+    void SetDeviceCloudBoundCallback(std::function<void()> callback) {
+        device_cloud_bound_callback_ = std::move(callback);
+    }
+    void NotifyDeviceCloudBound() {
+        if (device_cloud_bound_callback_) {
+            device_cloud_bound_callback_();
+        }
+    }
+
 private:
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
@@ -105,4 +123,6 @@ private:
     rodakos::WakeOnLanService* wake_on_lan_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;
+    std::function<void()> device_cloud_unbound_callback_;
+    std::function<void()> device_cloud_bound_callback_;
 };

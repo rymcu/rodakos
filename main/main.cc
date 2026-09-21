@@ -389,7 +389,7 @@ extern "C" void app_main(void) {
     static rodakos::BatteryMonitor battery_monitor;
     static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service,
-        &battery_monitor);
+        &battery_monitor, &light_service);
     static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
@@ -466,6 +466,13 @@ extern "C" void app_main(void) {
     services.SetWakeOnLan(&wake_on_lan_service);
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
+    services.SetDeviceCloudUnboundCallback([]() {
+        voice_assistant_service.StopInteraction();
+        unified_mqtt_service.Stop();
+    });
+    services.SetDeviceCloudBoundCallback([]() {
+        unified_mqtt_service.ReconnectAfterCredentialChange();
+    });
 
     static PhoneSystem system(ui, services);
     if (!system.Start()) {

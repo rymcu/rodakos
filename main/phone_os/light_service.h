@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include "esp_err.h"
 #include "rodakos_adapters/board_device_adapter.h"
@@ -33,15 +34,16 @@ struct LightState {
 class LightService {
 public:
     bool Init();
-    bool IsAvailable() const { return !lights_.empty(); }
+    bool IsAvailable() const;
 
-    const std::vector<LightState>& ListLights() const { return lights_; }
-    const LightState* GetLight(size_t index) const;
+    std::vector<LightState> ListLights() const;
+    bool GetLight(size_t index, LightState& state) const;
 
     bool SetEnabled(size_t index, bool enabled);
     bool Toggle(size_t index);
     bool SetBrightness(size_t index, uint8_t brightness_percent);
     bool SetColor(size_t index, RgbColor color);
+    bool SetState(size_t index, bool enabled, uint8_t brightness_percent, RgbColor color);
     bool Apply(size_t index);
 
 private:
@@ -51,6 +53,7 @@ private:
     std::vector<LightState> lights_;
     std::vector<BoardLightDevice> board_lights_;
     bool initialized_ = false;
+    mutable std::recursive_mutex mutex_;
 };
 
 }  // namespace rodakos

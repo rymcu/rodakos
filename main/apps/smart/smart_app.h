@@ -31,7 +31,7 @@ private:
                             lv_coord_t x,
                             lv_coord_t y);
     void SelectLight(size_t index);
-    const rodakos::LightState* SelectedLight() const;
+    bool SelectedLight(rodakos::LightState& state) const;
     bool HasSelectedLight() const;
     void SetControlsDisabled(bool disabled);
     void SetPower(bool enabled);

@@ -179,8 +179,27 @@ void SettingsApp::CreateMainPage() {
         self->ShowPage(SettingsPage::kWiFiList);
     }, LV_EVENT_CLICKED, this);
 
+    // ===== Rodak 连接入口 =====
+    auto* cloud_card = CreateSettingCard(main_body_, 258);
+    lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
+    CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
+
+    auto* cloud_title = CreateSettingLabel(cloud_card, "连接 Rodak");
+    lv_obj_align(cloud_title, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* cloud_arrow = lv_label_create(cloud_card);
+    lv_label_set_text(cloud_arrow, ">");
+    lv_obj_set_style_text_color(cloud_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(cloud_arrow, &phone_font_18, 0);
+    lv_obj_align(cloud_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(cloud_card, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->ShowPage(SettingsPage::kDeviceCloud);
+    }, LV_EVENT_CLICKED, this);
+
     // ===== 日期与时间入口 =====
-    auto* datetime_card = CreateSettingCard(main_body_, 258);
+    auto* datetime_card = CreateSettingCard(main_body_, 316);
     lv_obj_add_flag(datetime_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(datetime_card, FONT_AWESOME_CLOCK);
@@ -200,7 +219,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== 系统壳入口 =====
-    auto* shell_card = CreateSettingCard(main_body_, 316);
+    auto* shell_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(shell_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(shell_card, FONT_AWESOME_LOCK);
@@ -220,7 +239,7 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== 按键绑定入口 =====
-    auto* buttons_card = CreateSettingCard(main_body_, 374);
+    auto* buttons_card = CreateSettingCard(main_body_, 432);
     lv_obj_add_flag(buttons_card, LV_OBJ_FLAG_CLICKABLE);
 
     CreateSettingIcon(buttons_card, FONT_AWESOME_KEY);
@@ -237,26 +256,6 @@ void SettingsApp::CreateMainPage() {
     lv_obj_add_event_cb(buttons_card, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->ShowPage(SettingsPage::kButtons);
-    }, LV_EVENT_CLICKED, this);
-
-    // ===== 设备服务入口 =====
-    auto* cloud_card = CreateSettingCard(main_body_, 432);
-    lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
-
-    CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
-
-    auto* cloud_title = CreateSettingLabel(cloud_card, "Device Services");
-    lv_obj_align(cloud_title, LV_ALIGN_LEFT_MID, 28, 0);
-
-    auto* cloud_arrow = lv_label_create(cloud_card);
-    lv_label_set_text(cloud_arrow, ">");
-    lv_obj_set_style_text_color(cloud_arrow, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(cloud_arrow, &phone_font_18, 0);
-    lv_obj_align(cloud_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
-
-    lv_obj_add_event_cb(cloud_card, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->ShowPage(SettingsPage::kDeviceCloud);
     }, LV_EVENT_CLICKED, this);
 
     // ===== Web 上传入口 =====

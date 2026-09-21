@@ -2,6 +2,7 @@
 
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/battery_monitor.h"
+#include "phone_os/light_service.h"
 
 #include <array>
 #include <atomic>
@@ -28,11 +29,13 @@ public:
     UnifiedMqttService(DeviceCloudConfigService& config_service,
                        OtaUpdateService& ota_update,
                        AudioOutputService* audio_output,
-                       BatteryStateProvider* battery_provider = nullptr);
+                       BatteryStateProvider* battery_provider = nullptr,
+                       LightService* light_service = nullptr);
     ~UnifiedMqttService();
 
     bool Start();
     void Stop();
+    void ReconnectAfterCredentialChange();
     // Apply a provisioning change. An active session restarts so its outbox
     // and event workers cannot cross broker or routing boundaries.
     void RequestCredentialRefresh();
@@ -86,6 +89,7 @@ private:
     OtaUpdateService& ota_update_;
     AudioOutputService* audio_output_ = nullptr;
     BatteryStateProvider* battery_provider_ = nullptr;
+    LightService* light_service_ = nullptr;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     esp_mqtt_client_handle_t client_ = nullptr;
