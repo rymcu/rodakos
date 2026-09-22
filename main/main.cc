@@ -5,6 +5,7 @@
 #include "rodakos_adapters/audio_codec_input.h"
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
+#include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/audio_output_service.h"
@@ -46,6 +47,9 @@
 #include <freertos/task.h>
 #include <inttypes.h>
 #include <nvs_flash.h>
+#include <cstdio>
+#include <memory>
+#include <string>
 
 namespace {
 constexpr const char* TAG = "RodakOS";
@@ -67,6 +71,21 @@ struct TouchInputBridge {
 };
 
 TouchInputBridge g_touch_input;
+
+struct SerialLaunchRequest {
+    PhoneNavigation* navigation = nullptr;
+    std::string app_id;
+};
+
+void LaunchAppFromSerial(void* user_data) {
+    std::unique_ptr<SerialLaunchRequest> request(
+        static_cast<SerialLaunchRequest*>(user_data));
+    const bool launched = request != nullptr && request->navigation != nullptr &&
+                          request->navigation->Launch(request->app_id);
+    std::fprintf(stdout, "RODAK_APP_LAUNCH_COMPLETE {\"ok\":%s}\n",
+                 launched ? "true" : "false");
+    std::fflush(stdout);
+}
 
 void ResetTouchInputBridge(void* user_data) {
     auto* touch = static_cast<TouchInputBridge*>(user_data);
@@ -400,6 +419,7 @@ extern "C" void app_main(void) {
         audio_output_service);
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
+    unified_mqtt_service.SetVoiceWakeService(&voice_wake_service);
     static rodakos::SerialProvisioningService serial_provisioning_service(
         wifi, device_cloud_config_service,
         []() { unified_mqtt_service.RequestCredentialRefresh(); },
@@ -475,6 +495,24 @@ extern "C" void app_main(void) {
     });
 
     static PhoneSystem system(ui, services);
+    serial_provisioning_service.SetAppLaunchCallback([&system](const std::string& requested_id) {
+        const auto* descriptor = system.registry().ResolveAlias(requested_id);
+        if (descriptor == nullptr) {
+            return false;
+        }
+        auto* request = new SerialLaunchRequest{&system.navigation(), descriptor->id};
+        if (!lvgl_port_lock(1000)) {
+            delete request;
+            return false;
+        }
+        const lv_result_t result = lv_async_call(LaunchAppFromSerial, request);
+        lvgl_port_unlock();
+        if (result != LV_RESULT_OK) {
+            delete request;
+            return false;
+        }
+        return true;
+    });
     if (!system.Start()) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         return;

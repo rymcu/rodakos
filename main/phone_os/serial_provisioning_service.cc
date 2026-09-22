@@ -101,12 +101,19 @@ bool HasPendingTransaction() {
 
 SerialProvisioningService::SerialProvisioningService(
     WiFiAdapter* wifi, DeviceCloudConfigService& cloud_config,
-    CloudRefreshCallback cloud_refresh, VoiceTestCallback voice_test)
+    CloudRefreshCallback cloud_refresh, VoiceTestCallback voice_test,
+    AppLaunchCallback app_launch)
     : wifi_(wifi),
       cloud_config_(cloud_config),
       cloud_refresh_callback_(std::move(cloud_refresh)),
-      voice_test_callback_(std::move(voice_test)) {
+      voice_test_callback_(std::move(voice_test)),
+      app_launch_callback_(std::move(app_launch)) {
     stopped_semaphore_ = xSemaphoreCreateBinaryStatic(&stopped_semaphore_storage_);
+}
+
+void SerialProvisioningService::SetAppLaunchCallback(AppLaunchCallback callback) {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    app_launch_callback_ = std::move(callback);
 }
 
 SerialProvisioningService::~SerialProvisioningService() {
@@ -310,6 +317,16 @@ void SerialProvisioningService::Run() {
 }
 
 bool SerialProvisioningService::HandleLine(const std::string& line) {
+    constexpr char kAppLaunchPrefix[] = "RODAK_APP_LAUNCH_V1 ";
+    if (line.rfind(kAppLaunchPrefix, 0) == 0) {
+        const std::string app_id = line.substr(sizeof(kAppLaunchPrefix) - 1);
+        const bool queued = !app_id.empty() && app_id.size() < 64 &&
+                            app_launch_callback_ && app_launch_callback_(app_id);
+        std::fprintf(stdout, "RODAK_APP_LAUNCH_RESULT {\"queued\":%s}\n",
+                     queued ? "true" : "false");
+        std::fflush(stdout);
+        return queued;
+    }
     constexpr char kVoiceTestPrefix[] = "RODAK_VOICE_TEST_V1 ";
     if (line.rfind(kVoiceTestPrefix, 0) == 0) {
         const std::string command = line.substr(sizeof(kVoiceTestPrefix) - 1);

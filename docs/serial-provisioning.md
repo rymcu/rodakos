@@ -38,9 +38,9 @@ values before the next bootstrap. MQTT and WebSocket secrets are never accepted
 as serial request fields.
 
 The firmware does not expose textual commands such as `cloud bootstrap set` or
-`wifi provision`. The only host-to-device command is the framed
-`RODAK_PROVISION_V1` line below; the namespace names above describe persistence
-only.
+`wifi provision`. Provisioning uses only the framed `RODAK_PROVISION_V1` line
+below; the namespace names above describe persistence only. The separate
+runtime app-launch command does not read or write provisioning state.
 
 ## Wire Format
 
@@ -86,6 +86,28 @@ terminating LF are all included. LF and CRLF are accepted; with CRLF, both line
 ending bytes count toward the same limit. After rejecting an oversized line,
 the receiver discards bytes through its terminating LF and then accepts the
 next frame normally.
+
+## Runtime App Launch
+
+After `PhoneSystem` has started, a local serial client can request a registered
+app by exact ID or alias:
+
+```text
+RODAK_APP_LAUNCH_V1 camera\n
+```
+
+The service resolves aliases through `PhoneAppRegistry` and queues navigation
+on the LVGL thread. Acceptance and completion are reported separately:
+
+```text
+RODAK_APP_LAUNCH_RESULT {"queued":true}
+RODAK_APP_LAUNCH_COMPLETE {"ok":true}
+```
+
+An unknown identity or a request that cannot be queued returns
+`RODAK_APP_LAUNCH_RESULT` with `queued:false`; a navigation failure after a
+successful queue returns `RODAK_APP_LAUNCH_COMPLETE` with `ok:false`. This is a
+physically local diagnostic/control path and does not grant new app privileges.
 
 ## Transaction Rules
 

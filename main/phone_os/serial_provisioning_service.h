@@ -23,11 +23,13 @@ class SerialProvisioningService {
 public:
     using CloudRefreshCallback = std::function<void()>;
     using VoiceTestCallback = std::function<bool(const std::string&)>;
+    using AppLaunchCallback = std::function<bool(const std::string&)>;
 
     SerialProvisioningService(WiFiAdapter* wifi,
                               DeviceCloudConfigService& cloud_config,
                               CloudRefreshCallback cloud_refresh = {},
-                              VoiceTestCallback voice_test = {});
+                              VoiceTestCallback voice_test = {},
+                              AppLaunchCallback app_launch = {});
     ~SerialProvisioningService();
 
     SerialProvisioningService(const SerialProvisioningService&) = delete;
@@ -36,6 +38,7 @@ public:
     bool Start();
     void Stop();
     bool IsRunning() const { return running_.load(); }
+    void SetAppLaunchCallback(AppLaunchCallback callback);
 
     // Clear a provisioning transaction left behind by an interrupted boot.
     // Recovery is deliberately conservative: an incomplete transaction is
@@ -63,6 +66,7 @@ private:
     DeviceCloudConfigService& cloud_config_;
     CloudRefreshCallback cloud_refresh_callback_;
     VoiceTestCallback voice_test_callback_;
+    AppLaunchCallback app_launch_callback_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> cloud_refresh_pending_{false};
