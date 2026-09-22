@@ -21,4 +21,3 @@ RODAK_TEST("Temporary voice identity requires a future expiry") {
     RODAK_CHECK_FALSE(rodakos::IsVoiceIdentityExpired(normalized, 1'999));
     RODAK_CHECK(rodakos::IsVoiceIdentityExpired(normalized, 2'000));
 }
-
