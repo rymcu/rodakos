@@ -3,6 +3,7 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/mqtt_credential_refresh_policy.h"
 #include "phone_os/ota_update_service.h"
+#include "phone_os/voice_wake_service.h"
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
@@ -656,9 +657,12 @@ void UnifiedMqttService::MqttEventHandler(void* arg, esp_event_base_t event_base
 }
 
 void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
+    constexpr size_t kMaxMqttPayloadBytes = 256 * 1024;
     bool wake_publisher = false;
     bool schedule_message = false;
     uint32_t event_generation = 0;
+    std::string completed_topic;
+    std::string completed_payload;
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!started_.load() || event->client != client_) {
@@ -670,6 +674,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
             connected_pending_generation_ = client_generation_;
         } else if (event->event_id == MQTT_EVENT_DISCONNECTED) {
             connected_.store(false);
+            message_assembly_ = {};
         } else if (event->event_id == MQTT_EVENT_PUBLISHED) {
             const uint64_t sequence = ++published_event_sequence_;
             recent_published_events_[next_published_event_index_] = {
@@ -686,11 +691,54 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                    reliable_publish_.message_id == event->msg_id) {
             reliable_publish_ = {};
             wake_publisher = true;
-        } else if (event->event_id == MQTT_EVENT_DATA &&
-                   event->current_data_offset == 0 &&
-                   event->data_len == event->total_data_len) {
-            schedule_message = true;
-            event_generation = client_generation_;
+        } else if (event->event_id == MQTT_EVENT_DATA) {
+            const bool valid_lengths = event->current_data_offset >= 0 &&
+                                       event->data_len >= 0 && event->total_data_len >= 0 &&
+                                       static_cast<size_t>(event->total_data_len) <=
+                                           kMaxMqttPayloadBytes &&
+                                       event->current_data_offset <= event->total_data_len &&
+                                       event->data_len <=
+                                           event->total_data_len - event->current_data_offset;
+            const bool starts_message = event->current_data_offset == 0;
+            if (starts_message) {
+                message_assembly_ = {};
+                if (valid_lengths) {
+                    message_assembly_.active = true;
+                    message_assembly_.client_generation = client_generation_;
+                    message_assembly_.total_length =
+                        static_cast<size_t>(event->total_data_len);
+                    if (event->topic != nullptr && event->topic_len > 0) {
+                        message_assembly_.topic.assign(event->topic,
+                                                       static_cast<size_t>(event->topic_len));
+                    }
+                    message_assembly_.payload.reserve(message_assembly_.total_length);
+                    if (event->data != nullptr && event->data_len > 0) {
+                        message_assembly_.payload.append(
+                            event->data, static_cast<size_t>(event->data_len));
+                    }
+                }
+            } else if (valid_lengths && message_assembly_.active &&
+                       message_assembly_.client_generation == client_generation_ &&
+                       message_assembly_.total_length ==
+                           static_cast<size_t>(event->total_data_len) &&
+                       message_assembly_.payload.size() ==
+                           static_cast<size_t>(event->current_data_offset)) {
+                if (event->data != nullptr && event->data_len > 0) {
+                    message_assembly_.payload.append(
+                        event->data, static_cast<size_t>(event->data_len));
+                }
+            } else {
+                message_assembly_ = {};
+            }
+
+            if (message_assembly_.active && message_assembly_.payload.size() ==
+                                                 message_assembly_.total_length) {
+                schedule_message = true;
+                event_generation = message_assembly_.client_generation;
+                completed_topic = std::move(message_assembly_.topic);
+                completed_payload = std::move(message_assembly_.payload);
+                message_assembly_ = {};
+            }
         }
     }
     if (wake_publisher && publish_ack_semaphore_ != nullptr) {
@@ -705,16 +753,15 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
             break;
         case MQTT_EVENT_DATA:
             if (!schedule_message) {
-                ESP_LOGW(TAG, "Ignoring fragmented MQTT payload on topic %.*s",
-                         event->topic_len, event->topic);
+                ESP_LOGW(TAG, "Ignoring invalid or incomplete MQTT payload fragment");
                 break;
             }
             {
                 auto context = std::unique_ptr<PendingMessage>(
                     new (std::nothrow) PendingMessage{
                         event_generation,
-                        std::string(event->topic, event->topic_len),
-                        std::string(event->data, event->data_len),
+                        std::move(completed_topic),
+                        std::move(completed_payload),
                     });
                 PendingMessage* pending = context.get();
                 if (pending == nullptr || xQueueSend(message_queue_, &pending, 0) != pdTRUE) {
@@ -863,7 +910,40 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
             }
         }
     }
-    if (cJSON_IsNumber(volume) || cJSON_IsObject(light)) PublishShadowReport();
+    cJSON* voice_identity = cJSON_IsObject(desired)
+                                ? cJSON_GetObjectItemCaseSensitive(desired, "voice_identity")
+                                : nullptr;
+    bool voice_identity_changed = false;
+    if (cJSON_IsObject(voice_identity) && voice_wake_ != nullptr) {
+        VoiceIdentityConfig config;
+        const VoiceIdentityConfig defaults = DefaultVoiceIdentityConfig();
+        const cJSON* name = cJSON_GetObjectItemCaseSensitive(voice_identity, "name");
+        const cJSON* wake_word = cJSON_GetObjectItemCaseSensitive(voice_identity, "wakeWord");
+        const cJSON* wake_command = cJSON_GetObjectItemCaseSensitive(voice_identity, "wakeCommand");
+        const cJSON* mode = cJSON_GetObjectItemCaseSensitive(voice_identity, "mode");
+        const cJSON* revision = cJSON_GetObjectItemCaseSensitive(voice_identity, "revision");
+        const cJSON* expires_at_ms = cJSON_GetObjectItemCaseSensitive(voice_identity, "expiresAtMs");
+        config.name = cJSON_IsString(name) ? name->valuestring : defaults.name;
+        config.wake_word = cJSON_IsString(wake_word) ? wake_word->valuestring : defaults.wake_word;
+        config.wake_command = cJSON_IsString(wake_command) ? wake_command->valuestring : defaults.wake_command;
+        config.mode = cJSON_IsString(mode) && std::string(mode->valuestring) == "temporary"
+                          ? VoiceIdentityApplyMode::kTemporary
+                          : VoiceIdentityApplyMode::kPersistent;
+        config.revision = cJSON_IsNumber(revision) && revision->valueint > 0
+                              ? static_cast<uint32_t>(revision->valueint)
+                              : 1;
+        config.expires_at_ms = cJSON_IsNumber(expires_at_ms)
+                                   ? static_cast<int64_t>(expires_at_ms->valuedouble)
+                                   : 0;
+        std::string error;
+        voice_identity_changed = voice_wake_->ApplyVoiceIdentity(config, error);
+        if (!voice_identity_changed) {
+            ESP_LOGW(TAG, "Rejected desired voice identity: %s", error.c_str());
+        }
+    }
+    if (cJSON_IsNumber(volume) || cJSON_IsObject(light) || cJSON_IsObject(voice_identity)) {
+        PublishShadowReport();
+    }
     cJSON_Delete(root);
 }
 
@@ -1006,6 +1086,29 @@ void UnifiedMqttService::PublishShadowReport() {
     }
     if (battery.charging_valid) {
         cJSON_AddBoolToObject(root, "charging", battery.charging);
+    }
+    if (voice_wake_ != nullptr) {
+        const VoiceWakeState state = voice_wake_->GetState();
+        const VoiceIdentityConfig& identity = state.voice_identity;
+        cJSON* identity_json = cJSON_CreateObject();
+        cJSON_AddStringToObject(identity_json, "name", identity.name.c_str());
+        cJSON_AddStringToObject(identity_json, "wakeWord", identity.wake_word.c_str());
+        cJSON_AddStringToObject(identity_json, "wakeCommand", identity.wake_command.c_str());
+        cJSON_AddStringToObject(identity_json, "mode",
+                                identity.mode == VoiceIdentityApplyMode::kTemporary
+                                    ? "temporary"
+                                    : "persistent");
+        cJSON_AddNumberToObject(identity_json, "revision", identity.revision);
+        if (identity.expires_at_ms > 0) {
+            cJSON_AddNumberToObject(identity_json, "expiresAtMs", identity.expires_at_ms);
+        }
+        cJSON_AddStringToObject(identity_json, "status", state.voice_identity_status.c_str());
+        cJSON_AddStringToObject(identity_json, "runtime", state.runtime_name.c_str());
+        cJSON_AddStringToObject(identity_json, "model", "multinet5q8_cn");
+        if (!state.voice_identity_error.empty()) {
+            cJSON_AddStringToObject(identity_json, "error", state.voice_identity_error.c_str());
+        }
+        cJSON_AddItemToObject(root, "voice_identity", identity_json);
     }
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);

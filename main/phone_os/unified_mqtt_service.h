@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include <esp_event.h>
 #include <mqtt_client.h>
@@ -23,6 +24,7 @@ namespace rodakos {
 class AudioOutputService;
 class DeviceCloudConfigService;
 class OtaUpdateService;
+class VoiceWakeService;
 
 class UnifiedMqttService {
 public:
@@ -39,6 +41,7 @@ public:
     // Apply a provisioning change. An active session restarts so its outbox
     // and event workers cannot cross broker or routing boundaries.
     void RequestCredentialRefresh();
+    void SetVoiceWakeService(VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
 
@@ -90,6 +93,7 @@ private:
     AudioOutputService* audio_output_ = nullptr;
     BatteryStateProvider* battery_provider_ = nullptr;
     LightService* light_service_ = nullptr;
+    VoiceWakeService* voice_wake_ = nullptr;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     esp_mqtt_client_handle_t client_ = nullptr;
@@ -117,6 +121,14 @@ private:
         std::string topic;
         std::string payload;
     };
+    struct MessageAssembly {
+        bool active = false;
+        uint32_t client_generation = 0;
+        size_t total_length = 0;
+        std::string topic;
+        std::string payload;
+    };
+    MessageAssembly message_assembly_;
     QueueHandle_t message_queue_ = nullptr;
     TaskHandle_t worker_ = nullptr;
     std::atomic<bool> worker_running_{false};
