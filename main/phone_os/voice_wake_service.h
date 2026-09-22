@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/voice_assistant_service.h"
+#include "phone_os/voice_identity.h"
 
 #include <cstdint>
 #include <functional>
@@ -28,6 +29,9 @@ struct VoiceWakeState {
     std::string runtime_name;
     std::string message;
     std::string last_wake_word;
+    VoiceIdentityConfig voice_identity;
+    std::string voice_identity_status;
+    std::string voice_identity_error;
 };
 
 class VoiceWakeRuntime {
@@ -40,6 +44,7 @@ public:
     virtual void StopListening() = 0;
     virtual bool IsListening() const = 0;
     virtual bool IsAvailable() const = 0;
+    virtual bool ConfigureWakeWord(const VoiceIdentityConfig& config) = 0;
     virtual const char* name() const = 0;
     virtual const char* last_error() const = 0;
 };
@@ -52,6 +57,7 @@ public:
     void StopListening() override;
     bool IsListening() const override;
     bool IsAvailable() const override { return false; }
+    bool ConfigureWakeWord(const VoiceIdentityConfig& config) override;
     const char* name() const override { return "wake-runtime"; }
     const char* last_error() const override { return last_error_.c_str(); }
 
@@ -71,6 +77,7 @@ public:
     bool SetEnabled(bool enabled);
     bool IsEnabled();
     VoiceWakeState GetState();
+    bool ApplyVoiceIdentity(const VoiceIdentityConfig& config, std::string& error);
 
     void NotifyWakeWordDetected(const std::string& wake_word);
 
@@ -105,6 +112,10 @@ private:
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;
     std::string message_ = "Disabled";
     std::string last_wake_word_;
+    VoiceIdentityConfig persistent_identity_ = DefaultVoiceIdentityConfig();
+    VoiceIdentityConfig active_identity_ = DefaultVoiceIdentityConfig();
+    std::string voice_identity_status_ = "applied";
+    std::string voice_identity_error_;
 };
 
 }  // namespace rodakos

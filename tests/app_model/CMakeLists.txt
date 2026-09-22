@@ -16,6 +16,7 @@ add_executable(rodakos_app_model_tests
     voice_pcm_assembler_test.cc
     voice_aec_diagnostic_capture_test.cc
     voice_wake_settings_test.cc
+    voice_identity_test.cc
     serial_provisioning_frame_test.cc
     mqtt_credential_refresh_policy_test.cc
     device_pairing_policy_test.cc
@@ -35,6 +36,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/voice_pcm_assembler.cc
     ../../main/phone_os/voice_aec_diagnostic_capture.cc
     ../../main/phone_os/voice_wake_settings.cc
+    ../../main/phone_os/voice_identity.cc
     ../../main/phone_os/serial_provisioning_protocol.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
     ../../main/phone_os/device_pairing_protocol.cc

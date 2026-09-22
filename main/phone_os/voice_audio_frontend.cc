@@ -24,8 +24,6 @@ namespace {
 constexpr const char* TAG = "VoiceAudioFrontend";
 constexpr const char* kWakeAudioInputOwner = "voice-wake-frontend";
 constexpr const char* kConversationAudioInputOwner = "voice-conversation-frontend";
-constexpr const char* kWakeWordCommand = "ni hao da ke";
-constexpr const char* kWakeWordDisplay = "你好达克";
 constexpr int kWakeInputPriority = 10;
 constexpr int kConversationInputPriority = 30;
 constexpr uint32_t kSampleRate = 16000;
@@ -38,7 +36,10 @@ constexpr uint16_t kBitsPerSample = 16;
 constexpr uint16_t kInputChannelMask = 0;
 constexpr int kInputGain = 30;
 constexpr int kDetectionDurationMs = 3000;
-constexpr float kDetectionThreshold = 0.2F;
+// 0.2 is conservative for a quiet near-field lab. The lower threshold is paired
+// with a distinctive command and the existing single-command gate so distant
+// speech can reach MultiNet without turning arbitrary audio into a wake.
+constexpr float kDetectionThreshold = 0.14F;
 constexpr size_t kConversationReadSamples = 320;
 constexpr size_t kMaxQueuedFrames = 80;
 constexpr TickType_t kIdleDelay = pdMS_TO_TICKS(20);
@@ -239,7 +240,7 @@ bool VoiceAudioFrontend::StartListening(
     }
 
     ESP_LOGI(TAG, "Always-on wake monitoring armed for %s on TDM slot %u (MIC2)",
-             kWakeWordDisplay, static_cast<unsigned>(kMainMicTdmSlot));
+             wake_identity_.wake_word.c_str(), static_cast<unsigned>(kMainMicTdmSlot));
     return true;
 }
 
@@ -257,6 +258,44 @@ void VoiceAudioFrontend::StopListening() {
     on_wake_word_ = {};
     xSemaphoreGive(mutex_);
     input_.CloseForOwner(kWakeAudioInputOwner);
+}
+
+bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
+    VoiceIdentityConfig normalized;
+    std::string error;
+    if (!NormalizeVoiceIdentityConfig(config, normalized, error)) {
+        if (mutex_ == nullptr) return false;
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        SetErrorLocked(error.empty() ? "Invalid voice identity" : error.c_str());
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    if (mutex_ == nullptr) return false;
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const VoiceIdentityConfig previous = wake_identity_;
+    if (multinet_data_ == nullptr || multinet_ == nullptr) {
+        wake_identity_ = normalized;
+        xSemaphoreGive(mutex_);
+        return true;
+    }
+
+    const bool updated = esp_mn_commands_clear() == ESP_OK &&
+                         esp_mn_commands_add(1, normalized.wake_command.c_str()) == ESP_OK &&
+                         esp_mn_commands_update() == nullptr;
+    if (!updated) {
+        esp_mn_commands_clear();
+        esp_mn_commands_add(1, previous.wake_command.c_str());
+        esp_mn_commands_update();
+        SetErrorLocked("MultiNet rejected voice identity command");
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    wake_identity_ = normalized;
+    xSemaphoreGive(mutex_);
+    ESP_LOGI(TAG, "MultiNet wake command updated: display=%s command=%s",
+             normalized.wake_word.c_str(), normalized.wake_command.c_str());
+    return true;
 }
 
 bool VoiceAudioFrontend::IsListening() const {
@@ -632,7 +671,7 @@ bool VoiceAudioFrontend::InitModelLocked() {
         return false;
     }
     commands_allocated_ = true;
-    if (esp_mn_commands_add(1, kWakeWordCommand) != ESP_OK) {
+    if (esp_mn_commands_add(1, wake_identity_.wake_command.c_str()) != ESP_OK) {
         SetErrorLocked("Wake command registration failed");
         ReleaseModelLocked();
         return false;
@@ -1064,7 +1103,7 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
 
     if (callback) {
         input_.CloseForOwner(kWakeAudioInputOwner);
-        ESP_LOGI(TAG, "Wake word detected: %s", kWakeWordDisplay);
+        ESP_LOGI(TAG, "Wake word detected: %s", wake_identity_.wake_word.c_str());
         TaskHandle_t notification_task = nullptr;
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool can_notify = wake_generation_ == wake_generation &&
@@ -1074,7 +1113,7 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
                                 !wake_notification_active_;
         if (can_notify) {
             pending_wake_callback_ = std::move(callback);
-            pending_wake_word_ = kWakeWordDisplay;
+            pending_wake_word_ = wake_identity_.wake_word;
             pending_wake_generation_ = wake_generation;
             wake_notification_pending_ = true;
             notification_task = wake_notification_task_;

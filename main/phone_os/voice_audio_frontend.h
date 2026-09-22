@@ -34,6 +34,7 @@ public:
     void StopListening() override;
     bool IsListening() const override;
     bool IsAvailable() const override { return true; }
+    bool ConfigureWakeWord(const VoiceIdentityConfig& config) override;
 
     bool Start(const VoiceRecorderConfig& config) override;
     void Stop() override;
@@ -117,6 +118,7 @@ private:
     size_t wake_chunk_samples_ = 0;
     uint32_t wake_generation_ = 0;
     std::string last_error_;
+    VoiceIdentityConfig wake_identity_ = DefaultVoiceIdentityConfig();
     int selected_main_mic_ = 2;
     int mic_switch_frames_ = 0;
     int64_t mic1_power_ = 0;

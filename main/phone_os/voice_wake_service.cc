@@ -4,6 +4,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/idf_additions.h>
 
 namespace rodakos {
@@ -49,6 +50,11 @@ void UnavailableVoiceWakeRuntime::StopListening() {
 }
 
 bool UnavailableVoiceWakeRuntime::IsListening() const {
+    return false;
+}
+
+bool UnavailableVoiceWakeRuntime::ConfigureWakeWord(const VoiceIdentityConfig&) {
+    last_error_ = "Wake-word runtime not installed";
     return false;
 }
 
@@ -231,6 +237,9 @@ VoiceWakeState VoiceWakeService::GetState() {
     state.runtime_name = runtime_.name();
     state.message = message_;
     state.last_wake_word = last_wake_word_;
+    state.voice_identity = active_identity_;
+    state.voice_identity_status = voice_identity_status_;
+    state.voice_identity_error = voice_identity_error_;
     xSemaphoreGive(mutex_);
     return state;
 }
@@ -362,6 +371,19 @@ bool VoiceWakeService::LoadSettingsLocked() {
     if (!LoadVoiceWakeSettings(enabled_)) {
         return false;
     }
+    if (!LoadVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
+        return false;
+    }
+    if (IsVoiceIdentityExpired(active_identity_, esp_timer_get_time() / 1000)) {
+        active_identity_ = persistent_identity_;
+        if (!SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
+            return false;
+        }
+        voice_identity_status_ = "expired";
+    } else {
+        voice_identity_status_ = "applied";
+    }
+    voice_identity_error_.clear();
     ESP_LOGI(TAG, "Wake listener setting restored from NVS: %s",
              enabled_ ? "enabled" : "disabled");
     return true;
@@ -451,6 +473,17 @@ void VoiceWakeService::SupervisorTick() {
         return;
     }
     LogHealthIfDueLocked();
+    if (IsVoiceIdentityExpired(active_identity_, esp_timer_get_time() / 1000)) {
+        active_identity_ = persistent_identity_;
+        if (listening_) {
+            runtime_.StopListening();
+            listening_ = false;
+        }
+        runtime_.ConfigureWakeWord(active_identity_);
+        SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_);
+        voice_identity_status_ = "expired";
+        voice_identity_error_.clear();
+    }
     if (listening_ && !runtime_.IsListening()) {
         listening_ = false;
         SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
@@ -527,6 +560,12 @@ bool VoiceWakeService::StartRuntimeLocked() {
         return false;
     }
 
+    if (!runtime_.ConfigureWakeWord(active_identity_)) {
+        listening_ = false;
+        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
+        return false;
+    }
+
     const uint32_t enable_generation = enable_generation_;
     const bool started = runtime_.StartListening([this, enable_generation](const std::string& wake_word) {
         HandleWakeWordDetected(wake_word, enable_generation);
@@ -555,6 +594,71 @@ void VoiceWakeService::StopRuntimeLocked(const char* message) {
 void VoiceWakeService::SetStatusLocked(VoiceWakeStatus status, const char* message) {
     status_ = status;
     message_ = message != nullptr && message[0] != '\0' ? message : StatusMessage(status);
+}
+
+bool VoiceWakeService::ApplyVoiceIdentity(const VoiceIdentityConfig& config, std::string& error) {
+    VoiceIdentityConfig normalized;
+    if (!NormalizeVoiceIdentityConfig(config, normalized, error)) {
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+        return false;
+    }
+    if (normalized.mode == VoiceIdentityApplyMode::kTemporary &&
+        IsVoiceIdentityExpired(normalized, esp_timer_get_time() / 1000)) {
+        error = "temporary voice identity has expired";
+        voice_identity_status_ = "expired";
+        voice_identity_error_ = error;
+        return false;
+    }
+    if (normalized.revision < active_identity_.revision) {
+        error = "voice identity revision is stale";
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const VoiceIdentityConfig previousPersistent = persistent_identity_;
+    const VoiceIdentityConfig previousActive = active_identity_;
+    const bool wasListening = listening_;
+    if (normalized.mode == VoiceIdentityApplyMode::kPersistent) {
+        persistent_identity_ = normalized;
+        active_identity_ = normalized;
+    } else {
+        active_identity_ = normalized;
+    }
+    if (!SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
+        persistent_identity_ = previousPersistent;
+        active_identity_ = previousActive;
+        xSemaphoreGive(mutex_);
+        error = "failed to persist voice identity";
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+        return false;
+    }
+    if (wasListening) {
+        runtime_.StopListening();
+        listening_ = false;
+    }
+    const bool configured = runtime_.ConfigureWakeWord(active_identity_);
+    const bool restarted = !wasListening || !enabled_ || StartRuntimeLocked();
+    if (!configured || !restarted) {
+        persistent_identity_ = previousPersistent;
+        active_identity_ = previousActive;
+        SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_);
+        runtime_.ConfigureWakeWord(active_identity_);
+        if (wasListening) StartRuntimeLocked();
+        xSemaphoreGive(mutex_);
+        error = runtime_.last_error();
+        if (error.empty()) error = "wake runtime rejected voice identity";
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+        return false;
+    }
+    xSemaphoreGive(mutex_);
+    voice_identity_status_ = "applied";
+    voice_identity_error_.clear();
+    return true;
 }
 
 }  // namespace rodakos
