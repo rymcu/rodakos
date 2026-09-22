@@ -2,7 +2,9 @@
 
 > 适用范围：Rodak 桌面/服务端 + RodakOS 设备云闭环
 >
-> 当前基线（已推送）：Rodak `d6f4b44`（`origin/master`），RodakOS `9510f1b`（`origin/main`）
+> 功能基线（已推送）：Rodak `d6f4b44`（`origin/master`），RodakOS `9510f1b`（`origin/main`）
+>
+> 当前计划文档提交：Rodak `4725803`，RodakOS `ebbf323`
 >
 > 本计划不包含 Xiaozhi pipeline、`runLegacyXiaozhiSpeechPipeline` 或 Xiaozhi session 生命周期重构。
 
@@ -86,7 +88,7 @@
    git rev-parse --short HEAD
    ```
 
-   预期分别为 `d6f4b44` 和 `9510f1b`；若工作树有本地修改，先停下并保留现场，不要用
+   预期分别为 `4725803` 和 `ebbf323`（包含上述功能基线及本计划文档）；若工作树有本地修改，先停下并保留现场，不要用
    `reset --hard` 覆盖它们。
 
 2. 激活并验证 ESP-IDF 6.0.2：
