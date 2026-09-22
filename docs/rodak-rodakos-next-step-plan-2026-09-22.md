@@ -2,7 +2,7 @@
 
 > 适用范围：Rodak 桌面/服务端 + RodakOS 设备云闭环
 >
-> 当前基线：Rodak `6eacff8`，RodakOS `a86c87c`
+> 当前基线（已推送）：Rodak `d6f4b44`（`origin/master`），RodakOS `9510f1b`（`origin/main`）
 >
 > 本计划不包含 Xiaozhi pipeline、`runLegacyXiaozhiSpeechPipeline` 或 Xiaozhi session 生命周期重构。
 
@@ -74,11 +74,20 @@
 
 在接入 RodakOS 真机的电脑上，严格按以下顺序执行：
 
-1. 拉取同一提交：
+1. 在两个仓库分别拉取并确认提交：
 
    ```powershell
+   cd E:\workspace\rodak
    git pull --ff-only
+   git rev-parse --short HEAD
+
+   cd E:\workspace\rodakos
+   git pull --ff-only
+   git rev-parse --short HEAD
    ```
+
+   预期分别为 `d6f4b44` 和 `9510f1b`；若工作树有本地修改，先停下并保留现场，不要用
+   `reset --hard` 覆盖它们。
 
 2. 激活并验证 ESP-IDF 6.0.2：
 
@@ -130,7 +139,29 @@
    - OTA notify -> download -> SHA-256 -> Recovery boot confirmation -> progress/result；
    - 失败时保留完整 log，不重复擦写设备。
 
-   完整串口/云门禁以 Rodak 仓库的 `docs/device-cloud-hardware-gate.md` 为准：先设置 `RODAK_E2E_HARDWARE_PROVISIONING_CONFIRM=1` 执行 `pnpm test:e2e:hardware:provisioning`，通过后再设置 `RODAK_E2E_HARDWARE_CONFIRM=1` 执行 `pnpm test:e2e:hardware`。运行期间只能有一个串口 reader；不要同时打开 Serial Lab、ESP-IDF monitor 或其他串口工具。两种 gate 都需要串口、设备 key、环境文件和当前 server bootstrap URL。
+   完整串口/云门禁以 Rodak 仓库的 `docs/device-cloud-hardware-gate.md` 为准。先在
+   Rodak 仓库设置同一组目标参数，再按 provisioning-only -> full 顺序执行；两个 project
+   都会先运行 `pnpm build`：
+
+   ```powershell
+   cd E:\workspace\rodak
+   $env:RODAK_E2E_HARDWARE_SERIAL_PORT = 'COM<n>'
+   $env:RODAK_E2E_HARDWARE_DEVICE_KEY = '<device-key>'
+   $env:RODAK_E2E_HARDWARE_ENV_FILE = 'C:\path\to\device.env'
+
+   $env:RODAK_E2E_HARDWARE_PROVISIONING_CONFIRM = '1'
+   pnpm test:e2e:hardware:provisioning
+   Remove-Item Env:RODAK_E2E_HARDWARE_PROVISIONING_CONFIRM
+
+   $env:RODAK_E2E_HARDWARE_CONFIRM = '1'
+   pnpm test:e2e:hardware
+   Remove-Item Env:RODAK_E2E_HARDWARE_CONFIRM
+   ```
+
+   运行期间只能有一个串口 reader；不要同时打开 Serial Lab、ESP-IDF monitor 或其他串口工具。
+   两种 gate 都需要串口、设备 key、环境文件和当前 server bootstrap URL。若只验证串口/云链路而
+   不启动 Playwright/Electron，可改用 `pnpm gate:device-cloud-hardware -- --confirm-provisioning-only ...`
+   和 `--confirm-hardware ...`，参数定义以 hardware gate 文档为准。
 
 ## 3. Runtime 接入顺序
 
