@@ -4,7 +4,7 @@ RodakOS provides a multi-turn voice assistant backed by Rodak. The device perfor
 monitoring for **"你好达克"** and opens the cloud voice session only after a successful local
 detection. One wake continues across replies on the same WebSocket until `session.end`, 30 seconds of
 follow-up silence, or an error/watchdog ends the session; idle standby never keeps a cloud voice
-session open.
+session open. The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md).
 
 ## Product Boundaries
 
@@ -63,33 +63,35 @@ releases the DAC; after TTS drains, music reopens its original format and resume
 decode position. Recorder and camera requests intentionally keep their existing non-resuming focus
 policy.
 
-## Wire Contract
+## Wire behavior
 
-- Transport: canonical `rodak-realtime-voice/v1` over WebSocket at the `realtimeVoice.endpoint`
-  advertised by Rodak AIoT bootstrap/token. RodakOS does not parse or emit XiaoZhi wire messages;
-  XiaoZhi firmware compatibility belongs exclusively to a Rodak server adapter.
-- Uplink/downlink: each binary WebSocket message uses the canonical `RAV1` envelope: 4-byte magic,
-  big-endian positive sequence (starting at 1), big-endian payload length, then one Opus packet. Uplink is 16 kHz, mono,
-  60 ms; downlink uses the format returned by `session.ready`. Descriptor validation, cached
-  configuration and the handshake share the supported downlink frame durations: 5, 10, 20, 40,
-  and 60 ms.
-- The device sends `session.open` and validates `session.ready` before it uploads audio. The
-  descriptor's `limits` bound audio and control frames; the transport adds no XiaoZhi v2/v3 wrapper.
-- VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`; the server returns
-  `vadStrategy` in `session.ready`. The device suppresses device-VAD control events when the server
-  selects `server-authoritative`, while `hybrid-fallback` keeps audio flowing to server VAD if device
-  boundaries time out.
-- Text and binary input accept both transport-buffer chunks and WebSocket continuation frames. Text
-  messages are limited to 64 KiB and binary audio messages to 8 KiB.
-- The device sends `wake.detected` with `text: "你好达克"`, followed by `input.start` in realtime
-  mode. Each later non-terminal reply starts another `input.start` on the same session without
-  repeating `wake.detected`.
-- `output.start` stops microphone upload when AEC is disabled. Binary Opus frames are decoded and
-  queued to the DAC. `output.stop` drains the estimated playback tail and closes the DAC.
-- The follow-up window is 30 seconds and is re-armed when capture restarts. A new `output.start` proves
-  the next turn progressed and clears that deadline. Silence, an error, a connection/listening
-  watchdog, or Rodak's explicit `session.end` ends the session and restores local wake monitoring.
-  Active TTS playback is not terminated by that watchdog.
+The device uses `rodak-realtime-voice/v1` over the endpoint supplied by the AIoT
+descriptor. It sends `session.open`, validates one matching `session.ready`, then
+sends `wake.detected` and `input.start` before uploading RAV1-wrapped Opus. The
+uplink is fixed at 16 kHz mono/60 ms; downlink format is negotiated. Audio and
+control messages use the descriptor's negotiated limits (defaults 8 KiB and
+64 KiB; audio payloads are capped at 64 KiB and inbound text is currently
+buffered at 64 KiB). See the canonical
+[voice contract](rodak-realtime-voice-contract-v1.md) for event schemas,
+generation/session/epoch gates, MCP, error handling, and the complete RAV1 layout.
+
+VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`.
+When the server selects `server-authoritative`, the device keeps streaming audio
+but suppresses device VAD events. `hybrid-fallback` permits device boundaries
+when server-side boundaries do not arrive.
+
+Each later non-terminal reply starts another `input.start` on the same session
+without repeating `wake.detected`. `output.start` marks a playback epoch and
+binary Opus frames are decoded and queued to the DAC. `output.stop` drains the
+estimated playback tail before the next turn. Capture remains available during
+TTS so the AEC/VAD frontend can detect barge-in; `StopRecorderForPlayback()` is
+intentionally a no-op in the current service.
+
+The follow-up window is 30 seconds and is re-armed when capture restarts. A new
+`output.start` proves the next turn progressed and clears that deadline. Silence,
+an error, a connection/listening watchdog, or Rodak's explicit `session.end`
+ends the session and restores local wake monitoring. Active TTS playback is not
+terminated by that watchdog.
 
 The service also exposes a speaking-time interruption path for an AEC/VAD frontend. A confirmed
 barge-in sends `playback.abort` with `reason: "vad_detected"` on the existing session, closes local TTS output, and

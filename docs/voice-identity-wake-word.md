@@ -1,5 +1,9 @@
 # Rodak Identity And Wake Word
 
+The `voice_identity` desired/reported shadow fields belong to the
+[Rodak AIoT v1 contract](rodak-aiot-contract-v1.md). This document covers the
+local ESP-SR command graph and wake-word policy only.
+
 Rodak uses one product identity across the desktop Agent Runtime and RodakOS. The initial identity
 is `罗达克（Rodak）`; the default displayed wake phrase remains `你好达克` until a device receives
 another identity configuration.

@@ -3,7 +3,9 @@
 This document defines the USB serial provisioning path for WiFi and
 Device Cloud bootstrap configuration. It is intentionally separate from the
 runtime voice protocol. Device binding begins only after serial provisioning
-has supplied enough network configuration to reach the Rodak server API.
+has supplied enough network configuration to reach the Rodak server API. The
+AIoT endpoint and credential rules are defined in [Rodak AIoT v1](rodak-aiot-contract-v1.md);
+the voice wire format is defined in [Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md).
 
 ## Scope
 
@@ -275,47 +277,23 @@ gate, so this is an armed/listening result, not a claim of a successful
 real-person wake. A Rodak near-field recording preset is not required for the local
 MultiNet gate; audio fixtures only exercise the post-wake cloud path.
 
-## Device Cloud E2E Acceptance
+## Hardware gate
 
-Rodak's Playwright hardware gate passed in one serial session after verifying the
-immutable Recovery image and partition table against the installed baseline.
-The device accepted provisioning, returned the result before its own restart, and
-then restored WiFi and the bootstrap URL from NVS. The resulting bootstrap, MQTT
-connect, and telemetry events were observed in order. A second host-controlled
-restart reused the persisted cloud cache. A formal `token_version` rotation from
-4 to 5 caused the cached MQTT credential to be rejected; RodakOS refreshed bootstrap
-credentials, updated the running MQTT client, and reconnected.
+Use the Recovery-safe refresh flow before testing provisioning. Verify the
+installed partition table and immutable Recovery image, then capture the full
+serial sequence with the monitor attached using `--no-reset`.
 
-The gate recorded three host-controlled resets plus one provisioning-owned restart.
-The 300,013 ms soak received 9 telemetry frames at 29,321..30,311 ms intervals and
-20 successful Rodak health samples (maximum latency 8 ms). It detected no unexpected
-reset, panic, MQTT task creation failure, or disconnect. The redacted report is under
-the ignored Playwright `test-results` directory.
-This remains a non-voice acceptance result; it does not claim a real-person local
-MultiNet wake.
+The gate is green only when it observes, in order:
 
-## Interrupted-Recovery Hardware Gate (2026-09-02)
+1. `RODAK_PROVISION_READY`;
+2. a successful provisioning result with no credential echo;
+3. WiFi association and the configured AIoT bootstrap request;
+4. owner-confirmed binding or a valid bound-device token refresh;
+5. `Unified MQTT connected`, a reported shadow, and at least two telemetry
+   reports; and
+6. normal Home startup and local OTA confirmation.
 
-The first same-value provisioning smoke exposed a real recovery failure. The
-request left `serial_prov/pending=true`; the next boot cleared WiFi, then
-overflowed the 3,584-byte `main` task stack while nested cloud-config snapshots
-were being created.
-
-The fix keeps full `DeviceCloudConfig` rollback snapshots in short-lived heap
-objects and persists the empty realtime voice/MQTT state directly. The compiled
-`SaveProvisioningUrl()` frame decreased from `0x420` (1,056 bytes) to `0xC0`
-(192 bytes) without increasing a resident task stack.
-
-The corrected firmware passed an NVS-preserving refresh after its bootloader,
-partition table, and immutable Recovery were verified. The boot log records the
-pending marker being detected, WiFi/cloud state being conservatively cleared,
-and `Interrupted provisioning recovery complete`, followed by Home startup and
-local OTA confirmation without a panic. A second provisioning request returned
-an explicit success response. Rodak then observed bootstrap request/response,
-MQTT connect, and telemetry at approximately 30-second intervals. A subsequent
-no-reset capture contained the expected readiness and MQTT downlink markers with
-no reset, panic, or stack-overflow marker. The server-side `token_version`
-remained unchanged; this gate did not perform credential rotation.
-
-This is a non-voice provisioning and Device Cloud result. It does not claim a
-real-person MultiNet wake.
+Repeat the flow after a controlled reboot, an interrupted NVS transaction, an
+expired/rejected pairing request, and a server token rotation. These checks cover
+serial/AIoT/MQTT persistence and recovery only; they do not claim a real-person
+MultiNet wake or acoustic voice quality.

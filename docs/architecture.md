@@ -135,11 +135,11 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
-  audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and restarts
-  capture on that same session; `goodbye`, 30 seconds of follow-up silence, errors, or a
+  audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and starts
+  the next input turn on that same session; a user saying “再见” results in `session.end`, while 30 seconds of follow-up silence, errors, or a
   connection/listening watchdog disconnect and re-arm local monitoring. Active TTS playback is not
-  terminated by that watchdog. See
-  [Voice assistant integration](voice-assistant.md).
+  terminated by that watchdog. See [Voice assistant integration](voice-assistant.md) and the
+  [realtime voice v1 contract](rodak-realtime-voice-contract-v1.md).
 - WiFi credentials are stored in NVS by `WiFiConfig`; auto-connect starts after PhoneSystem is up so UI boot is not blocked.
 - MotionService exposes a stable app-facing motion API. The BigSmart QMI8658 adapter samples over the shared Board Manager I2C peripheral in a background task so apps never perform I2C work in the LVGL thread.
 - UnifiedMqttService consumes Rodak bootstrap credentials, reports device state, and routes OTA
@@ -156,5 +156,9 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - [Project roadmap](roadmap.md)
 - [OpenOS comparison and design decisions](openos-comparison.md)
 - [Home layout and folder design](home-layout-design.md)
+- [Rodak AIoT v1 contract](rodak-aiot-contract-v1.md)
+- [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md)
+- [Voice assistant integration](voice-assistant.md)
+- [Serial provisioning](serial-provisioning.md)
 - [Rodak MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md)
 - [Troubleshooting](../TROUBLESHOOTING.md)

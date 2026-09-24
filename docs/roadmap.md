@@ -4,7 +4,7 @@ RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web pro
 
 ## Current Baseline
 
-As of 2026-09-04:
+As of 2026-09-24:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
 - ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
@@ -141,7 +141,7 @@ and awaits its device gate.
 - Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
 - A wake match acquires audio focus, buffers 16 kHz mono PCM, opens one Rodak WebSocket, uploads
   60 ms Opus frames, and decodes downlink Opus. Every non-terminal reply drains TTS and resumes
-  listening on the same session; goodbye, 30 seconds of follow-up silence, errors, or a
+  listening on the same session; a user saying "再见" ends the session with `session.end`, while 30 seconds of follow-up silence, errors, or a
   connection/listening watchdog disconnect and re-arm local monitoring. Active TTS playback is not
   terminated by that watchdog.
 - Wake, Recorder, and assistant capture use explicit ADC owners and priorities.
@@ -153,11 +153,12 @@ Next work:
 - Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud gate as a
   regression check.
 - Run the multi-turn [voice assistant hardware verification](voice-assistant.md#verification-gates),
-  including at least six same-session turns, explicit goodbye, follow-up silence, music resume, Recorder
+  including at least six same-session turns, explicit "再见"/`session.end`, follow-up silence, music resume, Recorder
   preemption, repeated wake suppression, and TTS tail playback.
 - Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
 - TTS-time interruption is now wired through the existing session: an AEC/VAD-confirmed barge-in
-  aborts playback, restarts capture, and rejects late TTS frames without opening a second session.
+  aborts playback, keeps capture and the existing session alive, and rejects late TTS frames
+  without opening a second session.
   Hardware validation remains required, and true full duplex still depends on AEC and
   echo-suppression validation.
 
@@ -192,6 +193,11 @@ Status: design only.
 - Use staged install, path traversal checks, size limits, backup, and rollback before activating a package.
 
 The source comparison and rationale are recorded in [OpenOS comparison and design decisions](openos-comparison.md).
+
+The current cross-repository wire contracts are [Rodak AIoT v1](rodak-aiot-contract-v1.md) and
+[Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md). Product behavior and hardware
+verification remain in [Voice assistant integration](voice-assistant.md) and
+[Voice AEC and barge-in integration](voice-aec-integration.md).
 
 ## Non-Goals For Now
 

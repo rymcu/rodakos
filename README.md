@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-09-04.
+Last refreshed: 2026-09-24.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -184,7 +184,10 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
+- [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
+- [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
+- [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
 - [Rodak identity and wake word](docs/voice-identity-wake-word.md)
 - [Serial provisioning](docs/serial-provisioning.md)
 - [OpenOS comparison and design decisions](docs/openos-comparison.md)
@@ -192,7 +195,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Agent/developer notes](AGENTS.md)
 
-Historical migration notes, old progress reports, screenshots, and one-off test helpers have been removed from the repository root. Current build and runtime knowledge should be kept in the documents above.
+Historical migration notes, one-off progress reports, screenshots, and test helpers are not part of the current documentation set. Current build, protocol, and runtime knowledge should be kept in the documents above.
 
 ## Acknowledgments
 

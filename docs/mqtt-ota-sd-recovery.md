@@ -24,39 +24,27 @@ image does not.
 
 ## Bootstrap And MQTT
 
-RodakOS declares the BigSmart device's autonomous product identity with the product key
-`rymcu-bigsmart` and protocol marker `rodak-aiot` (version 1). The Board Manager hardware
-discriminator remains `board.type = rymcu_bigsmart`; it is deliberately separate from the cloud
-product key. The request also includes the device MAC and stable client UUID. RodakOS sends only
-this canonical AIoT identity; any compatibility translation for other firmware belongs to a Rodak
-server adapter.
+The canonical identity and owner-confirmed onboarding flow are defined in
+[Rodak AIoT v1](rodak-aiot-contract-v1.md). In summary, RodakOS uses
+`productKey = rymcu-bigsmart`, `protocol = rodak-aiot`, and Board Manager's
+separate `board.type = rymcu_bigsmart`. It calls `bootstrap`, then
+`binding/request` and `binding/requests/{id}/status`; only `confirmed` or
+`approved` returns the access token and unified MQTT configuration. A bound
+device may refresh through `auth/token` with its persisted secret. The older
+`register`/`activate` endpoints are server compatibility paths, not the
+RodakOS onboarding sequence.
 
-The firmware now performs the autonomous onboarding lifecycle against the configured server:
+The returned access token is used as the MQTT password and HTTP Bearer
+credential. `unifiedMqtt` and `mqttConnectInfo` are accepted for the
+broker/topics payload, with the server origin and standard device topics used
+as fallbacks. AIoT identity, MQTT, and realtime voice values are committed under
+a pending marker; boot ignores a candidate pair left incomplete by a reset and
+retries the binding/refresh flow.
 
-```text
-GET  /api/v1/aiot/devices/bootstrap
-POST /api/v1/aiot/devices/register
-POST /api/v1/aiot/devices/activate
-POST /api/v1/aiot/devices/auth/token
-```
-
-The generated device secret is persisted before the first register request, so a reset between
-register and token exchange can safely retry with the same credential. The returned access token is
-used as the MQTT password and HTTP Bearer credential. `unifiedMqtt` and `mqttConnectInfo` are both
-accepted for the broker/topics payload, with the server origin and standard device topics used as
-fallbacks. RodakOS does not call legacy voice/bootstrap paths or persist a legacy voice-websocket
-credential set. AIoT and MQTT credentials are committed under a pending marker; boot ignores a
-candidate pair left incomplete by a reset and retries enrollment.
-
-The configured bootstrap endpoint returns `unifiedMqtt` v2 with:
-
-- broker address, port, username, JWT password, keepalive and device key;
-- OTA HTTP base URL and the same JWT as the HTTP Bearer credential;
-- complete telemetry, shadow, OTA, command and PC status topics.
-
-RodakOS stores these values in the `unified_mqtt` NVS namespace. ESP-MQTT connects after WiFi gets
-an address, publishes telemetry every 30 seconds, publishes the reported shadow, subscribes to the
-desired shadow and OTA notification topics, and relies on ESP-MQTT auto-reconnect.
+RodakOS stores MQTT values in the `unified_mqtt` NVS namespace. ESP-MQTT
+connects after WiFi gets an address, publishes telemetry every 30 seconds,
+publishes the reported shadow, subscribes to desired shadow, OTA notification,
+command, and PC status topics, and relies on ESP-MQTT auto-reconnect.
 
 On the BigSmart board, telemetry includes the board-backed `battery` percentage and `charging`
 state when the ADC readings are valid. The battery divider is sampled from ADC2 CH0 (GPIO11)
@@ -136,25 +124,19 @@ Worker reservation failures and stack high-water marks are now logged. This does
 establish memory headroom for OTA's separate download/report tasks or active AEC.
 
 The main firmware disables `ESP_WIFI_IRAM_OPT` and `ESP_WIFI_RX_IRAM_OPT` to return
-shared SRAM to runtime allocations. IDF documents more than 27 KiB of combined IRAM
-savings at the cost of peak WiFi throughput. That initial MQTT fix kept static RX/TX
-buffers and the receive BA window unchanged; the subsequent
-[voice session memory work](voice-session-memory.md) reduces static TX to 8.
-Reserving the MQTT worker alone was insufficient: WiFi logged
-`mem fail` / `m f null` and disconnected after the first telemetry report. The serial
-stability checker treats both warnings as allocation failures.
+shared SRAM to runtime allocations. Static WiFi TX buffers remain at 8, while RX
+and the receive BA window remain sized for the PSRAM configuration. This is a
+throughput/memory tradeoff; it is not a protocol compatibility setting.
 
 Keep internal heap and worker stack diagnostics in the serial `MQTT health` line. Battery and
 charging are declared read-only properties in the `rymcu-bigsmart` thing model; adding any other
 undeclared telemetry fields causes Rodak validation warnings.
 
-The 2026-09-16 COM3 package `20260916-115916` passed the protected non-erasing
-refresh and boot gates. Rodak observed a new connection at 12:01:08 CST, a reported
-shadow and subsequent 30-second telemetry. Serial logs show incoming PC status,
-internal free space around 18 KiB, a 10 KiB largest block and 3,852 bytes of minimum
-MQTT worker stack headroom. Evidence is in `build/mqtt-final-flash.log` and
-`build/logs/mqtt-final-soak.log`. These are idle-network checks, not active AEC,
-OTA download, credential-rotation or peak-throughput validation.
+The MQTT gate is complete only when the serial log shows `Unified MQTT connected`,
+incoming PC status, at least two telemetry reports, and a reported shadow. Keep
+the `MQTT health` line's internal free heap, largest block, and worker stack
+headroom in captured logs. This gate does not establish memory headroom for OTA
+download/report tasks, active AEC, credential rotation, or peak throughput.
 
 ## Build Artifacts
 
