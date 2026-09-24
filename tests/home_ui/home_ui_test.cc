@@ -492,6 +492,107 @@ RODAK_TEST("SoftKeyboard occupies the bottom 320 by 120 pixels") {
     RODAK_CHECK_FALSE(keyboard.IsVisible());
 }
 
+RODAK_TEST("SoftKeyboard collapse never submits and text field reopens it") {
+    ResetScreen();
+    ResetSettings();
+
+    auto* textarea = lv_textarea_create(lv_screen_active());
+    int ready_calls = 0;
+    SoftKeyboard keyboard;
+    keyboard.Show(textarea, [&ready_calls]() { ++ready_calls; });
+    Pump();
+    RODAK_CHECK(keyboard.IsVisible());
+    RODAK_CHECK(FindLabel(lv_screen_active(), "收起") != nullptr);
+
+    lv_obj_t* keyboard_object = nullptr;
+    const uint32_t child_count = lv_obj_get_child_count(lv_screen_active());
+    for (uint32_t index = 0; index < child_count; ++index) {
+        lv_obj_t* child = lv_obj_get_child(lv_screen_active(), index);
+        if (lv_obj_check_type(child, &lv_keyboard_class)) {
+            keyboard_object = child;
+            break;
+        }
+    }
+    RODAK_CHECK(keyboard_object != nullptr);
+    lv_obj_send_event(keyboard_object, LV_EVENT_CANCEL, nullptr);
+    Pump();
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+    RODAK_CHECK_EQ(ready_calls, 0);
+
+    lv_obj_send_event(textarea, LV_EVENT_CLICKED, nullptr);
+    Pump();
+    RODAK_CHECK(keyboard.IsVisible());
+    keyboard.Hide();
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+}
+
+RODAK_TEST("SoftKeyboard rebinds a collapsed keyboard when switching text fields") {
+    ResetScreen();
+    ResetSettings();
+
+    auto* first = lv_textarea_create(lv_screen_active());
+    auto* second = lv_textarea_create(lv_screen_active());
+    int first_ready_calls = 0;
+    int second_ready_calls = 0;
+    SoftKeyboard keyboard;
+    keyboard.Show(first, [&first_ready_calls]() { ++first_ready_calls; });
+    keyboard.Collapse();
+    keyboard.Show(second, [&second_ready_calls]() { ++second_ready_calls; });
+    keyboard.Collapse();
+
+    lv_obj_send_event(first, LV_EVENT_CLICKED, nullptr);
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+    lv_obj_send_event(second, LV_EVENT_CLICKED, nullptr);
+    Pump();
+    RODAK_CHECK(keyboard.IsVisible());
+
+    lv_obj_t* keyboard_object = nullptr;
+    for (uint32_t index = 0; index < lv_obj_get_child_count(lv_screen_active()); ++index) {
+        lv_obj_t* child = lv_obj_get_child(lv_screen_active(), index);
+        if (lv_obj_check_type(child, &lv_keyboard_class)) {
+            keyboard_object = child;
+            break;
+        }
+    }
+    RODAK_CHECK(keyboard_object != nullptr);
+    lv_obj_send_event(keyboard_object, LV_EVENT_READY, nullptr);
+    RODAK_CHECK_EQ(first_ready_calls, 0);
+    RODAK_CHECK_EQ(second_ready_calls, 1);
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+
+    keyboard.Hide();
+    lv_obj_send_event(first, LV_EVENT_CLICKED, nullptr);
+    lv_obj_send_event(second, LV_EVENT_CLICKED, nullptr);
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+}
+
+RODAK_TEST("SoftKeyboard ready is distinct from collapse") {
+    ResetScreen();
+    ResetSettings();
+
+    auto* textarea = lv_textarea_create(lv_screen_active());
+    int ready_calls = 0;
+    SoftKeyboard keyboard;
+    keyboard.Show(textarea, [&ready_calls]() { ++ready_calls; });
+    Pump();
+
+    lv_obj_t* keyboard_object = nullptr;
+    const uint32_t child_count = lv_obj_get_child_count(lv_screen_active());
+    for (uint32_t index = 0; index < child_count; ++index) {
+        lv_obj_t* child = lv_obj_get_child(lv_screen_active(), index);
+        if (lv_obj_check_type(child, &lv_keyboard_class)) {
+            keyboard_object = child;
+            break;
+        }
+    }
+    RODAK_CHECK(keyboard_object != nullptr);
+    lv_obj_send_event(keyboard_object, LV_EVENT_READY, nullptr);
+    Pump();
+    RODAK_CHECK_EQ(ready_calls, 1);
+    RODAK_CHECK_FALSE(keyboard.IsVisible());
+    keyboard.Hide();
+}
+
 RODAK_TEST("96 apps use eight managed pages without All Apps") {
     ResetScreen();
     ResetSettings();

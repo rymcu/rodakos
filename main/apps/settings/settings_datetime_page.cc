@@ -332,11 +332,7 @@ void SettingsApp::ShowNtpServerDialog() {
         self->CloseNtpServerDialog();
     }, LV_EVENT_CLICKED, this);
 
-    soft_keyboard_.Show(ntp_textarea_, [this]() {
-        const std::string server = TrimServerName(lv_textarea_get_text(ntp_textarea_));
-        SaveNtpServer(server);
-        CloseNtpServerDialogAsync();
-    });
+    soft_keyboard_.Show(ntp_textarea_);
 }
 
 void SettingsApp::CloseNtpServerDialog() {

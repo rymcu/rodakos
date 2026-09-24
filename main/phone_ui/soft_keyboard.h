@@ -4,36 +4,30 @@
 #include <functional>
 
 /**
- * 软件键盘组件
+ * 软件键盘组件。
  *
- * 为 WiFi 密码输入等场景提供屏幕键盘
+ * The keyboard's confirm key invokes the optional callback. Closing or
+ * collapsing the keyboard only hides input and never submits the form.
  */
 class SoftKeyboard {
 public:
     SoftKeyboard() = default;
     ~SoftKeyboard();
 
-    /**
-     * 显示键盘
-     * @param textarea 要输入的文本框
-     * @param on_close 关闭时的回调（可选）
-     */
-    void Show(lv_obj_t* textarea, std::function<void()> on_close = nullptr);
-
-    /**
-     * 隐藏键盘
-     */
+    void Show(lv_obj_t* textarea, std::function<void()> on_ready = nullptr);
     void Hide();
-
-    /**
-     * 键盘是否可见
-     */
+    void Collapse();
     bool IsVisible() const { return keyboard_ != nullptr; }
 
 private:
     lv_obj_t* keyboard_ = nullptr;
+    lv_obj_t* hide_button_ = nullptr;
     lv_obj_t* target_textarea_ = nullptr;
-    std::function<void()> on_close_callback_;
+    bool textarea_handler_registered_ = false;
+    std::function<void()> on_ready_callback_;
 
     static void KeyboardEventHandler(lv_event_t* e);
+    static void TextareaEventHandler(lv_event_t* e);
+    static void HideButtonEventHandler(lv_event_t* e);
+    void DeleteKeyboardObjects();
 };
