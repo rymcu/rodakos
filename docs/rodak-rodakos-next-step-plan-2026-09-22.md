@@ -19,13 +19,14 @@
 - Rodak `CommandService` 的普通 command event projection 已脱敏；设备实际下发和持久化 command payload 不在本切片改变。
 - RodakOS 的 pairing、MQTT credential、voice identity 和 Recovery 相关实现已有静态合同证据与 host test 入口。
 - Rodak 的 RodakOS 定向集成测试、renderer typecheck、lint 和 build 已通过。
+- 2026-09-24 RodakOS 本地验证通过：165 项 app-model 测试、17 项 Home UI 测试、ESP-IDF 6.0.2 firmware build，以及主应用 `ota_0` / immutable Recovery `factory` 独立容量校验。
 
 当前限制：
 
-- 当前电脑没有真实设备。
-- 当前电脑缺少 ESP-IDF 6.0.2、`idf.py`、Python、Ninja 和 C/C++ 编译器，因此 RodakOS host CMake/ctest、firmware build 和 hardware gate 尚未执行。
-- RodakOS adapter 目前是边界锁定切片，尚未接入 Runtime IPC/API。
-- Xiaozhi baseline 仍有独立失败；不将其作为 RodakOS 主线验收条件，也不在本计划中修复。
+- 设备工作站可接入 BigSmart；串口和设备标识以现场枚举结果为准。
+- 本轮 RodakOS 验证未打开串口、未复位、未刷写；真实唤醒、AEC/VAD 插话、多轮语音和云端闭环仍需完成硬件 gate。
+- RodakOS adapter 已接入 Runtime IPC/API 的只读 list/get；Runtime policy、effect host、设备 mutation 和完整审计链仍待后续切片。
+- XiaoZhi 兼容只属于 Rodak 服务端 adapter；RodakOS 主线不包含 XiaoZhi wire、旧 WebSocket 或 `/xiaozhi/ota/` fallback。
 
 ## 2. 执行分层
 
