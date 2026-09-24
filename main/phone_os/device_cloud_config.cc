@@ -1,6 +1,8 @@
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/device_pairing_policy.h"
 #include "phone_os/device_pairing_protocol.h"
+#include "phone_os/realtime_voice_contract.h"
+#include "phone_os/serial_provisioning_protocol.h"
 
 #include "settings.h"
 
@@ -18,12 +20,12 @@
 #include <esp_partition.h>
 #include <esp_random.h>
 #include <esp_system.h>
+#include <nvs.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <new>
 #include <vector>
@@ -32,16 +34,27 @@ namespace rodakos {
 namespace {
 constexpr const char* TAG = "DeviceCloud";
 constexpr const char* kCloudNamespace = "device_cloud";
-constexpr const char* kLegacyVoiceNamespace = "voice_cloud";
-constexpr const char* kLegacyXiaozhiNamespace = "xiaozhi";
-constexpr const char* kWebsocketNamespace = "websocket";
+constexpr const char* kRealtimeVoiceNamespace = "realtime_voice";
 constexpr const char* kMqttNamespace = "unified_mqtt";
 constexpr const char* kBoardNamespace = "board";
 constexpr const char* kProvisioningUrlKey = "prov_url";
-constexpr const char* kLegacyOtaUrlKey = "ota_url";
-constexpr const char* kUrlKey = "url";
-constexpr const char* kTokenKey = "token";
-constexpr const char* kVersionKey = "version";
+constexpr char kRealtimeVoiceEndpointKey[] = "endpoint";
+constexpr char kRealtimeVoiceProtocolVersionKey[] = "protocol_ver";
+constexpr char kRealtimeVoiceDownlinkSampleRateKey[] = "downlink_hz";
+constexpr char kRealtimeVoiceDownlinkFrameDurationKey[] = "downlink_ms";
+constexpr char kRealtimeVoiceMaxAudioFrameKey[] = "max_audio_bytes";
+constexpr char kRealtimeVoiceMaxControlKey[] = "max_ctrl_bytes";
+constexpr char kRealtimeVoiceVadStrategiesKey[] = "vad_strategies";
+constexpr char kRealtimeVoicePreferredVadStrategyKey[] = "preferred_vad";
+static_assert(sizeof(kRealtimeVoiceEndpointKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceProtocolVersionKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceDownlinkSampleRateKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceDownlinkFrameDurationKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceMaxAudioFrameKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceMaxControlKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceVadStrategiesKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoicePreferredVadStrategyKey) <= NVS_KEY_NAME_MAX_SIZE,
+              "Realtime voice NVS keys exceed the NVS name limit");
 constexpr const char* kUuidKey = "uuid";
 constexpr const char* kAiotSecretKey = "device_secret";
 constexpr const char* kAiotTokenKey = "access_token";
@@ -72,11 +85,24 @@ constexpr const char* kMqttOtaProgressTopicKey = "ota_progress";
 constexpr const char* kMqttCommandsTopicKey = "commands";
 constexpr const char* kMqttPcStatusTopicKey = "pc_status";
 constexpr const char* kMqttHomePrefixTopicKey = "home_prefix";
-constexpr const char* kDefaultProvisioningUrl = "https://api.tenclass.net/xiaozhi/ota/";
+// Deployments should provision an explicit Rodak server URL. This reserved
+// canonical placeholder deliberately does not point at a legacy service.
+constexpr const char* kDefaultProvisioningUrl =
+    "https://api.rodak.local/api/v1/aiot/devices/bootstrap";
 constexpr int kDefaultMqttBrokerPort = 1883;
+
+int NormalizeRealtimeVoiceSampleRate(int value) {
+    return (value == 8000 || value == 12000 || value == 16000 || value == 24000 ||
+            value == 48000)
+               ? value
+               : 24000;
+}
+
+int NormalizeRealtimeVoiceFrameDuration(int value) {
+    return IsSupportedRealtimeVoiceFrameDuration(value) ? value : 60;
+}
 constexpr int kDefaultMqttKeepalive = 240;
 constexpr int kProvisioningTimeoutMs = 10000;
-constexpr size_t kMaxProvisioningResponseBytes = 8192;
 constexpr size_t kMaxAiotResponseBytes = 16384;
 
 constexpr const char* kAiotBootstrapPath = "/api/v1/aiot/devices/bootstrap";
@@ -148,13 +174,8 @@ std::string Lowercase(std::string value) {
 }
 
 bool IsExplicitAiotUrl(const std::string& url) {
-    const std::string lower = Lowercase(url);
-    return lower.find("/api/v1/aiot/devices/bootstrap") != std::string::npos;
-}
-
-bool IsLegacyExternalUrl(const std::string& url) {
-    const std::string lower = Lowercase(url);
-    return lower.find("tenclass.net") != std::string::npos;
+    return url.size() >= std::strlen(kAiotBootstrapPath) &&
+           url.ends_with(kAiotBootstrapPath);
 }
 
 std::string UrlOrigin(const std::string& url) {
@@ -198,15 +219,11 @@ std::string ResolveAiotBootstrapUrl(const std::string& configured_url) {
     return ResolveApiUrl(configured_url, kAiotBootstrapPath);
 }
 
-std::string ResolveLegacyProvisioningUrl(const std::string& configured_url) {
-    if (configured_url.empty()) {
-        return {};
-    }
-    const std::string lower = Lowercase(configured_url);
-    if (lower.find("/xiaozhi/ota/") != std::string::npos) {
-        return configured_url;
-    }
-    return ResolveApiUrl(configured_url, "/xiaozhi/ota/");
+bool IsForbiddenLegacyProvisioningHost(const std::string& url) {
+    const std::string host = Lowercase(UrlHost(UrlOrigin(url)));
+    return host == "tenclass.net" ||
+           (host.size() > std::string(".tenclass.net").size() &&
+            host.ends_with(".tenclass.net"));
 }
 
 bool PerformHttpRequest(const std::string& url,
@@ -356,27 +373,32 @@ std::string JsonToString(cJSON* root) {
     return result;
 }
 
-void AddStringIfPresent(cJSON* root, const char* key, std::string& output) {
-    cJSON* item = cJSON_GetObjectItem(root, key);
-    if (cJSON_IsString(item) && item->valuestring != nullptr) {
-        output = item->valuestring;
+std::string SerializeStringArray(const std::vector<std::string>& values) {
+    cJSON* root = cJSON_CreateArray();
+    if (root == nullptr) return "[]";
+    for (const std::string& value : values) {
+        cJSON_AddItemToArray(root, cJSON_CreateString(value.c_str()));
     }
+    const std::string result = JsonToString(root);
+    cJSON_Delete(root);
+    return result;
 }
 
-void AddIntIfPresent(cJSON* root, const char* key, int& output) {
-    cJSON* item = cJSON_GetObjectItem(root, key);
-    if (cJSON_IsNumber(item)) {
-        output = item->valueint;
+std::vector<std::string> ParseStringArray(const std::string& encoded) {
+    std::vector<std::string> values;
+    cJSON* root = cJSON_Parse(encoded.c_str());
+    if (!cJSON_IsArray(root)) {
+        cJSON_Delete(root);
+        return values;
     }
-}
-
-void AddBoolIfPresent(cJSON* root, const char* key, bool& output) {
-    cJSON* item = cJSON_GetObjectItem(root, key);
-    if (cJSON_IsBool(item)) {
-        output = cJSON_IsTrue(item);
-    } else if (cJSON_IsNumber(item)) {
-        output = item->valueint != 0;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, root) {
+        if (cJSON_IsString(item) && item->valuestring != nullptr) {
+            values.emplace_back(item->valuestring);
+        }
     }
+    cJSON_Delete(root);
+    return values;
 }
 
 void ResetMqttConfig(DeviceCloudConfig& config) {
@@ -446,11 +468,24 @@ bool PersistAiotIdentity(const DeviceCloudConfig& config) {
     return true;
 }
 
-bool PersistWebsocketConfig(const DeviceCloudConfig& config) {
-    Settings settings(kWebsocketNamespace, true);
-    const bool written = settings.SetString(kUrlKey, config.websocket_url) &&
-                         settings.SetString(kTokenKey, config.websocket_token) &&
-                         settings.SetInt(kVersionKey, config.websocket_version);
+bool PersistRealtimeVoiceConfig(const DeviceCloudConfig& config) {
+    Settings settings(kRealtimeVoiceNamespace, true);
+    const bool written =
+        settings.SetString(kRealtimeVoiceEndpointKey, config.realtime_voice_url) &&
+        settings.SetInt(kRealtimeVoiceProtocolVersionKey,
+                        config.realtime_voice_protocol_version) &&
+        settings.SetInt(kRealtimeVoiceDownlinkSampleRateKey,
+                        config.realtime_voice_downlink_sample_rate_hz) &&
+        settings.SetInt(kRealtimeVoiceDownlinkFrameDurationKey,
+                        config.realtime_voice_downlink_frame_duration_ms) &&
+        settings.SetInt(kRealtimeVoiceMaxAudioFrameKey,
+                        static_cast<int32_t>(config.realtime_voice_max_audio_frame_bytes)) &&
+        settings.SetInt(kRealtimeVoiceMaxControlKey,
+                        static_cast<int32_t>(config.realtime_voice_max_control_bytes)) &&
+        settings.SetString(kRealtimeVoiceVadStrategiesKey,
+                           SerializeStringArray(config.realtime_voice_vad_strategies)) &&
+        settings.SetString(kRealtimeVoicePreferredVadStrategyKey,
+                           config.realtime_voice_preferred_vad_strategy);
     if (!written || !settings.Commit()) {
         // NVSHandleSimple may have applied an earlier field before reporting
         // an error. Mark the handle settled before the destructor and let the
@@ -558,36 +593,54 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
                                  !config.pairing_request_token.empty() &&
                                  !config.pairing_code.empty();
     config.provisioning_url = cloud_settings.GetString(kProvisioningUrlKey, "");
-    bool should_migrate_provisioning_url = false;
-    if (config.provisioning_url.empty()) {
-        Settings legacy_voice_settings(kLegacyVoiceNamespace, false);
-        config.provisioning_url = legacy_voice_settings.GetString(kLegacyOtaUrlKey, "");
-        should_migrate_provisioning_url = !config.provisioning_url.empty();
-    }
-    if (config.provisioning_url.empty()) {
-        Settings legacy_settings(kLegacyXiaozhiNamespace, false);
-        const std::string legacy_url = legacy_settings.GetString(kLegacyOtaUrlKey, "");
-        if (!legacy_url.empty()) {
-            config.provisioning_url = legacy_url;
-            should_migrate_provisioning_url = true;
-        }
-    }
     if (config.provisioning_url.empty()) {
         config.provisioning_url = kDefaultProvisioningUrl;
     }
-    if (should_migrate_provisioning_url) {
-        Settings write_settings(kCloudNamespace, true);
-        write_settings.SetString(kProvisioningUrlKey, config.provisioning_url);
-    }
 
-    Settings ws_settings(kWebsocketNamespace, false);
-    config.websocket_url = ws_settings.GetString(kUrlKey, "");
-    config.websocket_token = ws_settings.GetString(kTokenKey, "");
-    config.websocket_version = ws_settings.GetInt(kVersionKey, 1);
-    if (config.websocket_version <= 0) {
-        config.websocket_version = 1;
+    Settings realtime_voice_settings(kRealtimeVoiceNamespace, false);
+    config.realtime_voice_url =
+        realtime_voice_settings.GetString(kRealtimeVoiceEndpointKey, "");
+    config.realtime_voice_protocol_version = realtime_voice_settings.GetInt(
+        kRealtimeVoiceProtocolVersionKey, kRodakRealtimeVoiceProtocolVersion);
+    config.realtime_voice_downlink_sample_rate_hz = realtime_voice_settings.GetInt(
+        kRealtimeVoiceDownlinkSampleRateKey, 24000);
+    config.realtime_voice_downlink_frame_duration_ms = realtime_voice_settings.GetInt(
+        kRealtimeVoiceDownlinkFrameDurationKey, 60);
+    config.realtime_voice_downlink_sample_rate_hz = NormalizeRealtimeVoiceSampleRate(
+        config.realtime_voice_downlink_sample_rate_hz);
+    config.realtime_voice_downlink_frame_duration_ms = NormalizeRealtimeVoiceFrameDuration(
+        config.realtime_voice_downlink_frame_duration_ms);
+    config.realtime_voice_max_audio_frame_bytes = static_cast<size_t>(
+        std::clamp<int32_t>(realtime_voice_settings.GetInt(kRealtimeVoiceMaxAudioFrameKey, 8192),
+                            1, 64 * 1024));
+    config.realtime_voice_max_control_bytes = static_cast<size_t>(
+        std::clamp<int32_t>(realtime_voice_settings.GetInt(kRealtimeVoiceMaxControlKey, 64 * 1024),
+                            1, 256 * 1024));
+    config.realtime_voice_vad_strategies = ParseStringArray(
+        realtime_voice_settings.GetString(kRealtimeVoiceVadStrategiesKey, "[]"));
+    config.realtime_voice_preferred_vad_strategy = realtime_voice_settings.GetString(
+        kRealtimeVoicePreferredVadStrategyKey, kRealtimeVoiceVadServerAuthoritative);
+    if (!IsRealtimeVoiceVadStrategy(config.realtime_voice_preferred_vad_strategy)) {
+        config.realtime_voice_preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
     }
-    config.has_websocket_config = !config.websocket_url.empty();
+    config.realtime_voice_vad_strategies.erase(
+        std::remove_if(config.realtime_voice_vad_strategies.begin(),
+                       config.realtime_voice_vad_strategies.end(),
+                       [](const std::string& value) {
+                           return !IsRealtimeVoiceVadStrategy(value);
+                       }),
+        config.realtime_voice_vad_strategies.end());
+    if (config.realtime_voice_vad_strategies.empty() ||
+        std::find(config.realtime_voice_vad_strategies.begin(),
+                  config.realtime_voice_vad_strategies.end(),
+                  config.realtime_voice_preferred_vad_strategy) ==
+            config.realtime_voice_vad_strategies.end()) {
+        config.realtime_voice_vad_strategies.clear();
+        config.realtime_voice_preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
+    }
+    if (config.realtime_voice_protocol_version <= 0) {
+        config.realtime_voice_protocol_version = kRodakRealtimeVoiceProtocolVersion;
+    }
 
     ResetMqttConfig(config);
     Settings mqtt_settings(kMqttNamespace, false);
@@ -615,12 +668,12 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     if (config.aiot_pending) {
         config.has_mqtt_config = false;
         // A partially committed pairing or unbind transaction must fail
-        // closed across every cloud transport, including the legacy voice
-        // WebSocket namespace.
-        config.has_websocket_config = false;
+        // closed across every cloud transport.
     }
     config.has_aiot_config = HasCompleteAiotConfig(config);
-    return config.has_websocket_config || config.has_aiot_config;
+    config.has_realtime_voice_config = config.has_aiot_config &&
+                                       !config.realtime_voice_url.empty();
+    return config.has_aiot_config;
 }
 
 bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
@@ -793,10 +846,6 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
         cJSON_AddStringToObject(request_body, "clientId", client_id.c_str());
         cJSON_AddStringToObject(request_body, "firmwareVersion", firmware_version.c_str());
         cJSON_AddStringToObject(request_body, "hardwareVersion", "rymcu_bigsmart");
-        const std::string legacy_secret =
-            std::string(kRodakAiotProtocol) + ":" + device_key + ":" + client_id;
-        cJSON_AddStringToObject(request_body, "legacyCredentialSecret",
-                                legacy_secret.c_str());
         cJSON* application = cJSON_CreateObject();
         cJSON_AddStringToObject(application, "name", "rodakos");
         cJSON_AddStringToObject(application, "version", firmware_version.c_str());
@@ -1047,6 +1096,55 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
     AddStringAlias(token_data, "activation_code", activation_code);
     AddStringAlias(token_data, "activationMessage", activation_message);
     AddStringAlias(token_data, "activation_message", activation_message);
+
+    // A missing descriptor revokes the cached voice capability on a successful
+    // token refresh, even when an older response advertised it.
+    config.realtime_voice_url.clear();
+    config.realtime_voice_protocol_version = kRodakRealtimeVoiceProtocolVersion;
+    config.realtime_voice_downlink_sample_rate_hz = 24000;
+    config.realtime_voice_downlink_frame_duration_ms = 60;
+    config.realtime_voice_max_audio_frame_bytes = 8192;
+    config.realtime_voice_max_control_bytes = 64 * 1024;
+    config.realtime_voice_vad_strategies.clear();
+    config.realtime_voice_preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
+    config.has_realtime_voice_config = false;
+
+    // The canonical token response may advertise a realtime voice capability.
+    // It is optional during the rollout so an existing MQTT-only device can
+    // refresh credentials before the voice endpoint is enabled server-side.
+    const cJSON* realtime_voice = cJSON_GetObjectItemCaseSensitive(token_data, "realtimeVoice");
+    if (!cJSON_IsObject(realtime_voice)) {
+        realtime_voice = cJSON_GetObjectItemCaseSensitive(token_data, "realtime_voice");
+    }
+    if (!cJSON_IsObject(realtime_voice)) {
+        realtime_voice = cJSON_GetObjectItemCaseSensitive(bootstrap_data, "realtimeVoice");
+    }
+    if (!cJSON_IsObject(realtime_voice)) {
+        realtime_voice = cJSON_GetObjectItemCaseSensitive(bootstrap_data, "realtime_voice");
+    }
+    if (cJSON_IsObject(realtime_voice)) {
+        RealtimeVoiceDescriptor voice_descriptor;
+        std::string voice_error;
+        if (!ParseRealtimeVoiceDescriptor(realtime_voice, voice_descriptor, voice_error)) {
+            SetError("Realtime voice descriptor is invalid: " + voice_error);
+            cJSON_Delete(token_root);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+        config.realtime_voice_url = voice_descriptor.endpoint;
+        config.realtime_voice_protocol_version = voice_descriptor.protocol_version;
+        config.realtime_voice_downlink_sample_rate_hz =
+            voice_descriptor.downlink_sample_rate_hz;
+        config.realtime_voice_downlink_frame_duration_ms =
+            voice_descriptor.downlink_frame_duration_ms;
+        config.realtime_voice_max_audio_frame_bytes =
+            voice_descriptor.max_audio_frame_bytes;
+        config.realtime_voice_max_control_bytes = voice_descriptor.max_control_bytes;
+        config.realtime_voice_vad_strategies = voice_descriptor.vad_strategies;
+        config.realtime_voice_preferred_vad_strategy =
+            voice_descriptor.preferred_vad_strategy;
+        config.has_realtime_voice_config = true;
+    }
     cJSON_Delete(token_root);
 
     if (config.aiot_access_token.empty()) {
@@ -1110,7 +1208,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
     // Persist the autonomous credentials as one guarded transaction. The
     // credentials and MQTT connection parameters live in separate NVS
     // namespaces, so restore the complete prior snapshot if either commit
-    // fails or the legacy websocket cache cannot be cleared.
+    // fails or the realtime voice descriptor cache cannot be cleared.
     bool credentials_persisted = false;
     bool generation_matches = false;
     bool rollback_ok = true;
@@ -1131,21 +1229,22 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
                 config.aiot_pending = true;
                 const bool aiot_saved = PersistAiotIdentity(config);
                 const bool mqtt_saved = aiot_saved && PersistMqttConfig(config);
-                bool websocket_saved = false;
+                bool realtime_voice_saved = false;
                 if (aiot_saved && mqtt_saved) {
                     config.aiot_pending = false;
-                    websocket_saved = PersistWebsocketConfig(DeviceCloudConfig{});
-                    if (websocket_saved) {
+                    realtime_voice_saved = PersistRealtimeVoiceConfig(config);
+                    if (realtime_voice_saved) {
                         credentials_persisted = PersistAiotIdentity(config);
                         config.has_aiot_config = HasCompleteAiotConfig(config);
                     }
                 }
 
                 if (!credentials_persisted) {
-                    const bool websocket_restored = PersistWebsocketConfig(*previous_config);
+                    const bool realtime_voice_restored =
+                        PersistRealtimeVoiceConfig(*previous_config);
                     const bool aiot_restored = PersistAiotIdentity(*previous_config);
                     const bool mqtt_restored = PersistMqttConfig(*previous_config);
-                    rollback_ok = websocket_restored && aiot_restored && mqtt_restored;
+                    rollback_ok = realtime_voice_restored && aiot_restored && mqtt_restored;
                     if (!rollback_ok) {
                         ESP_LOGE(TAG, "Failed to restore cloud credentials after AIoT transaction failure");
                     }
@@ -1173,166 +1272,34 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config) {
 
 bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     std::lock_guard<std::mutex> refresh_lock(refresh_mutex_);
-    uint32_t config_generation = 0;
     {
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
         Load(config);
-        config_generation = config_generation_;
     }
     if (config.provisioning_url.empty()) {
         config.provisioning_url = kDefaultProvisioningUrl;
     }
-
-    // A Rodak AIoT bootstrap is an explicit GET descriptor followed by the
-    // register -> activate -> token exchange. Local deployments may still
-    // have `/xiaozhi/ota/` saved from the legacy firmware; derive the
-    // autonomous endpoint from its origin and only fall back when that route
-    // is genuinely unavailable. The external Tenclass endpoint remains a
-    // legacy-only compatibility path.
-    if (!IsLegacyExternalUrl(config.provisioning_url)) {
-        const bool explicit_aiot = IsExplicitAiotUrl(config.provisioning_url);
-        if (RefreshAiot(config) || explicit_aiot) {
-            return config.has_aiot_config;
-        }
-        const std::string aiot_error = last_error();
-        if (aiot_error.find("HTTP status 404") == std::string::npos &&
-            aiot_error.find("HTTP status 405") == std::string::npos) {
-            return false;
-        }
-        ESP_LOGW(TAG, "AIoT endpoint unavailable; trying legacy bootstrap compatibility path");
-    }
-
-    const std::string legacy_provisioning_url =
-        ResolveLegacyProvisioningUrl(config.provisioning_url);
-    if (legacy_provisioning_url.empty()) {
-        SetError("Legacy provisioning URL has no valid origin");
+    if (!IsValidSerialProvisioningBootstrapUrl(config.provisioning_url) ||
+        IsForbiddenLegacyProvisioningHost(config.provisioning_url)) {
+        SetError("请配置有效的 Rodak AIoT 引导地址，不支持旧语音服务地址");
         return false;
     }
-    const std::string payload = BuildSystemInfoJson();
-    esp_http_client_config_t http_config = {};
-    http_config.url = legacy_provisioning_url.c_str();
-    http_config.method = HTTP_METHOD_POST;
-    http_config.timeout_ms = kProvisioningTimeoutMs;
-    http_config.buffer_size = 1024;
-    http_config.buffer_size_tx = 1024;
-    http_config.crt_bundle_attach = esp_crt_bundle_attach;
-    http_config.user_agent = "RodakOS/device-cloud";
-
-    esp_http_client_handle_t client = esp_http_client_init(&http_config);
-    if (client == nullptr) {
-        SetError("Failed to create cloud provisioning client");
-        return false;
-    }
-
-    const std::string client_id = GetClientId();
-    const std::string mac = MacAddress();
-    // Keep the established bootstrap header for existing configured endpoints;
-    // the Rodak identity is carried independently in the metadata below.
-    esp_http_client_set_header(client, "Activation-Version", "1");
-    esp_http_client_set_header(client, "Device-Id", mac.c_str());
-    esp_http_client_set_header(client, "Client-Id", client_id.c_str());
-    esp_http_client_set_header(client, "Rodak-Protocol", kRodakAiotProtocol);
-    const std::string protocol_version = std::to_string(kRodakAiotProtocolVersion);
-    esp_http_client_set_header(client, "Rodak-Protocol-Version", protocol_version.c_str());
-    esp_http_client_set_header(client, "Rodak-Product-Key", kRodakBigSmartProductKey);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    ESP_LOGI(TAG, "Refreshing legacy device cloud config from %s", legacy_provisioning_url.c_str());
-    if (payload.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-        SetError("Provisioning request payload is too large");
-        esp_http_client_cleanup(client);
-        return false;
-    }
-
-    esp_err_t err = esp_http_client_open(client, payload.size());
-    if (err != ESP_OK) {
-        SetError(std::string("Provisioning open failed: ") + esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return false;
-    }
-
-    const int write_len = esp_http_client_write(client, payload.c_str(), payload.size());
-    if (write_len != static_cast<int>(payload.size())) {
-        SetError(write_len < 0 ? "Provisioning request write failed" : "Provisioning request write incomplete");
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-
-    const int64_t content_length = esp_http_client_fetch_headers(client);
-    if (content_length < 0) {
-        SetError("Provisioning response header fetch failed");
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-
-    const int status_code = esp_http_client_get_status_code(client);
-    if (status_code != 200) {
-        SetError("Provisioning request returned HTTP " + std::to_string(status_code));
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-
-    std::vector<char> response(kMaxProvisioningResponseBytes + 1, '\0');
-    const int read_len = esp_http_client_read_response(client, response.data(), kMaxProvisioningResponseBytes);
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    if (read_len <= 0) {
-        SetError("Provisioning response is empty");
-        return false;
-    }
-    response[std::min(static_cast<size_t>(read_len), kMaxProvisioningResponseBytes)] = '\0';
-
-    if (!ParseProvisioningResponse(std::string(response.data(), read_len), config)) {
-        return false;
-    }
-    {
-        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
-        if (config_generation != config_generation_) {
-            last_error_ = "Provisioning endpoint changed while refresh was in progress";
-            return false;
-        }
-        // DeviceCloudConfig contains many strings. Keep rollback snapshots off
-        // the small ESP-IDF service stacks while NVS persistence is nested.
-        auto previous_config = std::unique_ptr<DeviceCloudConfig>(
-            new (std::nothrow) DeviceCloudConfig());
-        auto empty_config = std::unique_ptr<DeviceCloudConfig>(
-            new (std::nothrow) DeviceCloudConfig());
-        if (previous_config == nullptr || empty_config == nullptr) {
-            last_error_ = "Not enough memory to snapshot device cloud config";
-            return false;
-        }
-        Load(*previous_config);
-        empty_config->websocket_version = 1;
-        ResetMqttConfig(*empty_config);
-        bool save_ok = config.has_websocket_config
-                           ? PersistWebsocketConfig(config)
-                           : PersistWebsocketConfig(*empty_config);
-        save_ok = PersistAiotIdentity(config) && save_ok;
-        if (config.has_mqtt_config) {
-            save_ok = PersistMqttConfig(config) && save_ok;
-        } else {
-            save_ok = PersistMqttConfig(*empty_config) && save_ok;
-        }
-        if (!save_ok) {
-            const bool websocket_restored = PersistWebsocketConfig(*previous_config);
-            const bool aiot_restored = PersistAiotIdentity(*previous_config);
-            const bool mqtt_restored = PersistMqttConfig(*previous_config);
-            if (!websocket_restored || !aiot_restored || !mqtt_restored) {
-                ESP_LOGE(TAG, "Failed to restore cloud config after persistence error");
-            }
-            last_error_ = "Failed to persist device cloud credentials";
-            return false;
-        }
-    }
-    return config.has_websocket_config;
+    // Canonical Rodak AIoT is the only onboarding path. A missing realtime
+    // voice descriptor is a capability gap, not a reason to discard MQTT
+    // credentials; the next token refresh can fill it in.
+    return RefreshAiot(config) && config.has_aiot_config;
 }
 
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
     const std::string& url) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-    const std::string provisioning_url = url.empty() ? kDefaultProvisioningUrl : url;
+    const std::string requested_url = url.empty() ? kDefaultProvisioningUrl : url;
+    std::string provisioning_url;
+    if (!NormalizeSerialProvisioningBootstrapUrl(requested_url, provisioning_url) ||
+        IsForbiddenLegacyProvisioningHost(provisioning_url)) {
+        last_error_ = "不支持旧语音服务地址，请配置 Rodak AIoT 引导地址";
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
     auto previous_config = std::unique_ptr<DeviceCloudConfig>(
         new (std::nothrow) DeviceCloudConfig());
     auto empty_config = std::unique_ptr<DeviceCloudConfig>(
@@ -1342,14 +1309,14 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
         return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
     Load(*previous_config);
-    empty_config->websocket_version = 1;
+    empty_config->realtime_voice_protocol_version = 1;
     ResetMqttConfig(*empty_config);
     empty_config->aiot_device_secret = previous_config->aiot_device_secret;
     ResetAiotCredentials(*empty_config);
 
     // An explicit provisioning request is a credential-rotation boundary.
     // Invalidate cached cloud credentials even when the URL is unchanged so
-    // the next boot must fetch fresh MQTT/WebSocket credentials.
+    // the next boot must fetch fresh MQTT/realtime voice credentials.
 
     Settings settings(kCloudNamespace, true);
     const bool url_saved = settings.SetString(kProvisioningUrlKey, provisioning_url) &&
@@ -1369,8 +1336,8 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
     }
     ++config_generation_;
 
-    const bool websocket_cleared = PersistWebsocketConfig(*empty_config);
-    const bool aiot_cleared = websocket_cleared && PersistAiotIdentity(*empty_config);
+    const bool realtime_voice_cleared = PersistRealtimeVoiceConfig(*empty_config);
+    const bool aiot_cleared = realtime_voice_cleared && PersistAiotIdentity(*empty_config);
     const bool mqtt_cleared = aiot_cleared && PersistMqttConfig(*empty_config);
     if (!mqtt_cleared) {
         Settings rollback_settings(kCloudNamespace, true);
@@ -1378,15 +1345,15 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
             rollback_settings.SetString(kProvisioningUrlKey,
                                         previous_config->provisioning_url) &&
             rollback_settings.Commit();
-        const bool websocket_restored = PersistWebsocketConfig(*previous_config);
+        const bool realtime_voice_restored = PersistRealtimeVoiceConfig(*previous_config);
         const bool aiot_restored = PersistAiotIdentity(*previous_config);
         const bool mqtt_restored = PersistMqttConfig(*previous_config);
-        if (!url_restored || !websocket_restored || !aiot_restored || !mqtt_restored) {
+        if (!url_restored || !realtime_voice_restored || !aiot_restored || !mqtt_restored) {
             ESP_LOGE(TAG, "Failed to restore device cloud config after credential invalidation error");
         }
         last_error_ = "Failed to invalidate cached device cloud credentials";
         return ClassifyProvisioningUrlSaveFailure(
-            url_restored, websocket_restored && aiot_restored, mqtt_restored);
+            url_restored, realtime_voice_restored && aiot_restored, mqtt_restored);
     }
 
     last_error_.clear();
@@ -1457,7 +1424,7 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
 
     DeviceCloudConfig empty;
     empty.provisioning_url = config.provisioning_url;
-    empty.websocket_version = 1;
+    empty.realtime_voice_protocol_version = 1;
     ResetMqttConfig(empty);
     ResetAiotCredentials(empty);
     ResetPairingRequest(empty);
@@ -1468,9 +1435,9 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
     empty.unbind_server_acknowledged = true;
     const bool aiot_invalidated = PersistAiotIdentity(empty);
     const bool mqtt_cleared = aiot_invalidated && PersistMqttConfig(empty);
-    const bool websocket_cleared = mqtt_cleared && PersistWebsocketConfig(empty);
+    const bool realtime_voice_cleared = mqtt_cleared && PersistRealtimeVoiceConfig(empty);
     bool cleanup_committed = false;
-    if (websocket_cleared) {
+    if (realtime_voice_cleared) {
         empty.aiot_pending = false;
         empty.unbind_pending = false;
         empty.unbind_server_acknowledged = false;
@@ -1500,150 +1467,6 @@ std::string DeviceCloudConfigService::GetClientId() {
 std::string DeviceCloudConfigService::last_error() const {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     return last_error_;
-}
-
-bool DeviceCloudConfigService::ParseProvisioningResponse(const std::string& response,
-                                                         DeviceCloudConfig& config) {
-    cJSON* root = cJSON_Parse(response.c_str());
-    if (root == nullptr) {
-        SetError("Provisioning response is not JSON");
-        return false;
-    }
-
-    config.websocket_url.clear();
-    config.websocket_token.clear();
-    config.websocket_version = 1;
-    config.activation_code.clear();
-    config.activation_message.clear();
-    config.has_websocket_config = false;
-    ResetMqttConfig(config);
-    ResetAiotCredentials(config);
-    config.has_activation_code = false;
-
-    cJSON* websocket = cJSON_GetObjectItem(root, "websocket");
-    if (cJSON_IsObject(websocket)) {
-        AddStringIfPresent(websocket, kUrlKey, config.websocket_url);
-        AddStringIfPresent(websocket, kTokenKey, config.websocket_token);
-        AddIntIfPresent(websocket, kVersionKey, config.websocket_version);
-        config.has_websocket_config = !config.websocket_url.empty();
-    }
-
-    cJSON* unified_mqtt = cJSON_GetObjectItem(root, "unifiedMqtt");
-    if (!cJSON_IsObject(unified_mqtt)) {
-        unified_mqtt = cJSON_GetObjectItem(root, "unified_mqtt");
-    }
-    if (cJSON_IsObject(unified_mqtt)) {
-        AddIntIfPresent(unified_mqtt, "protocol_version", config.mqtt_protocol_version);
-        AddStringIfPresent(unified_mqtt, "broker_address", config.mqtt_broker_address);
-        AddIntIfPresent(unified_mqtt, "broker_port", config.mqtt_broker_port);
-        AddStringIfPresent(unified_mqtt, "username", config.mqtt_username);
-        AddStringIfPresent(unified_mqtt, "password", config.mqtt_password);
-        AddIntIfPresent(unified_mqtt, "keepalive", config.mqtt_keepalive);
-        AddStringIfPresent(unified_mqtt, "device_key", config.mqtt_device_key);
-        AddBoolIfPresent(unified_mqtt, "home_enabled", config.mqtt_home_enabled);
-        AddStringIfPresent(unified_mqtt, "http_base_url", config.mqtt_http_base_url);
-
-        cJSON* topics = cJSON_GetObjectItem(unified_mqtt, "topics");
-        if (cJSON_IsObject(topics)) {
-            AddStringIfPresent(topics, "telemetry", config.mqtt_topic_telemetry);
-            AddStringIfPresent(topics, "shadow_report", config.mqtt_topic_shadow_report);
-            AddStringIfPresent(topics, "shadow_desired", config.mqtt_topic_shadow_desired);
-            AddStringIfPresent(topics, "ota_notify", config.mqtt_topic_ota_notify);
-            AddStringIfPresent(topics, "ota_progress", config.mqtt_topic_ota_progress);
-            AddStringIfPresent(topics, "commands", config.mqtt_topic_commands);
-            AddStringIfPresent(topics, "pc_status", config.mqtt_topic_pc_status);
-            AddStringIfPresent(topics, "home_prefix", config.mqtt_topic_home_prefix);
-        }
-        FinalizeMqttConfig(config);
-    }
-
-    cJSON* activation = cJSON_GetObjectItem(root, "activation");
-    if (cJSON_IsObject(activation)) {
-        AddStringIfPresent(activation, "code", config.activation_code);
-        AddStringIfPresent(activation, "message", config.activation_message);
-        config.has_activation_code = !config.activation_code.empty();
-    }
-
-    cJSON_Delete(root);
-    if (!config.has_websocket_config) {
-        SetError(config.has_activation_code ? "Activate the device in the cloud console" : "No websocket config from device cloud");
-        return false;
-    }
-    if (config.websocket_version <= 0) {
-        config.websocket_version = 1;
-    }
-    {
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        last_error_.clear();
-    }
-    ESP_LOGI(TAG, "Device cloud websocket config ready: version=%d url=%s",
-             config.websocket_version, config.websocket_url.c_str());
-    if (config.has_mqtt_config) {
-        ESP_LOGI(TAG, "Device cloud MQTT config ready: protocol=%d broker=%s:%d",
-                 config.mqtt_protocol_version, config.mqtt_broker_address.c_str(),
-                 config.mqtt_broker_port);
-    }
-    return true;
-}
-
-std::string DeviceCloudConfigService::BuildSystemInfoJson() {
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "version", 2);
-    cJSON_AddStringToObject(root, "protocol", kRodakAiotProtocol);
-    cJSON_AddNumberToObject(root, "protocol_version", kRodakAiotProtocolVersion);
-    cJSON_AddStringToObject(root, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(root, "language", "zh-CN");
-
-    uint32_t flash_size = 0;
-    esp_flash_get_size(nullptr, &flash_size);
-    cJSON_AddNumberToObject(root, "flash_size", flash_size);
-    cJSON_AddNumberToObject(root, "minimum_free_heap_size", esp_get_minimum_free_heap_size());
-    cJSON_AddNumberToObject(root, "psram_size", heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
-    cJSON_AddStringToObject(root, "mac_address", MacAddress().c_str());
-    cJSON_AddStringToObject(root, "uuid", GetClientId().c_str());
-    cJSON_AddStringToObject(root, "chip_model_name", CONFIG_IDF_TARGET);
-
-    esp_chip_info_t chip_info;
-    esp_chip_info(&chip_info);
-    cJSON* chip = cJSON_CreateObject();
-    cJSON_AddNumberToObject(chip, "model", chip_info.model);
-    cJSON_AddNumberToObject(chip, "cores", chip_info.cores);
-    cJSON_AddNumberToObject(chip, "revision", chip_info.revision);
-    cJSON_AddNumberToObject(chip, "features", chip_info.features);
-    cJSON_AddItemToObject(root, "chip_info", chip);
-
-    const esp_app_desc_t* app_desc = esp_app_get_description();
-    cJSON* app = cJSON_CreateObject();
-    cJSON_AddStringToObject(app, "name", app_desc->project_name);
-    cJSON_AddStringToObject(app, "version", app_desc->version);
-    cJSON_AddStringToObject(app, "idf_version", app_desc->idf_ver);
-    cJSON_AddItemToObject(root, "application", app);
-
-    const esp_partition_t* ota_partition = esp_ota_get_running_partition();
-    cJSON* ota = cJSON_CreateObject();
-    cJSON_AddStringToObject(ota, "label", ota_partition != nullptr ? ota_partition->label : "factory");
-    cJSON_AddItemToObject(root, "ota", ota);
-    const std::string board_json = BuildBoardJson();
-    cJSON_AddRawToObject(root, "board", board_json.c_str());
-
-    std::string json = JsonToString(root);
-    cJSON_Delete(root);
-    return json;
-}
-
-std::string DeviceCloudConfigService::BuildBoardJson() {
-    cJSON* board = cJSON_CreateObject();
-    // `type` is still the Board Manager hardware discriminator. The cloud
-    // product identity is explicit instead of being derived from that name.
-    cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
-    cJSON_AddStringToObject(board, "product_key", kRodakBigSmartProductKey);
-    cJSON_AddStringToObject(board, "protocol", kRodakAiotProtocol);
-    cJSON_AddStringToObject(board, "board_manager_type", "rymcu_bigsmart");
-    cJSON_AddStringToObject(board, "name", "RodakOS RYMCU BigSmart");
-    cJSON_AddStringToObject(board, "mac", MacAddress().c_str());
-    std::string json = JsonToString(board);
-    cJSON_Delete(board);
-    return json;
 }
 
 void DeviceCloudConfigService::SetError(const std::string& message) {

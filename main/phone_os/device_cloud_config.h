@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace rodakos {
 
@@ -15,9 +17,8 @@ inline constexpr int kRodakAiotProtocolVersion = 1;
 
 struct DeviceCloudConfig {
     std::string provisioning_url;
-    // Autonomous Rodak AIoT identity. These values are persisted separately
-    // from the legacy XiaoZhi websocket cache and are the source of truth for
-    // MQTT/HTTP device authentication.
+    // Autonomous Rodak AIoT identity. These values are the source of truth for
+    // MQTT/HTTP authentication and the canonical realtime voice stream.
     std::string aiot_device_secret;
     std::string aiot_access_token;
     bool aiot_registered = false;
@@ -30,9 +31,14 @@ struct DeviceCloudConfig {
     std::string pairing_code;
     std::string pairing_expires_at;
     std::string pairing_status;
-    std::string websocket_url;
-    std::string websocket_token;
-    int websocket_version = 1;
+    std::string realtime_voice_url;
+    int realtime_voice_protocol_version = 1;
+    int realtime_voice_downlink_sample_rate_hz = 24000;
+    int realtime_voice_downlink_frame_duration_ms = 60;
+    size_t realtime_voice_max_audio_frame_bytes = 8192;
+    size_t realtime_voice_max_control_bytes = 64 * 1024;
+    std::vector<std::string> realtime_voice_vad_strategies;
+    std::string realtime_voice_preferred_vad_strategy = "server-authoritative";
     int mqtt_protocol_version = 1;
     std::string mqtt_broker_address;
     int mqtt_broker_port = 1883;
@@ -52,7 +58,7 @@ struct DeviceCloudConfig {
     std::string mqtt_topic_home_prefix;
     std::string activation_code;
     std::string activation_message;
-    bool has_websocket_config = false;
+    bool has_realtime_voice_config = false;
     bool has_mqtt_config = false;
     bool has_aiot_config = false;
     bool has_activation_code = false;
@@ -66,8 +72,8 @@ enum class ProvisioningUrlSaveResult {
 };
 
 constexpr ProvisioningUrlSaveResult ClassifyProvisioningUrlSaveFailure(
-    bool url_restored, bool websocket_restored, bool mqtt_restored) {
-    return url_restored && websocket_restored && mqtt_restored
+    bool url_restored, bool realtime_voice_restored, bool mqtt_restored) {
+    return url_restored && realtime_voice_restored && mqtt_restored
                ? ProvisioningUrlSaveResult::kFailedRolledBack
                : ProvisioningUrlSaveResult::kStateUncertain;
 }
@@ -84,10 +90,7 @@ public:
     static const char* DefaultProvisioningUrl();
 
 private:
-    bool ParseProvisioningResponse(const std::string& response, DeviceCloudConfig& config);
     bool RefreshAiot(DeviceCloudConfig& config);
-    std::string BuildSystemInfoJson();
-    std::string BuildBoardJson();
     void SetError(const std::string& message);
 
     mutable std::recursive_mutex config_mutex_;

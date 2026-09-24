@@ -1,6 +1,7 @@
 #include "phone_os/voice_assistant_service.h"
 
 #include "phone_os/audio_output_service.h"
+#include "phone_os/realtime_voice_contract.h"
 
 #include <algorithm>
 #include <inttypes.h>
@@ -327,7 +328,8 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     interrupt_onset_ms_ = 0;
     interrupt_manual_ = false;
     playback_epoch_policy_.Reset();
-    interaction_generation = ++interaction_generation_;
+    interaction_generation = NextRealtimeVoiceGeneration(interaction_generation_);
+    interaction_generation_ = interaction_generation;
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     xSemaphoreGive(mutex_);
 
@@ -638,7 +640,8 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     stopping_ = true;
     cleanup_resources_released_ = false;
     cleanup_task_ = current_task;
-    cleanup_generation = ++interaction_generation_;
+    cleanup_generation = NextRealtimeVoiceGeneration(interaction_generation_);
+    interaction_generation_ = cleanup_generation;
     cleanup_generation_ = cleanup_generation;
     cleanup_final_phase_ = final_phase;
     cleanup_message_ = message.empty() ? "Ready" : message;

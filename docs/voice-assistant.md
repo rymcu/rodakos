@@ -2,7 +2,7 @@
 
 RodakOS provides a multi-turn voice assistant backed by Rodak. The device performs local wake
 monitoring for **"你好达克"** and opens the cloud voice session only after a successful local
-detection. One wake continues across replies on the same WebSocket until `goodbye`, 30 seconds of
+detection. One wake continues across replies on the same WebSocket until `session.end`, 30 seconds of
 follow-up silence, or an error/watchdog ends the session; idle standby never keeps a cloud voice
 session open.
 
@@ -17,7 +17,8 @@ session open.
   subsequent explicit disable remains authoritative across app launches and device restarts.
 - Device Cloud, provisioning, WiFi, MQTT, and OTA remain system services consumed by the assistant;
   the assistant does not duplicate their configuration or lifecycle.
-- Wake handling uses the cached Device Cloud WebSocket configuration. Provisioning refresh remains
+- Wake handling uses the canonical `realtimeVoice` descriptor and the AIoT device token cached by
+  Device Cloud. Provisioning refresh remains
   an explicit system-settings action and never blocks microphone capture after a wake match.
 
 ## State Flow
@@ -27,12 +28,12 @@ stateDiagram-v2
   [*] --> Disabled
   Disabled --> WakeOnly: Enable "你好达克"
   WakeOnly --> Connecting: Local MultiNet match
-  Connecting --> Listening: WebSocket hello + listen detect/start
-  Listening --> Speaking: Rodak TTS start/audio
-  Speaking --> Draining: Rodak TTS stop
-  Draining --> Listening: Drain TTS + listen start
+  Connecting --> Listening: session.open/ready + wake.detected + input.start
+  Listening --> Speaking: output.start + Opus audio
+  Speaking --> Draining: output.stop
+  Draining --> Listening: Drain audio + input.start
   Listening --> WakeOnly: 30 s follow-up silence
-  Speaking --> WakeOnly: Rodak goodbye/error
+  Speaking --> WakeOnly: session.end/error
   Connecting --> WakeOnly: Failure/timeout
   Listening --> WakeOnly: Failure/timeout
   Speaking --> WakeOnly: Failure/timeout
@@ -64,26 +65,35 @@ policy.
 
 ## Wire Contract
 
-- Transport: Rodak Xiaozhi-compatible WebSocket.
-- Uplink: Opus, 16 kHz, mono, 60 ms frames.
-- Downlink: Opus using the sample rate and frame duration returned in the server hello.
-- Protocol v1 sends raw Opus payloads. Protocol v2/v3 use their respective binary wrappers.
+- Transport: canonical `rodak-realtime-voice/v1` over WebSocket at the `realtimeVoice.endpoint`
+  advertised by Rodak AIoT bootstrap/token. RodakOS does not parse or emit XiaoZhi wire messages;
+  XiaoZhi firmware compatibility belongs exclusively to a Rodak server adapter.
+- Uplink/downlink: each binary WebSocket message uses the canonical `RAV1` envelope: 4-byte magic,
+  big-endian positive sequence (starting at 1), big-endian payload length, then one Opus packet. Uplink is 16 kHz, mono,
+  60 ms; downlink uses the format returned by `session.ready`. Descriptor validation, cached
+  configuration and the handshake share the supported downlink frame durations: 5, 10, 20, 40,
+  and 60 ms.
+- The device sends `session.open` and validates `session.ready` before it uploads audio. The
+  descriptor's `limits` bound audio and control frames; the transport adds no XiaoZhi v2/v3 wrapper.
+- VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`; the server returns
+  `vadStrategy` in `session.ready`. The device suppresses device-VAD control events when the server
+  selects `server-authoritative`, while `hybrid-fallback` keeps audio flowing to server VAD if device
+  boundaries time out.
 - Text and binary input accept both transport-buffer chunks and WebSocket continuation frames. Text
   messages are limited to 64 KiB and binary audio messages to 8 KiB.
-- The device sends `listen:detect` with `text: "你好达克"`, followed by `listen:start` in auto-stop
-  mode. Rodak cancels its pending hello auto-greeting when either explicit listen signal arrives.
-- `tts:start` stops microphone upload. Binary TTS frames are decoded and queued to the DAC.
-  `tts:stop` drains the estimated playback tail and closes the DAC. After every non-terminal reply,
-  the device reopens capture and sends another `listen:start` in auto-stop mode on the same
-  WebSocket/session without repeating `listen:detect`.
-- The follow-up window is 30 seconds and is re-armed when capture restarts. A new `tts:start` proves
+- The device sends `wake.detected` with `text: "你好达克"`, followed by `input.start` in realtime
+  mode. Each later non-terminal reply starts another `input.start` on the same session without
+  repeating `wake.detected`.
+- `output.start` stops microphone upload when AEC is disabled. Binary Opus frames are decoded and
+  queued to the DAC. `output.stop` drains the estimated playback tail and closes the DAC.
+- The follow-up window is 30 seconds and is re-armed when capture restarts. A new `output.start` proves
   the next turn progressed and clears that deadline. Silence, an error, a connection/listening
-  watchdog, or Rodak's explicit `goodbye` ends the session and restores local wake monitoring.
+  watchdog, or Rodak's explicit `session.end` ends the session and restores local wake monitoring.
   Active TTS playback is not terminated by that watchdog.
 
 The service also exposes a speaking-time interruption path for an AEC/VAD frontend. A confirmed
-barge-in sends the transport `abort` message on the existing session, closes local TTS output, and
-discards late audio until the next `tts:start`. The wake service routes this detection to the
+barge-in sends `playback.abort` with `reason: "vad_detected"` on the existing session, closes local TTS output, and
+discards late audio until the next `output.start`. The wake service routes this detection to the
 existing interaction instead of opening a second session. This remains gated by validated echo
 cancellation or voice activity detection; the built-in wake runtime still runs only in normal
 listening mode.
@@ -126,15 +136,15 @@ Before hardware testing:
 
 On hardware, verify:
 
-- idle startup has no `VoiceWs` connection;
+- idle startup has no realtime voice WebSocket connection;
 - enabling the switch loads MultiNet and opens the ADC locally;
 - one utterance of "你好达克" creates exactly one wake-triggered session;
-- WebSocket hello/listen appears only after the local match;
+- `session.open`, `session.ready`, `wake.detected`, and `input.start` appear only after the local match;
 - at least six consecutive questions work without repeating the wake phrase and retain one WebSocket and
-  session id, with one new `listen:start` after each non-terminal `tts:stop`;
+  session id, with one new `input.start` after each non-terminal `output.stop`;
 - Rodak receives valid Opus and returns audible TTS without a clipped final syllable;
 - no intermediate turn releases focus, closes the WebSocket, or re-arms MultiNet;
-- saying "再见" produces `tts:stop`, then explicit `goodbye`, one cleanup, and local wake re-arm;
+- saying "再见" produces `output.stop`, then `session.end`, one cleanup, and local wake re-arm;
 - 30 seconds of follow-up silence closes the session safely after any completed reply;
 - music pauses and resumes, while Recorder can temporarily preempt wake monitoring;
 - disabling wake monitoring closes the ADC owner and does not reconnect to the cloud.

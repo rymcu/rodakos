@@ -1,7 +1,7 @@
-#include "phone_os/voice_cloud_websocket_transport.h"
+#include "phone_os/realtime_voice_transport.h"
+#include "phone_os/realtime_voice_contract.h"
 
 #include <cJSON.h>
-#include <arpa/inet.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -9,28 +9,22 @@
 #include <esp_timer.h>
 #include <freertos/idf_additions.h>
 
-#include <limits>
+#include <algorithm>
 #include <cstring>
 #include <utility>
 #include <vector>
 
 namespace rodakos {
 namespace {
-constexpr const char* TAG = "VoiceWs";
+constexpr const char* TAG = "RodakRealtimeVoice";
 constexpr EventBits_t kConnectedBit = BIT0;
-constexpr EventBits_t kHelloBit = BIT1;
+constexpr EventBits_t kSessionReadyBit = BIT1;
 constexpr EventBits_t kErrorBit = BIT2;
 constexpr EventBits_t kCancelBit = BIT3;
 constexpr int kConnectTimeoutMs = 10000;
-constexpr int kHelloTimeoutMs = 10000;
+constexpr int kSessionReadyTimeoutMs = 10000;
 constexpr int kSendTimeoutMs = 3000;
-constexpr int kUplinkSampleRate = 16000;
-constexpr int kUplinkChannels = 1;
-constexpr int kUplinkFrameDurationMs = 60;
-constexpr uint16_t kBinaryMessageTypeAudio = 0;
-constexpr size_t kBinaryProtocol2HeaderSize = 16;
-constexpr size_t kBinaryProtocol3HeaderSize = 4;
-constexpr size_t kMaxInboundAudioMessageSize = 8 * 1024;
+constexpr size_t kMaxInboundAudioMessageSize = 64 * 1024;
 constexpr size_t kMaxInboundTextMessageSize = 64 * 1024;
 constexpr uint32_t kCleanupTaskStackSize = 4096;
 constexpr UBaseType_t kCleanupTaskPriority = 3;
@@ -87,16 +81,6 @@ private:
     bool locked_ = false;
 };
 
-std::string JsonToString(cJSON* root) {
-    char* json = cJSON_PrintUnformatted(root);
-    if (json == nullptr) {
-        return "{}";
-    }
-    std::string result(json);
-    cJSON_free(json);
-    return result;
-}
-
 std::string MacAddress() {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -111,95 +95,16 @@ const char* ListeningModeName(VoiceListeningMode mode) {
         case VoiceListeningMode::kRealtime:
             return "realtime";
         case VoiceListeningMode::kManualStop:
-            return "manual";
+            return "manual-stop";
         case VoiceListeningMode::kAutoStop:
         default:
-            return "auto";
+            return "auto-stop";
     }
-}
-
-std::vector<uint8_t> WrapAudioPacketV2(const VoiceAudioPacket& packet, int version) {
-    std::vector<uint8_t> frame(kBinaryProtocol2HeaderSize + packet.payload.size());
-    uint16_t wire_version = htons(static_cast<uint16_t>(version));
-    uint16_t type = htons(kBinaryMessageTypeAudio);
-    uint32_t reserved = 0;
-    uint32_t timestamp = htonl(packet.timestamp_ms);
-    uint32_t payload_size = htonl(static_cast<uint32_t>(packet.payload.size()));
-    std::memcpy(frame.data(), &wire_version, sizeof(wire_version));
-    std::memcpy(frame.data() + 2, &type, sizeof(type));
-    std::memcpy(frame.data() + 4, &reserved, sizeof(reserved));
-    std::memcpy(frame.data() + 8, &timestamp, sizeof(timestamp));
-    std::memcpy(frame.data() + 12, &payload_size, sizeof(payload_size));
-    std::memcpy(frame.data() + kBinaryProtocol2HeaderSize,
-                packet.payload.data(), packet.payload.size());
-    return frame;
-}
-
-std::vector<uint8_t> WrapAudioPacketV3(const VoiceAudioPacket& packet) {
-    std::vector<uint8_t> frame(kBinaryProtocol3HeaderSize + packet.payload.size());
-    frame[0] = static_cast<uint8_t>(kBinaryMessageTypeAudio);
-    frame[1] = 0;
-    uint16_t payload_size = htons(static_cast<uint16_t>(packet.payload.size()));
-    std::memcpy(frame.data() + 2, &payload_size, sizeof(payload_size));
-    std::memcpy(frame.data() + kBinaryProtocol3HeaderSize,
-                packet.payload.data(), packet.payload.size());
-    return frame;
-}
-
-bool UnwrapAudioPacket(const uint8_t* data,
-                       size_t size,
-                       int version,
-                       VoiceAudioPacket& packet) {
-    if (data == nullptr || size == 0) {
-        return false;
-    }
-
-    size_t payload_offset = 0;
-    size_t payload_size = size;
-    if (version == 2) {
-        if (size < kBinaryProtocol2HeaderSize) {
-            return false;
-        }
-        uint32_t timestamp = 0;
-        uint32_t wire_size = 0;
-        std::memcpy(&timestamp, data + 8, sizeof(timestamp));
-        std::memcpy(&wire_size, data + 12, sizeof(wire_size));
-        packet.timestamp_ms = ntohl(timestamp);
-        payload_offset = kBinaryProtocol2HeaderSize;
-        payload_size = ntohl(wire_size);
-    } else if (version == 3) {
-        if (size < kBinaryProtocol3HeaderSize) {
-            return false;
-        }
-        uint16_t wire_size = 0;
-        std::memcpy(&wire_size, data + 2, sizeof(wire_size));
-        payload_offset = kBinaryProtocol3HeaderSize;
-        payload_size = ntohs(wire_size);
-    } else {
-        packet.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
-    }
-
-    if (payload_size == 0 || payload_offset + payload_size > size) {
-        return false;
-    }
-    packet.payload.assign(data + payload_offset, data + payload_offset + payload_size);
-    return true;
-}
-
-bool IsSupportedOpusSampleRate(int sample_rate) {
-    return sample_rate == 8000 || sample_rate == 12000 || sample_rate == 16000 ||
-           sample_rate == 24000 || sample_rate == 48000;
-}
-
-bool IsSupportedOpusFrameDuration(int frame_duration_ms) {
-    return frame_duration_ms == 5 || frame_duration_ms == 10 ||
-           frame_duration_ms == 20 || frame_duration_ms == 40 ||
-           frame_duration_ms == 60;
 }
 
 }  // namespace
 
-VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(DeviceCloudConfigService& config_service)
+RodakRealtimeVoiceTransport::RodakRealtimeVoiceTransport(DeviceCloudConfigService& config_service)
     : config_service_(config_service) {
     mutex_ = xSemaphoreCreateMutex();
     client_mutex_ = xSemaphoreCreateRecursiveMutex();
@@ -208,7 +113,7 @@ VoiceCloudWebSocketTransport::VoiceCloudWebSocketTransport(DeviceCloudConfigServ
     events_ = xEventGroupCreate();
 }
 
-VoiceCloudWebSocketTransport::~VoiceCloudWebSocketTransport() {
+RodakRealtimeVoiceTransport::~RodakRealtimeVoiceTransport() {
     CloseAudioChannel();
     if (open_mutex_ != nullptr) {
         xSemaphoreTake(open_mutex_, portMAX_DELAY);
@@ -235,7 +140,7 @@ VoiceCloudWebSocketTransport::~VoiceCloudWebSocketTransport() {
     }
 }
 
-bool VoiceCloudWebSocketTransport::Start() {
+bool RodakRealtimeVoiceTransport::Start() {
     if (started_) {
         return true;
     }
@@ -248,7 +153,7 @@ bool VoiceCloudWebSocketTransport::Start() {
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue) {
+bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) {
     if (mutex_ == nullptr || client_mutex_ == nullptr || open_mutex_ == nullptr ||
         frame_mutex_ == nullptr || events_ == nullptr) {
         SetError("Voice transport synchronization unavailable");
@@ -276,46 +181,53 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
                                  cleanup_task_ != nullptr || cleanup_client_ != nullptr;
     xSemaphoreGive(mutex_);
     if (cleanup_pending) {
-        SetError("Previous voice websocket is still closing");
+        SetError("Previous realtime voice channel is still closing");
         return false;
     }
 
     uint32_t generation = 0;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    generation = ++connection_generation_;
+    generation = NextRealtimeVoiceGeneration(connection_generation_);
+    connection_generation_ = generation;
     closing_ = false;
     connected_ = false;
     channel_open_ = false;
     session_id_.clear();
+    session_gate_.Clear();
+    vad_strategy_ = kRealtimeVoiceVadServerAuthoritative;
+    inbound_playback_epoch_ = 0;
+    inbound_output_active_ = false;
+    audio_sequence_ = 0;
+    inbound_audio_sequence_ = 0;
     xSemaphoreGive(mutex_);
-    xEventGroupClearBits(events_, kConnectedBit | kHelloBit | kErrorBit | kCancelBit);
+    xEventGroupClearBits(events_, kConnectedBit | kSessionReadyBit | kErrorBit | kCancelBit);
 
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
         return false;
     }
 
     config_service_.Load(config_);
-    if (config_.has_aiot_config) {
-        SetError("Rodak AIoT mode does not provide a legacy voice websocket");
+    if (!config_.has_realtime_voice_config) {
+        const std::string error = config_service_.last_error();
+        SetError(error.empty() ? "Realtime voice stream is not configured" : error);
         return false;
     }
-    if (!config_.has_websocket_config) {
-        const std::string error = config_service_.last_error();
-        SetError(error.empty() ? "Voice cloud websocket is not configured" : error);
+    if (config_.aiot_access_token.empty()) {
+        SetError("Realtime voice stream requires an AIoT access token");
         return false;
     }
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
-        SetError("Voice websocket open cancelled");
+        SetError("Realtime voice stream open cancelled");
         return false;
     }
 
     authorization_header_.clear();
-    if (!config_.websocket_token.empty()) {
-        authorization_header_ = config_.websocket_token.find(' ') == std::string::npos
-            ? "Bearer " + config_.websocket_token
-            : config_.websocket_token;
+    if (!config_.aiot_access_token.empty()) {
+        authorization_header_ = config_.aiot_access_token.find(' ') == std::string::npos
+            ? "Bearer " + config_.aiot_access_token
+            : config_.aiot_access_token;
     }
-    protocol_version_header_ = std::to_string(config_.websocket_version);
+    protocol_version_header_ = std::to_string(config_.realtime_voice_protocol_version);
     device_id_header_ = MacAddress();
     client_id_header_ = config_service_.GetClientId();
 
@@ -328,14 +240,14 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
     headers_ += "Client-Id: " + client_id_header_ + "\r\n";
 
     esp_websocket_client_config_t ws_config = {};
-    ws_config.uri = config_.websocket_url.c_str();
+    ws_config.uri = config_.realtime_voice_url.c_str();
     ws_config.headers = headers_.c_str();
     ws_config.disable_auto_reconnect = true;
     ws_config.buffer_size = 4096;
     ws_config.network_timeout_ms = 10000;
     ws_config.reconnect_timeout_ms = 10000;
     ws_config.pingpong_timeout_sec = 30;
-    ws_config.task_name = "voice_ws";
+    ws_config.task_name = "rodak_voice";
     ws_config.task_stack = 6144;
     ws_config.crt_bundle_attach = esp_crt_bundle_attach;
 
@@ -359,7 +271,7 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
         xSemaphoreGive(mutex_);
     }
 
-    ESP_LOGI(TAG, "Connecting to voice cloud websocket: %s", config_.websocket_url.c_str());
+    ESP_LOGI(TAG, "Connecting to Rodak realtime voice stream: %s", config_.realtime_voice_url.c_str());
     esp_err_t err = ESP_FAIL;
     {
         RecursiveSemaphoreLock client_lock(client_mutex_);
@@ -385,12 +297,12 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
         pdMS_TO_TICKS(kConnectTimeoutMs));
     if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
         (can_continue && !can_continue())) {
-        SetError("Voice websocket open cancelled");
+        SetError("Realtime voice stream open cancelled");
         CloseAudioChannel();
         return false;
     }
     if ((bits & kErrorBit) != 0 || (bits & kConnectedBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error() : "Websocket connect timeout");
+        SetError((bits & kErrorBit) ? last_error() : "Realtime voice stream connect timeout");
         CloseAudioChannel();
         return false;
     }
@@ -399,7 +311,7 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
         CloseAudioChannel();
         return false;
     }
-    if (!SendHello(generation)) {
+    if (!SendSessionOpen(generation)) {
         CloseAudioChannel();
         return false;
     }
@@ -408,16 +320,16 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
         CloseAudioChannel();
         return false;
     }
-    bits = xEventGroupWaitBits(events_, kHelloBit | kErrorBit | kCancelBit, pdTRUE, pdFALSE,
-                               pdMS_TO_TICKS(kHelloTimeoutMs));
+    bits = xEventGroupWaitBits(events_, kSessionReadyBit | kErrorBit | kCancelBit, pdTRUE, pdFALSE,
+                               pdMS_TO_TICKS(kSessionReadyTimeoutMs));
     if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
         (can_continue && !can_continue())) {
-        SetError("Voice websocket hello cancelled");
+        SetError("Realtime voice session open cancelled");
         CloseAudioChannel();
         return false;
     }
-    if ((bits & kErrorBit) != 0 || (bits & kHelloBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error() : "Voice cloud hello timeout");
+    if ((bits & kErrorBit) != 0 || (bits & kSessionReadyBit) == 0) {
+        SetError((bits & kErrorBit) ? last_error() : "Realtime voice session ready timeout");
         CloseAudioChannel();
         return false;
     }
@@ -445,10 +357,10 @@ bool VoiceCloudWebSocketTransport::OpenAudioChannel(VoiceOpenGuard can_continue)
     return true;
 }
 
-void VoiceCloudWebSocketTransport::CloseAudioChannel() {
+void RodakRealtimeVoiceTransport::CloseAudioChannel() {
     if (mutex_ == nullptr || client_mutex_ == nullptr) {
         const auto restore_closed_state = [this]() {
-            ++connection_generation_;
+            connection_generation_ = NextRealtimeVoiceGeneration(connection_generation_);
             connected_ = false;
             channel_open_ = false;
             closing_ = false;
@@ -459,6 +371,9 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
             client_ = nullptr;
             cleanup_client_ = nullptr;
             session_id_.clear();
+            session_gate_.Clear();
+            inbound_playback_epoch_ = 0;
+            inbound_output_active_ = false;
         };
         if (mutex_ != nullptr) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -477,7 +392,7 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
     bool cleanup_started = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
     closing_ = true;
-    ++connection_generation_;
+    connection_generation_ = NextRealtimeVoiceGeneration(connection_generation_);
     xSemaphoreGive(mutex_);
     if (events_ != nullptr) {
         xEventGroupSetBits(events_, kCancelBit | kErrorBit);
@@ -500,6 +415,9 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
             connected_ = false;
             channel_open_ = false;
             session_id_.clear();
+            session_gate_.Clear();
+            inbound_playback_epoch_ = 0;
+            inbound_output_active_ = false;
             if (cleanup_client_ != nullptr && !cleanup_in_progress_) {
                 cleanup_in_progress_ = true;
                 cleanup_inline_required_ = false;
@@ -567,8 +485,8 @@ void VoiceCloudWebSocketTransport::CloseAudioChannel() {
     xSemaphoreGive(mutex_);
 }
 
-void VoiceCloudWebSocketTransport::CleanupTaskEntry(void* arg) {
-    auto* owner = static_cast<VoiceCloudWebSocketTransport*>(arg);
+void RodakRealtimeVoiceTransport::CleanupTaskEntry(void* arg) {
+    auto* owner = static_cast<RodakRealtimeVoiceTransport*>(arg);
     if (owner != nullptr) {
         owner->CleanupDetachedClient();
         ESP_LOGI(TAG, "Websocket cleanup stack minimum free: %u bytes",
@@ -586,7 +504,7 @@ void VoiceCloudWebSocketTransport::CleanupTaskEntry(void* arg) {
     }
 }
 
-void VoiceCloudWebSocketTransport::CleanupDetachedClient() {
+void RodakRealtimeVoiceTransport::CleanupDetachedClient() {
     esp_websocket_client_handle_t client = nullptr;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -631,7 +549,7 @@ void VoiceCloudWebSocketTransport::CleanupDetachedClient() {
     }
 }
 
-void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
+void RodakRealtimeVoiceTransport::WaitForAudioChannelClosed() {
     if (mutex_ == nullptr || client_mutex_ == nullptr) {
         return;
     }
@@ -704,7 +622,7 @@ void VoiceCloudWebSocketTransport::WaitForAudioChannelClosed() {
     }
 }
 
-bool VoiceCloudWebSocketTransport::IsAudioChannelOpen() const {
+bool RodakRealtimeVoiceTransport::IsAudioChannelOpen() const {
     RecursiveSemaphoreLock client_lock(client_mutex_);
     if (!client_lock.locked() || mutex_ == nullptr) {
         return false;
@@ -716,7 +634,7 @@ bool VoiceCloudWebSocketTransport::IsAudioChannelOpen() const {
     return open;
 }
 
-uint32_t VoiceCloudWebSocketTransport::connection_generation() const {
+uint32_t RodakRealtimeVoiceTransport::connection_generation() const {
     if (mutex_ == nullptr) {
         return 0;
     }
@@ -726,7 +644,7 @@ uint32_t VoiceCloudWebSocketTransport::connection_generation() const {
     return generation;
 }
 
-bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet,
+bool RodakRealtimeVoiceTransport::SendAudio(const VoiceAudioPacket& packet,
                                              uint32_t expected_generation) {
     RecursiveSemaphoreLock client_lock(client_mutex_);
     if (!client_lock.locked()) {
@@ -749,102 +667,104 @@ bool VoiceCloudWebSocketTransport::SendAudio(const VoiceAudioPacket& packet,
     if (packet.payload.empty()) {
         return true;
     }
-
-    const uint8_t* data = packet.payload.data();
-    size_t size = packet.payload.size();
-    std::vector<uint8_t> framed_packet;
-    if (config_.websocket_version == 2) {
-        if (packet.payload.size() > std::numeric_limits<uint32_t>::max()) {
-            SetError("Audio packet is too large");
-            return false;
-        }
-        framed_packet = WrapAudioPacketV2(packet, config_.websocket_version);
-        data = framed_packet.data();
-        size = framed_packet.size();
-    } else if (config_.websocket_version == 3) {
-        if (packet.payload.size() > std::numeric_limits<uint16_t>::max()) {
-            SetError("Audio packet is too large for protocol v3");
-            return false;
-        }
-        framed_packet = WrapAudioPacketV3(packet);
-        data = framed_packet.data();
-        size = framed_packet.size();
+    if (packet.payload.size() > config_.realtime_voice_max_audio_frame_bytes) {
+        SetError("Realtime voice audio frame is too large");
+        return false;
     }
 
+    std::vector<uint8_t> frame(kRealtimeVoiceAudioHeaderBytes + packet.payload.size());
+    std::memcpy(frame.data(), kRealtimeVoiceAudioMagic, 4);
+    uint32_t sequence = 0;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        // Sequence zero is reserved by the canonical envelope.  Refuse to
+        // wrap instead of emitting a frame that the peer must reject.
+        if (audio_sequence_ == UINT32_MAX || connection_generation_ != expected_generation ||
+            closing_ || !channel_open_) {
+            xSemaphoreGive(mutex_);
+            SetError("Realtime voice audio sequence exhausted or channel changed");
+            return false;
+        }
+        sequence = ++audio_sequence_;
+        xSemaphoreGive(mutex_);
+    } else {
+        if (audio_sequence_ == UINT32_MAX) {
+            SetError("Realtime voice audio sequence exhausted");
+            return false;
+        }
+        sequence = ++audio_sequence_;
+    }
+    frame[4] = static_cast<uint8_t>(sequence >> 24);
+    frame[5] = static_cast<uint8_t>(sequence >> 16);
+    frame[6] = static_cast<uint8_t>(sequence >> 8);
+    frame[7] = static_cast<uint8_t>(sequence);
+    const uint32_t payload_size = static_cast<uint32_t>(packet.payload.size());
+    frame[8] = static_cast<uint8_t>(payload_size >> 24);
+    frame[9] = static_cast<uint8_t>(payload_size >> 16);
+    frame[10] = static_cast<uint8_t>(payload_size >> 8);
+    frame[11] = static_cast<uint8_t>(payload_size);
+    std::memcpy(frame.data() + kRealtimeVoiceAudioHeaderBytes,
+                packet.payload.data(), packet.payload.size());
+
     int sent = esp_websocket_client_send_bin(
-        client, reinterpret_cast<const char*>(data), size,
+        client, reinterpret_cast<const char*>(frame.data()), frame.size(),
         pdMS_TO_TICKS(kSendTimeoutMs));
-    if (sent != static_cast<int>(size)) {
+    if (sent != static_cast<int>(frame.size())) {
         SetError("Failed to send complete audio packet");
         return false;
     }
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::SendStartListening(VoiceListeningMode mode,
+bool RodakRealtimeVoiceTransport::SendStartListening(VoiceListeningMode mode,
                                                       uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
         return false;
     }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "listen");
-    cJSON_AddStringToObject(root, "state", "start");
-    cJSON_AddStringToObject(root, "mode", ListeningModeName(mode));
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
+    const std::string message = BuildRealtimeVoiceInputMessage(
+        kRealtimeVoiceEventInputStart, session_id, ListeningModeName(mode));
     const bool sent = SendText(message, expected_generation, session_id, true);
     if (sent) {
-        ESP_LOGI(TAG, "Sent listen:start: session=%s mode=%s",
+        ESP_LOGI(TAG, "Sent speech input start: session=%s mode=%s",
                  session_id.c_str(), ListeningModeName(mode));
     }
     return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendStopListening(uint32_t expected_generation) {
+bool RodakRealtimeVoiceTransport::SendStopListening(uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
         return false;
     }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "listen");
-    cJSON_AddStringToObject(root, "state", "stop");
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
+    const std::string message = BuildRealtimeVoiceInputMessage(
+        kRealtimeVoiceEventInputStop, session_id);
     const bool sent = SendText(message, expected_generation, session_id, true);
     if (sent) {
-        ESP_LOGI(TAG, "Sent listen:stop: session=%s", session_id.c_str());
+        ESP_LOGI(TAG, "Sent speech input stop: session=%s", session_id.c_str());
     }
     return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendWakeWordDetected(const std::string& wake_word,
+bool RodakRealtimeVoiceTransport::SendWakeWordDetected(const std::string& wake_word,
                                                         uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
         SetError("Audio channel is not open");
         return false;
     }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "listen");
-    cJSON_AddStringToObject(root, "state", "detect");
-    cJSON_AddStringToObject(root, "text", wake_word.c_str());
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
+    const std::string message = BuildRealtimeVoiceWakeMessage(session_id, wake_word);
     const bool sent = SendText(message, expected_generation, session_id, true);
     if (sent) {
-        ESP_LOGI(TAG, "Sent listen:detect: session=%s text=%s",
+        ESP_LOGI(TAG, "Sent wake event: session=%s text=%s",
                  session_id.c_str(), wake_word.c_str());
     }
     return sent;
 }
 
-bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
+bool RodakRealtimeVoiceTransport::SendAbortSpeaking(VoiceAbortReason reason,
                                                      uint32_t expected_generation,
                                                      uint32_t playback_epoch) {
     std::string session_id;
@@ -852,34 +772,29 @@ bool VoiceCloudWebSocketTransport::SendAbortSpeaking(VoiceAbortReason reason,
         SetError("Audio channel is not open");
         return false;
     }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "abort");
-    if (reason == VoiceAbortReason::kWakeWordDetected) {
-        cJSON_AddStringToObject(root, "reason", "wake_word_detected");
-    } else if (reason == VoiceAbortReason::kVadDetected) {
-        cJSON_AddStringToObject(root, "reason", "vad_detected");
-        cJSON_AddNumberToObject(root, "playback_epoch", playback_epoch);
+    const std::string message = BuildRealtimeVoicePlaybackAbortMessage(
+        session_id, reason, playback_epoch);
+    if (message.empty()) {
+        SetError("Invalid realtime voice playback abort");
+        return false;
     }
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
     return SendText(message, expected_generation, session_id, true);
 }
 
-bool VoiceCloudWebSocketTransport::SendVadStart(const char* source, uint32_t sequence,
+bool RodakRealtimeVoiceTransport::SendVadStart(const char* source, uint32_t sequence,
                                                 uint32_t trigger_ms,
                                                 uint32_t expected_generation,
                                                 uint32_t playback_epoch) {
     return SendVadState("start", source, sequence, trigger_ms, expected_generation, playback_epoch);
 }
 
-bool VoiceCloudWebSocketTransport::SendVadEnd(const char* source, uint32_t sequence,
+bool RodakRealtimeVoiceTransport::SendVadEnd(const char* source, uint32_t sequence,
                                               uint32_t trigger_ms, uint32_t expected_generation,
                                               uint32_t playback_epoch) {
     return SendVadState("end", source, sequence, trigger_ms, expected_generation, playback_epoch);
 }
 
-bool VoiceCloudWebSocketTransport::SendVadState(const char* state, const char* source,
+bool RodakRealtimeVoiceTransport::SendVadState(const char* state, const char* source,
                                                 uint32_t sequence, uint32_t trigger_ms,
                                                 uint32_t expected_generation,
                                                 uint32_t playback_epoch) {
@@ -888,22 +803,18 @@ bool VoiceCloudWebSocketTransport::SendVadState(const char* state, const char* s
         SetError("Audio channel is not open");
         return false;
     }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "vad");
-    cJSON_AddStringToObject(root, "state", state);
-    cJSON_AddStringToObject(root, "source", source != nullptr ? source : "device");
-    cJSON_AddNumberToObject(root, "seq", static_cast<double>(sequence));
-    cJSON_AddNumberToObject(root, "trigger_ms", static_cast<double>(trigger_ms));
-    if (playback_epoch != 0) {
-        cJSON_AddNumberToObject(root, "playback_epoch", playback_epoch);
+    // The server-selected strategy is authoritative for this session. A
+    // server-authoritative session still streams audio, but device VAD events
+    // are deliberately suppressed so they cannot create a second boundary.
+    if (vad_strategy_ == kRealtimeVoiceVadServerAuthoritative) {
+        return true;
     }
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
+    const std::string message = BuildRealtimeVoiceVadMessage(
+        session_id, state, source, sequence, trigger_ms, playback_epoch);
     return SendText(message, expected_generation, session_id, true);
 }
 
-bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload,
+bool RodakRealtimeVoiceTransport::SendMcpMessage(const std::string& payload,
                                                   uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
@@ -911,21 +822,15 @@ bool VoiceCloudWebSocketTransport::SendMcpMessage(const std::string& payload,
         return false;
     }
 
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "session_id", session_id.c_str());
-    cJSON_AddStringToObject(root, "type", "mcp");
-    cJSON* payload_json = cJSON_Parse(payload.c_str());
-    if (payload_json != nullptr) {
-        cJSON_AddItemToObject(root, "payload", payload_json);
-    } else {
-        cJSON_AddStringToObject(root, "payload", payload.c_str());
+    const std::string message = BuildRealtimeVoiceMcpMessage(session_id, payload);
+    if (message.empty()) {
+        SetError("Realtime voice MCP payload must be a JSON object");
+        return false;
     }
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
     return SendText(message, expected_generation, session_id, true);
 }
 
-void VoiceCloudWebSocketTransport::SetInboundHandler(VoiceInboundHandler handler) {
+void RodakRealtimeVoiceTransport::SetInboundHandler(VoiceInboundHandler handler) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         inbound_handler_ = std::move(handler);
@@ -935,11 +840,11 @@ void VoiceCloudWebSocketTransport::SetInboundHandler(VoiceInboundHandler handler
     }
 }
 
-void VoiceCloudWebSocketTransport::EventHandler(void* arg,
+void RodakRealtimeVoiceTransport::EventHandler(void* arg,
                                              esp_event_base_t,
                                              int32_t event_id,
                                              void* event_data) {
-    auto* self = static_cast<VoiceCloudWebSocketTransport*>(arg);
+    auto* self = static_cast<RodakRealtimeVoiceTransport*>(arg);
     auto* data = static_cast<esp_websocket_event_data_t*>(event_data);
     if (self == nullptr) {
         return;
@@ -961,6 +866,13 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
         case WEBSOCKET_EVENT_CONNECTED:
             if (self->mutex_ != nullptr) {
                 xSemaphoreTake(self->mutex_, portMAX_DELAY);
+                if (self->closing_ || self->connection_generation_ != generation ||
+                    self->client_ == nullptr ||
+                    (data != nullptr && data->client != nullptr &&
+                     self->client_ != data->client)) {
+                    xSemaphoreGive(self->mutex_);
+                    return;
+                }
                 self->connected_ = true;
                 xSemaphoreGive(self->mutex_);
             }
@@ -971,10 +883,18 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
             bool unexpected_close = false;
             if (self->mutex_ != nullptr) {
                 xSemaphoreTake(self->mutex_, portMAX_DELAY);
+                if (self->connection_generation_ != generation) {
+                    xSemaphoreGive(self->mutex_);
+                    return;
+                }
                 unexpected_close = !self->closing_ &&
                                    (self->connected_ || self->channel_open_);
                 self->connected_ = false;
                 self->channel_open_ = false;
+                self->session_id_.clear();
+                self->session_gate_.Clear();
+                self->inbound_playback_epoch_ = 0;
+                self->inbound_output_active_ = false;
                 xSemaphoreGive(self->mutex_);
             }
             if (unexpected_close) {
@@ -989,6 +909,20 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
             break;
         }
         case WEBSOCKET_EVENT_ERROR:
+            if (self->mutex_ != nullptr) {
+                xSemaphoreTake(self->mutex_, portMAX_DELAY);
+                if (self->closing_ || self->connection_generation_ != generation) {
+                    xSemaphoreGive(self->mutex_);
+                    return;
+                }
+                self->connected_ = false;
+                self->channel_open_ = false;
+                self->session_id_.clear();
+                self->session_gate_.Clear();
+                self->inbound_playback_epoch_ = 0;
+                self->inbound_output_active_ = false;
+                xSemaphoreGive(self->mutex_);
+            }
             self->SetError("Websocket error");
             xEventGroupSetBits(self->events_, kErrorBit);
             self->EmitInbound(VoiceInboundEvent{
@@ -1007,7 +941,7 @@ void VoiceCloudWebSocketTransport::EventHandler(void* arg,
     }
 }
 
-void VoiceCloudWebSocketTransport::HandleDataFrame(
+void RodakRealtimeVoiceTransport::HandleDataFrame(
     const esp_websocket_event_data_t& data,
     uint32_t generation) {
     if (data.data_ptr == nullptr || data.data_len <= 0 || data.payload_len <= 0 ||
@@ -1082,7 +1016,7 @@ void VoiceCloudWebSocketTransport::HandleDataFrame(
     }
 }
 
-bool VoiceCloudWebSocketTransport::SendText(const std::string& text,
+bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
                                             uint32_t expected_generation,
                                             const std::string& expected_session,
                                             bool require_open) {
@@ -1116,11 +1050,11 @@ bool VoiceCloudWebSocketTransport::SendText(const std::string& text,
     return true;
 }
 
-bool VoiceCloudWebSocketTransport::SendHello(uint32_t generation) {
-    return SendText(BuildHelloMessage(), generation, {}, false);
+bool RodakRealtimeVoiceTransport::SendSessionOpen(uint32_t generation) {
+    return SendText(BuildSessionOpenMessage(), generation, {}, false);
 }
 
-bool VoiceCloudWebSocketTransport::SnapshotSession(uint32_t expected_generation,
+bool RodakRealtimeVoiceTransport::SnapshotSession(uint32_t expected_generation,
                                                    std::string& session_id) const {
     if (mutex_ == nullptr) {
         return false;
@@ -1136,36 +1070,43 @@ bool VoiceCloudWebSocketTransport::SnapshotSession(uint32_t expected_generation,
     return valid;
 }
 
-std::string VoiceCloudWebSocketTransport::BuildHelloMessage() const {
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "type", "hello");
-    cJSON_AddNumberToObject(root, "version", config_.websocket_version);
-    cJSON_AddStringToObject(root, "transport", "websocket");
-
-    cJSON* features = cJSON_CreateObject();
-    cJSON_AddBoolToObject(features, "mcp", false);
+std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage() const {
+    RealtimeVoiceDescriptor descriptor;
+    descriptor.endpoint = config_.realtime_voice_url;
+    descriptor.protocol_version = config_.realtime_voice_protocol_version;
+    descriptor.downlink_sample_rate_hz = config_.realtime_voice_downlink_sample_rate_hz;
+    descriptor.downlink_frame_duration_ms = config_.realtime_voice_downlink_frame_duration_ms;
+    descriptor.max_audio_frame_bytes = config_.realtime_voice_max_audio_frame_bytes;
+    descriptor.max_control_bytes = config_.realtime_voice_max_control_bytes;
+    descriptor.vad_strategies = config_.realtime_voice_vad_strategies;
+    if (descriptor.vad_strategies.empty()) {
+        descriptor.vad_strategies = {kRealtimeVoiceVadServerAuthoritative};
+    }
+    descriptor.preferred_vad_strategy = config_.realtime_voice_preferred_vad_strategy;
+    if (!IsRealtimeVoiceVadStrategy(descriptor.preferred_vad_strategy) ||
+        std::find(descriptor.vad_strategies.begin(), descriptor.vad_strategies.end(),
+                  descriptor.preferred_vad_strategy) == descriptor.vad_strategies.end()) {
+        descriptor.preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
+    }
+    const bool supports_device_vad_epoch =
 #if CONFIG_USE_DEVICE_AEC
-    cJSON_AddNumberToObject(features, "device_vad_epoch", 1);
+        true;
+#else
+        false;
 #endif
-    cJSON_AddItemToObject(root, "features", features);
-
-    cJSON* audio_params = cJSON_CreateObject();
-    cJSON_AddStringToObject(audio_params, "format", "opus");
-    cJSON_AddNumberToObject(audio_params, "sample_rate", kUplinkSampleRate);
-    cJSON_AddNumberToObject(audio_params, "download_sample_rate", server_sample_rate_);
-    cJSON_AddNumberToObject(audio_params, "channels", kUplinkChannels);
-    cJSON_AddNumberToObject(audio_params, "frame_duration", kUplinkFrameDurationMs);
-    cJSON_AddItemToObject(root, "audio_params", audio_params);
-
-    std::string message = JsonToString(root);
-    cJSON_Delete(root);
-    return message;
+    return BuildRealtimeVoiceSessionOpenMessage(descriptor, false,
+                                                supports_device_vad_epoch,
+                                                connection_generation_);
 }
 
-void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
+void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
                                                    int len,
                                                    uint32_t generation) {
-    if (data == nullptr || len <= 0) {
+    if (data == nullptr || len <= 0 ||
+        static_cast<size_t>(len) > config_.realtime_voice_max_control_bytes) {
+        if (data != nullptr && len > 0) {
+            SetError("Realtime voice control frame is too large");
+        }
         return;
     }
     std::string payload(data, len);
@@ -1175,17 +1116,70 @@ void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
         return;
     }
 
-    cJSON* type = cJSON_GetObjectItem(root, "type");
-    if (cJSON_IsString(type) && std::strcmp(type->valuestring, "hello") == 0) {
-        ParseServerHello(payload, generation);
-    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "tts") == 0) {
-        const cJSON* epoch_value = cJSON_GetObjectItemCaseSensitive(root, "playback_epoch");
+    cJSON* event = cJSON_GetObjectItem(root, "event");
+    if (!cJSON_IsString(event) || event->valuestring == nullptr ||
+        event->valuestring[0] == '\0') {
+        cJSON_Delete(root);
+        SetError("Realtime voice control frame is missing a canonical event");
+        return;
+    }
+
+    const char* event_name = event->valuestring;
+    const bool is_session_ready =
+        std::strcmp(event_name, kRealtimeVoiceEventSessionReady) == 0;
+    const bool is_output_start =
+        std::strcmp(event_name, kRealtimeVoiceEventOutputStart) == 0;
+    const bool is_output_stop =
+        std::strcmp(event_name, kRealtimeVoiceEventOutputStop) == 0;
+    const bool is_session_end =
+        std::strcmp(event_name, kRealtimeVoiceEventSessionEnd) == 0;
+    const bool is_mcp = std::strcmp(event_name, kRealtimeVoiceEventMcp) == 0;
+    const bool is_error = std::strcmp(event_name, kRealtimeVoiceEventError) == 0;
+    if (!is_session_ready && !is_output_start && !is_output_stop && !is_session_end &&
+        !is_mcp && !is_error) {
+        cJSON_Delete(root);
+        SetError("Unsupported realtime voice control event");
+        return;
+    }
+
+    std::string payload_error;
+    if (!ValidateRealtimeVoiceServerControlPayload(root, payload_error)) {
+        cJSON_Delete(root);
+        SetError(payload_error);
+        xEventGroupSetBits(events_, kErrorBit);
+        return;
+    }
+
+    if (!is_session_ready) {
+        const cJSON* session_id = cJSON_GetObjectItemCaseSensitive(root, "sessionId");
+        bool session_matches = false;
+        if (is_error && session_id == nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            session_matches = !closing_ && connection_generation_ == generation;
+            xSemaphoreGive(mutex_);
+        } else if (cJSON_IsString(session_id) && session_id->valuestring != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            session_matches = !closing_ && session_id_ == session_id->valuestring &&
+                              connection_generation_ == generation;
+            xSemaphoreGive(mutex_);
+        }
+        if (!session_matches) {
+            cJSON_Delete(root);
+            SetError("Realtime voice control frame sessionId does not match");
+            return;
+        }
+    }
+
+    if (is_session_ready) {
+        ParseSessionReady(payload, generation);
+    } else if (is_output_start || is_output_stop) {
+        const cJSON* epoch_value = cJSON_GetObjectItemCaseSensitive(root, "playbackEpoch");
         uint32_t epoch = 0;
         if (epoch_value != nullptr) {
             if (!cJSON_IsNumber(epoch_value) || !(epoch_value->valuedouble >= 1 &&
                 epoch_value->valuedouble <= UINT32_MAX)) {
                 cJSON_Delete(root);
-                ESP_LOGW(TAG, "Invalid TTS playback epoch");
+                ESP_LOGW(TAG, "Invalid realtime voice playback epoch");
                 return;
             }
             epoch = static_cast<uint32_t>(epoch_value->valuedouble);
@@ -1194,25 +1188,39 @@ void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
                 return;
             }
         }
-        cJSON* state = cJSON_GetObjectItem(root, "state");
-        if (cJSON_IsString(state) && std::strcmp(state->valuestring, "start") == 0) {
+        if (is_output_start) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
             if (closing_ || connection_generation_ != generation ||
-                epoch < inbound_playback_epoch_) {
+                !session_gate_.AcceptOutputStart(generation, epoch)) {
                 xSemaphoreGive(mutex_);
                 cJSON_Delete(root);
                 return;
             }
-            inbound_playback_epoch_ = epoch;
+            inbound_playback_epoch_ = session_gate_.playback_epoch();
+            inbound_output_active_ = true;
             xSemaphoreGive(mutex_);
-            ESP_LOGI(TAG, "Received tts:start: playback_epoch=%u", static_cast<unsigned>(epoch));
+            ESP_LOGI(TAG, "Received realtime voice output start: playback_epoch=%u",
+                     static_cast<unsigned>(epoch));
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStarted,
                 .playback_epoch = epoch,
                 .audio = {},
                 .payload = {},
             }, generation);
-        } else if (cJSON_IsString(state) && std::strcmp(state->valuestring, "stop") == 0) {
+        } else {
+            // A delayed stop from an older playback must not terminate a
+            // newer utterance.  Zero remains the wire-compatible value for
+            // servers that omit playbackEpoch on output.stop.
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool stale = closing_ || connection_generation_ != generation ||
+                               !inbound_output_active_ ||
+                               !session_gate_.AcceptOutputStop(generation, epoch);
+            if (!stale) inbound_output_active_ = false;
+            xSemaphoreGive(mutex_);
+            if (stale) {
+                cJSON_Delete(root);
+                return;
+            }
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStopped,
                 .playback_epoch = epoch,
@@ -1220,38 +1228,68 @@ void VoiceCloudWebSocketTransport::HandleTextFrame(const char* data,
                 .payload = {},
             }, generation);
         }
-    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "goodbye") == 0) {
+    } else if (is_session_end) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (closing_ || connection_generation_ != generation) {
+            xSemaphoreGive(mutex_);
+            cJSON_Delete(root);
+            return;
+        }
+        channel_open_ = false;
+        session_id_.clear();
+        inbound_playback_epoch_ = 0;
+        inbound_output_active_ = false;
+        session_gate_.Clear();
+        xSemaphoreGive(mutex_);
         EmitInbound(VoiceInboundEvent{
             .type = VoiceInboundEventType::kSessionFinished,
             .audio = {},
             .payload = {},
         }, generation);
-    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "mcp") == 0) {
+    } else if (is_mcp) {
+        if (!IsRealtimeVoiceMcpPayloadObject(root)) {
+            cJSON_Delete(root);
+            SetError("Invalid realtime voice MCP payload");
+            return;
+        }
         EmitInbound(VoiceInboundEvent{
             .type = VoiceInboundEventType::kMcp,
             .audio = {},
             .payload = payload,
         }, generation);
-    } else if (cJSON_IsString(type) && std::strcmp(type->valuestring, "error") == 0) {
+    } else if (is_error) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (closing_ || connection_generation_ != generation) {
+            xSemaphoreGive(mutex_);
+            cJSON_Delete(root);
+            return;
+        }
+        channel_open_ = false;
+        session_id_.clear();
+        inbound_playback_epoch_ = 0;
+        inbound_output_active_ = false;
+        session_gate_.Clear();
+        xSemaphoreGive(mutex_);
+        SetError("Realtime voice server returned an error");
+        xEventGroupSetBits(events_, kErrorBit);
         EmitInbound(VoiceInboundEvent{
             .type = VoiceInboundEventType::kError,
             .audio = {},
             .payload = payload,
         }, generation);
-    } else if (cJSON_IsString(type)) {
-        ESP_LOGI(TAG, "Voice cloud message: type=%s", type->valuestring);
     }
     cJSON_Delete(root);
 }
 
-void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
+void RodakRealtimeVoiceTransport::HandleBinaryFrame(const uint8_t* data,
                                                      size_t size,
                                                      uint32_t generation) {
     VoiceAudioPacket packet;
     uint32_t playback_epoch = 0;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (closing_ || connection_generation_ != generation) {
+        if (closing_ || connection_generation_ != generation || session_id_.empty() ||
+            !inbound_output_active_ || !session_gate_.Matches(generation, session_id_)) {
             xSemaphoreGive(mutex_);
             return;
         }
@@ -1263,15 +1301,34 @@ void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
         packet.sample_rate = server_sample_rate_;
         packet.frame_duration_ms = server_frame_duration_ms_;
     }
-    if (!UnwrapAudioPacket(data, size, config_.websocket_version, packet)) {
-        SetError("Invalid voice cloud audio packet");
-        EmitInbound(VoiceInboundEvent{
-            .type = VoiceInboundEventType::kError,
-            .audio = {},
-            .payload = "Invalid voice cloud audio packet",
-        }, generation);
+    const size_t max_audio_frame_bytes =
+        std::min(config_.realtime_voice_max_audio_frame_bytes, kMaxInboundAudioMessageSize);
+    RealtimeVoiceAudioFrame frame;
+    std::string frame_error;
+    if (!ParseRealtimeVoiceAudioFrame(data, size, max_audio_frame_bytes, frame, frame_error)) {
+        SetError(frame_error.empty() ? "Invalid realtime voice audio frame" : frame_error);
         return;
     }
+    const uint32_t sequence = frame.sequence;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (closing_ || connection_generation_ != generation || session_id_.empty() ||
+            !session_gate_.AcceptAudio(generation, sequence)) {
+            xSemaphoreGive(mutex_);
+            SetError("Invalid realtime voice audio sequence");
+            return;
+        }
+        inbound_audio_sequence_ = session_gate_.audio_sequence();
+        xSemaphoreGive(mutex_);
+    } else {
+        if (sequence == 0 || sequence <= inbound_audio_sequence_) {
+            SetError("Invalid realtime voice audio sequence");
+            return;
+        }
+        inbound_audio_sequence_ = sequence;
+    }
+    packet.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    packet.payload.assign(frame.payload, frame.payload + frame.payload_size);
     EmitInbound(VoiceInboundEvent{
         .type = VoiceInboundEventType::kAudio,
         .playback_epoch = playback_epoch,
@@ -1280,39 +1337,61 @@ void VoiceCloudWebSocketTransport::HandleBinaryFrame(const uint8_t* data,
     }, generation);
 }
 
-void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload,
+void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
                                                      uint32_t generation) {
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
-        SetError("Invalid server hello");
+        SetError("Invalid realtime voice session.ready event");
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
 
-    cJSON* transport = cJSON_GetObjectItem(root, "transport");
-    if (!cJSON_IsString(transport) || std::strcmp(transport->valuestring, "websocket") != 0) {
+    cJSON* event = cJSON_GetObjectItemCaseSensitive(root, "event");
+    cJSON* protocol = cJSON_GetObjectItemCaseSensitive(root, "protocol");
+    cJSON* protocol_version = cJSON_GetObjectItemCaseSensitive(root, "protocolVersion");
+    cJSON* generation_value = cJSON_GetObjectItemCaseSensitive(root, "generation");
+    cJSON* transport = cJSON_GetObjectItemCaseSensitive(root, "transport");
+    cJSON* vad_strategy = cJSON_GetObjectItemCaseSensitive(root, "vadStrategy");
+    if (!cJSON_IsString(event) ||
+        std::strcmp(event->valuestring, kRealtimeVoiceEventSessionReady) != 0 ||
+        !cJSON_IsString(protocol) ||
+        std::strcmp(protocol->valuestring, kRodakRealtimeVoiceProtocol) != 0 ||
+        !cJSON_IsNumber(protocol_version) ||
+        protocol_version->valuedouble != kRodakRealtimeVoiceProtocolVersion ||
+        !cJSON_IsNumber(generation_value) || generation == 0 ||
+        generation_value->valuedouble != static_cast<double>(generation) ||
+        !cJSON_IsString(transport) ||
+        std::strcmp(transport->valuestring, kRealtimeVoiceTransportWebSocket) != 0) {
         cJSON_Delete(root);
-        SetError("Unsupported voice cloud transport");
+        SetError("Unsupported realtime voice session.ready event");
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
 
-    cJSON* session_id = cJSON_GetObjectItem(root, "session_id");
-    cJSON* audio_params = cJSON_GetObjectItem(root, "audio_params");
-    cJSON* format = cJSON_IsObject(audio_params)
-                        ? cJSON_GetObjectItem(audio_params, "format")
-                        : nullptr;
-    cJSON* channels = cJSON_IsObject(audio_params)
-                          ? cJSON_GetObjectItem(audio_params, "channels")
-                          : nullptr;
-    cJSON* sample_rate = cJSON_IsObject(audio_params)
-                             ? cJSON_GetObjectItem(audio_params, "download_sample_rate")
-                             : nullptr;
-    if (!cJSON_IsNumber(sample_rate) && cJSON_IsObject(audio_params)) {
-        sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
+    const bool valid_vad_strategy =
+        vad_strategy == nullptr ||
+        (cJSON_IsString(vad_strategy) && vad_strategy->valuestring != nullptr &&
+         IsRealtimeVoiceVadStrategy(vad_strategy->valuestring));
+    if (!valid_vad_strategy) {
+        cJSON_Delete(root);
+        SetError("Invalid realtime voice VAD strategy");
+        xEventGroupSetBits(events_, kErrorBit);
+        return;
     }
-    cJSON* frame_duration = cJSON_IsObject(audio_params)
-                                ? cJSON_GetObjectItem(audio_params, "frame_duration")
+
+    cJSON* session_id = cJSON_GetObjectItem(root, "sessionId");
+    cJSON* downlink = cJSON_GetObjectItem(root, "downlink");
+    cJSON* format = cJSON_IsObject(downlink)
+                        ? cJSON_GetObjectItem(downlink, "codec")
+                        : nullptr;
+    cJSON* channels = cJSON_IsObject(downlink)
+                          ? cJSON_GetObjectItem(downlink, "channels")
+                          : nullptr;
+    cJSON* sample_rate = cJSON_IsObject(downlink)
+                             ? cJSON_GetObjectItem(downlink, "sampleRateHz")
+                             : nullptr;
+    cJSON* frame_duration = cJSON_IsObject(downlink)
+                                ? cJSON_GetObjectItem(downlink, "frameDurationMs")
                                 : nullptr;
 
     const bool valid_session = cJSON_IsString(session_id) &&
@@ -1320,23 +1399,40 @@ void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload,
                                session_id->valuestring[0] != '\0';
     const bool valid_format = cJSON_IsString(format) &&
                               std::strcmp(format->valuestring, "opus") == 0;
-    const bool valid_channels = cJSON_IsNumber(channels) && channels->valueint == 1;
-    const int negotiated_sample_rate = cJSON_IsNumber(sample_rate)
+    const bool valid_channels = cJSON_IsNumber(channels) && channels->valuedouble == 1;
+    const int negotiated_sample_rate = cJSON_IsNumber(sample_rate) &&
+                                               sample_rate->valuedouble ==
+                                                   static_cast<double>(sample_rate->valueint)
                                            ? sample_rate->valueint
                                            : 0;
-    const int negotiated_frame_duration = cJSON_IsNumber(frame_duration)
+    const int negotiated_frame_duration = cJSON_IsNumber(frame_duration) &&
+                                                  frame_duration->valuedouble ==
+                                                      static_cast<double>(frame_duration->valueint)
                                               ? frame_duration->valueint
                                               : 0;
     if (!valid_session || !valid_format || !valid_channels ||
-        !IsSupportedOpusSampleRate(negotiated_sample_rate) ||
-        !IsSupportedOpusFrameDuration(negotiated_frame_duration)) {
+        (negotiated_sample_rate != 8000 && negotiated_sample_rate != 12000 &&
+         negotiated_sample_rate != 16000 && negotiated_sample_rate != 24000 &&
+         negotiated_sample_rate != 48000) ||
+        !IsSupportedRealtimeVoiceFrameDuration(negotiated_frame_duration)) {
         cJSON_Delete(root);
-        SetError("Invalid voice cloud hello parameters");
+        SetError("Invalid realtime voice session.ready parameters");
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
 
     const std::string negotiated_session_id = session_id->valuestring;
+    const std::string negotiated_vad_strategy =
+        vad_strategy != nullptr ? vad_strategy->valuestring : kRealtimeVoiceVadServerAuthoritative;
+    if (!config_.realtime_voice_vad_strategies.empty() &&
+        std::find(config_.realtime_voice_vad_strategies.begin(),
+                  config_.realtime_voice_vad_strategies.end(), negotiated_vad_strategy) ==
+            config_.realtime_voice_vad_strategies.end()) {
+        cJSON_Delete(root);
+        SetError("Server selected an unsupported realtime voice VAD strategy");
+        xEventGroupSetBits(events_, kErrorBit);
+        return;
+    }
     cJSON_Delete(root);
 
     if (mutex_ != nullptr) {
@@ -1345,23 +1441,37 @@ void VoiceCloudWebSocketTransport::ParseServerHello(const std::string& payload,
             xSemaphoreGive(mutex_);
             return;
         }
+        if (!session_gate_.Establish(generation, negotiated_session_id)) {
+            xSemaphoreGive(mutex_);
+            SetError("Duplicate realtime voice session.ready event");
+            xEventGroupSetBits(events_, kErrorBit);
+            return;
+        }
         session_id_ = negotiated_session_id;
         inbound_playback_epoch_ = 0;
+        inbound_output_active_ = false;
         server_sample_rate_ = negotiated_sample_rate;
         server_frame_duration_ms_ = negotiated_frame_duration;
+        vad_strategy_ = negotiated_vad_strategy;
         xSemaphoreGive(mutex_);
     } else {
+        if (!session_gate_.Establish(generation, negotiated_session_id)) {
+            SetError("Duplicate realtime voice session.ready event");
+            xEventGroupSetBits(events_, kErrorBit);
+            return;
+        }
         session_id_ = negotiated_session_id;
         server_sample_rate_ = negotiated_sample_rate;
         server_frame_duration_ms_ = negotiated_frame_duration;
+        vad_strategy_ = negotiated_vad_strategy;
     }
-    ESP_LOGI(TAG, "Voice cloud hello received: session=%s sample_rate=%d frame=%d",
+    ESP_LOGI(TAG, "Realtime voice session ready: session=%s sample_rate=%d frame=%d",
              negotiated_session_id.c_str(), negotiated_sample_rate,
              negotiated_frame_duration);
-    xEventGroupSetBits(events_, kHelloBit);
+    xEventGroupSetBits(events_, kSessionReadyBit);
 }
 
-void VoiceCloudWebSocketTransport::SetError(const std::string& message) {
+void RodakRealtimeVoiceTransport::SetError(const std::string& message) {
     const std::string normalized = message.empty() ? "Voice cloud transport error" : message;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -1373,7 +1483,7 @@ void VoiceCloudWebSocketTransport::SetError(const std::string& message) {
     ESP_LOGW(TAG, "%s", normalized.c_str());
 }
 
-std::string VoiceCloudWebSocketTransport::last_error() const {
+std::string RodakRealtimeVoiceTransport::last_error() const {
     if (mutex_ == nullptr) {
         return last_error_;
     }
@@ -1383,7 +1493,7 @@ std::string VoiceCloudWebSocketTransport::last_error() const {
     return error;
 }
 
-bool VoiceCloudWebSocketTransport::IsConnectionCurrent(uint32_t generation) const {
+bool RodakRealtimeVoiceTransport::IsConnectionCurrent(uint32_t generation) const {
     if (mutex_ == nullptr) {
         return false;
     }
@@ -1393,7 +1503,7 @@ bool VoiceCloudWebSocketTransport::IsConnectionCurrent(uint32_t generation) cons
     return current;
 }
 
-void VoiceCloudWebSocketTransport::EmitInbound(VoiceInboundEvent&& event,
+void RodakRealtimeVoiceTransport::EmitInbound(VoiceInboundEvent&& event,
                                                uint32_t generation) {
     event.transport_generation = generation;
     VoiceInboundHandler handler;

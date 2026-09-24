@@ -51,6 +51,12 @@ private:
 
 bool IsValidSerialProvisioningBootstrapUrl(const std::string& url);
 
+// Return the canonical effective bootstrap URL. Origins and the canonical
+// bootstrap path resolve to the same value; host names are case-insensitive
+// and default HTTP(S) ports are omitted.
+bool NormalizeSerialProvisioningBootstrapUrl(const std::string& url,
+                                             std::string& normalized);
+
 // cJSON stores decoded strings as NUL-terminated buffers. This helper rejects
 // literal or JSON-escaped NUL bytes before parsing can truncate a field.
 bool ContainsSerialProvisioningJsonNul(const std::string& json);

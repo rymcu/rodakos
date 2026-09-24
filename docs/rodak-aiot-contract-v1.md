@@ -14,11 +14,9 @@
 | product key       | `rymcu-bigsmart`                                                                        |
 | device key        | Stable device identity, derived from the WiFi MAC by default                            |
 | binding status    | `unbound`, `pending`, or `bound`                                                        |
-| credential source | `aiot-register`, `aiot-pairing`, `device-register`, or a compatibility bootstrap source |
+| credential source | `aiot-register`, `aiot-pairing`, or `device-register` |
 
-The `rodak-aiot` identity is canonical. The legacy XiaoZhi bootstrap is compatibility-only and must not downgrade a confirmed RodakOS product or protocol identity.
-
-Compatibility bootstrap records may remain in the device database for migration, but they are not inputs to the Runtime's canonical RodakOS capability adapter.
+RodakOS accepts only the canonical `rodak-aiot` identity. It does not read, migrate, or recognize XiaoZhi bootstrap data, legacy WebSocket credentials, or legacy NVS fields. Compatibility for XiaoZhi firmware is a separate adapter in the Rodak server, not a RodakOS credential source.
 
 ## 2. Onboarding and credentials
 
@@ -87,7 +85,7 @@ Rodak publishes task metadata through `ota/notify`. RodakOS obtains the manifest
 - Shadow desired/reported: both sides follow this contract; Agent Runtime does not access device DAOs directly
 - OTA lifecycle: Rodak `OtaService` + `OtaUpdateService`/Recovery
 - Agent capability, policy, and audit: Rodak Agent Runtime contracts
-- XiaoZhi WebSocket/voice: a future adapter, outside this contract
+- `rodak-realtime-voice/v1`: canonical realtime voice is implemented by RodakOS and the Rodak server; XiaoZhi firmware compatibility exists only in a Rodak server adapter and is outside the RodakOS/canonical wire contract
 
 ## 7. Verification anchors
 

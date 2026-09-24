@@ -27,9 +27,9 @@ image does not.
 RodakOS declares the BigSmart device's autonomous product identity with the product key
 `rymcu-bigsmart` and protocol marker `rodak-aiot` (version 1). The Board Manager hardware
 discriminator remains `board.type = rymcu_bigsmart`; it is deliberately separate from the cloud
-product key. The request also includes the device MAC and stable client UUID. A legacy-compatible
-server route may still classify the request under its historical protocol until it consumes these
-explicit fields.
+product key. The request also includes the device MAC and stable client UUID. RodakOS sends only
+this canonical AIoT identity; any compatibility translation for other firmware belongs to a Rodak
+server adapter.
 
 The firmware now performs the autonomous onboarding lifecycle against the configured server:
 
@@ -44,11 +44,9 @@ The generated device secret is persisted before the first register request, so a
 register and token exchange can safely retry with the same credential. The returned access token is
 used as the MQTT password and HTTP Bearer credential. `unifiedMqtt` and `mqttConnectInfo` are both
 accepted for the broker/topics payload, with the server origin and standard device topics used as
-fallbacks. `/xiaozhi/ota/` and its `Activation-Version` header remain a legacy compatibility path;
-they are attempted only when an autonomous endpoint is unavailable and are never required for the
-Rodak AIoT path. AIoT and MQTT credentials are committed under a pending marker; boot ignores a
-candidate pair left incomplete by a reset and retries enrollment. A successful AIoT enrollment
-also clears the legacy voice-websocket cache, so the two credential paths cannot race each other.
+fallbacks. RodakOS does not call legacy voice/bootstrap paths or persist a legacy voice-websocket
+credential set. AIoT and MQTT credentials are committed under a pending marker; boot ignores a
+candidate pair left incomplete by a reset and retries enrollment.
 
 The configured bootstrap endpoint returns `unifiedMqtt` v2 with:
 

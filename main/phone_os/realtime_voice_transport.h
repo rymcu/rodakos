@@ -2,6 +2,7 @@
 
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/realtime_voice_contract.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -14,10 +15,10 @@
 
 namespace rodakos {
 
-class VoiceCloudWebSocketTransport final : public VoiceAssistantTransport {
+class RodakRealtimeVoiceTransport final : public VoiceAssistantTransport {
 public:
-    explicit VoiceCloudWebSocketTransport(DeviceCloudConfigService& config_service);
-    ~VoiceCloudWebSocketTransport() override;
+    explicit RodakRealtimeVoiceTransport(DeviceCloudConfigService& config_service);
+    ~RodakRealtimeVoiceTransport() override;
 
     bool Start() override;
     bool OpenAudioChannel(VoiceOpenGuard can_continue = {}) override;
@@ -42,7 +43,7 @@ public:
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
 
-    const char* name() const override { return "voice-cloud"; }
+    const char* name() const override { return "rodak-realtime-voice"; }
     std::string last_error() const override;
 
 private:
@@ -55,14 +56,14 @@ private:
                   uint32_t expected_generation,
                   const std::string& expected_session,
                   bool require_open);
-    bool SendHello(uint32_t generation);
+    bool SendSessionOpen(uint32_t generation);
     bool SnapshotSession(uint32_t expected_generation, std::string& session_id) const;
-    std::string BuildHelloMessage() const;
+    std::string BuildSessionOpenMessage() const;
     void CleanupDetachedClient();
     void HandleDataFrame(const esp_websocket_event_data_t& data, uint32_t generation);
     void HandleTextFrame(const char* data, int len, uint32_t generation);
     void HandleBinaryFrame(const uint8_t* data, size_t size, uint32_t generation);
-    void ParseServerHello(const std::string& payload, uint32_t generation);
+    void ParseSessionReady(const std::string& payload, uint32_t generation);
     void EmitInbound(VoiceInboundEvent&& event, uint32_t generation);
     void SetError(const std::string& message);
     bool IsConnectionCurrent(uint32_t generation) const;
@@ -82,6 +83,7 @@ private:
     std::string device_id_header_;
     std::string client_id_header_;
     std::string session_id_;
+    RealtimeVoiceSessionGate session_gate_;
     std::string last_error_ = "Not connected";
     VoiceInboundHandler inbound_handler_;
     std::vector<uint8_t> inbound_frame_;
@@ -100,6 +102,10 @@ private:
     TaskHandle_t cleanup_task_ = nullptr;
     uint32_t connection_generation_ = 0;
     uint32_t inbound_playback_epoch_ = 0;
+    bool inbound_output_active_ = false;
+    uint32_t audio_sequence_ = 0;
+    uint32_t inbound_audio_sequence_ = 0;
+    std::string vad_strategy_ = "server-authoritative";
 };
 
 }  // namespace rodakos

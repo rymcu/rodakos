@@ -21,6 +21,7 @@ add_executable(rodakos_app_model_tests
     mqtt_credential_refresh_policy_test.cc
     device_pairing_policy_test.cc
     device_pairing_protocol_test.cc
+    realtime_voice_contract_test.cc
     battery_level_model_test.cc
     wifi_connection_policy_test.cc
     ../../main/phone_os/phone_app_registry.cc
@@ -40,6 +41,9 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/serial_provisioning_protocol.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
     ../../main/phone_os/device_pairing_protocol.cc
+    ../../main/phone_os/realtime_voice_contract.cc
+    ../../main/phone_os/realtime_voice_reconnect_policy.cc
+    ../../main/phone_os/realtime_voice_transport_harness.cc
     ../../main/phone_os/battery_level_model.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
 )

@@ -228,12 +228,12 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_label_set_long_mode(cloud_client_id_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_align(cloud_client_id_label_, LV_ALIGN_LEFT_MID, 0, 0);
 
-    auto* ws_card = CreateSettingCard(device_cloud_body_, 434, 40);
-    lv_obj_set_style_pad_all(ws_card, 8, 0);
-    cloud_websocket_label_ = CreateSettingLabel(ws_card, "连接协议：未配置", true);
-    lv_obj_set_width(cloud_websocket_label_, 264);
-    lv_label_set_long_mode(cloud_websocket_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(cloud_websocket_label_, LV_ALIGN_LEFT_MID, 0, 0);
+    auto* voice_card = CreateSettingCard(device_cloud_body_, 434, 40);
+    lv_obj_set_style_pad_all(voice_card, 8, 0);
+    cloud_realtime_voice_label_ = CreateSettingLabel(voice_card, "实时语音流：未配置", true);
+    lv_obj_set_width(cloud_realtime_voice_label_, 264);
+    lv_label_set_long_mode(cloud_realtime_voice_label_, LV_LABEL_LONG_DOT);
+    lv_obj_align(cloud_realtime_voice_label_, LV_ALIGN_LEFT_MID, 0, 0);
 
     auto* activation_card = CreateSettingCard(device_cloud_body_, 146, 64);
     lv_obj_set_style_pad_all(activation_card, 8, 0);
@@ -298,9 +298,8 @@ void SettingsApp::UpdateDeviceCloudPage() {
     const std::string client_id = "设备 ID: " + device_cloud->GetClientId();
     lv_label_set_text(cloud_client_id_label_, client_id.c_str());
     lv_label_set_text_fmt(
-        cloud_websocket_label_, "连接协议：%s",
-        config.has_aiot_config ? "Rodak AIoT"
-                               : (config.has_websocket_config ? "兼容服务" : "未配置"));
+        cloud_realtime_voice_label_, "实时语音流：%s",
+        config.has_realtime_voice_config ? "Rodak realtime voice" : "未配置");
     if (!aiot_bound && !pairing_code.empty() &&
         (config.has_pairing_request || !cloud_pairing_error_.empty())) {
         lv_label_set_text_fmt(cloud_activation_label_, "配对码  %s",
@@ -320,8 +319,8 @@ void SettingsApp::UpdateDeviceCloudPage() {
                                      ? "配对码仍然有效，请检查网络后点击重试。"
                                      : (pairing_pending
                                             ? "在 Rodak 中输入配对码，本页会自动检查结果。"
-                                            : (config.has_websocket_config
-                                                   ? "兼容语音服务已配置；仍可绑定 Rodak 设备云。"
+                                            : (config.has_realtime_voice_config
+                                                   ? "实时语音流已配置；仍可绑定 Rodak 设备云。"
                                                    : "1. 点击下方按钮\n2. 在 Rodak 中输入配对码"))));
     }
     if (cloud_pairing_button_label_ != nullptr) {

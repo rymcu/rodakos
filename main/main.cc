@@ -29,7 +29,7 @@
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/wake_on_lan_service.h"
 #include "phone_os/web_file_system_service.h"
-#include "phone_os/voice_cloud_websocket_transport.h"
+#include "phone_os/realtime_voice_transport.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/phone_fonts.h"
@@ -409,7 +409,7 @@ extern "C" void app_main(void) {
     static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service,
         &battery_monitor, &light_service);
-    static rodakos::VoiceCloudWebSocketTransport voice_assistant_transport(
+    static rodakos::RodakRealtimeVoiceTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
     static rodakos::VoiceAssistantService voice_assistant_service(

@@ -14,8 +14,8 @@ successful provisioning session writes only:
 - Device Cloud bootstrap URL to the existing `device_cloud` NVS namespace
   (`prov_url` key).
 
-MQTT credentials, WebSocket tokens, broker settings, and topic names are not
-sent over serial. RodakOS obtains those values from the configured bootstrap
+MQTT credentials, realtime voice descriptors, broker settings, and topic names are not
+sent over serial. RodakOS obtains those values from the configured canonical AIoT bootstrap
 endpoint after WiFi connects.
 
 The existing Settings pages remain supported as a manual fallback.
@@ -30,11 +30,11 @@ The service label is **Device Cloud**, but the persisted NVS namespace is
 | `wifi`         | `ssid`, `password`                 | Serial provisioning request |
 | `device_cloud` | `prov_url`                         | Serial provisioning request |
 | `device_cloud` | AIoT identity and pairing state    | Device-owned binding flow   |
-| `websocket`    | `url`, `token`, `version`          | Bootstrap response          |
+| `realtime_voice` | Canonical endpoint and audio limits | AIoT bootstrap/token response |
 | `unified_mqtt` | Broker, credential, and topic keys | Bootstrap response          |
 
-Changing `device_cloud/prov_url` clears cached `websocket` and `unified_mqtt`
-values before the next bootstrap. MQTT and WebSocket secrets are never accepted
+Changing `device_cloud/prov_url` clears cached `realtime_voice` and `unified_mqtt`
+values before the next bootstrap. MQTT and voice credentials are never accepted
 as serial request fields.
 
 The firmware does not expose textual commands such as `cloud bootstrap set` or
@@ -76,7 +76,9 @@ RODAK_PROVISION_RESULT {"ok":false,"error":"invalid_bootstrap_url"}\n
 The receiver must reject oversized frames, malformed JSON, control characters
 inside values, unknown protocol versions, and URLs using schemes other than
 `http` or `https`. Bootstrap URLs also require a non-empty authority, a valid
-port when present, and no embedded user information. Credentials must never be
+port when present, and no embedded user information. Only the canonical
+`/api/v1/aiot/devices/bootstrap` path or an HTTP(S) origin is accepted; legacy paths, query strings,
+and fragments are rejected. Credentials must never be
 printed in replies or logs.
 An empty `password` is valid for an open WiFi network; non-empty passwords are
 limited to 63 bytes and SSIDs to 32 bytes.
@@ -113,7 +115,7 @@ physically local diagnostic/control path and does not grant new app privileges.
 
 1. Validate the complete request before changing NVS.
 2. Save WiFi credentials and bootstrap URL as one provisioning transaction.
-3. Clear cached WebSocket and MQTT credentials for every accepted provisioning
+3. Clear cached realtime voice descriptor and MQTT credentials for every accepted provisioning
    request, including a repeat request for the same bootstrap URL.
 4. Return success only after NVS commit succeeds.
 5. Start or restart WiFi connection using the saved credentials.
@@ -121,8 +123,8 @@ physically local diagnostic/control path and does not grant new app privileges.
    the cloud refresh callback. When the unified MQTT service is already running,
    that callback restarts the device so an in-flight old bootstrap task and MQTT
    outbox cannot cross the new configuration boundary.
-7. After the restart, call Device Cloud bootstrap and persist its WebSocket and
-   unified MQTT response.
+7. After the restart, call Device Cloud bootstrap and persist its canonical realtime voice
+   descriptor and unified MQTT response.
 
 When MQTT authentication is rejected later, RodakOS refreshes bootstrap credentials
 without accepting any secret over serial. An unchanged session identity with an
@@ -143,7 +145,7 @@ Before the first provisioning NVS mutation, RodakOS commits
 bootstrap URL, and cloud credential invalidation have all committed. If power is
 lost while the marker is set, the next boot does not try to combine old and new
 fields: it clears the saved WiFi credentials, restores the default bootstrap URL,
-invalidates cached WebSocket and MQTT credentials, and then clears the marker.
+invalidates cached realtime voice descriptor and MQTT credentials, and then clears the marker.
 If any recovery write fails, the marker remains set so the same conservative
 cleanup is retried on the next boot.
 
@@ -158,10 +160,10 @@ next normal boot can use them.
 The serial link is assumed to be physically local. It is not an authenticated
 remote management channel. The sender must require an explicit operator action
 and should use a short-lived provisioning session. The device must not echo the
-WiFi password, MQTT password, JWT, or WebSocket token. Serial provisioning does
+WiFi password, MQTT password, JWT, or realtime voice token. Serial provisioning does
 not authorize Device Cloud access. RodakOS requires a separate short-code
 confirmation before it obtains an AIoT access token or enables MQTT and
-WebSocket credentials.
+realtime voice capabilities.
 
 RodakOS reuses the ESP-IDF USB Serial/JTAG console VFS; it does not create a
 second serial or USB interface. The service backs that VFS with Espressif's
@@ -210,7 +212,7 @@ or written to logs.
 Settings offers **解除设备绑定** only after AIoT configuration is complete. With
 WiFi connected, RodakOS posts to `/api/v1/aiot/devices/binding/unbind` using the
 current device access token. It clears local AIoT access state, pairing request,
-MQTT credentials, and WebSocket credentials only after the server confirms the
+MQTT credentials, and the realtime voice descriptor only after the server confirms the
 request. WiFi credentials and the configured provisioning URL remain available
 so the operator can bind the same device again.
 
@@ -242,7 +244,7 @@ file, shows the target serial port, and requires confirmation before sending.
 The action must report only validation, transport, and device result status.
 
 The server-side bootstrap endpoint remains the source of truth for MQTT and
-WebSocket credentials. It must not accept MQTT secrets from the desktop
+realtime voice capabilities. It must not accept MQTT secrets from the desktop
 provisioning flow.
 
 ## Acceptance
@@ -300,7 +302,7 @@ overflowed the 3,584-byte `main` task stack while nested cloud-config snapshots
 were being created.
 
 The fix keeps full `DeviceCloudConfig` rollback snapshots in short-lived heap
-objects and persists the empty WebSocket/MQTT state directly. The compiled
+objects and persists the empty realtime voice/MQTT state directly. The compiled
 `SaveProvisioningUrl()` frame decreased from `0x420` (1,056 bytes) to `0xC0`
 (192 bytes) without increasing a resident task stack.
 

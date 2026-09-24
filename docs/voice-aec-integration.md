@@ -1,6 +1,6 @@
 # Voice AEC integration
 
-RodakOS reuses the `xiaozhi` BigSmart AEC input arrangement and extends the Rodak playback-time
+RodakOS uses the BigSmart AEC input arrangement and extends the Rodak playback-time
 interruption contract with VAD start/end and playback epochs. Capture continues while TTS is
 playing, and only AFE-processed audio is sent upstream.
 
@@ -12,8 +12,8 @@ the ADC net names: physical `MIC1` is wired to `ADC_MIC2P/N`, while physical `MI
 through 0-ohm links, so `MIC3` is the AEC reference channel, not a second user microphone. The
 AFE input must therefore be `MR`, where `M` is the selected MIC1/MIC2 signal and `R` is MIC3.
 
-The processor follows `D:\workspace\xiaozhi\main\audio\processors\afe_audio_processor.cc` for
-the hardware input arrangement, with a separate RodakOS conversation policy:
+The processor follows the board's documented ES7210/ES8311 wiring for the hardware input
+arrangement, with a separate RodakOS conversation policy:
 
 1. Read four-channel 16 kHz TDM from `AudioCodecInput`, then select M and retain R.
 2. Feed it to ESP-SR AFE with `AEC_MODE_VOIP_HIGH_PERF` and WebRTC VAD (`VAD_MODE_0`,
@@ -27,35 +27,37 @@ the hardware input arrangement, with a separate RodakOS conversation policy:
 5. Interrupt once for that playback and preserve capture, AFE and the uplink Opus encoder.
    This path does not call `VoiceWakeService::NotifyWakeWordDetected` or restart the recorder.
 
-`CONFIG_USE_DEVICE_AEC` and server-side timestamp AEC are mutually exclusive. RodakOS should use
-device AEC first; the server-AEC path requires Binary Protocol 2 timestamps for every uplink frame
-and the matching downlink playback timestamp.
+`CONFIG_USE_DEVICE_AEC` and a future server-side timestamp AEC extension are mutually exclusive.
+RodakOS uses device AEC in this contract; it does not implement or emit a legacy binary protocol
+timestamp wrapper.
 
 ## Rodak contract
 
-AEC-enabled firmware advertises `features.device_vad_epoch: 1` in hello. Rodak uses this
+AEC-enabled firmware advertises the `features.device_vad_epoch: 1` capability in
+`session.open`. Rodak uses this
 explicit capability to leave immediate playback interruption to the device; server codec VAD
 continues capture and semantic probing without a competing hard preemption. Older devices keep
 the existing server-side interruption behavior. ASR remains a fallback for unconfirmed speech.
 
-The device sends `listen:start` with `mode: "realtime"`, then continuous Opus frames. A confirmed
-device VAD event is sent as `type: "vad"`, `state: "start"`, with `source: "esp-sr"`, `seq`,
-`trigger_ms` and `playback_epoch`, followed by `type: "abort"`, `reason: "vad_detected"` and
-the same playback epoch. `trigger_ms` records the detected speech onset rather than the later
+The device sends `input.start` with `mode: "realtime"`, then continuous canonical `RAV1` Opus frames. A confirmed
+device VAD event is sent as `event: "vad"`, `state: "start"`, with `source: "esp-sr"`, `sequence`,
+`triggerMs` and `playbackEpoch`, followed by `event: "playback.abort"`, `reason: "vad_detected"` and
+the same playback epoch. `triggerMs` records the detected speech onset rather than the later
 confirmation time. Both send results are checked. Rodak uses the epoch to deduplicate the
 device request against server-side interruption and preserves the existing capture buffer.
 
 The device closes playback and resets only the downlink decoder. It keeps the WebSocket,
-recorder and uplink encoder running and does not send another `listen:start` for tagged VAD
+recorder and uplink encoder running and does not send another `input.start` for tagged VAD
 interruption, because restarting server capture can discard the beginning of the new utterance.
-After 180 ms of fresh VAD silence it sends one `vad:end` with the original sequence and epoch.
+After 180 ms of fresh VAD silence it sends one `event: "vad"` with `state: "end"`, the original
+sequence and epoch.
 An outstanding end prevents another local interruption from overwriting that identity; session
 cleanup clears the pending state. This also supports Rodak's `requireVadEndToRearm` option.
 
-TTS start/stop events carry `playback_epoch`; the transport associates binary audio with the
+`output.start`/`output.stop` events carry `playbackEpoch`; the transport associates binary audio with the
 latest accepted start. `VoicePlaybackEpochPolicy` rejects interrupted or older start/audio/stop
 events and accepts audio/stop only for the current epoch. A newer start admits the next reply.
-The server must prevent an old producer from emitting audio after that newer start. Legacy
+The server must prevent an old producer from emitting audio after that newer start. Older
 servers without epochs retain explicit interruption behavior, but automatic device VAD is
 disabled for them because untagged packets cannot provide the same late-audio isolation.
 
@@ -137,7 +139,8 @@ the device gate in three sessions with six confirmed interruptions. These runs e
 wake, the physical board's AFE/Opus/network path, playback gating and repeated interruption.
 That intermediate run exposed one truncated server-side utterance. Follow-up runs also exposed
 competing codec/device cancellation. Rodak now isolates worker generations, preserves ASR startup,
-separates live-final endpoint protection from interruption routing, and honors the hello capability
+separates live-final endpoint protection from interruption routing, and honors the `session.open`
+capability
 above. The intermediate runs are not the final acceptance evidence.
 
 Package `20260916-162147` (SHA-256
@@ -154,7 +157,7 @@ The final joint run is `build/logs/vad-capability-joint.log` with its summary JS
   watchdog occurred. Minimum internal free heap was 12,823 B; each cleanup restored a 14,336 B
   largest block. MQTT remained connected.
 - Explicit software wake during playback also passed in `build/logs/vad-manual-wake.log`:
-  `wake_word_detected` abort and same-session `listen:start`, with no fabricated VAD event.
+  `wake.detected` playback abort and same-session `input.start`, with no fabricated VAD event.
   This path bypasses automatic VAD-end gating and retains old-playback epoch isolation.
 - ESP-IDF 6.0.2 build and host app-model tests passed. Rodak's final targeted suite passed
   89 tests; build, lint and type checking also passed.
@@ -238,8 +241,8 @@ The 30 dB uniform-gain baseline in `build/logs/aec-auto-baseline/analysis.json` 
 TDM slot 1 at full scale, with 0.3583% clipped samples; the microphone channels were not clipped.
 Conversation capture now selects `AudioCodecInput::InputGainProfile::kAecReference10Db`:
 all microphones retain 30 dB, while physical ADC channel 2 (MIC3, TDM slot 1) requests 10 dB,
-matching xiaozhi. ES7210 quantizes this request to 9 dB. Wake, Recorder and legacy owners use
-the default uniform profile. Cache keys include both gain and profile, and owner/format changes
+matching the board's reference profile. ES7210 quantizes this request to 9 dB. Wake, Recorder and
+other owners use the default uniform profile. Cache keys include both gain and profile, and owner/format changes
 invalidate the cache. The SDK channel-gain wrapper does not propagate every register-write error,
 so readback waveforms, not an API success alone, establish the observed effect.
 
@@ -266,7 +269,7 @@ controlled real-person silent-playback and double-talk test before accepting aco
 ### September 16 late-follow-up investigation
 
 Session `92e848c1` exposed a playback rearm race: stop epoch3 at23:12:43.565,
-start epoch4 at43.834, then an obsolete follow-up listen at44.481. The accepted new
+start epoch4 at43.834, then an obsolete follow-up `input.start` at44.481. The accepted new
 start now clears delayed follow-up rearm; rearm also requires the conversation policy
 to be waiting. The server had sent the complete answer, while the old rearm could
 switch the device to Listening and discard subsequent audio.

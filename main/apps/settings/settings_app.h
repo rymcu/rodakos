@@ -155,7 +155,7 @@ private:
     lv_obj_t* cloud_guide_label_ = nullptr;
     lv_obj_t* cloud_url_label_ = nullptr;
     lv_obj_t* cloud_client_id_label_ = nullptr;
-    lv_obj_t* cloud_websocket_label_ = nullptr;
+    lv_obj_t* cloud_realtime_voice_label_ = nullptr;
     lv_obj_t* cloud_activation_label_ = nullptr;
     lv_obj_t* cloud_pairing_button_ = nullptr;
     lv_obj_t* cloud_pairing_button_label_ = nullptr;

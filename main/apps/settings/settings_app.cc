@@ -181,7 +181,7 @@ void SettingsApp::ResetUiPointers() {
     cloud_guide_label_ = nullptr;
     cloud_url_label_ = nullptr;
     cloud_client_id_label_ = nullptr;
-    cloud_websocket_label_ = nullptr;
+    cloud_realtime_voice_label_ = nullptr;
     cloud_activation_label_ = nullptr;
     cloud_pairing_button_ = nullptr;
     cloud_pairing_button_label_ = nullptr;

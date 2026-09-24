@@ -64,6 +64,37 @@ bool IsValidAuthority(std::string_view authority) {
            IsValidPort(authority.substr(first_colon + 1));
 }
 
+bool NormalizeAuthority(std::string_view authority, std::string& normalized) {
+    if (!IsValidAuthority(authority)) {
+        return false;
+    }
+    if (authority.front() == '[') {
+        const size_t closing_bracket = authority.find(']');
+        std::string host(authority.substr(1, closing_bracket - 1));
+        for (char& character : host) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+        normalized = "[" + host + "]";
+        const std::string_view suffix = authority.substr(closing_bracket + 1);
+        if (!suffix.empty()) {
+            normalized += std::string(suffix);
+        }
+        return true;
+    }
+
+    const size_t colon = authority.find(':');
+    std::string host(authority.substr(0, colon));
+    for (char& character : host) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    normalized = host;
+    if (colon != std::string_view::npos) {
+        normalized += ":";
+        normalized += std::string(authority.substr(colon + 1));
+    }
+    return true;
+}
+
 }  // namespace
 
 SerialProvisioningFrameAccumulator::SerialProvisioningFrameAccumulator() {
@@ -116,7 +147,8 @@ void SerialProvisioningFrameAccumulator::Reset() {
 
 bool IsValidSerialProvisioningBootstrapUrl(const std::string& url) {
     if (url.empty() || url.size() > kSerialProvisioningMaxBootstrapUrlBytes ||
-        HasControlOrWhitespace(url)) {
+        HasControlOrWhitespace(url) ||
+        url.find_first_of("?#\\") != std::string::npos) {
         return false;
     }
     const size_t scheme_end = url.find("://");
@@ -130,8 +162,50 @@ bool IsValidSerialProvisioningBootstrapUrl(const std::string& url) {
     const size_t authority_size = authority_end == std::string::npos
                                       ? std::string_view::npos
                                       : authority_end - authority_start;
-    return IsValidAuthority(
-        std::string_view(url).substr(authority_start, authority_size));
+    if (!IsValidAuthority(std::string_view(url).substr(authority_start, authority_size))) {
+        return false;
+    }
+    const std::string_view path = authority_end == std::string::npos
+                                      ? std::string_view()
+                                      : std::string_view(url).substr(authority_end);
+    return path.empty() || path == "/" ||
+           path == "/api/v1/aiot/devices/bootstrap";
+}
+
+bool NormalizeSerialProvisioningBootstrapUrl(const std::string& url,
+                                             std::string& normalized) {
+    normalized.clear();
+    if (!IsValidSerialProvisioningBootstrapUrl(url)) {
+        return false;
+    }
+    const size_t scheme_end = url.find("://");
+    const std::string scheme = url.substr(0, scheme_end);
+    const size_t authority_start = scheme_end + 3;
+    const size_t authority_end = url.find('/', authority_start);
+    const size_t authority_size = authority_end == std::string::npos
+                                      ? std::string::npos
+                                      : authority_end - authority_start;
+    std::string authority;
+    if (!NormalizeAuthority(std::string_view(url).substr(authority_start, authority_size),
+                            authority)) {
+        return false;
+    }
+
+    const size_t closing_bracket = authority.find(']');
+    const size_t port_separator = closing_bracket == std::string::npos
+                                      ? authority.find(':')
+                                      : authority.find(':', closing_bracket);
+    if (port_separator != std::string::npos) {
+        unsigned port = 0;
+        for (size_t index = port_separator + 1; index < authority.size(); ++index) {
+            port = port * 10 + static_cast<unsigned>(authority[index] - '0');
+        }
+        if ((scheme == "http" && port == 80) || (scheme == "https" && port == 443)) {
+            authority.erase(port_separator);
+        }
+    }
+    normalized = scheme + "://" + authority + "/api/v1/aiot/devices/bootstrap";
+    return true;
 }
 
 bool ContainsSerialProvisioningJsonNul(const std::string& json) {

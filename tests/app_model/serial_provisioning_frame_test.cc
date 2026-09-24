@@ -119,25 +119,43 @@ RODAK_TEST("Serial provisioning handles adjacent frames in one RX chunk") {
     RODAK_CHECK_EQ(ready_count, 2);
 }
 
-RODAK_TEST("Serial provisioning accepts HTTP bootstrap authorities") {
+RODAK_TEST("Serial provisioning accepts canonical AIoT bootstrap authorities") {
     RODAK_CHECK(rodakos::IsValidSerialProvisioningBootstrapUrl(
-        "http://192.0.2.154:9080/xiaozhi/ota/"));
+        "http://192.0.2.154:9080/api/v1/aiot/devices/bootstrap"));
     RODAK_CHECK(rodakos::IsValidSerialProvisioningBootstrapUrl(
-        "https://example.com/bootstrap?channel=stable"));
+        "https://example.com/"));
     RODAK_CHECK(rodakos::IsValidSerialProvisioningBootstrapUrl(
-        "http://[fd00::1]:9080/xiaozhi/ota/"));
+        "http://[fd00::1]:9080/api/v1/aiot/devices/bootstrap"));
+}
+
+RODAK_TEST("Serial provisioning normalizes equivalent bootstrap endpoints") {
+    std::string normalized;
+    RODAK_CHECK(rodakos::NormalizeSerialProvisioningBootstrapUrl(
+        "https://Example.COM:443/", normalized));
+    RODAK_CHECK_EQ(normalized,
+                   "https://example.com/api/v1/aiot/devices/bootstrap");
+    RODAK_CHECK(rodakos::NormalizeSerialProvisioningBootstrapUrl(
+        "http://example.com/api/v1/aiot/devices/bootstrap", normalized));
+    RODAK_CHECK_EQ(normalized,
+                   "http://example.com/api/v1/aiot/devices/bootstrap");
+    RODAK_CHECK(rodakos::NormalizeSerialProvisioningBootstrapUrl(
+        "http://example.com:80", normalized));
+    RODAK_CHECK_EQ(normalized,
+                   "http://example.com/api/v1/aiot/devices/bootstrap");
 }
 
 RODAK_TEST("Serial provisioning rejects unsafe bootstrap authorities") {
     const std::string invalid_urls[] = {
         "HTTP://example.com/",
-        "http:///xiaozhi/ota/",
+        "http:///api/v1/aiot/devices/bootstrap",
         "http://?target=example.com",
         "https://user:password@example.com/",
         "http://example.com:0/",
         "http://example.com:65536/",
-        "http://fd00::1/xiaozhi/ota/",
-        "http://example.com\\xiaozhi/ota/",
+        "http://fd00::1/api/v1/aiot/devices/bootstrap",
+        "http://example.com\\api/v1/aiot/devices/bootstrap",
+        "http://example.com/xiaozhi/ota/",
+        "https://example.com/bootstrap?channel=stable",
     };
     for (const std::string& url : invalid_urls) {
         RODAK_CHECK_FALSE(rodakos::IsValidSerialProvisioningBootstrapUrl(url));
