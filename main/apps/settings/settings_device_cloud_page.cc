@@ -135,7 +135,7 @@ void SettingsApp::CreateDeviceCloudPage() {
 
     cloud_pairing_button_ = lv_btn_create(device_cloud_body_);
     lv_obj_set_size(cloud_pairing_button_, 288, 38);
-    lv_obj_set_pos(cloud_pairing_button_, 4, 52);
+    lv_obj_set_pos(cloud_pairing_button_, 4, 258);
     lv_obj_set_style_bg_color(cloud_pairing_button_, rodakos_theme_primary(), 0);
     lv_obj_set_style_radius(cloud_pairing_button_, 7, 0);
     cloud_pairing_button_label_ = lv_label_create(cloud_pairing_button_);
@@ -147,7 +147,7 @@ void SettingsApp::CreateDeviceCloudPage() {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->RefreshDeviceCloud();
     }, LV_EVENT_CLICKED, this);
 
-    auto* status_card = CreateSettingCard(device_cloud_body_, 98, 44);
+    auto* status_card = CreateSettingCard(device_cloud_body_, 56, 52);
     lv_obj_set_style_pad_all(status_card, 10, 0);
 
     auto* status_icon = lv_label_create(status_card);
@@ -165,7 +165,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_label_set_long_mode(cloud_status_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(cloud_status_label_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
 
-    auto* url_card = CreateSettingCard(device_cloud_body_, 314, 62);
+    auto* url_card = CreateSettingCard(device_cloud_body_, 116, 62);
     lv_obj_set_style_pad_all(url_card, 8, 0);
 
     auto* url_icon = lv_label_create(url_card);
@@ -174,7 +174,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_text_font(url_icon, PhoneIconFont(), 0);
     lv_obj_align(url_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
-    auto* url_title = CreateSettingLabel(url_card, "服务地址（高级）", true);
+    auto* url_title = CreateSettingLabel(url_card, "服务地址", true);
     lv_obj_set_style_text_font(url_title, &phone_font_12, 0);
     lv_obj_set_width(url_title, 196);
     lv_label_set_long_mode(url_title, LV_LABEL_LONG_DOT);
@@ -221,21 +221,21 @@ void SettingsApp::CreateDeviceCloudPage() {
         self->RefreshDeviceCloud();
     }, LV_EVENT_CLICKED, this);
 
-    auto* id_card = CreateSettingCard(device_cloud_body_, 386, 40);
+    auto* id_card = CreateSettingCard(device_cloud_body_, 304, 40);
     lv_obj_set_style_pad_all(id_card, 8, 0);
     cloud_client_id_label_ = CreateSettingLabel(id_card, "设备 ID", true);
     lv_obj_set_width(cloud_client_id_label_, 264);
     lv_label_set_long_mode(cloud_client_id_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_align(cloud_client_id_label_, LV_ALIGN_LEFT_MID, 0, 0);
 
-    auto* voice_card = CreateSettingCard(device_cloud_body_, 434, 40);
+    auto* voice_card = CreateSettingCard(device_cloud_body_, 352, 40);
     lv_obj_set_style_pad_all(voice_card, 8, 0);
     cloud_realtime_voice_label_ = CreateSettingLabel(voice_card, "实时语音流：未配置", true);
     lv_obj_set_width(cloud_realtime_voice_label_, 264);
     lv_label_set_long_mode(cloud_realtime_voice_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(cloud_realtime_voice_label_, LV_ALIGN_LEFT_MID, 0, 0);
 
-    auto* activation_card = CreateSettingCard(device_cloud_body_, 146, 64);
+    auto* activation_card = CreateSettingCard(device_cloud_body_, 186, 64);
     lv_obj_set_style_pad_all(activation_card, 8, 0);
     cloud_activation_label_ = CreateSettingLabel(activation_card, "尚未连接", true);
     lv_obj_set_width(cloud_activation_label_, 272);
@@ -245,7 +245,7 @@ void SettingsApp::CreateDeviceCloudPage() {
 
     cloud_unbind_button_ = lv_btn_create(device_cloud_body_);
     lv_obj_set_size(cloud_unbind_button_, 288, 38);
-    lv_obj_set_pos(cloud_unbind_button_, 4, 218);
+    lv_obj_set_pos(cloud_unbind_button_, 4, 258);
     lv_obj_set_style_bg_color(cloud_unbind_button_, lv_palette_main(LV_PALETTE_RED), 0);
     auto* unbind_label = lv_label_create(cloud_unbind_button_);
     lv_label_set_text(unbind_label, "解除与 Rodak 的连接");
@@ -299,7 +299,8 @@ void SettingsApp::UpdateDeviceCloudPage() {
     lv_label_set_text(cloud_client_id_label_, client_id.c_str());
     lv_label_set_text_fmt(
         cloud_realtime_voice_label_, "实时语音流：%s",
-        config.has_realtime_voice_config ? "Rodak realtime voice" : "未配置");
+         config.has_realtime_voice_config ? "Rodak realtime voice"
+                                          : "未配置");
     if (!aiot_bound && !pairing_code.empty() &&
         (config.has_pairing_request || !cloud_pairing_error_.empty())) {
         lv_label_set_text_fmt(cloud_activation_label_, "配对码  %s",
@@ -319,9 +320,9 @@ void SettingsApp::UpdateDeviceCloudPage() {
                                      ? "配对码仍然有效，请检查网络后点击重试。"
                                      : (pairing_pending
                                             ? "在 Rodak 中输入配对码，本页会自动检查结果。"
-                                            : (config.has_realtime_voice_config
-                                                   ? "实时语音流已配置；仍可绑定 Rodak 设备云。"
-                                                   : "1. 点击下方按钮\n2. 在 Rodak 中输入配对码"))));
+                                             : (config.has_realtime_voice_config
+                                                    ? "实时语音流已配置；仍可绑定 Rodak 设备云。"
+                                                    : "1. 点击下方按钮\n2. 在 Rodak 中输入配对码"))));
     }
     if (cloud_pairing_button_label_ != nullptr) {
         lv_label_set_text(cloud_pairing_button_label_,
@@ -610,7 +611,7 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
     lv_obj_set_style_pad_all(dialog_box, 12, 0);
     lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* title = CreateSettingLabel(dialog_box, "Provisioning endpoint");
+    auto* title = CreateSettingLabel(dialog_box, "服务地址");
     lv_obj_set_style_text_font(title, &phone_font_14, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -635,7 +636,7 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
     lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
 
     auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "Cancel");
+    lv_label_set_text(cancel_label, "取消");
     lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
     lv_obj_center(cancel_label);
@@ -652,20 +653,20 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
     lv_obj_set_style_shadow_width(save_btn, 0, 0);
 
     auto* save_label = lv_label_create(save_btn);
-    lv_label_set_text(save_label, "Save");
+    lv_label_set_text(save_label, "保存");
     lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
     lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
     lv_obj_center(save_label);
     lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->SaveCloudProvisioningUrl(TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_)));
-        self->CloseCloudProvisioningUrlDialog();
+        const bool saved = self->SaveCloudProvisioningUrl(
+            TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_)));
+        if (saved) {
+            self->CloseCloudProvisioningUrlDialog();
+        }
     }, LV_EVENT_CLICKED, this);
 
-    soft_keyboard_.Show(cloud_url_textarea_, [this]() {
-        SaveCloudProvisioningUrl(TrimCloudUrl(lv_textarea_get_text(cloud_url_textarea_)));
-        CloseCloudProvisioningUrlDialogAsync();
-    });
+    soft_keyboard_.Show(cloud_url_textarea_);
 }
 
 void SettingsApp::CloseCloudProvisioningUrlDialog() {
@@ -686,16 +687,20 @@ void SettingsApp::CloseCloudProvisioningUrlDialogAsync() {
     }, this);
 }
 
-void SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
+bool SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
     auto* device_cloud = context_ != nullptr ? context_->services().device_cloud() : nullptr;
     if (device_cloud == nullptr) {
-        return;
+        return false;
     }
-    if (device_cloud->SaveProvisioningUrl(url) !=
-        rodakos::ProvisioningUrlSaveResult::kSaved) {
+    const auto result = device_cloud->SaveProvisioningUrl(url);
+    if (result != rodakos::ProvisioningUrlSaveResult::kSaved &&
+        result != rodakos::ProvisioningUrlSaveResult::kUnchanged) {
         ui_->ShowToastUnlocked("Failed to save provisioning endpoint");
-        return;
+        return false;
     }
-    ui_->ShowToastUnlocked("Provisioning endpoint saved");
+    ui_->ShowToastUnlocked(result == rodakos::ProvisioningUrlSaveResult::kUnchanged
+                               ? "服务地址未变更"
+                               : "服务地址已保存");
     UpdateDeviceCloudPage();
+    return true;
 }

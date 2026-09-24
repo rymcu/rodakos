@@ -1291,7 +1291,7 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
 }
 
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
-    const std::string& url) {
+    const std::string& url, ProvisioningUrlSaveMode mode) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     const std::string requested_url = url.empty() ? kDefaultProvisioningUrl : url;
     std::string provisioning_url;
@@ -1309,6 +1309,14 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
         return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
     Load(*previous_config);
+    std::string previous_url;
+    if (mode == ProvisioningUrlSaveMode::kPreserveCredentials &&
+        NormalizeSerialProvisioningBootstrapUrl(previous_config->provisioning_url,
+                                                previous_url) &&
+        previous_url == provisioning_url) {
+        last_error_.clear();
+        return ProvisioningUrlSaveResult::kUnchanged;
+    }
     empty_config->realtime_voice_protocol_version = 1;
     ResetMqttConfig(*empty_config);
     empty_config->aiot_device_secret = previous_config->aiot_device_secret;
@@ -1380,37 +1388,37 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
         const bool request_ok = PerformHttpRequest(origin + kAiotUnbindPath, HTTP_METHOD_POST,
                                                    "{}", config.aiot_access_token,
                                                    kMaxAiotResponseBytes, response, error);
-        const int business_code = request_ok ? ResponseBusinessCode(response) : 0;
-        const bool already_unbound = request_ok &&
-            (response.status_code == 401 || response.status_code == 403 ||
-             response.status_code == 404 || response.status_code == 410 ||
-             business_code == 401 || business_code == 403 ||
-             business_code == 404 || business_code == 410);
-        if (!request_ok && !already_unbound) {
+        if (!request_ok) {
             SetError(error);
             return false;
         }
-        if (request_ok && !already_unbound &&
-            (response.status_code < 200 || response.status_code >= 300)) {
+        if (response.status_code < 200 || response.status_code >= 300) {
             SetError("设备解绑失败：HTTP status " +
                      std::to_string(response.status_code));
             return false;
         }
-        if (request_ok && !already_unbound && response.status_code >= 200 &&
-            response.status_code < 300 && !response.body.empty()) {
-            cJSON* root = nullptr;
-            cJSON* data = nullptr;
-            if (!ParseResponse(response, root, data, error)) {
-                // A successful HTTP response with an empty/unknown envelope
-                // is treated as an idempotent server acknowledgement. Local
-                // invalidation is still required and can be retried safely.
-                if (response.status_code < 200 || response.status_code >= 300) {
-                    SetError("设备解绑失败：" + error);
-                    return false;
-                }
-            }
+        cJSON* root = nullptr;
+        cJSON* data = nullptr;
+        if (response.body.empty() || !ParseResponse(response, root, data, error)) {
+            SetError("设备解绑失败：" +
+                     (error.empty() ? std::string("响应无效") : error));
             cJSON_Delete(root);
+            return false;
         }
+        const cJSON* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+        if (!cJSON_IsNumber(code) || code->valueint != 200) {
+            SetError("设备解绑失败：服务端业务响应未成功");
+            cJSON_Delete(root);
+            return false;
+        }
+        const cJSON* status = cJSON_GetObjectItemCaseSensitive(data, "status");
+        if (!cJSON_IsString(status) || status->valuestring == nullptr ||
+            Lowercase(status->valuestring) != "unbound") {
+            SetError("设备解绑失败：服务端未确认 unbound");
+            cJSON_Delete(root);
+            return false;
+        }
+        cJSON_Delete(root);
         config.unbind_server_acknowledged = true;
         config.unbind_pending = true;
         {

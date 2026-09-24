@@ -91,7 +91,7 @@ private:
     void ShowCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
-    void SaveCloudProvisioningUrl(const std::string& url);
+    bool SaveCloudProvisioningUrl(const std::string& url);
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();

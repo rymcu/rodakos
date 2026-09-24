@@ -67,8 +67,18 @@ struct DeviceCloudConfig {
 
 enum class ProvisioningUrlSaveResult {
     kSaved,
+    // The normalized endpoint was already active and no state was changed.
+    kUnchanged,
     kFailedRolledBack,
     kStateUncertain,
+};
+
+enum class ProvisioningUrlSaveMode {
+    // Preserve a working cloud identity when the effective endpoint is the same.
+    kPreserveCredentials,
+    // Explicit provisioning is a credential rotation boundary, even for the
+    // same endpoint (for example a new serial provisioning transaction).
+    kForceRefresh,
 };
 
 constexpr ProvisioningUrlSaveResult ClassifyProvisioningUrlSaveFailure(
@@ -83,7 +93,9 @@ public:
     bool Load(DeviceCloudConfig& config);
     bool Refresh(DeviceCloudConfig& config);
     bool Unbind(DeviceCloudConfig& config);
-    ProvisioningUrlSaveResult SaveProvisioningUrl(const std::string& url);
+    ProvisioningUrlSaveResult SaveProvisioningUrl(
+        const std::string& url,
+        ProvisioningUrlSaveMode mode = ProvisioningUrlSaveMode::kPreserveCredentials);
     std::string GetClientId();
     std::string last_error() const;
 

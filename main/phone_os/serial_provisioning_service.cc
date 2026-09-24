@@ -131,8 +131,9 @@ bool SerialProvisioningService::RecoverPendingTransaction(
     WiFiConfig wifi_config;
     const bool wifi_cleared = wifi_config.ClearCredentials();
     const bool cloud_reset =
-        cloud_config.SaveProvisioningUrl(DeviceCloudConfigService::DefaultProvisioningUrl()) ==
-        ProvisioningUrlSaveResult::kSaved;
+        cloud_config.SaveProvisioningUrl(
+            DeviceCloudConfigService::DefaultProvisioningUrl(),
+            ProvisioningUrlSaveMode::kForceRefresh) == ProvisioningUrlSaveResult::kSaved;
     const bool marker_cleared = wifi_cleared && cloud_reset && SetPendingTransaction(false);
     if (!marker_cleared) {
         ESP_LOGE(TAG, "Unable to finish interrupted provisioning recovery; retrying next boot");
@@ -448,7 +449,8 @@ bool SerialProvisioningService::ApplyRequest(const Request& request, std::string
         return false;
     }
     const ProvisioningUrlSaveResult cloud_save_result =
-        cloud_config_.SaveProvisioningUrl(request.bootstrap_url);
+        cloud_config_.SaveProvisioningUrl(request.bootstrap_url,
+                                          ProvisioningUrlSaveMode::kForceRefresh);
     if (cloud_save_result != ProvisioningUrlSaveResult::kSaved) {
         bool wifi_restored = false;
         if (had_previous_wifi) {
