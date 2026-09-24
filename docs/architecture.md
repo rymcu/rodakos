@@ -105,7 +105,7 @@ Home behavior and object lifetime, but it cannot replace those embedded and phys
 - `PhoneUi` and `PhoneUiLock` centralize LVGL access.
 - `rodakos_theme` defines dark/light/blue/green theme tokens.
 - `rodakos_layout` provides fixed-screen helpers for header/body/footer, grids, and flex rows.
-- `phone_fonts` initializes xiaozhi Chinese fonts and Font Awesome icon fonts.
+- `phone_fonts` initializes the RodakOS-owned CJK and Font Awesome UI font subset.
 - `image_library` scans and loads JPG/PNG/BMP images from FileService-backed storage, preferring SPIRAM.
 
 GT911 touch is registered through a cached polling bridge in `main.cc`: a low-priority task reads the touch controller and LVGL reads cached coordinates. This avoids doing I2C reads directly inside the LVGL task. `PhoneUi` retains the primary LVGL input device so system gestures can observe LVGL events without accessing GT911 or I2C.

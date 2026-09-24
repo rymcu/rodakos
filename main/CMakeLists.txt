@@ -139,6 +139,7 @@ idf_component_register(
         sdmmc
         esp_tinyusb
         esp_new_jpeg
+        rodakos_fonts
 )
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)

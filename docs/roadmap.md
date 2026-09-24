@@ -9,7 +9,8 @@ As of 2026-09-04:
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
 - ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
 - Local Board Manager configuration and BigSmart board definition for `rymcu_bigsmart`.
-- LVGL 9.3 with `esp_lvgl_port` 2.8, double buffering, xiaozhi fonts, theme/layout helpers.
+- LVGL 9.3 with `esp_lvgl_port` 2.8, double buffering, the RodakOS-owned
+  `rodakos_fonts` subset, and theme/layout helpers.
 - IDF 6 managed MQTT 1.0.0 and cJSON 1.7.19 dependencies.
 - ST7789 display, LEDC backlight, GT911 touch via cached polling, WiFi STA, SD FileService, USB MSC mode.
 - App registry/host/navigation model is in place, validates a unique Home role, and gives the host sole ownership of app lifecycle.

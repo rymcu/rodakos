@@ -14,3 +14,4 @@ components/gen_bmgr_codes/
 components/esp_board_manager/boards/rymcu_bigsmart/
 .vscode/settings.json
 .env
+build-*/

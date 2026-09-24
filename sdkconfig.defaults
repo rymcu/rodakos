@@ -39,8 +39,6 @@ CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_26=y
 # 支持大型中文字体（font_puhui_20_4/30_4 等，bitmap_index 超过 20 位）
 CONFIG_LV_FONT_FMT_TXT_LARGE=y
-# 支持图片字体（xiaozhi-fonts 的 emoji 字体 font_emoji_32/64 需要）
-CONFIG_LV_USE_IMGFONT=y
 # 支持相册从内存解码 PNG/JPG，并通过文件路径解码 BMP
 CONFIG_LV_USE_FS_STDIO=y
 CONFIG_LV_FS_STDIO_LETTER=83

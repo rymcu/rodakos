@@ -3,10 +3,6 @@ dependencies:
   lvgl/lvgl: "9.3.0"
   esp_lvgl_port: "2.8.0~1"
 
-  # 字体（普惠体中文 + Font Awesome 图标 + emoji），解决"豆腐块"显示问题
-  # 参考 xiaozhi-esp32 的字体方案
-  78/xiaozhi-fonts: "1.6.0"
-
   # Touch driver
   espressif/esp_lcd_touch_gt911: "1.2.0~3"
 

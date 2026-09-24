@@ -196,4 +196,4 @@ Historical migration notes, old progress reports, screenshots, and one-off test 
 
 ## Acknowledgments
 
-Hardware abstraction is based on Espressif Board Manager and the BigSmart board definition. Fonts use the `78/xiaozhi-fonts` package for Chinese glyphs, Font Awesome icons, and emoji support.
+Hardware abstraction is based on Espressif Board Manager and the BigSmart board definition. The UI uses the small RodakOS-owned font subset in `components/rodakos_fonts` for Chinese glyphs and Font Awesome icons.

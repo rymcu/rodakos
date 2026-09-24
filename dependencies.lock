@@ -23,16 +23,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.4.1
-  78/xiaozhi-fonts:
-    component_hash: 19ee829a7439702e18084a313b7b86017d3b8d17a094684575edc76bb6d11023
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.3'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.6.0
   chmorgan/esp-libhelix-mp3:
     component_hash: cbb76089dc2c5749f7b470e2e70aedc44c9da519e04eb9a67d4c7ec275229e53
     dependencies:
@@ -396,7 +386,6 @@ dependencies:
 direct_dependencies:
 - 78/esp-opus
 - 78/esp-opus-encoder
-- 78/xiaozhi-fonts
 - chmorgan/esp-libhelix-mp3
 - esp_io_expander_pca9557
 - espressif/button
@@ -415,6 +404,6 @@ direct_dependencies:
 - espressif/mqtt
 - idf
 - lvgl/lvgl
-manifest_hash: 91231e8689dfec13e3b1a82973d720162f31174edf1b14fb18e55eadafa23ac4
+manifest_hash: fe6b8f80e633f4f1416f087e5393ae248fc78992b5e51f5503f1c127f3a40184
 target: esp32s3
 version: 3.0.0

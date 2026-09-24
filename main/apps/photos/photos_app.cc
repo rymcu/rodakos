@@ -35,7 +35,7 @@ constexpr int32_t kPhotoAreaHeight = 146;
 constexpr lv_coord_t kPhotoAreaTop = 42;
 constexpr lv_coord_t kFullscreenTopBarHeight = 40;
 
-// UI 常量 - 参考 xiaozhi image_app 的圆形按钮设计
+// UI 常量 - 采用 RodakOS 图片应用的圆形按钮设计
 constexpr lv_coord_t kRoundButtonSize = 38;
 
 lv_obj_t* CreateRoundButton(lv_obj_t* parent, const char* icon_text, bool is_primary) {

@@ -1,7 +1,7 @@
 #include "phone_ui/phone_fonts.h"
 
-// 来自 78/xiaozhi-fonts 组件的字体（每个字体是独立的 .c 文件，
-// 只有被引用的字体才会被链接进固件，未引用的不会占用 flash）。
+// RodakOS-owned 字体子集（每个字体是独立的 .c 文件，只有被引用的
+// 字体才会被链接进固件，未引用的不会占用 flash）。
 LV_FONT_DECLARE(font_puhui_16_4);    // 中文 / CJK
 LV_FONT_DECLARE(font_awesome_20_4);  // 图标（状态栏 / 列表 / 文本内联）
 LV_FONT_DECLARE(font_awesome_30_4);  // 图标（桌面大图标）

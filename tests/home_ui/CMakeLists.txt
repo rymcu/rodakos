@@ -41,7 +41,7 @@ target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${RODAKOS_ROOT}/main"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson"
-    "${RODAKOS_ROOT}/managed_components/78__xiaozhi-fonts/include"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/include"
 )
 
 target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl)

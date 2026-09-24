@@ -1,8 +1,8 @@
 #pragma once
 
 // RodakOS 字体系统
-// 参考 xiaozhi-esp32 的字体方案，使用 78/xiaozhi-fonts 组件解决“豆腐块”问题：
-//   - font_puhui_16_4 : 阿里巴巴普惠体（中文 / CJK 字形）
+// RodakOS-owned UI font subset，解决中文和图标的“豆腐块”问题：
+//   - font_puhui_16_4 : 普惠体（中文 / CJK 字形）
 //   - font_awesome_*  : Font Awesome 图标字体（替换 emoji / 方块字符图标）
 //
 // 通过 LVGL 9 的字体回退链（fallback）把三套字体串起来：

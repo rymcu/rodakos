@@ -1,0 +1,5 @@
+version: 0.1.0
+description: RodakOS-owned UI font subset (CJK text and Font Awesome icons)
+license: MIT
+dependencies:
+  idf: ">=5.3"
