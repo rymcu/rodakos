@@ -11,6 +11,35 @@ bool IsAuthenticationStatus(int status_code) {
 }
 }
 
+void VoiceTransportFailureArbiter::Reset(uint32_t transport_generation) {
+    transport_generation_ = transport_generation;
+    origin_ = VoiceTransportFailureOrigin::kNone;
+    failure_ = {};
+}
+
+bool VoiceTransportFailureArbiter::Claim(
+    const VoiceTransportFailure& failure, VoiceTransportFailureOrigin origin) {
+    if (transport_generation_ == 0 || failure.transport_generation != transport_generation_ ||
+        origin == VoiceTransportFailureOrigin::kNone ||
+        origin_ != VoiceTransportFailureOrigin::kNone) {
+        return false;
+    }
+    failure_ = failure;
+    origin_ = origin;
+    return true;
+}
+
+bool VoiceTransportFailureArbiter::HasClaim(uint32_t transport_generation) const {
+    return transport_generation != 0 && transport_generation == transport_generation_ &&
+           origin_ != VoiceTransportFailureOrigin::kNone;
+}
+
+bool VoiceTransportFailureArbiter::HasInboundClaim(
+    uint32_t transport_generation) const {
+    return HasClaim(transport_generation) &&
+           origin_ == VoiceTransportFailureOrigin::kInbound;
+}
+
 VoiceTransportFailure ClassifyVoiceWebsocketCloseFailure(
     int close_code, uint32_t transport_generation) {
     VoiceTransportFailure failure;

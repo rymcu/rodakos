@@ -741,31 +741,109 @@ RODAK_TEST("websocket close failures preserve canonical reconnect policy") {
     RODAK_CHECK(network.retryable);
     RODAK_CHECK_EQ(network.transport_generation, 31u);
 
-    const auto protocol = rodakos::ClassifyVoiceWebsocketCloseFailure(1002, 32);
+    const auto normal = rodakos::ClassifyVoiceWebsocketCloseFailure(1000, 32);
+    RODAK_CHECK_EQ(normal.kind, rodakos::VoiceTransportFailureKind::kNetwork);
+    RODAK_CHECK_FALSE(normal.retryable);
+
+    const auto protocol = rodakos::ClassifyVoiceWebsocketCloseFailure(1002, 33);
     RODAK_CHECK_EQ(protocol.kind, rodakos::VoiceTransportFailureKind::kProtocol);
     RODAK_CHECK_FALSE(protocol.retryable);
 
-    const auto server = rodakos::ClassifyVoiceWebsocketCloseFailure(1011, 33);
+    const auto server = rodakos::ClassifyVoiceWebsocketCloseFailure(1011, 34);
     RODAK_CHECK_EQ(server.kind, rodakos::VoiceTransportFailureKind::kServer);
     RODAK_CHECK(server.retryable);
 
     const auto service_restart =
-        rodakos::ClassifyVoiceWebsocketCloseFailure(1012, 34);
+        rodakos::ClassifyVoiceWebsocketCloseFailure(1012, 35);
     RODAK_CHECK_EQ(service_restart.kind,
                    rodakos::VoiceTransportFailureKind::kServer);
     RODAK_CHECK(service_restart.retryable);
-    RODAK_CHECK_EQ(service_restart.transport_generation, 34u);
+    RODAK_CHECK_EQ(service_restart.transport_generation, 35u);
 
     const auto service_overload =
-        rodakos::ClassifyVoiceWebsocketCloseFailure(1013, 35);
+        rodakos::ClassifyVoiceWebsocketCloseFailure(1013, 36);
     RODAK_CHECK_EQ(service_overload.kind,
                    rodakos::VoiceTransportFailureKind::kServer);
     RODAK_CHECK(service_overload.retryable);
-    RODAK_CHECK_EQ(service_overload.transport_generation, 35u);
+    RODAK_CHECK_EQ(service_overload.transport_generation, 36u);
 
-    const auto cancelled = rodakos::ClassifyVoiceWebsocketCloseFailure(4001, 36);
+    const auto cancelled = rodakos::ClassifyVoiceWebsocketCloseFailure(4001, 37);
     RODAK_CHECK_EQ(cancelled.kind, rodakos::VoiceTransportFailureKind::kCancelled);
     RODAK_CHECK_FALSE(cancelled.retryable);
+}
+
+RODAK_TEST("voice transport failure arbiter preserves the first generation outcome") {
+    rodakos::VoiceTransportFailureArbiter arbiter;
+    arbiter.Reset(15);
+
+    const auto normal_close = rodakos::ClassifyVoiceWebsocketCloseFailure(1000, 15);
+    RODAK_CHECK(arbiter.Claim(
+        normal_close, rodakos::VoiceTransportFailureOrigin::kInbound));
+
+    rodakos::VoiceTransportFailure channel_closed;
+    channel_closed.kind = rodakos::VoiceTransportFailureKind::kNetwork;
+    channel_closed.code = "audio_channel_closed";
+    channel_closed.message = "Audio channel is not open";
+    channel_closed.retryable = true;
+    channel_closed.transport_generation = 15;
+    RODAK_CHECK_FALSE(arbiter.Claim(
+        channel_closed, rodakos::VoiceTransportFailureOrigin::kLocalOperation));
+    RODAK_CHECK(arbiter.HasInboundClaim(15));
+    RODAK_CHECK_EQ(arbiter.failure().code, "websocket_close_1000");
+    RODAK_CHECK_FALSE(arbiter.failure().retryable);
+
+    arbiter.Reset(16);
+    rodakos::VoiceTransportFailure session_finished;
+    session_finished.kind = rodakos::VoiceTransportFailureKind::kCancelled;
+    session_finished.code = "session_finished";
+    session_finished.message = "Voice session finished";
+    session_finished.transport_generation = 16;
+    RODAK_CHECK(arbiter.Claim(
+        session_finished, rodakos::VoiceTransportFailureOrigin::kInbound));
+    channel_closed.transport_generation = 16;
+    RODAK_CHECK_FALSE(arbiter.Claim(
+        channel_closed, rodakos::VoiceTransportFailureOrigin::kLocalOperation));
+    rodakos::VoiceTransportFailure control_send_failed;
+    control_send_failed.kind = rodakos::VoiceTransportFailureKind::kSend;
+    control_send_failed.code = "control_send_failed";
+    control_send_failed.message = "Failed to send complete websocket text";
+    control_send_failed.retryable = true;
+    control_send_failed.transport_generation = 16;
+    RODAK_CHECK_FALSE(arbiter.Claim(
+        control_send_failed, rodakos::VoiceTransportFailureOrigin::kLocalOperation));
+    RODAK_CHECK_EQ(arbiter.failure().code, "session_finished");
+    RODAK_CHECK_FALSE(arbiter.failure().retryable);
+
+    arbiter.Reset(17);
+    rodakos::VoiceTransportFailure send_failure;
+    send_failure.kind = rodakos::VoiceTransportFailureKind::kSend;
+    send_failure.code = "audio_send_failed";
+    send_failure.message = "Failed to send complete audio packet";
+    send_failure.retryable = true;
+    send_failure.transport_generation = 17;
+    RODAK_CHECK(arbiter.Claim(
+        send_failure, rodakos::VoiceTransportFailureOrigin::kLocalOperation));
+    const auto late_close = rodakos::ClassifyVoiceWebsocketCloseFailure(1000, 17);
+    RODAK_CHECK_FALSE(arbiter.Claim(
+        late_close, rodakos::VoiceTransportFailureOrigin::kInbound));
+    RODAK_CHECK_FALSE(arbiter.HasInboundClaim(17));
+    RODAK_CHECK_EQ(arbiter.failure().code, "audio_send_failed");
+    RODAK_CHECK(arbiter.failure().retryable);
+
+    arbiter.Reset(18);
+    rodakos::VoiceTransportFailure malformed_server_error;
+    malformed_server_error.kind = rodakos::VoiceTransportFailureKind::kProtocol;
+    malformed_server_error.code = "server_error_invalid";
+    malformed_server_error.message = "Invalid realtime voice server error";
+    malformed_server_error.transport_generation = 18;
+    RODAK_CHECK(arbiter.Claim(
+        malformed_server_error, rodakos::VoiceTransportFailureOrigin::kInbound));
+    const auto trailing_disconnect =
+        rodakos::ClassifyVoiceWebsocketCloseFailure(0, 18);
+    RODAK_CHECK_FALSE(arbiter.Claim(
+        trailing_disconnect, rodakos::VoiceTransportFailureOrigin::kInbound));
+    RODAK_CHECK_EQ(arbiter.failure().code, "server_error_invalid");
+    RODAK_CHECK_FALSE(arbiter.failure().retryable);
 }
 
 RODAK_TEST("websocket handshake failures distinguish auth timeout and server load") {

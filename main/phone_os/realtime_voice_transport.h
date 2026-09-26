@@ -71,8 +71,16 @@ private:
                                      const std::string& code,
                                      const std::string& message,
                                      bool retryable,
-                                     uint32_t generation = 0);
-    bool ClaimInboundFailure(uint32_t generation);
+                                     uint32_t generation = 0,
+                                     VoiceTransportFailureOrigin origin =
+                                         VoiceTransportFailureOrigin::kNone,
+                                     bool* claimed = nullptr);
+    bool ResolveLocalOperationFailure(VoiceTransportFailureKind kind,
+                                      const std::string& code,
+                                      const std::string& message,
+                                      bool retryable,
+                                      uint32_t generation);
+    bool HasInboundFailure(uint32_t generation) const;
     void SetError(const std::string& message, uint32_t generation = 0);
     bool IsConnectionCurrent(uint32_t generation) const;
 
@@ -121,7 +129,7 @@ private:
     bool inbound_output_active_ = false;
     uint32_t audio_sequence_ = 0;
     uint32_t inbound_audio_sequence_ = 0;
-    bool inbound_failure_reported_ = false;
+    VoiceTransportFailureArbiter failure_arbiter_;
     std::string vad_strategy_ = "server-authoritative";
 };
 

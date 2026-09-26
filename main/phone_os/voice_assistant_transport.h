@@ -56,6 +56,27 @@ struct VoiceTransportFailure {
     uint32_t transport_generation = 0;
 };
 
+enum class VoiceTransportFailureOrigin {
+    kNone,
+    kLocalOperation,
+    kInbound,
+};
+
+class VoiceTransportFailureArbiter {
+public:
+    void Reset(uint32_t transport_generation);
+    bool Claim(const VoiceTransportFailure& failure, VoiceTransportFailureOrigin origin);
+
+    bool HasClaim(uint32_t transport_generation) const;
+    bool HasInboundClaim(uint32_t transport_generation) const;
+    const VoiceTransportFailure& failure() const { return failure_; }
+
+private:
+    uint32_t transport_generation_ = 0;
+    VoiceTransportFailureOrigin origin_ = VoiceTransportFailureOrigin::kNone;
+    VoiceTransportFailure failure_;
+};
+
 VoiceTransportFailure ClassifyVoiceWebsocketCloseFailure(
     int close_code, uint32_t transport_generation);
 VoiceTransportFailure ClassifyVoiceWebsocketErrorFailure(
