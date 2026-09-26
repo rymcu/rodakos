@@ -213,7 +213,7 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-Current observed IDF 6.0.2 `build\rodakos.bin` size is about 5.87 MiB. The main `ota_0` partition is
+Current observed IDF 6.0.2 `build\rodakos.bin` size is about 6.28 MiB. The main `ota_0` partition is
 13.3125 MiB; the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash

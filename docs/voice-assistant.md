@@ -116,9 +116,15 @@ connection while idle.
 
 For an established interaction, the I/O task retries network disconnects, server `retryable: true`,
 WebSocket `1011`, `1012`, or `1013`, connect/session-ready timeouts, and failed sends. It does not
-retry `session.end`, user stop or deinitialization, close `1002` or `4001`,
-authentication/configuration failures, protocol violations, or server `retryable: false`. The policy
-permits three attempts with exponential backoff starting at 250 ms and capped at 8 s.
+retry `session.end`, normal WebSocket close `1000`, user stop or deinitialization, close `1002` or
+`4001`, authentication/configuration failures, protocol violations, or server `retryable: false`.
+The policy permits three attempts with exponential backoff starting at 250 ms and capped at 8 s.
+
+Within one transport generation, the first transport failure or terminal result wins. Once an
+inbound `session.end`, WebSocket close, server error, or protocol error is accepted, later outbound
+failures cannot replace it; outbound calls return success when they observe that already-latched
+inbound result. If a retryable local send failure is accepted first, it remains authoritative and
+the service follows the bounded reconnect path.
 
 Each retry closes and waits for the previous transport, opens a new connection, receives
 `session.ready`, restores `wake.detected`, and starts realtime input. Only after that sequence is the
@@ -185,13 +191,14 @@ On hardware, verify:
   session id, with one new `input.start` after each non-terminal `output.stop`;
 - Rodak receives valid Opus and returns audible TTS without a clipped final syllable;
 - no intermediate turn releases focus, closes the WebSocket, or re-arms MultiNet;
-- saying "再见" produces `output.stop`, then `session.end`, one cleanup, and local wake re-arm;
+- saying "再见" produces `output.stop`, then `session.end` and normal close `1000`, one cleanup, no
+  `audio_channel_closed` reconnect, and local wake re-arm;
 - 30 seconds of follow-up silence closes the session safely after any completed reply;
 - a forced network loss during an established interaction, including before its first `output.start`,
   retries at the bounded backoff, restores `session.ready`, `wake.detected`, and `input.start` in
   that order, and never replays pre-failure microphone or TTS data;
-- server `retryable: false`, close `1002`/`4001`, explicit stop, and deinitialization do not retry,
-  while close `1011`/`1012`/`1013` retries only after the interaction is established;
+- server `retryable: false`, close `1000`/`1002`/`4001`, explicit stop, and deinitialization do not
+  retry, while close `1011`/`1012`/`1013` retries only after the interaction is established;
 - music pauses and resumes, while Recorder can temporarily preempt wake monitoring;
 - disabling wake monitoring closes the ADC owner and does not reconnect to the cloud.
 

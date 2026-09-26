@@ -4,7 +4,7 @@ RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web pro
 
 ## Current Baseline
 
-As of 2026-09-24:
+As of 2026-09-27:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
 - ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
@@ -21,7 +21,7 @@ As of 2026-09-24:
 - Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
   Music, Recorder, Assistant, Smart, and Wake.
 - Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, and SD-staged OTA.
-- Current IDF 6.0.2 app binary is about 5.87 MiB of the 13.3125 MiB main application partition.
+- Current IDF 6.0.2 app binary is about 6.28 MiB of the 13.3125 MiB main application partition.
 
 ## Milestone 0: Hardware And Build Baseline
 
@@ -134,9 +134,10 @@ Next work:
 
 ## Milestone 5: Assistant And Cloud
 
-Status: non-voice Device Cloud provisioning and credential rotation are hardware-verified; one
-real-person local wake/ASR/agent/TTS turn is verified. Multi-turn follow-up is implemented
-and awaits its device gate.
+Status: non-voice Device Cloud provisioning and credential rotation are hardware-verified.
+Real-person local wake/ASR/agent/TTS, same-session follow-up, bounded reconnect and retry exhaustion,
+and explicit "再见" termination are verified on COM3; the broader six-turn, coexistence, and
+long-duration device gates remain.
 
 - Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
 - A wake match acquires audio focus, buffers 16 kHz mono PCM, opens one Rodak WebSocket, uploads
@@ -154,11 +155,12 @@ Next work:
 
 - Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud gate as a
   regression check.
-- Run the multi-turn [voice assistant hardware verification](voice-assistant.md#verification-gates),
-  including at least six same-session turns, explicit "再见"/`session.end`, follow-up silence, music resume, Recorder
-  preemption, repeated wake suppression, and TTS tail playback.
-- Force a network drop and retryable/nonretryable server failures on hardware to verify bounded
-  reconnect, stale audio discard, and stop/deinitialization cancellation.
+- Complete the remaining [voice assistant hardware verification](voice-assistant.md#verification-gates):
+  at least six same-session turns, follow-up silence, music resume, Recorder preemption, repeated wake
+  suppression, and TTS tail playback.
+- Extend hardware fault injection beyond the verified retryable reconnect and retry-exhaustion
+  scenarios to cover server `retryable: false`, close `1002`/`4001`, stale audio discard, and
+  stop/deinitialization cancellation.
 - Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
 - TTS-time interruption is now wired through the existing session: an AEC/VAD-confirmed barge-in
   aborts playback, keeps capture and the existing session alive, and rejects late TTS frames

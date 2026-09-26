@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-09-24.
+Last refreshed: 2026-09-27.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -32,7 +32,7 @@ Last refreshed: 2026-09-24.
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Current IDF 6.0.2 built artifact seen in `build/rodakos.bin`: about 5.87 MiB. The main application slot is
+- Current IDF 6.0.2 built artifact seen in `build/rodakos.bin`: about 6.28 MiB. The main application slot is
   13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
