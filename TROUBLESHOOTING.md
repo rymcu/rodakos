@@ -288,6 +288,32 @@ These services intentionally open heavy hardware paths on demand. If an app says
   linker alias `_ctype_=_ctype_b+127` in `main/CMakeLists.txt`; do not replace it with a C pointer
   variable or patch the prebuilt library under `managed_components/`.
 
+If GC0308 detection succeeds but camera startup reports `no mem for CAM DVP DMA receive buffer`
+and `Failed to start camera stream: Not enough space`, check contiguous internal DMA SRAM, not
+total free heap or PSRAM. The ESP32-S3 DVP driver copies through an internal receive ring even
+when the full image buffers are in PSRAM. Its default 32768-byte limit requires a 30720-byte
+contiguous allocation for 320x240 RGB565; the resident voice/network runtime can leave only a
+20480-byte block.
+
+Keep `CONFIG_CAM_CTRL_DVP_DMA_BUFFER_SIZE=8192` in both `sdkconfig` and `sdkconfig.defaults`.
+That supported setting uses a 7680-byte receive ring at the current preview resolution. Rebuild
+and verify on hardware with wake monitoring enabled: `Starting camera stream` reports the DMA
+budget, and `Camera first frame ready` confirms actual reception. Reopen Camera after a voice
+interaction and check sustained preview for DVP overflow/dequeue errors; a smaller ring increases
+the frequency at which the driver's copy task must run.
+
+If the voice WebSocket reaches Rodak but the handshake returns HTTP 401 with an expired-device-token
+reason, the endpoint is reachable but its cached AIoT credential is no longer valid. The current
+Rodak server issues 600-second tokens. New voice interactions verify the token's advertised
+`expiresIn` and refresh it using the existing paired device secret before opening the stream.
+Freshness is tracked with a monotonic clock in RAM and is re-established after each boot. A rejected
+refresh ends the attempt without opening a WebSocket or starting a new pairing request.
+
+MQTT refreshes bootstrap before its first connection after boot, so a cached broker address from a
+previous LAN can be replaced by the configured server's current address. Verify `MQTT health:
+connected=1`, `Realtime voice session ready`, and `Sent speech input start`. A serial simulated wake
+proves connection setup, while acoustic wake and a complete spoken answer require a real-person test.
+
 ## USB Disk Mode
 
 USB disk mode is not a normal app runtime state. Settings requests a one-shot boot flag, then the next boot enters TinyUSB MSC before the normal UI and services start.

@@ -100,6 +100,13 @@ If the configured token already contains an auth scheme, the transport uses it
 as supplied. Generation `0` is reserved for “not established”; every connection
 generation starts at a non-zero value and wraps `UINT32_MAX` to `1`.
 
+The device also owns an interaction generation and a reconnect-policy generation. The interaction
+generation identifies one local wake lifecycle. The policy generation is the currently committed
+transport generation that failed; a successful retry receives a different transport generation. A
+callback or failure for any other generation is stale and must be dropped. During command restoration,
+the new generation may be temporarily bound only to queue its callbacks; it is not active until the
+full restore sequence commits.
+
 The client sends one `session.open` per connection generation. The server must
 answer one matching `session.ready`; a duplicate or delayed ready event is an
 error and cannot reset the session's playback or audio counters.
@@ -205,9 +212,22 @@ local wake → connect → session.open/ready → wake.detected → input.start
 ```
 
 The follow-up window is 30 seconds and is refreshed when capture restarts or
-fresh speech begins. A transport error, connection/listening watchdog, explicit
-`session.end`, or follow-up timeout closes the session and re-arms local wake
-monitoring. A watchdog must not cut off audio that is already draining.
+fresh speech begins. An initial connection or first-turn failure, a terminal transport error,
+connection/listening watchdog, explicit `session.end`, or follow-up timeout closes the session and
+re-arms local wake monitoring. A watchdog must not cut off audio that is already draining.
+
+An interaction is established only after `session.ready`, `wake.detected`, and its first
+`input.start` have all succeeded; `session.open` is a prerequisite of `session.ready`. A failure
+before that point is an initial-setup failure and ends the wake interaction. Once established, a
+retryable failure remains eligible for reconnect even before the first `output.start` arrives. The
+service retries only retryable transport failures: network loss, connect/session-ready timeout, send
+failure, WebSocket `1011`, `1012`, or `1013`, or a server `error` with `retryable: true`. It does not
+retry configuration or authentication errors, protocol errors, WebSocket `1002` or `4001`,
+`session.end`, user stop, or deinitialization. Retry timing is bounded to three attempts with
+exponential backoff from 250 ms to 8 s. Each attempt performs
+`close/wait → session.open/session.ready → wake.detected → input.start`; only a completed sequence
+commits the new active generation. Old recorder frames, inbound callbacks, playback state, and decoder
+state are discarded at the recovery boundary.
 
 During AEC/VAD-enabled playback, the capture path may remain open. A confirmed
 barge-in sends `vad`/`playback.abort` on the current session and playback epoch,
@@ -229,9 +249,15 @@ must not be reused by the Rodak realtime path.
 
 ## 8. Verification anchors
 
-Host coverage is in `tests/app_model/realtime_voice_contract_test.cc`, including
-descriptor validation, VAD negotiation, RAV1 parsing, MCP/error validation,
-generation isolation, playback epochs, monotonic sequences, and bounded reconnect
-policy. Product behavior and hardware gates are documented in
-[Voice assistant integration](voice-assistant.md) and
+Host coverage is limited to pure contract and coordinator behavior.
+`tests/app_model/realtime_voice_contract_test.cc` covers descriptor validation,
+VAD negotiation, RAV1 parsing, MCP/error validation, generation isolation,
+playback epochs, monotonic sequences, and bounded reconnect policy.
+`tests/app_model/voice_assistant_reconnect_coordinator_test.cc` exercises recovery
+ordering, generation gates, backoff, and cancellation through a fake transport.
+Neither target instantiates `VoiceAssistantService` or the ESP/FreeRTOS transport;
+they do not validate production Stop/Deinit cancellation, release of a blocked
+open attempt, or decoder reset at the recovery boundary. Those behaviors require
+firmware and hardware validation. Product behavior and hardware gates are documented
+in [Voice assistant integration](voice-assistant.md) and
 [Voice AEC integration](voice-aec-integration.md).

@@ -141,8 +141,10 @@ and awaits its device gate.
 - Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
 - A wake match acquires audio focus, buffers 16 kHz mono PCM, opens one Rodak WebSocket, uploads
   60 ms Opus frames, and decodes downlink Opus. Every non-terminal reply drains TTS and resumes
-  listening on the same session; a user saying "再见" ends the session with `session.end`, while 30 seconds of follow-up silence, errors, or a
-  connection/listening watchdog disconnect and re-arm local monitoring. Active TTS playback is not
+  listening on the same session; a user saying "再见" ends the session with `session.end`, while 30 seconds of follow-up silence, terminal errors, or a
+  connection/listening watchdog disconnect and re-arm local monitoring. Established retryable transport
+  failures use bounded service-owned reconnect/backoff and restore `session.ready`, `wake.detected`, and
+  `input.start` before becoming active. Active TTS playback is not
   terminated by that watchdog.
 - Wake, Recorder, and assistant capture use explicit ADC owners and priorities.
 - The Assistant app is a persistent enable/configuration and status surface, not a Talk/Stop page.
@@ -155,6 +157,8 @@ Next work:
 - Run the multi-turn [voice assistant hardware verification](voice-assistant.md#verification-gates),
   including at least six same-session turns, explicit "再见"/`session.end`, follow-up silence, music resume, Recorder
   preemption, repeated wake suppression, and TTS tail playback.
+- Force a network drop and retryable/nonretryable server failures on hardware to verify bounded
+  reconnect, stale audio discard, and stop/deinitialization cancellation.
 - Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
 - TTS-time interruption is now wired through the existing session: an AEC/VAD-confirmed barge-in
   aborts playback, keeps capture and the existing session alive, and rejects late TTS frames
