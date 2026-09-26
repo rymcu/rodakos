@@ -9,6 +9,10 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 
+# The S3 DVP driver needs contiguous internal DMA SRAM even with PSRAM frames.
+# Keep its receive ring below the free-block budget of the resident voice runtime.
+CONFIG_CAM_CTRL_DVP_DMA_BUFFER_SIZE=8192
+
 # Reserve shared SRAM for WiFi runtime buffers and concurrent voice/cloud tasks.
 # IDF's optional IRAM fast paths trade more than 27 KiB for peak throughput.
 CONFIG_ESP_WIFI_IRAM_OPT=n

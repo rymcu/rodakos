@@ -10,6 +10,7 @@
 #include "phone_ui/rodakos_theme.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -373,6 +374,7 @@ void CameraApp::UpdatePreview() {
         return;
     }
 
+    const bool first_displayed_frame = displayed_sequence_ == 0;
     preview_pixels_ = std::move(frame.rgb565);
     displayed_sequence_ = frame.sequence;
 
@@ -402,7 +404,8 @@ void CameraApp::UpdatePreview() {
     if (capture_button_ != nullptr && (!capture_guard_ || !capture_guard_->running.load())) {
         lv_obj_clear_state(capture_button_, LV_STATE_DISABLED);
     }
-    if (displayed_sequence_ == frame.sequence && frame.sequence == 1) {
+    if (first_displayed_frame) {
+        ESP_LOGI(TAG, "Camera preview image updated: sequence=%" PRIu32, frame.sequence);
         UpdateStatus("Ready");
     }
 }

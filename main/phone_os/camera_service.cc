@@ -470,6 +470,7 @@ void CameraService::PreviewTask() {
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     const size_t frame_size = static_cast<size_t>(active_stride_) * active_height_;
     const int64_t started_at_us = esp_timer_get_time();
+    int64_t last_frame_at_us = 0;
     int consecutive_dequeue_failures = 0;
     bool received_frame = false;
 
@@ -518,7 +519,13 @@ void CameraService::PreviewTask() {
                 has_frame_ = true;
                 frame_count_++;
                 xSemaphoreGive(mutex_);
+                if (!received_frame) {
+                    ESP_LOGI(TAG, "Camera first frame ready: %dx%d stride=%d elapsed_ms=%" PRId64,
+                             active_width_, active_height_, active_stride_,
+                             (esp_timer_get_time() - started_at_us) / 1000);
+                }
                 received_frame = true;
+                last_frame_at_us = esp_timer_get_time();
             }
         }
 
@@ -537,7 +544,16 @@ void CameraService::PreviewTask() {
 
     CloseStream();
     MarkPreviewStopped();
-    ESP_LOGI(TAG, "Camera preview stopped");
+    const auto state = GetState();
+#ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+    const int64_t stopped_at_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "Camera preview stopped: frames=%" PRIu32 " elapsed_ms=%" PRId64
+             " last_frame_age_ms=%" PRId64,
+             state.frame_count, (stopped_at_us - started_at_us) / 1000,
+             last_frame_at_us == 0 ? -1 : (stopped_at_us - last_frame_at_us) / 1000);
+#else
+    ESP_LOGI(TAG, "Camera preview stopped: frames=%" PRIu32, state.frame_count);
+#endif
 }
 
 bool CameraService::OpenStream(int width, int height) {
@@ -637,6 +653,12 @@ bool CameraService::OpenStream(int width, int height) {
     }
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    ESP_LOGI(TAG,
+             "Starting camera stream: dma_buffer_limit=%u internal_dma_free=%u "
+             "internal_dma_largest=%u",
+             static_cast<unsigned>(CONFIG_CAM_CTRL_DVP_DMA_BUFFER_SIZE),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)));
     if (StreamOnSuppressingBenignGpioIsrLog(fd_, &type) != 0) {
         SetError(std::string("Failed to start camera stream: ") + ErrnoName());
         return false;
