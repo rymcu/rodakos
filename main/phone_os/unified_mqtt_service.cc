@@ -207,6 +207,7 @@ bool UnifiedMqttService::Start() {
         return false;
     }
     ESP_LOGI(TAG, "Reserved internal MQTT worker: stack=6144 queue=8");
+    force_refresh_.store(true);
     BindOtaProgressPublisher();
 
     const esp_err_t err = esp_event_handler_instance_register(

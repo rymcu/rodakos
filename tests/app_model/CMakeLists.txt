@@ -19,9 +19,11 @@ add_executable(rodakos_app_model_tests
     voice_identity_test.cc
     serial_provisioning_frame_test.cc
     mqtt_credential_refresh_policy_test.cc
+    cloud_credential_freshness_test.cc
     device_pairing_policy_test.cc
     device_pairing_protocol_test.cc
     realtime_voice_contract_test.cc
+    voice_assistant_reconnect_coordinator_test.cc
     battery_level_model_test.cc
     wifi_connection_policy_test.cc
     ../../main/phone_os/phone_app_registry.cc
@@ -38,6 +40,8 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/voice_aec_diagnostic_capture.cc
     ../../main/phone_os/voice_wake_settings.cc
     ../../main/phone_os/voice_identity.cc
+    ../../main/phone_os/voice_assistant_reconnect_coordinator.cc
+    ../../main/phone_os/voice_assistant_transport.cc
     ../../main/phone_os/serial_provisioning_protocol.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
     ../../main/phone_os/device_pairing_protocol.cc

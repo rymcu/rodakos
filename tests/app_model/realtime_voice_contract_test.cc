@@ -651,6 +651,150 @@ RODAK_TEST("canonical realtime voice MCP inbound envelope requires an object pay
     cJSON_Delete(scalar_payload);
 }
 
+RODAK_TEST("canonical realtime voice server error parser preserves retry policy fields") {
+    cJSON* root = cJSON_Parse(
+        R"({"event":"error","sessionId":"session-1","code":"upstream_unavailable","message":"try later","retryable":true})");
+    RODAK_CHECK(root != nullptr);
+
+    rodakos::RealtimeVoiceServerError server_error;
+    std::string error;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceServerError(root, server_error, error));
+    RODAK_CHECK_EQ(server_error.code, "upstream_unavailable");
+    RODAK_CHECK_EQ(server_error.message, "try later");
+    RODAK_CHECK(server_error.retryable);
+    RODAK_CHECK(error.empty());
+    cJSON_Delete(root);
+
+    root = cJSON_Parse(
+        R"({"event":"error","code":"invalid_request","message":"stop","retryable":false})");
+    RODAK_CHECK(root != nullptr);
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceServerError(root, server_error, error));
+    RODAK_CHECK_EQ(server_error.code, "invalid_request");
+    RODAK_CHECK_FALSE(server_error.retryable);
+    cJSON_Delete(root);
+}
+
+RODAK_TEST("canonical realtime voice server error parser rejects incomplete envelopes") {
+    const std::vector<const char*> cases = {
+        R"({"event":"output.stop","code":"failed","message":"no","retryable":true})",
+        R"({"event":"error","message":"no","retryable":true})",
+        R"({"event":"error","code":"","message":"no","retryable":true})",
+        R"({"event":"error","code":"failed","message":"","retryable":true})",
+        R"({"event":"error","code":"failed","message":"no","retryable":"true"})",
+    };
+    for (const char* json : cases) {
+        cJSON* root = cJSON_Parse(json);
+        RODAK_CHECK(root != nullptr);
+        rodakos::RealtimeVoiceServerError server_error;
+        server_error.code = "stale";
+        server_error.message = "stale";
+        server_error.retryable = true;
+        std::string error;
+        RODAK_CHECK_FALSE(
+            rodakos::ParseRealtimeVoiceServerError(root, server_error, error));
+        RODAK_CHECK(server_error.code.empty());
+        RODAK_CHECK(server_error.message.empty());
+        RODAK_CHECK_FALSE(server_error.retryable);
+        RODAK_CHECK_FALSE(error.empty());
+        cJSON_Delete(root);
+    }
+}
+
+RODAK_TEST("voice transport failure augments legacy inbound error payload") {
+    const std::string payload =
+        R"({"event":"error","code":"busy","message":"try later","retryable":true})";
+    rodakos::VoiceInboundEvent event;
+    event.type = rodakos::VoiceInboundEventType::kError;
+    event.transport_generation = 23;
+    event.payload = payload;
+    event.failure.kind = rodakos::VoiceTransportFailureKind::kServer;
+    event.failure.code = "busy";
+    event.failure.message = "try later";
+    event.failure.retryable = true;
+    event.failure.transport_generation = 23;
+
+    RODAK_CHECK_EQ(event.payload, payload);
+    RODAK_CHECK_EQ(event.failure.kind, rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK_EQ(event.failure.code, "busy");
+    RODAK_CHECK_EQ(event.failure.message, "try later");
+    RODAK_CHECK(event.failure.retryable);
+    RODAK_CHECK_EQ(event.failure.transport_generation, 23u);
+}
+
+RODAK_TEST("offline voice transport reports a terminal configuration failure") {
+    rodakos::NoopVoiceAssistantTransport transport;
+    RODAK_CHECK_FALSE(transport.SendStartListening(
+        rodakos::VoiceListeningMode::kRealtime, 29));
+
+    const rodakos::VoiceTransportFailure failure = transport.last_failure();
+    RODAK_CHECK_EQ(failure.kind,
+                   rodakos::VoiceTransportFailureKind::kConfiguration);
+    RODAK_CHECK_EQ(failure.code, "transport_not_configured");
+    RODAK_CHECK_EQ(failure.message, "Voice transport not configured");
+    RODAK_CHECK_FALSE(failure.retryable);
+    RODAK_CHECK_EQ(failure.transport_generation, 29u);
+}
+
+RODAK_TEST("websocket close failures preserve canonical reconnect policy") {
+    const auto network = rodakos::ClassifyVoiceWebsocketCloseFailure(0, 31);
+    RODAK_CHECK_EQ(network.kind, rodakos::VoiceTransportFailureKind::kNetwork);
+    RODAK_CHECK(network.retryable);
+    RODAK_CHECK_EQ(network.transport_generation, 31u);
+
+    const auto protocol = rodakos::ClassifyVoiceWebsocketCloseFailure(1002, 32);
+    RODAK_CHECK_EQ(protocol.kind, rodakos::VoiceTransportFailureKind::kProtocol);
+    RODAK_CHECK_FALSE(protocol.retryable);
+
+    const auto server = rodakos::ClassifyVoiceWebsocketCloseFailure(1011, 33);
+    RODAK_CHECK_EQ(server.kind, rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK(server.retryable);
+
+    const auto service_restart =
+        rodakos::ClassifyVoiceWebsocketCloseFailure(1012, 34);
+    RODAK_CHECK_EQ(service_restart.kind,
+                   rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK(service_restart.retryable);
+    RODAK_CHECK_EQ(service_restart.transport_generation, 34u);
+
+    const auto service_overload =
+        rodakos::ClassifyVoiceWebsocketCloseFailure(1013, 35);
+    RODAK_CHECK_EQ(service_overload.kind,
+                   rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK(service_overload.retryable);
+    RODAK_CHECK_EQ(service_overload.transport_generation, 35u);
+
+    const auto cancelled = rodakos::ClassifyVoiceWebsocketCloseFailure(4001, 36);
+    RODAK_CHECK_EQ(cancelled.kind, rodakos::VoiceTransportFailureKind::kCancelled);
+    RODAK_CHECK_FALSE(cancelled.retryable);
+}
+
+RODAK_TEST("websocket handshake failures distinguish auth timeout and server load") {
+    const auto auth = rodakos::ClassifyVoiceWebsocketErrorFailure(401, false, 41);
+    RODAK_CHECK_EQ(auth.kind, rodakos::VoiceTransportFailureKind::kAuthentication);
+    RODAK_CHECK_FALSE(auth.retryable);
+
+    const auto timeout = rodakos::ClassifyVoiceWebsocketErrorFailure(408, false, 42);
+    RODAK_CHECK_EQ(timeout.kind, rodakos::VoiceTransportFailureKind::kTimeout);
+    RODAK_CHECK(timeout.retryable);
+
+    const auto busy = rodakos::ClassifyVoiceWebsocketErrorFailure(429, false, 43);
+    RODAK_CHECK_EQ(busy.kind, rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK(busy.retryable);
+
+    const auto unavailable = rodakos::ClassifyVoiceWebsocketErrorFailure(503, false, 44);
+    RODAK_CHECK_EQ(unavailable.kind, rodakos::VoiceTransportFailureKind::kServer);
+    RODAK_CHECK(unavailable.retryable);
+
+    const auto rejected = rodakos::ClassifyVoiceWebsocketErrorFailure(404, false, 45);
+    RODAK_CHECK_EQ(rejected.kind, rodakos::VoiceTransportFailureKind::kProtocol);
+    RODAK_CHECK_FALSE(rejected.retryable);
+
+    const auto pong_timeout =
+        rodakos::ClassifyVoiceWebsocketErrorFailure(0, true, 46);
+    RODAK_CHECK_EQ(pong_timeout.kind, rodakos::VoiceTransportFailureKind::kTimeout);
+    RODAK_CHECK(pong_timeout.retryable);
+}
+
 RODAK_TEST("canonical realtime voice server control payloads validate field types") {
     const std::vector<std::pair<const char*, bool>> cases = {
         {R"({"event":"output.start","text":"hello"})", true},

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace rodakos {
 
@@ -510,6 +511,36 @@ bool IsRealtimeVoiceMcpPayloadObject(const cJSON* envelope) {
     return cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(envelope, "payload"));
 }
 
+bool ParseRealtimeVoiceServerError(const cJSON* envelope,
+                                   RealtimeVoiceServerError& server_error,
+                                   std::string& error) {
+    server_error = {};
+    error.clear();
+    if (envelope == nullptr || !cJSON_IsObject(envelope)) {
+        error = "canonical server error envelope must be an object";
+        return false;
+    }
+
+    const cJSON* event = cJSON_GetObjectItemCaseSensitive(envelope, "event");
+    if (!cJSON_IsString(event) || event->valuestring == nullptr ||
+        std::strcmp(event->valuestring, kRealtimeVoiceEventError) != 0) {
+        error = "canonical server error event is invalid";
+        return false;
+    }
+
+    RealtimeVoiceServerError parsed;
+    const cJSON* retryable = cJSON_GetObjectItemCaseSensitive(envelope, "retryable");
+    if (!ReadRequiredString(envelope, "code", parsed.code) ||
+        !ReadRequiredString(envelope, "message", parsed.message) ||
+        !cJSON_IsBool(retryable)) {
+        error = "canonical server error payload is invalid";
+        return false;
+    }
+    parsed.retryable = cJSON_IsTrue(retryable);
+    server_error = std::move(parsed);
+    return true;
+}
+
 bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
                                                std::string& error) {
     error.clear();
@@ -542,13 +573,8 @@ bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
         return false;
     }
     if (event_name == kRealtimeVoiceEventError) {
-        const cJSON* code = cJSON_GetObjectItemCaseSensitive(envelope, "code");
-        const cJSON* message = cJSON_GetObjectItemCaseSensitive(envelope, "message");
-        const cJSON* retryable = cJSON_GetObjectItemCaseSensitive(envelope, "retryable");
-        if (!cJSON_IsString(code) || code->valuestring == nullptr || code->valuestring[0] == '\0' ||
-            !cJSON_IsString(message) || message->valuestring == nullptr ||
-            message->valuestring[0] == '\0' || !cJSON_IsBool(retryable)) {
-            error = "canonical error payload is invalid";
+        RealtimeVoiceServerError server_error;
+        if (!ParseRealtimeVoiceServerError(envelope, server_error, error)) {
             return false;
         }
     }

@@ -67,6 +67,12 @@ struct RealtimeVoiceAudioFrame {
     size_t payload_size = 0;
 };
 
+struct RealtimeVoiceServerError {
+    std::string code;
+    std::string message;
+    bool retryable = false;
+};
+
 // Host-testable session gate shared by the canonical transport lifecycle.
 // It deliberately contains no FreeRTOS/ESP state: the websocket transport
 // owns locking and calls these methods while holding its session mutex.
@@ -114,6 +120,13 @@ bool IsSupportedRealtimeVoiceFrameDuration(int frame_duration_ms);
 // Validate the canonical MCP envelope payload before it reaches the device
 // event bus. Canonical MCP payloads are JSON objects, never scalar/array text.
 bool IsRealtimeVoiceMcpPayloadObject(const cJSON* envelope);
+
+// Decode the canonical server error without coupling the wire contract to a
+// transport lifecycle. The transport maps this value to its failure type and
+// attaches the active connection generation.
+bool ParseRealtimeVoiceServerError(const cJSON* envelope,
+                                   RealtimeVoiceServerError& server_error,
+                                   std::string& error);
 
 // Validate server-to-device payload fields for canonical control events. The
 // transport still owns session/generation/epoch state checks.

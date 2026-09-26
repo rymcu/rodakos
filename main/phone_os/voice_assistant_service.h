@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/voice_assistant_reconnect_coordinator.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_conversation_policy.h"
 #include "phone_os/voice_barge_in_policy.h"
@@ -101,6 +102,9 @@ private:
     void IoTask();
     void HandleInbound(VoiceInboundEvent&& event);
     void ProcessInbound(VoiceInboundEvent&& event);
+    void HandleTransportFailure(VoiceTransportFailure failure);
+    void ProcessReconnect(uint32_t interaction_generation);
+    void QueueTransportFailure(VoiceTransportFailure failure);
     void ProcessInterrupt();
     bool SendNextAudioFrame();
     bool BeginFollowUpTurn();
@@ -108,6 +112,7 @@ private:
     void StopRecorderForPlayback();
     void RecordPlaybackFrame(int frame_duration_ms);
     void DrainPlayback();
+    void DiscardPendingRecorderFrames();
 
     AudioFocusService& audio_focus_;
     VoiceAssistantTransport& transport_;
@@ -133,6 +138,7 @@ private:
     bool stopping_ = false;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;
+    bool reconnect_pending_ = false;
     uint32_t focus_token_ = 0;
     uint32_t transport_generation_ = 0;
     uint32_t vad_sequence_ = 0;
@@ -149,6 +155,7 @@ private:
     VoiceBargeInPolicy barge_in_policy_;
     VoiceVadEndPolicy vad_end_policy_;
     VoicePlaybackEpochPolicy playback_epoch_policy_;
+    VoiceAssistantReconnectCoordinator reconnect_coordinator_;
     bool playback_vad_started_ = false;
     uint32_t playback_audio_events_ = 0;
     uint32_t playback_decoded_frames_ = 0;

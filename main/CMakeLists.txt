@@ -38,6 +38,7 @@ set(SOURCES
     "phone_os/voice_aec_diagnostic_console.cc"
     "phone_os/voice_aec_diagnostic_capture.cc"
     "phone_os/voice_pcm_assembler.cc"
+    "phone_os/voice_assistant_reconnect_coordinator.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_barge_in_policy.cc"

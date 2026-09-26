@@ -35,12 +35,39 @@ enum class VoiceInboundEventType {
     kError,
 };
 
+enum class VoiceTransportFailureKind {
+    kNone,
+    kConfiguration,
+    kAuthentication,
+    kProtocol,
+    kNetwork,
+    kTimeout,
+    kSend,
+    kResource,
+    kCancelled,
+    kServer,
+};
+
+struct VoiceTransportFailure {
+    VoiceTransportFailureKind kind = VoiceTransportFailureKind::kNone;
+    std::string code;
+    std::string message;
+    bool retryable = false;
+    uint32_t transport_generation = 0;
+};
+
+VoiceTransportFailure ClassifyVoiceWebsocketCloseFailure(
+    int close_code, uint32_t transport_generation);
+VoiceTransportFailure ClassifyVoiceWebsocketErrorFailure(
+    int http_status_code, bool pong_timeout, uint32_t transport_generation);
+
 struct VoiceInboundEvent {
     VoiceInboundEventType type = VoiceInboundEventType::kError;
     uint32_t transport_generation = 0;
     uint32_t playback_epoch = 0;
     VoiceAudioPacket audio;
     std::string payload;
+    VoiceTransportFailure failure;
 };
 
 using VoiceInboundHandler = std::function<void(VoiceInboundEvent&&)>;
@@ -51,6 +78,9 @@ public:
     virtual ~VoiceAssistantTransport() = default;
 
     virtual bool Start() = 0;
+    virtual bool PrepareInteraction(VoiceOpenGuard can_continue = {}) {
+        return !can_continue || can_continue();
+    }
     virtual bool OpenAudioChannel(VoiceOpenGuard can_continue = {}) = 0;
     virtual void CloseAudioChannel() = 0;
     virtual void WaitForAudioChannelClosed() = 0;
@@ -75,6 +105,7 @@ public:
 
     virtual const char* name() const = 0;
     virtual std::string last_error() const = 0;
+    virtual VoiceTransportFailure last_failure() const = 0;
 };
 
 class NoopVoiceAssistantTransport final : public VoiceAssistantTransport {
@@ -104,9 +135,12 @@ public:
 
     const char* name() const override { return "offline"; }
     std::string last_error() const override { return "Voice transport not configured"; }
+    VoiceTransportFailure last_failure() const override { return last_failure_; }
 
 private:
-    bool Reject(const char* operation);
+    bool Reject(const char* operation, uint32_t transport_generation = 0);
+
+    VoiceTransportFailure last_failure_;
 };
 
 }  // namespace rodakos

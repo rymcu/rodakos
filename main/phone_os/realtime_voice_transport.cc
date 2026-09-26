@@ -10,6 +10,7 @@
 #include <freertos/idf_additions.h>
 
 #include <algorithm>
+#include <inttypes.h>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -146,33 +147,76 @@ bool RodakRealtimeVoiceTransport::Start() {
     }
     if (mutex_ == nullptr || client_mutex_ == nullptr || open_mutex_ == nullptr ||
         frame_mutex_ == nullptr || events_ == nullptr) {
-        SetError("Voice transport synchronization unavailable");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "transport_sync_unavailable",
+                   "Voice transport synchronization unavailable", false);
         return false;
     }
     started_ = true;
     return true;
 }
 
+bool RodakRealtimeVoiceTransport::PrepareInteraction(VoiceOpenGuard can_continue) {
+    if (!Start()) {
+        return false;
+    }
+    SemaphoreLock open_lock(open_mutex_);
+    if (!open_lock.locked() || (can_continue && !can_continue())) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "prepare_cancelled", "Voice preparation cancelled", false);
+        return false;
+    }
+    config_prepared_ = false;
+    CloseAudioChannel();
+    WaitForAudioChannelClosed();
+    if (can_continue && !can_continue()) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "prepare_cancelled", "Voice preparation cancelled", false);
+        return false;
+    }
+    // New wakes run on wake_notify's internal stack; reconnect runs in PSRAM.
+    // Keep HTTP/NVS work here and use only this RAM snapshot for reconnect.
+    if (!config_service_.PrepareVoiceConfig(config_, can_continue)) {
+        SetFailure(VoiceTransportFailureKind::kAuthentication,
+                   "credential_refresh_failed", config_service_.last_error(), false);
+        return false;
+    }
+    client_id_header_ = config_service_.GetClientId();
+    if (can_continue && !can_continue()) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "prepare_cancelled", "Voice preparation cancelled", false);
+        return false;
+    }
+    config_prepared_ = true;
+    return true;
+}
+
 bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) {
     if (mutex_ == nullptr || client_mutex_ == nullptr || open_mutex_ == nullptr ||
         frame_mutex_ == nullptr || events_ == nullptr) {
-        SetError("Voice transport synchronization unavailable");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "transport_sync_unavailable",
+                   "Voice transport synchronization unavailable", false);
         return false;
     }
     SemaphoreLock open_lock(open_mutex_);
     if (!open_lock.locked()) {
-        SetError("Transport lock unavailable");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "transport_lock_unavailable",
+                   "Transport lock unavailable", false);
         return false;
     }
     if (can_continue && !can_continue()) {
-        SetError("Voice websocket open cancelled");
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Voice websocket open cancelled", false);
         return false;
     }
 
     CloseAudioChannel();
     WaitForAudioChannelClosed();
     if (can_continue && !can_continue()) {
-        SetError("Voice websocket open cancelled");
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Voice websocket open cancelled", false);
         return false;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -181,7 +225,9 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
                                  cleanup_task_ != nullptr || cleanup_client_ != nullptr;
     xSemaphoreGive(mutex_);
     if (cleanup_pending) {
-        SetError("Previous realtime voice channel is still closing");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "previous_channel_closing",
+                   "Previous realtime voice channel is still closing", true);
         return false;
     }
 
@@ -199,25 +245,43 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     inbound_output_active_ = false;
     audio_sequence_ = 0;
     inbound_audio_sequence_ = 0;
+    inbound_failure_reported_ = false;
     xSemaphoreGive(mutex_);
     xEventGroupClearBits(events_, kConnectedBit | kSessionReadyBit | kErrorBit | kCancelBit);
 
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Realtime voice stream open cancelled", false,
+                   generation);
         return false;
     }
 
-    config_service_.Load(config_);
+    if (!config_prepared_ || !config_service_.IsVoiceConfigCurrent(config_) ||
+        config_.aiot_token_expires_at_ms <= esp_timer_get_time() / 1000) {
+        SetFailure(VoiceTransportFailureKind::kAuthentication,
+                   "access_token_expired", "Wake again to refresh Rodak credentials", false,
+                   generation);
+        return false;
+    }
     if (!config_.has_realtime_voice_config) {
         const std::string error = config_service_.last_error();
-        SetError(error.empty() ? "Realtime voice stream is not configured" : error);
+        SetFailure(VoiceTransportFailureKind::kConfiguration,
+                   "stream_not_configured",
+                   error.empty() ? "Realtime voice stream is not configured" : error,
+                   false, generation);
         return false;
     }
     if (config_.aiot_access_token.empty()) {
-        SetError("Realtime voice stream requires an AIoT access token");
+        SetFailure(VoiceTransportFailureKind::kAuthentication,
+                   "access_token_missing",
+                   "Realtime voice stream requires an AIoT access token", false,
+                   generation);
         return false;
     }
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
-        SetError("Realtime voice stream open cancelled");
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Realtime voice stream open cancelled", false,
+                   generation);
         return false;
     }
 
@@ -229,7 +293,6 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     }
     protocol_version_header_ = std::to_string(config_.realtime_voice_protocol_version);
     device_id_header_ = MacAddress();
-    client_id_header_ = config_service_.GetClientId();
 
     headers_.clear();
     if (!authorization_header_.empty()) {
@@ -254,16 +317,27 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     esp_websocket_client_handle_t client = esp_websocket_client_init(&ws_config);
     if (client == nullptr) {
         LogTransportMemory("client_init_failed");
-        SetError("Failed to create websocket client");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "websocket_client_create_failed",
+                   "Failed to create websocket client", false, generation);
         return false;
     }
     esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, EventHandler, this);
 
     {
         RecursiveSemaphoreLock client_lock(client_mutex_);
-        if (!client_lock.locked() || !IsConnectionCurrent(generation) ||
-            (can_continue && !can_continue())) {
+        if (!client_lock.locked()) {
             esp_websocket_client_destroy(client);
+            SetFailure(VoiceTransportFailureKind::kResource,
+                       "transport_lock_unavailable", "Transport lock unavailable", false,
+                       generation);
+            return false;
+        }
+        if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+            esp_websocket_client_destroy(client);
+            SetFailure(VoiceTransportFailureKind::kCancelled,
+                       "open_cancelled", "Realtime voice stream open cancelled", false,
+                       generation);
             return false;
         }
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -275,8 +349,17 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     esp_err_t err = ESP_FAIL;
     {
         RecursiveSemaphoreLock client_lock(client_mutex_);
-        if (!client_lock.locked() || !IsConnectionCurrent(generation) ||
-            (can_continue && !can_continue())) {
+        if (!client_lock.locked()) {
+            SetFailure(VoiceTransportFailureKind::kResource,
+                       "transport_lock_unavailable", "Transport lock unavailable", false,
+                       generation);
+            CloseAudioChannel();
+            return false;
+        }
+        if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+            SetFailure(VoiceTransportFailureKind::kCancelled,
+                       "open_cancelled", "Realtime voice stream open cancelled", false,
+                       generation);
             CloseAudioChannel();
             return false;
         }
@@ -287,7 +370,10 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
         ESP_LOGE(TAG, "Websocket start failed: %s, required_internal_stack=%d",
                  esp_err_to_name(err), ws_config.task_stack);
         LogTransportMemory("task_start_failed");
-        SetError(std::string("Websocket start failed: ") + esp_err_to_name(err));
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "websocket_start_failed",
+                   std::string("Websocket start failed: ") + esp_err_to_name(err),
+                   true, generation);
         CloseAudioChannel();
         return false;
     }
@@ -297,17 +383,26 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
         pdMS_TO_TICKS(kConnectTimeoutMs));
     if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
         (can_continue && !can_continue())) {
-        SetError("Realtime voice stream open cancelled");
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Realtime voice stream open cancelled", false,
+                   generation);
         CloseAudioChannel();
         return false;
     }
     if ((bits & kErrorBit) != 0 || (bits & kConnectedBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error() : "Realtime voice stream connect timeout");
+        if ((bits & kErrorBit) == 0) {
+            SetFailure(VoiceTransportFailureKind::kTimeout,
+                       "connect_timeout", "Realtime voice stream connect timeout", true,
+                       generation);
+        }
         CloseAudioChannel();
         return false;
     }
 
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "open_cancelled", "Realtime voice stream open cancelled", false,
+                   generation);
         CloseAudioChannel();
         return false;
     }
@@ -317,6 +412,9 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     }
 
     if (!IsConnectionCurrent(generation) || (can_continue && !can_continue())) {
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "session_open_cancelled", "Realtime voice session open cancelled", false,
+                   generation);
         CloseAudioChannel();
         return false;
     }
@@ -324,12 +422,18 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
                                pdMS_TO_TICKS(kSessionReadyTimeoutMs));
     if ((bits & kCancelBit) != 0 || !IsConnectionCurrent(generation) ||
         (can_continue && !can_continue())) {
-        SetError("Realtime voice session open cancelled");
+        SetFailure(VoiceTransportFailureKind::kCancelled,
+                   "session_open_cancelled",
+                   "Realtime voice session open cancelled", false, generation);
         CloseAudioChannel();
         return false;
     }
     if ((bits & kErrorBit) != 0 || (bits & kSessionReadyBit) == 0) {
-        SetError((bits & kErrorBit) ? last_error() : "Realtime voice session ready timeout");
+        if ((bits & kErrorBit) == 0) {
+            SetFailure(VoiceTransportFailureKind::kTimeout,
+                       "session_ready_timeout",
+                       "Realtime voice session ready timeout", true, generation);
+        }
         CloseAudioChannel();
         return false;
     }
@@ -346,11 +450,18 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
             if (current) {
                 channel_open_ = true;
                 last_error_.clear();
+                last_failure_ = {};
             }
             xSemaphoreGive(mutex_);
         }
     }
     if (!current) {
+        SetFailure(allowed ? VoiceTransportFailureKind::kNetwork
+                           : VoiceTransportFailureKind::kCancelled,
+                   allowed ? "websocket_disconnected" : "session_open_cancelled",
+                   allowed ? "Realtime voice stream disconnected during session open"
+                           : "Realtime voice session open cancelled",
+                   allowed, generation);
         CloseAudioChannel();
         return false;
     }
@@ -391,6 +502,20 @@ void RodakRealtimeVoiceTransport::CloseAudioChannel() {
     esp_websocket_client_handle_t client_to_cleanup = nullptr;
     bool cleanup_started = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool already_closed = !closing_ && !cleanup_in_progress_ &&
+                                !cleanup_inline_required_ && !cleanup_task_finished_ &&
+                                cleanup_task_ == nullptr && client_ == nullptr &&
+                                cleanup_client_ == nullptr && !connected_ && !channel_open_;
+    const bool cleanup_pending = closing_ || cleanup_in_progress_ ||
+                                 cleanup_inline_required_ || cleanup_task_finished_ ||
+                                 cleanup_task_ != nullptr || cleanup_client_ != nullptr;
+    if (already_closed || cleanup_pending) {
+        xSemaphoreGive(mutex_);
+        if (cleanup_pending && events_ != nullptr) {
+            xEventGroupSetBits(events_, kCancelBit | kErrorBit);
+        }
+        return;
+    }
     closing_ = true;
     connection_generation_ = NextRealtimeVoiceGeneration(connection_generation_);
     xSemaphoreGive(mutex_);
@@ -468,7 +593,8 @@ void RodakRealtimeVoiceTransport::CloseAudioChannel() {
         }
         if (created != pdPASS) {
             LogTransportMemory("cleanup_task_failed");
-            SetError("Voice websocket cleanup task unavailable");
+            // Preserve the connection failure that caused this best-effort cleanup.
+            ESP_LOGE(TAG, "Voice websocket cleanup task unavailable");
             xSemaphoreTake(mutex_, portMAX_DELAY);
             cleanup_task_ = nullptr;
             cleanup_task_finished_ = false;
@@ -648,7 +774,9 @@ bool RodakRealtimeVoiceTransport::SendAudio(const VoiceAudioPacket& packet,
                                              uint32_t expected_generation) {
     RecursiveSemaphoreLock client_lock(client_mutex_);
     if (!client_lock.locked()) {
-        SetError("Transport lock unavailable");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "transport_lock_unavailable", "Transport lock unavailable", false,
+                   expected_generation);
         return false;
     }
     esp_websocket_client_handle_t client = nullptr;
@@ -661,14 +789,19 @@ bool RodakRealtimeVoiceTransport::SendAudio(const VoiceAudioPacket& packet,
         xSemaphoreGive(mutex_);
     }
     if (!open || !esp_websocket_client_is_connected(client)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     if (packet.payload.empty()) {
         return true;
     }
     if (packet.payload.size() > config_.realtime_voice_max_audio_frame_bytes) {
-        SetError("Realtime voice audio frame is too large");
+        SetFailure(VoiceTransportFailureKind::kProtocol,
+                   "audio_frame_too_large",
+                   "Realtime voice audio frame is too large", false,
+                   expected_generation);
         return false;
     }
 
@@ -679,17 +812,31 @@ bool RodakRealtimeVoiceTransport::SendAudio(const VoiceAudioPacket& packet,
         xSemaphoreTake(mutex_, portMAX_DELAY);
         // Sequence zero is reserved by the canonical envelope.  Refuse to
         // wrap instead of emitting a frame that the peer must reject.
-        if (audio_sequence_ == UINT32_MAX || connection_generation_ != expected_generation ||
-            closing_ || !channel_open_) {
+        if (audio_sequence_ == UINT32_MAX) {
             xSemaphoreGive(mutex_);
-            SetError("Realtime voice audio sequence exhausted or channel changed");
+            SetFailure(VoiceTransportFailureKind::kProtocol,
+                       "audio_sequence_exhausted",
+                       "Realtime voice audio sequence exhausted", false,
+                       expected_generation);
+            return false;
+        }
+        if (connection_generation_ != expected_generation || closing_ || !channel_open_ ||
+            !connected_) {
+            xSemaphoreGive(mutex_);
+            SetFailure(VoiceTransportFailureKind::kNetwork,
+                       "audio_channel_changed",
+                       "Realtime voice audio channel changed before send", true,
+                       expected_generation);
             return false;
         }
         sequence = ++audio_sequence_;
         xSemaphoreGive(mutex_);
     } else {
         if (audio_sequence_ == UINT32_MAX) {
-            SetError("Realtime voice audio sequence exhausted");
+            SetFailure(VoiceTransportFailureKind::kProtocol,
+                       "audio_sequence_exhausted",
+                       "Realtime voice audio sequence exhausted", false,
+                       expected_generation);
             return false;
         }
         sequence = ++audio_sequence_;
@@ -710,7 +857,9 @@ bool RodakRealtimeVoiceTransport::SendAudio(const VoiceAudioPacket& packet,
         client, reinterpret_cast<const char*>(frame.data()), frame.size(),
         pdMS_TO_TICKS(kSendTimeoutMs));
     if (sent != static_cast<int>(frame.size())) {
-        SetError("Failed to send complete audio packet");
+        SetFailure(VoiceTransportFailureKind::kSend,
+                   "audio_send_failed", "Failed to send complete audio packet", true,
+                   expected_generation);
         return false;
     }
     return true;
@@ -720,7 +869,9 @@ bool RodakRealtimeVoiceTransport::SendStartListening(VoiceListeningMode mode,
                                                       uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     const std::string message = BuildRealtimeVoiceInputMessage(
@@ -736,7 +887,9 @@ bool RodakRealtimeVoiceTransport::SendStartListening(VoiceListeningMode mode,
 bool RodakRealtimeVoiceTransport::SendStopListening(uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     const std::string message = BuildRealtimeVoiceInputMessage(
@@ -752,7 +905,9 @@ bool RodakRealtimeVoiceTransport::SendWakeWordDetected(const std::string& wake_w
                                                         uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     const std::string message = BuildRealtimeVoiceWakeMessage(session_id, wake_word);
@@ -769,13 +924,18 @@ bool RodakRealtimeVoiceTransport::SendAbortSpeaking(VoiceAbortReason reason,
                                                      uint32_t playback_epoch) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     const std::string message = BuildRealtimeVoicePlaybackAbortMessage(
         session_id, reason, playback_epoch);
     if (message.empty()) {
-        SetError("Invalid realtime voice playback abort");
+        SetFailure(VoiceTransportFailureKind::kProtocol,
+                   "playback_abort_invalid",
+                   "Invalid realtime voice playback abort", false,
+                   expected_generation);
         return false;
     }
     return SendText(message, expected_generation, session_id, true);
@@ -800,7 +960,9 @@ bool RodakRealtimeVoiceTransport::SendVadState(const char* state, const char* so
                                                 uint32_t playback_epoch) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
     // The server-selected strategy is authoritative for this session. A
@@ -818,13 +980,18 @@ bool RodakRealtimeVoiceTransport::SendMcpMessage(const std::string& payload,
                                                   uint32_t expected_generation) {
     std::string session_id;
     if (!SnapshotSession(expected_generation, session_id)) {
-        SetError("Audio channel is not open");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "audio_channel_closed", "Audio channel is not open", true,
+                   expected_generation);
         return false;
     }
 
     const std::string message = BuildRealtimeVoiceMcpMessage(session_id, payload);
     if (message.empty()) {
-        SetError("Realtime voice MCP payload must be a JSON object");
+        SetFailure(VoiceTransportFailureKind::kProtocol,
+                   "mcp_payload_invalid",
+                   "Realtime voice MCP payload must be a JSON object", false,
+                   expected_generation);
         return false;
     }
     return SendText(message, expected_generation, session_id, true);
@@ -887,33 +1054,9 @@ void RodakRealtimeVoiceTransport::EventHandler(void* arg,
                     xSemaphoreGive(self->mutex_);
                     return;
                 }
-                unexpected_close = !self->closing_ &&
-                                   (self->connected_ || self->channel_open_);
-                self->connected_ = false;
-                self->channel_open_ = false;
-                self->session_id_.clear();
-                self->session_gate_.Clear();
-                self->inbound_playback_epoch_ = 0;
-                self->inbound_output_active_ = false;
-                xSemaphoreGive(self->mutex_);
-            }
-            if (unexpected_close) {
-                self->SetError("Voice websocket disconnected");
-                xEventGroupSetBits(self->events_, kErrorBit);
-                self->EmitInbound(VoiceInboundEvent{
-                    .type = VoiceInboundEventType::kError,
-                    .audio = {},
-                    .payload = "Voice websocket disconnected",
-                }, generation);
-            }
-            break;
-        }
-        case WEBSOCKET_EVENT_ERROR:
-            if (self->mutex_ != nullptr) {
-                xSemaphoreTake(self->mutex_, portMAX_DELAY);
-                if (self->closing_ || self->connection_generation_ != generation) {
-                    xSemaphoreGive(self->mutex_);
-                    return;
+                unexpected_close = !self->closing_ && !self->inbound_failure_reported_;
+                if (unexpected_close) {
+                    self->inbound_failure_reported_ = true;
                 }
                 self->connected_ = false;
                 self->channel_open_ = false;
@@ -923,14 +1066,62 @@ void RodakRealtimeVoiceTransport::EventHandler(void* arg,
                 self->inbound_output_active_ = false;
                 xSemaphoreGive(self->mutex_);
             }
-            self->SetError("Websocket error");
+            if (unexpected_close) {
+                const int close_code = data != nullptr ? data->close_status_code : 0;
+                VoiceTransportFailure failure =
+                    ClassifyVoiceWebsocketCloseFailure(close_code, generation);
+                failure = self->SetFailure(
+                    failure.kind, failure.code, failure.message, failure.retryable, generation);
+                xEventGroupSetBits(self->events_, kErrorBit);
+                self->EmitInbound(VoiceInboundEvent{
+                    .type = VoiceInboundEventType::kError,
+                    .audio = {},
+                    .payload = "Voice websocket disconnected",
+                    .failure = failure,
+                }, generation);
+            }
+            break;
+        }
+        case WEBSOCKET_EVENT_ERROR: {
+            bool report_failure = false;
+            if (self->mutex_ != nullptr) {
+                xSemaphoreTake(self->mutex_, portMAX_DELAY);
+                if (self->closing_ || self->connection_generation_ != generation) {
+                    xSemaphoreGive(self->mutex_);
+                    return;
+                }
+                report_failure = !self->inbound_failure_reported_;
+                self->inbound_failure_reported_ = true;
+                self->connected_ = false;
+                self->channel_open_ = false;
+                self->session_id_.clear();
+                self->session_gate_.Clear();
+                self->inbound_playback_epoch_ = 0;
+                self->inbound_output_active_ = false;
+                xSemaphoreGive(self->mutex_);
+            }
+            if (!report_failure) {
+                break;
+            }
+            const int status_code = data != nullptr
+                ? data->error_handle.esp_ws_handshake_status_code
+                : 0;
+            const esp_websocket_error_type_t error_type = data != nullptr
+                ? data->error_handle.error_type
+                : WEBSOCKET_ERROR_TYPE_NONE;
+            VoiceTransportFailure failure = ClassifyVoiceWebsocketErrorFailure(
+                status_code, error_type == WEBSOCKET_ERROR_TYPE_PONG_TIMEOUT, generation);
+            failure = self->SetFailure(
+                failure.kind, failure.code, failure.message, failure.retryable, generation);
             xEventGroupSetBits(self->events_, kErrorBit);
             self->EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kError,
                 .audio = {},
                 .payload = "Websocket error",
+                .failure = failure,
             }, generation);
             break;
+        }
         case WEBSOCKET_EVENT_DATA:
             if (data != nullptr) {
                 self->HandleDataFrame(*data, generation);
@@ -1022,7 +1213,9 @@ bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
                                             bool require_open) {
     RecursiveSemaphoreLock client_lock(client_mutex_);
     if (!client_lock.locked()) {
-        SetError("Transport lock unavailable");
+        SetFailure(VoiceTransportFailureKind::kResource,
+                   "transport_lock_unavailable", "Transport lock unavailable", false,
+                   expected_generation);
         return false;
     }
     esp_websocket_client_handle_t client = nullptr;
@@ -1037,13 +1230,18 @@ bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
         xSemaphoreGive(mutex_);
     }
     if (!connected || !esp_websocket_client_is_connected(client)) {
-        SetError("Websocket is not connected");
+        SetFailure(VoiceTransportFailureKind::kNetwork,
+                   "websocket_disconnected", "Websocket is not connected", true,
+                   expected_generation);
         return false;
     }
     const int sent = esp_websocket_client_send_text(client, text.c_str(), text.size(),
                                                     pdMS_TO_TICKS(kSendTimeoutMs));
     if (sent != static_cast<int>(text.size())) {
-        SetError("Failed to send complete websocket text");
+        SetFailure(VoiceTransportFailureKind::kSend,
+                   "control_send_failed",
+                   "Failed to send complete websocket text", true,
+                   expected_generation);
         return false;
     }
     ESP_LOGD(TAG, "Sent text: %s", text.c_str());
@@ -1051,7 +1249,7 @@ bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
 }
 
 bool RodakRealtimeVoiceTransport::SendSessionOpen(uint32_t generation) {
-    return SendText(BuildSessionOpenMessage(), generation, {}, false);
+    return SendText(BuildSessionOpenMessage(generation), generation, {}, false);
 }
 
 bool RodakRealtimeVoiceTransport::SnapshotSession(uint32_t expected_generation,
@@ -1070,7 +1268,7 @@ bool RodakRealtimeVoiceTransport::SnapshotSession(uint32_t expected_generation,
     return valid;
 }
 
-std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage() const {
+std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage(uint32_t generation) const {
     RealtimeVoiceDescriptor descriptor;
     descriptor.endpoint = config_.realtime_voice_url;
     descriptor.protocol_version = config_.realtime_voice_protocol_version;
@@ -1096,7 +1294,7 @@ std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage() const {
 #endif
     return BuildRealtimeVoiceSessionOpenMessage(descriptor, false,
                                                 supports_device_vad_epoch,
-                                                connection_generation_);
+                                                generation);
 }
 
 void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
@@ -1105,7 +1303,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     if (data == nullptr || len <= 0 ||
         static_cast<size_t>(len) > config_.realtime_voice_max_control_bytes) {
         if (data != nullptr && len > 0) {
-            SetError("Realtime voice control frame is too large");
+            SetError("Realtime voice control frame is too large", generation);
         }
         return;
     }
@@ -1113,6 +1311,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
         ESP_LOGW(TAG, "Invalid JSON from voice cloud: %.*s", len, data);
+        SetError("Invalid JSON from voice cloud", generation);
         return;
     }
 
@@ -1120,7 +1319,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     if (!cJSON_IsString(event) || event->valuestring == nullptr ||
         event->valuestring[0] == '\0') {
         cJSON_Delete(root);
-        SetError("Realtime voice control frame is missing a canonical event");
+        SetError("Realtime voice control frame is missing a canonical event", generation);
         return;
     }
 
@@ -1138,14 +1337,14 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     if (!is_session_ready && !is_output_start && !is_output_stop && !is_session_end &&
         !is_mcp && !is_error) {
         cJSON_Delete(root);
-        SetError("Unsupported realtime voice control event");
+        SetError("Unsupported realtime voice control event", generation);
         return;
     }
 
     std::string payload_error;
     if (!ValidateRealtimeVoiceServerControlPayload(root, payload_error)) {
         cJSON_Delete(root);
-        SetError(payload_error);
+        SetError(payload_error, generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1165,7 +1364,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         }
         if (!session_matches) {
             cJSON_Delete(root);
-            SetError("Realtime voice control frame sessionId does not match");
+            SetError("Realtime voice control frame sessionId does not match", generation);
             return;
         }
     }
@@ -1206,6 +1405,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
                 .playback_epoch = epoch,
                 .audio = {},
                 .payload = {},
+                .failure = {},
             }, generation);
         } else {
             // A delayed stop from an older playback must not terminate a
@@ -1226,6 +1426,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
                 .playback_epoch = epoch,
                 .audio = {},
                 .payload = {},
+                .failure = {},
             }, generation);
         }
     } else if (is_session_end) {
@@ -1245,37 +1446,68 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             .type = VoiceInboundEventType::kSessionFinished,
             .audio = {},
             .payload = {},
+            .failure = {},
         }, generation);
     } else if (is_mcp) {
         if (!IsRealtimeVoiceMcpPayloadObject(root)) {
             cJSON_Delete(root);
-            SetError("Invalid realtime voice MCP payload");
+            SetError("Invalid realtime voice MCP payload", generation);
             return;
         }
         EmitInbound(VoiceInboundEvent{
             .type = VoiceInboundEventType::kMcp,
             .audio = {},
             .payload = payload,
+            .failure = {},
         }, generation);
     } else if (is_error) {
+        RealtimeVoiceServerError server_error;
+        std::string server_error_parse_failure;
+        if (!ParseRealtimeVoiceServerError(root, server_error,
+                                           server_error_parse_failure)) {
+            cJSON_Delete(root);
+            const VoiceTransportFailure failure = SetFailure(
+                VoiceTransportFailureKind::kProtocol, "server_error_invalid",
+                server_error_parse_failure.empty()
+                    ? "Invalid realtime voice server error"
+                    : server_error_parse_failure,
+                false, generation);
+            xEventGroupSetBits(events_, kErrorBit);
+            EmitInbound(VoiceInboundEvent{
+                .type = VoiceInboundEventType::kError,
+                .audio = {},
+                .payload = {},
+                .failure = failure,
+            }, generation);
+            return;
+        }
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (closing_ || connection_generation_ != generation) {
             xSemaphoreGive(mutex_);
             cJSON_Delete(root);
             return;
         }
+        if (inbound_failure_reported_) {
+            xSemaphoreGive(mutex_);
+            cJSON_Delete(root);
+            return;
+        }
+        inbound_failure_reported_ = true;
         channel_open_ = false;
         session_id_.clear();
         inbound_playback_epoch_ = 0;
         inbound_output_active_ = false;
         session_gate_.Clear();
         xSemaphoreGive(mutex_);
-        SetError("Realtime voice server returned an error");
+        const VoiceTransportFailure failure = SetFailure(
+            VoiceTransportFailureKind::kServer, server_error.code, server_error.message,
+            server_error.retryable, generation);
         xEventGroupSetBits(events_, kErrorBit);
         EmitInbound(VoiceInboundEvent{
             .type = VoiceInboundEventType::kError,
             .audio = {},
             .payload = payload,
+            .failure = failure,
         }, generation);
     }
     cJSON_Delete(root);
@@ -1306,7 +1538,8 @@ void RodakRealtimeVoiceTransport::HandleBinaryFrame(const uint8_t* data,
     RealtimeVoiceAudioFrame frame;
     std::string frame_error;
     if (!ParseRealtimeVoiceAudioFrame(data, size, max_audio_frame_bytes, frame, frame_error)) {
-        SetError(frame_error.empty() ? "Invalid realtime voice audio frame" : frame_error);
+        SetError(frame_error.empty() ? "Invalid realtime voice audio frame" : frame_error,
+                 generation);
         return;
     }
     const uint32_t sequence = frame.sequence;
@@ -1315,14 +1548,14 @@ void RodakRealtimeVoiceTransport::HandleBinaryFrame(const uint8_t* data,
         if (closing_ || connection_generation_ != generation || session_id_.empty() ||
             !session_gate_.AcceptAudio(generation, sequence)) {
             xSemaphoreGive(mutex_);
-            SetError("Invalid realtime voice audio sequence");
+            SetError("Invalid realtime voice audio sequence", generation);
             return;
         }
         inbound_audio_sequence_ = session_gate_.audio_sequence();
         xSemaphoreGive(mutex_);
     } else {
         if (sequence == 0 || sequence <= inbound_audio_sequence_) {
-            SetError("Invalid realtime voice audio sequence");
+            SetError("Invalid realtime voice audio sequence", generation);
             return;
         }
         inbound_audio_sequence_ = sequence;
@@ -1334,6 +1567,7 @@ void RodakRealtimeVoiceTransport::HandleBinaryFrame(const uint8_t* data,
         .playback_epoch = playback_epoch,
         .audio = std::move(packet),
         .payload = {},
+        .failure = {},
     }, generation);
 }
 
@@ -1341,7 +1575,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
                                                      uint32_t generation) {
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
-        SetError("Invalid realtime voice session.ready event");
+        SetError("Invalid realtime voice session.ready event", generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1363,7 +1597,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
         !cJSON_IsString(transport) ||
         std::strcmp(transport->valuestring, kRealtimeVoiceTransportWebSocket) != 0) {
         cJSON_Delete(root);
-        SetError("Unsupported realtime voice session.ready event");
+        SetError("Unsupported realtime voice session.ready event", generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1374,7 +1608,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
          IsRealtimeVoiceVadStrategy(vad_strategy->valuestring));
     if (!valid_vad_strategy) {
         cJSON_Delete(root);
-        SetError("Invalid realtime voice VAD strategy");
+        SetError("Invalid realtime voice VAD strategy", generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1416,7 +1650,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
          negotiated_sample_rate != 48000) ||
         !IsSupportedRealtimeVoiceFrameDuration(negotiated_frame_duration)) {
         cJSON_Delete(root);
-        SetError("Invalid realtime voice session.ready parameters");
+        SetError("Invalid realtime voice session.ready parameters", generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1429,7 +1663,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
                   config_.realtime_voice_vad_strategies.end(), negotiated_vad_strategy) ==
             config_.realtime_voice_vad_strategies.end()) {
         cJSON_Delete(root);
-        SetError("Server selected an unsupported realtime voice VAD strategy");
+        SetError("Server selected an unsupported realtime voice VAD strategy", generation);
         xEventGroupSetBits(events_, kErrorBit);
         return;
     }
@@ -1443,7 +1677,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
         }
         if (!session_gate_.Establish(generation, negotiated_session_id)) {
             xSemaphoreGive(mutex_);
-            SetError("Duplicate realtime voice session.ready event");
+            SetError("Duplicate realtime voice session.ready event", generation);
             xEventGroupSetBits(events_, kErrorBit);
             return;
         }
@@ -1456,7 +1690,7 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
         xSemaphoreGive(mutex_);
     } else {
         if (!session_gate_.Establish(generation, negotiated_session_id)) {
-            SetError("Duplicate realtime voice session.ready event");
+            SetError("Duplicate realtime voice session.ready event", generation);
             xEventGroupSetBits(events_, kErrorBit);
             return;
         }
@@ -1471,16 +1705,76 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
     xEventGroupSetBits(events_, kSessionReadyBit);
 }
 
-void RodakRealtimeVoiceTransport::SetError(const std::string& message) {
+VoiceTransportFailure RodakRealtimeVoiceTransport::SetFailure(
+    VoiceTransportFailureKind kind, const std::string& code, const std::string& message,
+    bool retryable, uint32_t generation) {
     const std::string normalized = message.empty() ? "Voice cloud transport error" : message;
+    uint32_t resolved_generation = generation;
+    VoiceTransportFailure failure;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        last_error_ = normalized;
+        if (resolved_generation == 0) {
+            resolved_generation = connection_generation_;
+        }
+        failure = {
+            .kind = kind,
+            .code = code,
+            .message = normalized,
+            .retryable = retryable,
+            .transport_generation = resolved_generation,
+        };
+        if (generation == 0 || resolved_generation == connection_generation_) {
+            last_error_ = normalized;
+            last_failure_ = failure;
+        }
         xSemaphoreGive(mutex_);
     } else {
         last_error_ = normalized;
+        failure = {
+            .kind = kind,
+            .code = code,
+            .message = normalized,
+            .retryable = retryable,
+            .transport_generation = generation,
+        };
+        last_failure_ = failure;
     }
-    ESP_LOGW(TAG, "%s", normalized.c_str());
+    ESP_LOGW(TAG, "%s: code=%s retryable=%d generation=%" PRIu32,
+             normalized.c_str(), code.c_str(), retryable ? 1 : 0,
+             resolved_generation);
+    return failure;
+}
+
+bool RodakRealtimeVoiceTransport::ClaimInboundFailure(uint32_t generation) {
+    if (mutex_ == nullptr || generation == 0) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool claimed = !closing_ && connection_generation_ == generation &&
+                         !inbound_failure_reported_;
+    if (claimed) {
+        inbound_failure_reported_ = true;
+    }
+    xSemaphoreGive(mutex_);
+    return claimed;
+}
+
+void RodakRealtimeVoiceTransport::SetError(const std::string& message,
+                                           uint32_t generation) {
+    if (!ClaimInboundFailure(generation)) {
+        return;
+    }
+    const VoiceTransportFailure failure = SetFailure(
+        VoiceTransportFailureKind::kProtocol, "protocol_error", message, false, generation);
+    if (events_ != nullptr) {
+        xEventGroupSetBits(events_, kErrorBit);
+    }
+    EmitInbound(VoiceInboundEvent{
+        .type = VoiceInboundEventType::kError,
+        .audio = {},
+        .payload = failure.message,
+        .failure = failure,
+    }, failure.transport_generation);
 }
 
 std::string RodakRealtimeVoiceTransport::last_error() const {
@@ -1491,6 +1785,16 @@ std::string RodakRealtimeVoiceTransport::last_error() const {
     const std::string error = last_error_;
     xSemaphoreGive(mutex_);
     return error;
+}
+
+VoiceTransportFailure RodakRealtimeVoiceTransport::last_failure() const {
+    if (mutex_ == nullptr) {
+        return last_failure_;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const VoiceTransportFailure failure = last_failure_;
+    xSemaphoreGive(mutex_);
+    return failure;
 }
 
 bool RodakRealtimeVoiceTransport::IsConnectionCurrent(uint32_t generation) const {
@@ -1509,7 +1813,9 @@ void RodakRealtimeVoiceTransport::EmitInbound(VoiceInboundEvent&& event,
     VoiceInboundHandler handler;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        handler = inbound_handler_;
+        if (!closing_ && generation != 0 && connection_generation_ == generation) {
+            handler = inbound_handler_;
+        }
         xSemaphoreGive(mutex_);
     } else {
         handler = inbound_handler_;

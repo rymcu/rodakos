@@ -1,7 +1,10 @@
 #pragma once
 
+#include "phone_os/cloud_credential_freshness.h"
+
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -21,6 +24,9 @@ struct DeviceCloudConfig {
     // MQTT/HTTP authentication and the canonical realtime voice stream.
     std::string aiot_device_secret;
     std::string aiot_access_token;
+    // Monotonic freshness is deliberately never persisted across a reboot.
+    int64_t aiot_token_expires_at_ms = 0;
+    uint32_t cloud_generation = 0;
     bool aiot_registered = false;
     bool aiot_activated = false;
     bool aiot_pending = false;
@@ -92,6 +98,9 @@ class DeviceCloudConfigService {
 public:
     bool Load(DeviceCloudConfig& config);
     bool Refresh(DeviceCloudConfig& config);
+    bool PrepareVoiceConfig(DeviceCloudConfig& config,
+                            const std::function<bool()>& can_continue = {});
+    bool IsVoiceConfigCurrent(const DeviceCloudConfig& config) const;
     bool Unbind(DeviceCloudConfig& config);
     ProvisioningUrlSaveResult SaveProvisioningUrl(
         const std::string& url,
@@ -102,13 +111,17 @@ public:
     static const char* DefaultProvisioningUrl();
 
 private:
-    bool RefreshAiot(DeviceCloudConfig& config);
+    bool RefreshAiot(DeviceCloudConfig& config,
+                     const std::function<bool()>& can_continue = {},
+                     int64_t deadline_ms = 0, bool allow_pairing = true);
     void SetError(const std::string& message);
 
     mutable std::recursive_mutex config_mutex_;
     std::mutex refresh_mutex_;
     uint32_t config_generation_ = 0;
     std::string last_error_;
+    std::string fresh_access_token_;
+    CloudCredentialFreshness credential_freshness_;
 };
 
 }  // namespace rodakos

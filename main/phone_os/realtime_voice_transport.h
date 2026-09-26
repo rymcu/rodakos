@@ -21,6 +21,7 @@ public:
     ~RodakRealtimeVoiceTransport() override;
 
     bool Start() override;
+    bool PrepareInteraction(VoiceOpenGuard can_continue = {}) override;
     bool OpenAudioChannel(VoiceOpenGuard can_continue = {}) override;
     void CloseAudioChannel() override;
     void WaitForAudioChannelClosed() override;
@@ -45,6 +46,7 @@ public:
 
     const char* name() const override { return "rodak-realtime-voice"; }
     std::string last_error() const override;
+    VoiceTransportFailure last_failure() const override;
 
 private:
     bool SendVadState(const char* state, const char* source, uint32_t sequence,
@@ -58,14 +60,20 @@ private:
                   bool require_open);
     bool SendSessionOpen(uint32_t generation);
     bool SnapshotSession(uint32_t expected_generation, std::string& session_id) const;
-    std::string BuildSessionOpenMessage() const;
+    std::string BuildSessionOpenMessage(uint32_t generation) const;
     void CleanupDetachedClient();
     void HandleDataFrame(const esp_websocket_event_data_t& data, uint32_t generation);
     void HandleTextFrame(const char* data, int len, uint32_t generation);
     void HandleBinaryFrame(const uint8_t* data, size_t size, uint32_t generation);
     void ParseSessionReady(const std::string& payload, uint32_t generation);
     void EmitInbound(VoiceInboundEvent&& event, uint32_t generation);
-    void SetError(const std::string& message);
+    VoiceTransportFailure SetFailure(VoiceTransportFailureKind kind,
+                                     const std::string& code,
+                                     const std::string& message,
+                                     bool retryable,
+                                     uint32_t generation = 0);
+    bool ClaimInboundFailure(uint32_t generation);
+    void SetError(const std::string& message, uint32_t generation = 0);
     bool IsConnectionCurrent(uint32_t generation) const;
 
     DeviceCloudConfigService& config_service_;
@@ -77,6 +85,7 @@ private:
     esp_websocket_client_handle_t client_ = nullptr;
     esp_websocket_client_handle_t cleanup_client_ = nullptr;
     DeviceCloudConfig config_;
+    bool config_prepared_ = false;
     std::string headers_;
     std::string authorization_header_;
     std::string protocol_version_header_;
@@ -85,6 +94,13 @@ private:
     std::string session_id_;
     RealtimeVoiceSessionGate session_gate_;
     std::string last_error_ = "Not connected";
+    VoiceTransportFailure last_failure_ = {
+        .kind = VoiceTransportFailureKind::kConfiguration,
+        .code = "not_connected",
+        .message = "Not connected",
+        .retryable = false,
+        .transport_generation = 0,
+    };
     VoiceInboundHandler inbound_handler_;
     std::vector<uint8_t> inbound_frame_;
     uint8_t inbound_opcode_ = 0;
@@ -105,6 +121,7 @@ private:
     bool inbound_output_active_ = false;
     uint32_t audio_sequence_ = 0;
     uint32_t inbound_audio_sequence_ = 0;
+    bool inbound_failure_reported_ = false;
     std::string vad_strategy_ = "server-authoritative";
 };
 
