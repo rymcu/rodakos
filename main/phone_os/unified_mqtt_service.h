@@ -3,10 +3,12 @@
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/battery_monitor.h"
 #include "phone_os/light_service.h"
+#include "phone_os/mqtt_credential_refresh_policy.h"
 
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -75,6 +77,9 @@ private:
     void Connect();
     void BindOtaProgressPublisher();
     void ScheduleCredentialRefresh();
+    void FinishCredentialRefresh();
+    void MaybeScheduleTransportRecovery();
+    bool ShouldDeferCredentialRefresh();
     bool HasClient() const;
     bool IsCurrentClientGeneration(uint32_t generation) const;
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
@@ -116,6 +121,12 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<bool> reset_scheduled_{false};
     std::atomic<bool> force_refresh_{false};
+    MqttTransportRecoveryPolicy transport_recovery_;
+    bool transport_refresh_scheduled_ = false;
+    bool auth_refresh_pending_ = false;
+    std::unique_ptr<DeviceCloudConfig> pending_credential_config_;
+    bool credential_restart_pending_ = false;
+    bool credential_refresh_deferred_for_voice_ = false;
     struct PendingMessage {
         uint32_t client_generation;
         std::string topic;

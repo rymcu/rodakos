@@ -1,7 +1,6 @@
 #include "phone_os/unified_mqtt_service.h"
 
 #include "phone_os/audio_output_service.h"
-#include "phone_os/mqtt_credential_refresh_policy.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/voice_wake_service.h"
 
@@ -273,6 +272,15 @@ void UnifiedMqttService::Stop() {
     reset_scheduled_.store(false);
     telemetry_pending_.store(false);
     connected_pending_ = false;
+    pending_credential_config_.reset();
+    credential_restart_pending_ = false;
+    credential_refresh_deferred_for_voice_ = false;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        transport_recovery_ = {};
+        transport_refresh_scheduled_ = false;
+        auth_refresh_pending_ = false;
+    }
     std::lock_guard<std::mutex> reliable_lock(reliable_publish_mutex_);
 }
 
@@ -322,7 +330,8 @@ void UnifiedMqttService::WorkerTask(void* arg) {
 
 void UnifiedMqttService::WorkerLoop() {
     while (started_.load()) {
-        if (reset_scheduled_.load()) {
+        MaybeScheduleTransportRecovery();
+        if (reset_scheduled_.load() && !ShouldDeferCredentialRefresh()) {
             RefreshCredentials();
         }
         if (connecting_.load() && started_.load()) {
@@ -469,9 +478,13 @@ void UnifiedMqttService::Connect() {
 }
 
 void UnifiedMqttService::ScheduleCredentialRefresh() {
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
     if (!started_.load()) {
         return;
     }
+    // Authentication rejection takes precedence over a pending TCP recovery.
+    transport_refresh_scheduled_ = false;
+    auth_refresh_pending_ = true;
     bool expected = false;
     if (!reset_scheduled_.compare_exchange_strong(expected, true)) {
         return;
@@ -479,154 +492,231 @@ void UnifiedMqttService::ScheduleCredentialRefresh() {
     // Coalesced control work cannot be starved by a full message queue.
 }
 
-void UnifiedMqttService::RefreshCredentials() {
-    auto* service = this;
-    MqttCredentialRefreshAction action =
-        MqttCredentialRefreshAction::kKeepCurrentClient;
-    if (service != nullptr) {
-        DelayWhileStarted(service->started_, kCredentialRefreshDelayMs);
-    }
-    if (service != nullptr && service->started_.load()) {
-        // MQTT events own connected_. Auto-reconnect can complete while the
-        // bootstrap HTTP request is pending, so do not overwrite a newer event.
-        ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
+void UnifiedMqttService::FinishCredentialRefresh() {
+    pending_credential_config_.reset();
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    transport_refresh_scheduled_ = false;
+    // A rejection received during HTTP or application still needs its own pass.
+    reset_scheduled_.store(auth_refresh_pending_);
+}
 
-        auto refreshed_snapshot = std::unique_ptr<DeviceCloudConfig>(
-            new (std::nothrow) DeviceCloudConfig);
-        auto active_snapshot = std::unique_ptr<DeviceCloudConfig>(
-            new (std::nothrow) DeviceCloudConfig);
-        if (refreshed_snapshot == nullptr || active_snapshot == nullptr) {
-            ESP_LOGE(TAG, "Cannot allocate MQTT credential refresh snapshots");
+bool UnifiedMqttService::ShouldDeferCredentialRefresh() {
+    const bool voice_active = voice_wake_ != nullptr &&
+                              voice_wake_->GetState().status ==
+                                  VoiceWakeStatus::kAssistantActive;
+    if (voice_active && !credential_refresh_deferred_for_voice_) {
+        ESP_LOGI(TAG, "MQTT recovery deferred until the active voice session finishes");
+    } else if (!voice_active && credential_refresh_deferred_for_voice_) {
+        ESP_LOGI(TAG, "Voice session finished; resuming pending MQTT recovery");
+    }
+    credential_refresh_deferred_for_voice_ = voice_active;
+    return voice_active;
+}
+
+void UnifiedMqttService::MaybeScheduleTransportRecovery() {
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!started_.load() || client_ == nullptr || connected_.load() ||
+            transport_recovery_.Decide(now_ms, reset_scheduled_.load(), false) !=
+                MqttTransportRecoveryAction::kRefresh) {
+            return;
+        }
+    }
+    const bool voice_active = ShouldDeferCredentialRefresh();
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!started_.load() || client_ == nullptr || connected_.load() ||
+            transport_recovery_.Decide(now_ms, reset_scheduled_.load(), voice_active) !=
+                MqttTransportRecoveryAction::kRefresh) {
+            return;
+        }
+        bool expected = false;
+        if (!reset_scheduled_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        transport_refresh_scheduled_ = true;
+    }
+    ESP_LOGW(TAG, "MQTT TCP failed at least 3 times; scheduling bootstrap recovery "
+                  "(minimum refresh interval=60s)");
+}
+
+void UnifiedMqttService::RefreshCredentials() {
+    if (credential_restart_pending_) {
+        if (started_.load() && !ShouldDeferCredentialRefresh()) {
+            ESP_LOGW(TAG, "Restarting to isolate refreshed MQTT session");
+            esp_restart();
+        }
+        return;
+    }
+    if (pending_credential_config_ == nullptr) {
+        DelayWhileStarted(started_, kCredentialRefreshDelayMs);
+        if (!started_.load()) {
             reset_scheduled_.store(false);
             return;
         }
-        DeviceCloudConfig& refreshed_config = *refreshed_snapshot;
-        DeviceCloudConfig& active_config = *active_snapshot;
-        service->config_service_.Load(refreshed_config);
-        const bool refreshed = service->config_service_.Refresh(refreshed_config) &&
-                               refreshed_config.has_mqtt_config;
-        if (!refreshed) {
-            MqttCredentialRefreshState state;
-            state.has_client = service->HasClient();
-            action = DecideMqttCredentialRefreshAction(state);
-            ESP_LOGE(TAG, "MQTT credential refresh failed: %s",
-                     service->config_service_.last_error().c_str());
-        } else {
-            std::string broker_uri = "mqtt://" + refreshed_config.mqtt_broker_address + ":" +
-                                     std::to_string(refreshed_config.mqtt_broker_port);
-            std::string client_id = BuildClientId(refreshed_config.mqtt_device_key);
-            esp_mqtt_client_config_t mqtt_config =
-                BuildMqttClientConfig(refreshed_config, broker_uri, client_id);
-
-            esp_mqtt_client_handle_t client = nullptr;
-            bool client_connected = false;
-            {
-                std::lock_guard<std::mutex> lock(service->mqtt_mutex_);
-                client = service->client_;
-                active_config = service->config_;
-                client_connected = service->connected_.load();
+        if (ShouldDeferCredentialRefresh()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            if (transport_refresh_scheduled_ && connected_.load()) {
+                reset_scheduled_.store(false);
+                transport_refresh_scheduled_ = false;
+                ESP_LOGI(TAG, "MQTT reconnected before TCP recovery; refresh cancelled");
+                return;
             }
+            transport_recovery_.MarkRefreshStarted(esp_timer_get_time() / 1000);
+            auth_refresh_pending_ = false;
+        }
+        auto refreshed = std::unique_ptr<DeviceCloudConfig>(
+            new (std::nothrow) DeviceCloudConfig);
+        if (refreshed == nullptr) {
+            ESP_LOGE(TAG, "Cannot allocate MQTT credential refresh snapshot");
+            FinishCredentialRefresh();
+            return;
+        }
+        config_service_.Load(*refreshed);
+        ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
+        if (!config_service_.Refresh(*refreshed) || !refreshed->has_mqtt_config) {
+            ESP_LOGE(TAG, "MQTT credential refresh failed: %s",
+                     config_service_.last_error().c_str());
+            FinishCredentialRefresh();
+            return;
+        }
+        // HTTP rotates credentials. Retain this result if voice became active
+        // so the worker can keep processing events without repeating the request.
+        pending_credential_config_ = std::move(refreshed);
+    }
+    if (!started_.load() || ShouldDeferCredentialRefresh()) {
+        return;
+    }
+    auto active_snapshot = std::unique_ptr<DeviceCloudConfig>(
+        new (std::nothrow) DeviceCloudConfig);
+    if (active_snapshot == nullptr) {
+        ESP_LOGE(TAG, "Cannot allocate MQTT active configuration snapshot");
+        DelayWhileStarted(started_, kCredentialRefreshDelayMs);
+        return;
+    }
+    DeviceCloudConfig& refreshed_config = *pending_credential_config_;
+    DeviceCloudConfig& active_config = *active_snapshot;
+    // Voice preparation may have refreshed again while application was deferred.
+    config_service_.Load(refreshed_config);
+    if (!refreshed_config.has_mqtt_config || refreshed_config.unbind_pending) {
+        ESP_LOGW(TAG, "MQTT recovery cancelled: persisted configuration is unavailable");
+        FinishCredentialRefresh();
+        return;
+    }
+    std::string broker_uri = "mqtt://" + refreshed_config.mqtt_broker_address + ":" +
+                             std::to_string(refreshed_config.mqtt_broker_port);
+    std::string client_id = BuildClientId(refreshed_config.mqtt_device_key);
+    esp_mqtt_client_config_t mqtt_config =
+        BuildMqttClientConfig(refreshed_config, broker_uri, client_id);
 
-            const bool same_session_identity =
-                client != nullptr &&
-                HasSameMqttSessionIdentity(active_config, refreshed_config);
-            if (client == nullptr) {
-                MqttCredentialRefreshState state;
-                state.refresh_succeeded = true;
-                action = DecideMqttCredentialRefreshAction(state);
-            } else if (!same_session_identity) {
-                MqttCredentialRefreshState state;
-                state.refresh_succeeded = true;
-                state.has_client = true;
-                state.outbox_empty = true;
-                action = DecideMqttCredentialRefreshAction(state);
-                ESP_LOGW(TAG, "MQTT session identity changed; restart required");
+    esp_mqtt_client_handle_t client = nullptr;
+    bool client_connected = false;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        client = client_;
+        active_config = config_;
+        client_connected = connected_.load();
+    }
+    MqttCredentialRefreshAction action = MqttCredentialRefreshAction::kKeepCurrentClient;
+    const bool same_session_identity =
+        client != nullptr && HasSameMqttSessionIdentity(active_config, refreshed_config);
+    if (client == nullptr) {
+        MqttCredentialRefreshState state;
+        state.refresh_succeeded = true;
+        action = DecideMqttCredentialRefreshAction(state);
+    } else if (!same_session_identity) {
+        MqttCredentialRefreshState state;
+        state.refresh_succeeded = true;
+        state.has_client = true;
+        state.outbox_empty = true;
+        action = DecideMqttCredentialRefreshAction(state);
+        ESP_LOGW(TAG, "MQTT session identity changed; restart required");
+    } else {
+        std::lock_guard<std::mutex> api_lock(client_api_mutex_);
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            if (!started_.load() || client_ != client) {
+                client = nullptr;
             } else {
-                std::lock_guard<std::mutex> api_lock(service->client_api_mutex_);
-                {
-                    std::lock_guard<std::mutex> lock(service->mqtt_mutex_);
-                    if (!service->started_.load() || service->client_ != client) {
-                        client = nullptr;
-                    } else {
-                        client_connected = service->connected_.load();
-                    }
-                }
-                if (client != nullptr) {
-                    const int outbox_size = client_connected
-                                                ? 0
-                                                : esp_mqtt_client_get_outbox_size(client);
-                    MqttCredentialRefreshState state;
-                    state.refresh_succeeded = true;
-                    state.has_client = true;
-                    state.client_connected = client_connected;
-                    state.same_session_identity = true;
-                    state.outbox_empty = outbox_size <= 0;
-                    action = DecideMqttCredentialRefreshAction(state);
-                    if (action == MqttCredentialRefreshAction::kRestart) {
-                        if (client_connected) {
-                            ESP_LOGW(TAG, "MQTT client reconnected during refresh; restart required");
-                        } else {
-                            ESP_LOGW(TAG, "MQTT outbox is not empty (%d bytes); restart required",
-                                     outbox_size);
-                        }
-                    } else {
-                        bool wake_publisher = false;
-                        {
-                            std::lock_guard<std::mutex> lock(service->mqtt_mutex_);
-                            if (service->client_ == client) {
-                                ++service->client_generation_;
-                                wake_publisher = service->reliable_publish_.message_id >= 0;
-                                service->reliable_publish_ = {};
-                            }
-                        }
-                        if (wake_publisher && service->publish_ack_semaphore_ != nullptr) {
-                            xSemaphoreGive(service->publish_ack_semaphore_);
-                        }
-
-                        const esp_err_t config_err = esp_mqtt_set_config(client, &mqtt_config);
-                        if (config_err == ESP_OK) {
-                            {
-                                std::lock_guard<std::mutex> lock(service->mqtt_mutex_);
-                                if (service->client_ == client) {
-                                    service->config_ = std::move(refreshed_config);
-                                    service->broker_uri_ = std::move(broker_uri);
-                                    service->client_id_ = std::move(client_id);
-                                }
-                            }
-                            const esp_err_t reconnect_err = esp_mqtt_client_reconnect(client);
-                            if (reconnect_err == ESP_OK) {
-                                ESP_LOGI(TAG, "MQTT credentials refreshed; reconnect requested");
-                            } else {
-                                ESP_LOGE(TAG, "Failed to reconnect refreshed MQTT client: %s",
-                                         esp_err_to_name(reconnect_err));
-                                action = MqttCredentialRefreshAction::kRestart;
-                            }
-                        } else {
-                            ESP_LOGE(TAG, "Failed to apply refreshed MQTT credentials: %s",
-                                     esp_err_to_name(config_err));
-                            action = MqttCredentialRefreshAction::kRestart;
-                        }
-                    }
-                } else {
-                    MqttCredentialRefreshState state;
-                    state.refresh_succeeded = true;
-                    action = DecideMqttCredentialRefreshAction(state);
-                }
+                client_connected = connected_.load();
             }
         }
+        if (client != nullptr) {
+            const int outbox_size = client_connected ? 0 : esp_mqtt_client_get_outbox_size(client);
+            MqttCredentialRefreshState state;
+            state.refresh_succeeded = true;
+            state.has_client = true;
+            state.client_connected = client_connected;
+            state.same_session_identity = true;
+            state.outbox_empty = outbox_size <= 0;
+            action = DecideMqttCredentialRefreshAction(state);
+            if (action == MqttCredentialRefreshAction::kRestart) {
+                if (client_connected) {
+                    ESP_LOGW(TAG, "MQTT client reconnected during refresh; restart required");
+                } else {
+                    ESP_LOGW(TAG, "MQTT outbox is not empty (%d bytes); restart required",
+                             outbox_size);
+                }
+            } else {
+                bool wake_publisher = false;
+                {
+                    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                    if (client_ == client) {
+                        ++client_generation_;
+                        wake_publisher = reliable_publish_.message_id >= 0;
+                        reliable_publish_ = {};
+                    }
+                }
+                if (wake_publisher && publish_ack_semaphore_ != nullptr) {
+                    xSemaphoreGive(publish_ack_semaphore_);
+                }
+                const esp_err_t config_err = esp_mqtt_set_config(client, &mqtt_config);
+                if (config_err == ESP_OK) {
+                    {
+                        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                        if (client_ == client) {
+                            config_ = std::move(refreshed_config);
+                            broker_uri_ = std::move(broker_uri);
+                            client_id_ = std::move(client_id);
+                        }
+                    }
+                    const esp_err_t reconnect_err = esp_mqtt_client_reconnect(client);
+                    if (reconnect_err == ESP_OK) {
+                        ESP_LOGI(TAG, "MQTT credentials refreshed; reconnect requested");
+                    } else {
+                        ESP_LOGE(TAG, "Failed to reconnect refreshed MQTT client: %s",
+                                 esp_err_to_name(reconnect_err));
+                        action = MqttCredentialRefreshAction::kRestart;
+                    }
+                } else {
+                    ESP_LOGE(TAG, "Failed to apply refreshed MQTT credentials: %s",
+                             esp_err_to_name(config_err));
+                    action = MqttCredentialRefreshAction::kRestart;
+                }
+            }
+        } else {
+            MqttCredentialRefreshState state;
+            state.refresh_succeeded = true;
+            action = DecideMqttCredentialRefreshAction(state);
+        }
     }
-    if (action == MqttCredentialRefreshAction::kStartConnection && service != nullptr &&
-        service->started_.load()) {
-        service->StartConnectionAsync();
+    pending_credential_config_.reset();
+    if (action == MqttCredentialRefreshAction::kStartConnection && started_.load()) {
+        StartConnectionAsync();
     }
-    if (service != nullptr) {
-        service->reset_scheduled_.store(false);
+    if (action == MqttCredentialRefreshAction::kRestart && started_.load()) {
+        credential_restart_pending_ = true;
+        if (!ShouldDeferCredentialRefresh()) {
+            ESP_LOGW(TAG, "Restarting to isolate refreshed MQTT session");
+            esp_restart();
+        }
+        return;
     }
-    if (action == MqttCredentialRefreshAction::kRestart && service != nullptr &&
-        service->started_.load()) {
-        ESP_LOGW(TAG, "Restarting to isolate refreshed MQTT session");
-        esp_restart();
-    }
+    FinishCredentialRefresh();
 }
 
 bool UnifiedMqttService::HasClient() const {
@@ -671,11 +761,15 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
         }
         if (event->event_id == MQTT_EVENT_CONNECTED) {
             connected_.store(true);
+            transport_recovery_.MarkConnected();
             connected_pending_ = true;
             connected_pending_generation_ = client_generation_;
         } else if (event->event_id == MQTT_EVENT_DISCONNECTED) {
             connected_.store(false);
             message_assembly_ = {};
+        } else if (event->event_id == MQTT_EVENT_ERROR && event->error_handle != nullptr &&
+                   event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+            transport_recovery_.RecordTransportFailure();
         } else if (event->event_id == MQTT_EVENT_PUBLISHED) {
             const uint64_t sequence = ++published_event_sequence_;
             recent_published_events_[next_published_event_index_] = {
@@ -950,6 +1044,9 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
 
 void UnifiedMqttService::ReconnectAfterCredentialChange() {
     if (!started_.load()) {
+        if (!Start()) {
+            ESP_LOGE(TAG, "Failed to restart MQTT service after device binding");
+        }
         return;
     }
     StartConnectionAsync();

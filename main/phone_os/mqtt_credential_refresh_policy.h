@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace rodakos {
 
 enum class MqttCredentialRefreshAction {
@@ -19,5 +21,24 @@ struct MqttCredentialRefreshState {
 
 MqttCredentialRefreshAction DecideMqttCredentialRefreshAction(
     const MqttCredentialRefreshState& state);
+
+enum class MqttTransportRecoveryAction {
+    kWait,
+    kDeferWhileVoiceActive,
+    kRefresh,
+};
+
+class MqttTransportRecoveryPolicy {
+public:
+    void RecordTransportFailure();
+    void MarkConnected();
+    void MarkRefreshStarted(int64_t now_ms);
+    MqttTransportRecoveryAction Decide(int64_t now_ms, bool refresh_pending,
+                                       bool voice_active) const;
+
+private:
+    uint32_t consecutive_failures_ = 0;
+    int64_t next_refresh_allowed_ms_ = 0;
+};
 
 }  // namespace rodakos

@@ -324,3 +324,14 @@ If it does not appear on the host:
 - Check SD card presence.
 - Confirm USB cable supports data.
 - Use the board's MSC startup button path only if that hardware input is configured.
+
+
+## MQTT Keeps Retrying While Voice Works
+
+As of 2026-09-28, TCP transport failures are counted independently from authentication rejection. After three consecutive TCP failures, the MQTT worker may refresh bootstrap configuration, with at least 60 seconds between TCP recovery attempts. Successful MQTT connection clears the failure count. Authentication rejection retains priority over TCP recovery.
+
+Voice activity defers applying refreshed settings or a required safety restart; pending snapshots return to the worker loop so waiting for voice to finish does not block queued MQTT messages and telemetry. The bootstrap HTTP call itself remains synchronous. Session identity/outbox changes still use the existing restart policy once voice is idle. Rebinding a device also restarts the MQTT service if unbinding previously stopped it.
+
+Package `build/packages/ota/20260928-072926` passed 197 app-model host tests, ESP-IDF 6.0.2 build, and COM3 protected non-erasing refresh. Main SHA-256: `a006b10af123feae9aceae4c2516d01afa507a2d49e22f10f373e03c35530740`.
+
+Hardware evidence: a 75-second local service outage produced one TCP recovery schedule and one bootstrap attempt, then MQTT reconnected after service restoration and telemetry resumed, without reset/panic/watchdog. A subsequent USB-injected silent wake/stop session kept MQTT connected after voice ended. This verifies connection lifecycle, not acoustic wake, speech quality, or speaker output. Stale-address changes and simultaneous HTTP/voice races remain covered by policy tests and review rather than this hardware fault injection.
