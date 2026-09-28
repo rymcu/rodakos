@@ -26,6 +26,7 @@ add_executable(rodakos_app_model_tests
     voice_assistant_reconnect_coordinator_test.cc
     battery_level_model_test.cc
     wifi_connection_policy_test.cc
+    ota_signature_format_test.cc
     ../../main/phone_os/phone_app_registry.cc
     ../../main/phone_os/phone_app_host.cc
     ../../main/phone_os/phone_navigation.cc
@@ -50,12 +51,14 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/realtime_voice_transport_harness.cc
     ../../main/phone_os/battery_level_model.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
+    ../../components/rodak_ota_state/rodak_ota_signature_format.cc
 )
 
 target_include_directories(rodakos_app_model_tests BEFORE PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../main"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../components/rodak_ota_state/include"
 )
 
 target_compile_features(rodakos_app_model_tests PRIVATE cxx_std_17)

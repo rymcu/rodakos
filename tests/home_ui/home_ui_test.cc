@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "test_framework.h"
 
 #include <algorithm>
@@ -641,4 +642,25 @@ RODAK_TEST("97 apps expose All Apps and asynchronously retain only adjacent page
     RODAK_CHECK_EQ(fixture.home.collection_state_.kind,
                    HomeApp::CollectionKind::kAllApps);
     RODAK_CHECK(FindLabel(fixture.home.collection_view_, "All Apps") != nullptr);
+}
+
+RODAK_TEST("failed neighbor page allocation preserves active page and allows retry") {
+    ResetScreen();
+    ResetSettings();
+    HomeFixture fixture(25);
+    fixture.home.CancelPendingPageWindowRefresh();
+    lv_tileview_set_tile(fixture.home.tileview_, fixture.home.page_tiles_[0], LV_ANIM_OFF);
+    RODAK_CHECK(fixture.home.RefreshHomePageWindow(0));
+    fixture.home.CancelPendingPageWindowRefresh();
+    // Move to the already resident middle page; the third page has never been populated.
+    lv_tileview_set_tile(fixture.home.tileview_, fixture.home.page_tiles_[1], LV_ANIM_OFF);
+    RODAK_CHECK(rodakos::ArmResourceFailure("home_page"));
+    RODAK_CHECK(fixture.home.RefreshHomePageWindow(1));
+    RODAK_CHECK(fixture.home.page_populated_[1]);
+    RODAK_CHECK_FALSE(fixture.home.page_populated_[2]);
+    RODAK_CHECK_EQ(lv_obj_get_child_count(fixture.home.page_tiles_[2]), 0U);
+    RODAK_CHECK_EQ(lv_obj_get_scroll_dir(fixture.home.tileview_), LV_DIR_LEFT);
+    RODAK_CHECK(fixture.home.RefreshHomePageWindow(1));
+    RODAK_CHECK(fixture.home.page_populated_[2]);
+    RODAK_CHECK_EQ(lv_obj_get_child_count(fixture.home.page_tiles_[2]), 1U);
 }

@@ -45,6 +45,7 @@ target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
 )
 
 target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl)
+target_compile_definitions(rodakos_home_ui_tests PRIVATE RODAKOS_RELEASE_TESTS=1)
 
 if(UNIX)
     find_package(Threads REQUIRED)

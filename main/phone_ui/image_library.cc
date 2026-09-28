@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "image_library.h"
 #include "rodakos_adapters/file_service.h"
 
@@ -311,10 +312,11 @@ std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
     }
 
     // Allocate in SPIRAM
-    void* data = heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool injected_failure = rodakos::FailResource(rodakos::ResourceFailure::kImage);
+    void* data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (data == nullptr) {
         // Fallback to internal RAM if SPIRAM not available
-        data = heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
+        data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
         if (data == nullptr) {
             fclose(f);
             ESP_LOGW(TAG, "Failed to allocate memory for image, size=%ld", file_size);
@@ -395,9 +397,10 @@ std::shared_ptr<LvglImage> LoadThumbnail(const std::string& path, int width, int
         return nullptr;
     }
 
-    void* data = heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool injected_failure = rodakos::FailResource(rodakos::ResourceFailure::kImage);
+    void* data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (data == nullptr) {
-        data = heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
+        data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
         if (data == nullptr) {
             fclose(f);
             ESP_LOGW(TAG, "Failed to allocate memory for thumbnail, size=%ld", file_size);

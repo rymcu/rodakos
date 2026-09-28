@@ -335,3 +335,29 @@ Voice activity defers applying refreshed settings or a required safety restart; 
 Package `build/packages/ota/20260928-072926` passed 197 app-model host tests, ESP-IDF 6.0.2 build, and COM3 protected non-erasing refresh. Main SHA-256: `a006b10af123feae9aceae4c2516d01afa507a2d49e22f10f373e03c35530740`.
 
 Hardware evidence: a 75-second local service outage produced one TCP recovery schedule and one bootstrap attempt, then MQTT reconnected after service restoration and telemetry resumed, without reset/panic/watchdog. A subsequent USB-injected silent wake/stop session kept MQTT connected after voice ended. This verifies connection lifecycle, not acoustic wake, speech quality, or speaker output. Stale-address changes and simultaneous HTTP/voice races remain covered by policy tests and review rather than this hardware fault injection.
+
+
+## Signed OTA release work
+
+The release work introduces manifest v2 and a configurable RSA-2048 public key. Both firmware
+builds need the same `RODAK_OTA_PUBLIC_KEY`; an unconfigured build refuses OTA authentication.
+Use the signing arguments in `docs/firmware-download.md`. Existing immutable Recovery needs a wired
+migration; changing manifest fields cannot upgrade its verifier. No production key is embedded by
+default, and a test key does not establish release readiness.
+
+Board Manager's default recursive scan does not reach
+`components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart` on a clean checkout.
+`generate_board_config.ps1` now passes the supported `--customer-path` explicitly, then normalizes
+generated paths and reconfigures as before. Do not repair missing `g_esp_board_devices` linker
+symbols by adding handwritten board tables.
+
+The original transitive versions of `esp_sccb_intf`, `tinyusb`, and `usb_host_uvc` are now pinned in
+`main/idf_component.yml`, preventing a fresh IDF install from silently upgrading them. Release host
+checks run under Linux with `tools/run_release_host_checks.sh`; install CMake, Ninja, a C++ compiler,
+`libmbedtls-dev`, and Python cryptography. The script uses a persistent cache directory instead of
+WSL's temporary directory, which can disappear when the distro stops.
+
+Test-only one-shot resource failures exercise cleanup at named boundaries. They do not demonstrate
+arbitrary LVGL heap exhaustion recovery. Keep that gate, real power interruption, the signed COM13
+migration, and the eight-hour release soak open until their evidence is captured in
+`docs/ota-release-readiness.md`.

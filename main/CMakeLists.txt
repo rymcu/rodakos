@@ -4,6 +4,10 @@ option(
     OFF
 )
 
+set(RODAK_OTA_FAULT_INJECTION_PHASE "" CACHE STRING
+    "Main OTA reset-injection phase for journal recovery tests")
+option(RODAKOS_RELEASE_TESTS "Enable one-shot serial resource failure injection" OFF)
+
 set(SOURCES
     "main.cc"
     "settings.cc"
@@ -144,6 +148,12 @@ idf_component_register(
         esp_new_jpeg
         rodakos_fonts
 )
+
+
+
+if(RODAKOS_RELEASE_TESTS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_RELEASE_TESTS=1)
+endif()
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
     target_compile_definitions(

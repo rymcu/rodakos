@@ -62,7 +62,9 @@ intentional dependency upgrade.
 idf.py build
 
 # Build the first-flash Recovery bundle and the normal Rodak OTA artifact
-.\build_ota_bundle.ps1
+.\build_ota_bundle.ps1 -SigningKeyPath C:\secure\ota-private.pem `
+  -VerificationKeyPath C:\secure\ota-public.pem `
+  -SigningTaskNo <rodak-task> -SigningVersion <compiled-version>
 
 # Refresh an existing Recovery-layout device, preserving NVS and OTA journal
 .\flash_and_test.ps1
@@ -184,6 +186,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
+- [OTA release readiness](docs/ota-release-readiness.md)
 - [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)

@@ -214,7 +214,7 @@ WebSocket object as a substitute.
 
 Rodak publishes OTA task metadata on `ota/notify`. RodakOS obtains the manifest
 and download ticket over the configured HTTP origin, stages the image on SD,
-verifies its size and SHA-256, and asks the immutable Recovery application to
+verifies its `manifestVersion: 2` metadata, size, SHA-256, and required `rsa2048-sha256` signature, and asks the immutable Recovery application to
 write `ota_0`. Progress and the terminal result use `ota/progress` or the
 matching HTTP result endpoint. Recovery, pending verification, confirmation,
 rollback, and journal schema remain firmware facts documented in

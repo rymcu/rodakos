@@ -54,6 +54,9 @@ private:
         std::string url;
         std::string checksum_type;
         std::string checksum_value;
+        std::string signature_type;
+        std::string signature_value;
+        uint32_t manifest_version = 0;
         uint64_t file_size = 0;
     };
 
@@ -81,6 +84,8 @@ private:
     bool PromotePendingImage(OtaUpdateRecord& record);
     bool VerifySdImage(const char* relative_path, uint64_t expected_size,
                        const std::string& expected_sha256);
+    bool VerifyPendingSignature(const OtaUpdateRecord& record);
+    bool WritePendingSignature(const Manifest& manifest);
     bool PublishProgress(const std::string& task_no, int progress_percent,
                          const std::string& step_code, const std::string& detail = {},
                          bool wait_for_ack = false);

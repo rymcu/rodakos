@@ -1,4 +1,5 @@
 #include "rodak_ota_state.h"
+#include "rodak_release_fault.h"
 
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -307,6 +308,11 @@ OtaUpdateLoadResult LoadOtaUpdateRecordStatus(OtaUpdateRecord& record) {
 
     const SlotRecord slot_a = ReadSlot(handle, kSlotAKey);
     const SlotRecord slot_b = ReadSlot(handle, kSlotBKey);
+    if (slot_a.status == SlotStatus::kError || slot_b.status == SlotStatus::kError) {
+        nvs_close(handle);
+        record = {};
+        return OtaUpdateLoadResult::kError;
+    }
     nvs_close(handle);
     const SlotRecord* selected = nullptr;
     if (slot_a.status == SlotStatus::kValid) {
@@ -347,6 +353,12 @@ bool SaveOtaUpdateRecord(const OtaUpdateRecord& record) {
 
     const SlotRecord slot_a = ReadSlot(handle, kSlotAKey);
     const SlotRecord slot_b = ReadSlot(handle, kSlotBKey);
+    if (slot_a.status == SlotStatus::kError || slot_b.status == SlotStatus::kError ||
+        ((slot_a.status == SlotStatus::kCorrupt || slot_b.status == SlotStatus::kCorrupt) &&
+         slot_a.status != SlotStatus::kValid && slot_b.status != SlotStatus::kValid)) {
+        nvs_close(handle);
+        return false;
+    }
     uint32_t latest_generation = 0;
     bool has_generation = false;
     if (slot_a.status == SlotStatus::kValid) {
@@ -370,9 +382,16 @@ bool SaveOtaUpdateRecord(const OtaUpdateRecord& record) {
     PersistedRecord persisted = {};
     const uint32_t next_generation = has_generation ? latest_generation + 1 : 1;
     const bool encoded = EncodeRecord(record, next_generation, persisted);
-    const bool saved = encoded &&
-                       nvs_set_blob(handle, target_key, &persisted, sizeof(persisted)) == ESP_OK &&
-                       nvs_commit(handle) == ESP_OK;
+    OtaFaultPoint("before_journal_set");
+    bool saved = encoded &&
+                 nvs_set_blob(handle, target_key, &persisted, sizeof(persisted)) == ESP_OK;
+    if (saved) {
+        OtaFaultPoint("after_journal_set");
+        saved = nvs_commit(handle) == ESP_OK;
+    }
+    if (saved) {
+        OtaFaultPoint("after_journal_commit");
+    }
     nvs_close(handle);
     return saved;
 }

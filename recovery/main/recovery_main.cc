@@ -1,4 +1,6 @@
 #include "rodak_ota_state.h"
+#include "rodak_ota_signature.h"
+#include "rodak_release_fault.h"
 #include "rodak_sha256.h"
 
 #include <driver/sdmmc_host.h>
@@ -16,7 +18,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <string>
@@ -26,11 +30,14 @@ constexpr const char* TAG = "RodakRecovery";
 constexpr const char* kMountPoint = "/sdcard";
 constexpr size_t kCopyBufferSize = 32 * 1024;
 
+
+
 struct MountedSdCard {
     std::string mount_point;
     sdmmc_card_t* card = nullptr;
     bool mounted = false;
 };
+
 
 bool InitializeNvs() {
     esp_err_t err = nvs_flash_init();
@@ -94,53 +101,22 @@ std::string AbsolutePath(const MountedSdCard& sd_card, const char* relative_path
 
 bool VerifyFile(const std::string& path, uint64_t expected_size,
                 const std::string& expected_sha256) {
-    FILE* file = std::fopen(path.c_str(), "rb");
-    if (file == nullptr) {
-        ESP_LOGE(TAG, "Image file is unavailable: %s", path.c_str());
-        return false;
-    }
-
-    rodakos::Sha256 sha;
-    bool ok = sha.Start();
-    uint64_t total = 0;
-    std::unique_ptr<unsigned char[]> buffer(
-        new (std::nothrow) unsigned char[kCopyBufferSize]);
-    if (buffer == nullptr) {
-        std::fclose(file);
-        ESP_LOGE(TAG, "Cannot allocate image verification buffer");
-        return false;
-    }
-    while (ok) {
-        const size_t read = std::fread(buffer.get(), 1, kCopyBufferSize, file);
-        if (read > 0) {
-            total += read;
-            ok = sha.Update(buffer.get(), read);
-        }
-        if (read < kCopyBufferSize) {
-            ok = ok && std::feof(file) != 0;
-            break;
-        }
-    }
-    std::fclose(file);
-
-    std::array<unsigned char, 32> digest = {};
-    ok = ok && sha.Finish(digest);
-    if (!ok || total != expected_size) {
-        ESP_LOGE(TAG, "Image size mismatch: expected=%llu actual=%llu",
-                 static_cast<unsigned long long>(expected_size),
-                 static_cast<unsigned long long>(total));
-        return false;
-    }
-
-    const std::string actual_sha256 = rodakos::Sha256ToHex(digest);
-    if (actual_sha256 != expected_sha256) {
-        ESP_LOGE(TAG, "Image SHA-256 mismatch");
-        return false;
-    }
-    return true;
+    return rodakos::VerifyOtaImageFile(path, expected_size, expected_sha256);
 }
 
-bool WriteImage(const std::string& path, uint64_t image_size) {
+bool VerifyPendingSignature(const MountedSdCard& sd_card,
+                            const rodakos::OtaUpdateRecord& record) {
+    std::string signature;
+    const bool verified = rodakos::ReadOtaSignatureFile(
+        AbsolutePath(sd_card, rodakos::kOtaPendingSignaturePath), signature) &&
+        rodakos::VerifyOtaSignature(record, signature);
+    if (!verified) {
+        ESP_LOGE(TAG, "Pending OTA signature verification failed; no candidate write");
+    }
+    return verified;
+}
+
+bool WriteImage(const std::string& path, uint64_t image_size, const std::string& expected_sha256, bool restoring = false) {
     const esp_partition_t* partition = MainPartition();
     if (partition == nullptr || image_size == 0 || image_size > partition->size) {
         ESP_LOGE(TAG, "Main partition cannot hold image (%llu bytes)",
@@ -161,6 +137,12 @@ bool WriteImage(const std::string& path, uint64_t image_size) {
         ESP_LOGE(TAG, "Cannot allocate image flashing buffer");
         return false;
     }
+    rodakos::Sha256 sha;
+    if (!sha.Start()) {
+        std::fclose(file);
+        return false;
+    }
+    rodakos::OtaFaultPoint(restoring ? "before_restore_erase" : "before_image_erase");
     esp_ota_handle_t ota_handle = 0;
     esp_err_t err = esp_ota_begin(partition, static_cast<size_t>(image_size), &ota_handle);
     if (err != ESP_OK) {
@@ -168,12 +150,13 @@ bool WriteImage(const std::string& path, uint64_t image_size) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         return false;
     }
+    rodakos::OtaFaultPoint(restoring ? "after_restore_erase" : "after_image_erase");
     uint64_t written = 0;
     while (written < image_size) {
         const size_t requested = static_cast<size_t>(
             std::min<uint64_t>(kCopyBufferSize, image_size - written));
         const size_t read = std::fread(buffer.get(), 1, requested, file);
-        if (read != requested) {
+        if (read != requested || !sha.Update(buffer.get(), read)) {
             err = ESP_FAIL;
             break;
         }
@@ -182,11 +165,19 @@ bool WriteImage(const std::string& path, uint64_t image_size) {
             break;
         }
         written += read;
+        if (written == read) {
+            rodakos::OtaFaultPoint(restoring ? "during_restore_write" : "during_image_write");
+        }
         if (written % (1024 * 1024) < kCopyBufferSize) {
             ESP_LOGI(TAG, "Flashed %llu/%llu bytes",
                      static_cast<unsigned long long>(written),
                      static_cast<unsigned long long>(image_size));
         }
+    }
+    std::array<unsigned char, 32> digest = {};
+    if (err == ESP_OK && (std::fgetc(file) != EOF || std::ferror(file) ||
+                         !sha.Finish(digest) || rodakos::Sha256ToHex(digest) != expected_sha256)) {
+        err = ESP_FAIL;
     }
     std::fclose(file);
 
@@ -261,12 +252,14 @@ bool RestoreInstalledImage(const MountedSdCard& sd_card, rodakos::OtaUpdateRecor
         ESP_LOGE(TAG, "Failed to persist restoring state; refusing to modify the main partition");
         return false;
     }
+    rodakos::OtaFaultPoint("after_restore_state");
 
     const std::string path = AbsolutePath(sd_card, rodakos::kOtaInstalledImagePath);
     if (!VerifyFile(path, record.installed_size, record.installed_sha256) ||
-        !WriteImage(path, record.installed_size)) {
+        !WriteImage(path, record.installed_size, record.installed_sha256, true)) {
         return false;
     }
+    rodakos::OtaFaultPoint("after_restore_write");
 
     record.phase = rodakos::OtaUpdatePhase::kRollbackReadyToBoot;
     record.detail = "上一版本已恢复，等待启动确认";
@@ -274,12 +267,14 @@ bool RestoreInstalledImage(const MountedSdCard& sd_card, rodakos::OtaUpdateRecor
         ESP_LOGE(TAG, "Failed to persist rollback-ready state; staying in Recovery");
         return false;
     }
+    rodakos::OtaFaultPoint("after_rollback_ready");
     RestartRestoredImage(record);
 }
 }  // namespace
 
 extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Starting immutable SD recovery runtime");
+    ESP_LOGI(TAG, "%s", rodakos::OtaTrustMarker());
     if (!InitializeNvs()) {
         return;
     }
@@ -364,23 +359,44 @@ extern "C" void app_main(void) {
         return;
     }
 
-    record.phase = rodakos::OtaUpdatePhase::kApplying;
-    record.detail = "Recovery 正在写入主应用分区";
-    record.error_code.clear();
-    if (!rodakos::SaveOtaUpdateRecord(record)) {
-        ESP_LOGE(TAG, "Failed to persist applying state; refusing to modify the main partition");
+    const std::string pending_path = AbsolutePath(sd_card, rodakos::kOtaPendingImagePath);
+    const bool previously_applying = record.phase == rodakos::OtaUpdatePhase::kApplying;
+    const bool candidate_valid = VerifyPendingSignature(sd_card, record) &&
+        VerifyFile(pending_path, record.pending_size, record.pending_sha256);
+    if (!candidate_valid) {
+        record.detail = "Recovery rejected candidate before erase";
+        record.error_code = "RECOVERY_IMAGE_UNAUTHENTICATED";
+        if (previously_applying) {
+            RestoreInstalledImage(sd_card, record);
+        } else {
+            // A rejected pending image has never touched ota_0; preserve it byte for byte.
+            record.phase = rodakos::OtaUpdatePhase::kFailed;
+            if (rodakos::SaveOtaUpdateRecord(record) && !main_was_invalid && IsValidImage(main_partition)) {
+                RestartInto(main_partition);
+            }
+        }
         return;
     }
-
-    const std::string pending_path =
-        AbsolutePath(sd_card, rodakos::kOtaPendingImagePath);
-    if (!VerifyFile(pending_path, record.pending_size, record.pending_sha256) ||
-        !WriteImage(pending_path, record.pending_size)) {
-        record.detail = "Recovery 写入或校验新固件失败";
+    if (!VerifyFile(AbsolutePath(sd_card, rodakos::kOtaInstalledImagePath),
+                    record.installed_size, record.installed_sha256)) {
+        ESP_LOGE(TAG, "Rollback backup is unavailable; refusing candidate erase");
+        return;
+    }
+    record.phase = rodakos::OtaUpdatePhase::kApplying;
+    record.detail = "Recovery applying authenticated image";
+    record.error_code.clear();
+    if (!rodakos::SaveOtaUpdateRecord(record)) {
+        ESP_LOGE(TAG, "Applying state not durable; refusing candidate erase");
+        return;
+    }
+    rodakos::OtaFaultPoint("after_applying_state");
+    if (!WriteImage(pending_path, record.pending_size, record.pending_sha256)) {
+        record.detail = "Recovery 写入新固件失败";
         record.error_code = "RECOVERY_FLASH_FAILED";
         RestoreInstalledImage(sd_card, record);
         return;
     }
+    rodakos::OtaFaultPoint("after_image_write");
 
     record.phase = rodakos::OtaUpdatePhase::kReadyToBoot;
     record.detail = "新固件已写入，等待首次启动确认";
@@ -389,5 +405,6 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "Failed to persist verification state");
         return;
     }
+    rodakos::OtaFaultPoint("after_ready_to_boot");
     RestartInto(main_partition);
 }

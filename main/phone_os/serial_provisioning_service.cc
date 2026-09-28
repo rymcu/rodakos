@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/serial_provisioning_service.h"
 
 #include "phone_os/device_cloud_config.h"
@@ -318,6 +319,15 @@ void SerialProvisioningService::Run() {
 }
 
 bool SerialProvisioningService::HandleLine(const std::string& line) {
+#ifdef RODAKOS_RELEASE_TESTS
+    constexpr char kResourceTestPrefix[] = "RODAK_RELEASE_TEST_V1 fail_alloc ";
+    if (line.rfind(kResourceTestPrefix, 0) == 0) {
+        const bool armed = ArmResourceFailure(line.substr(sizeof(kResourceTestPrefix) - 1).c_str());
+        std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"armed\":%s}\n", armed ? "true" : "false");
+        std::fflush(stdout);
+        return armed;
+    }
+#endif
     constexpr char kAppLaunchPrefix[] = "RODAK_APP_LAUNCH_V1 ";
     if (line.rfind(kAppLaunchPrefix, 0) == 0) {
         const std::string app_id = line.substr(sizeof(kAppLaunchPrefix) - 1);

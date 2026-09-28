@@ -9,6 +9,8 @@ namespace rodakos {
 inline constexpr const char* kOtaDirectory = "/rodak-ota";
 inline constexpr const char* kOtaPendingImagePath = "/rodak-ota/pending.bin";
 inline constexpr const char* kOtaPendingPartPath = "/rodak-ota/pending.bin.part";
+inline constexpr const char* kOtaPendingSignaturePath = "/rodak-ota/pending.sig";
+inline constexpr const char* kOtaPendingSignaturePartPath = "/rodak-ota/pending.sig.part";
 inline constexpr const char* kOtaInstalledImagePath = "/rodak-ota/installed.bin";
 inline constexpr const char* kOtaInstalledPartPath = "/rodak-ota/installed.bin.part";
 inline constexpr size_t kOtaTaskNoMaxBytes = 95;

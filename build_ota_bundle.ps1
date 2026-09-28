@@ -2,10 +2,24 @@ param(
     [string]$OutputRoot = "build/packages/ota",
     [string]$ImmutableRecoveryPackage = "",
     [switch]$SkipBuild,
-    [switch]$AllowHomeHardwareTestPopulation
+    [switch]$AllowHomeHardwareTestPopulation,
+    [string]$SigningKeyPath = "",
+    [string]$VerificationKeyPath = "",
+    [string]$SigningTaskNo = "",
+    [string]$SigningVersion = "",
+    [switch]$DevelopmentPackage,
+    [switch]$AllowReleaseFaultInjection
 )
 
 $ErrorActionPreference = "Stop"
+
+foreach ($value in @($SigningKeyPath, $VerificationKeyPath, $SigningTaskNo, $SigningVersion)) {
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        throw "Signed packages require SigningKeyPath, VerificationKeyPath, SigningTaskNo and SigningVersion"
+    }
+}
+$SigningKeyPath = (Resolve-Path -LiteralPath $SigningKeyPath).Path
+$VerificationKeyPath = (Resolve-Path -LiteralPath $VerificationKeyPath).Path
 
 function Get-PartitionLayout {
     param(
@@ -109,12 +123,12 @@ try {
             throw "Board Manager 配置生成失败"
         }
 
-        & idf.py build
+        & idf.py "-DRODAK_OTA_PUBLIC_KEY=$VerificationKeyPath" build
         if ($LASTEXITCODE -ne 0) {
             throw "RodakOS 主应用构建失败"
         }
 
-        & idf.py -C recovery build
+        & idf.py -C recovery "-DRODAK_OTA_PUBLIC_KEY=$VerificationKeyPath" build
         if ($LASTEXITCODE -ne 0) {
             throw "RodakOS Recovery 构建失败"
         }
@@ -176,6 +190,9 @@ try {
 
     $mainFlashArgs = Get-Content -Raw -LiteralPath $mainFlashArgsPath | ConvertFrom-Json
     $mainProject = Get-Content -Raw -LiteralPath $mainProjectDescriptionPath | ConvertFrom-Json
+    if ($SigningVersion -ne [string]$mainProject.project_version) {
+        throw "SigningVersion must match the compiled app version $($mainProject.project_version)"
+    }
     $recoveryFlashArgs = Get-Content -Raw -LiteralPath $recoveryFlashArgsPath | ConvertFrom-Json
     $recoveryProject = Get-Content -Raw -LiteralPath $recoveryProjectDescriptionPath | ConvertFrom-Json
     if ($mainProject.target -ne "esp32s3" -or $recoveryProject.target -ne "esp32s3") {
@@ -201,6 +218,7 @@ try {
         $immutableMergedHash =
             (Get-FileHash -LiteralPath $immutableMerged -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($immutableManifest.protocolVersion -ne 2 -or
+            $immutableManifest.manifestVersion -ne 2 -or
             $immutableManifest.otaJournalSchemaVersion -ne 1 -or
             [string]$immutableManifest.firstFlashImage.fileName -ne
                 "rodakos_sd_recovery_merged.bin" -or
@@ -251,19 +269,47 @@ try {
         $cacheRequestsHardwareTestPopulation = $null -ne (Select-String -LiteralPath $cmakeCache `
             -Pattern '^RODAKOS_HOME_HARDWARE_TEST_POPULATION:BOOL=(ON|TRUE|1)$' |
             Select-Object -First 1)
+        $faultInjectionCache = Select-String -LiteralPath $cmakeCache `
+            -Pattern '^RODAK_OTA_FAULT_INJECTION_PHASE:STRING=.+$' |
+            Select-Object -First 1
+        if ($null -ne $faultInjectionCache -and -not $AllowReleaseFaultInjection) {
+            throw "OTA 故障注入配置仍启用；清空 RODAK_OTA_FAULT_INJECTION_PHASE 后才能打包"
+        }
     }
     if ($cacheRequestsHardwareTestPopulation -ne $homeHardwareTestPopulation) {
         throw "Home 硬件测试配置与 rodakos.bin 不一致；请在切换 flavor 后重新运行 idf.py build"
+    }
+    $recoveryCmakeCachePath = Join-Path $repoRoot "recovery/build/CMakeCache.txt"
+    if (Test-Path -LiteralPath $recoveryCmakeCachePath) {
+        $recoveryFaultInjectionCache = Select-String -LiteralPath $recoveryCmakeCachePath `
+            -Pattern '^RODAK_OTA_FAULT_INJECTION_PHASE:STRING=.+$' |
+            Select-Object -First 1
+        if ($null -ne $recoveryFaultInjectionCache -and -not $AllowReleaseFaultInjection) {
+            throw "Recovery OTA 故障注入配置仍启用；清空 RODAK_OTA_FAULT_INJECTION_PHASE 后才能打包"
+        }
     }
     if ($homeHardwareTestPopulation -and -not $AllowHomeHardwareTestPopulation) {
         throw "Home 硬件测试固件需要显式传入 -AllowHomeHardwareTestPopulation 才能打包"
     }
     $buildFlavor = if ($homeHardwareTestPopulation) { "home-hardware-test" } else { "production" }
+    $releaseFaultInjection = (Test-BinaryContainsAscii -FilePath $mainBin `
+        -Text "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE") -or `
+        (Test-BinaryContainsAscii -FilePath $recoveryBin -Text "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE")
+    if ($releaseFaultInjection) {
+        if (-not $DevelopmentPackage -or -not $AllowReleaseFaultInjection) {
+            throw "Fault-injection packages require DevelopmentPackage and AllowReleaseFaultInjection"
+        }
+        $buildFlavor = "release-fault-test"
+    }
     $mainImageType = if ($homeHardwareTestPopulation) { "hardware-test" } else { "app" }
     $mainPackageName = if ($homeHardwareTestPopulation) {
         "rodakos_home_hardware_test.bin"
     } else {
         "rodakos.bin"
+    }
+    if ($releaseFaultInjection) {
+        $mainImageType = "hardware-test"
+        $mainPackageName = "rodakos_release_test.bin"
     }
     $partitionSha = (Get-FileHash -LiteralPath $partitionBin -Algorithm SHA256).Hash
     $mainPartitionSha = (Get-FileHash -LiteralPath $mainPartitionBin -Algorithm SHA256).Hash
@@ -392,6 +438,9 @@ try {
     $mergedSha256 = (Get-FileHash -LiteralPath $mergedBin -Algorithm SHA256).Hash.ToLowerInvariant()
     $manifest = [ordered]@{
         protocolVersion = 2
+        manifestVersion = 2
+        developmentPackage = [bool]$DevelopmentPackage
+        releaseFaultInjection = $releaseFaultInjection
         otaJournalSchemaVersion = $journalSchemaVersion
         buildFlavor = $buildFlavor
         homeHardwareTestPopulation = $homeHardwareTestPopulation
@@ -445,8 +494,36 @@ try {
             checksumValue = $partitionSha.ToLowerInvariant()
         }
     }
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageDir "manifest.json") -Encoding utf8
-    if ($homeHardwareTestPopulation) {
+    $manifestPath = Join-Path $packageDir "manifest.json"
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+    if (-not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
+        if ([string]::IsNullOrWhiteSpace($SigningTaskNo) -or
+            [string]::IsNullOrWhiteSpace($SigningVersion)) {
+            throw "提供 SigningKeyPath 时必须同时提供 SigningTaskNo 和 SigningVersion"
+        }
+        & (Join-Path $repoRoot "tools/sign_ota_manifest.ps1") `
+            -ManifestPath $manifestPath `
+            -SigningKeyPath $SigningKeyPath `
+            -VerificationKeyPath $VerificationKeyPath `
+            -TaskNo $SigningTaskNo `
+            -Version $SigningVersion `
+            -ImagePath (Join-Path $packageDir $mainPackageName)
+        if ($LASTEXITCODE -ne 0) {
+            throw "OTA manifest 签名失败"
+        }
+    }
+    Copy-Item -LiteralPath $VerificationKeyPath -Destination (Join-Path $packageDir "ota-public.pem")
+    $verifyOptions = @()
+    if ($AllowReleaseFaultInjection) { $verifyOptions += "--allow-faults" }
+    & python (Join-Path $repoRoot "tools/ota_security.py") verify-package --directory $packageDir @verifyOptions
+    if ($LASTEXITCODE -ne 0) { throw "Package authentication or build-flavor verification failed" }
+    if ($releaseFaultInjection) {
+        $flashInstructions = @(
+            "Release fault-injection test package. Never distribute through production OTA."
+            "Use flash_and_test.ps1 -AllowDevelopmentPackage -AllowReleaseFaultInjection."
+            "After testing, rebuild both images with all test switches disabled."
+        )
+    } elseif ($homeHardwareTestPopulation) {
         $flashInstructions = @(
             "Home 硬件测试包："
             "仅使用 flash_and_test.ps1 -AllowHomeHardwareTestPopulation 刷写。"
@@ -456,10 +533,10 @@ try {
     } else {
         $flashInstructions = @(
             "首次烧录："
-            "python -m esptool --chip esp32s3 -p COM3 erase-flash"
-            "python -m esptool --chip esp32s3 -p COM3 -b 460800 --before default-reset --after hard-reset write-flash 0x0 rodakos_sd_recovery_merged.bin"
+            "Use the repository flash_and_test.ps1 with -Port and -MergedImage pointing to this package."
+            "Verify the installed Recovery first; wired migration replaces Recovery and needs a preserved flash backup."
             ""
-            "Rodak OTA：仅上传 rodakos.bin，并使用 manifest.json 中的 fileSize/checksumValue。"
+            "Rodak OTA: upload rodakos.bin and preserve all signed manifest fields including taskNo and version."
         )
     }
     $flashInstructions | Set-Content -LiteralPath (Join-Path $packageDir "flash_args.txt") -Encoding utf8
@@ -468,7 +545,10 @@ try {
     Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -Force
     Write-Host "OTA 包已生成：$packageDir" -ForegroundColor Green
     Write-Host "首次烧录镜像：$mergedBin" -ForegroundColor Green
-    if ($homeHardwareTestPopulation) {
+    if ($releaseFaultInjection) {
+        Write-Host "Release 故障注入测试镜像：$(Join-Path $packageDir $mainPackageName)" -ForegroundColor Yellow
+        Write-Host "此包仅供本地测试，不能用于生产 OTA" -ForegroundColor Yellow
+    } elseif ($homeHardwareTestPopulation) {
         Write-Host "Home 硬件测试镜像：$(Join-Path $packageDir $mainPackageName)" -ForegroundColor Yellow
         Write-Host "禁止将此测试 flavor 上传到 Rodak OTA" -ForegroundColor Yellow
     } else {

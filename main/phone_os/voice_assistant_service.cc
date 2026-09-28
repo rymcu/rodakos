@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/voice_assistant_service.h"
 
 #include "phone_os/audio_output_service.h"
@@ -884,11 +885,11 @@ bool VoiceAssistantService::StartIoTask() {
     }
 
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+    const BaseType_t created = FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreatePinnedToCoreWithCaps(
         IoTaskEntry, "assistant_io", kIoTaskStackBytes, this,
         kIoTaskPriority, &io_task_, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t created = xTaskCreateWithCaps(
+    const BaseType_t created = FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreateWithCaps(
         IoTaskEntry, "assistant_io", kIoTaskStackBytes, this,
         kIoTaskPriority, &io_task_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif

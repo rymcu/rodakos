@@ -11,7 +11,9 @@ param(
     [ValidateRange(5, 120)]
     [int]$CaptureSeconds = 45,
     [switch]$NoMonitor,
-    [switch]$AllowHomeHardwareTestPopulation
+    [switch]$AllowHomeHardwareTestPopulation,
+    [switch]$AllowDevelopmentPackage,
+    [switch]$AllowReleaseFaultInjection
 )
 
 function Test-BinaryContainsAscii {
@@ -103,6 +105,13 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     exit 1
 }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+if ($manifest.developmentPackage -eq $true -and -not $AllowDevelopmentPackage) {
+    throw "Development-signed package requires -AllowDevelopmentPackage"
+}
+$verifyOptions = @()
+if ($AllowReleaseFaultInjection) { $verifyOptions += "--allow-faults" }
+& python (Join-Path $PSScriptRoot "tools/ota_security.py") verify-package --directory $packageDirectory @verifyOptions
+if ($LASTEXITCODE -ne 0) { throw "Package authentication failed" }
 $requiredFlavorFields = @('buildFlavor', 'homeHardwareTestPopulation', 'imageType')
 foreach ($field in $requiredFlavorFields) {
     if ($null -eq $manifest.PSObject.Properties[$field]) {
@@ -111,7 +120,12 @@ foreach ($field in $requiredFlavorFields) {
     }
 }
 $isHomeHardwareTestPopulation = $manifest.homeHardwareTestPopulation -eq $true
-if (($isHomeHardwareTestPopulation -and
+if ($manifest.releaseFaultInjection -eq $true) {
+    if (-not $AllowReleaseFaultInjection -or -not $AllowDevelopmentPackage -or
+        $manifest.buildFlavor -ne 'release-fault-test') {
+        throw "Release fault firmware requires explicit test switches"
+    }
+} elseif (($isHomeHardwareTestPopulation -and
      ([string]$manifest.buildFlavor -ne 'home-hardware-test' -or
       [string]$manifest.imageType -ne 'hardware-test')) -or
     (-not $isHomeHardwareTestPopulation -and
@@ -129,7 +143,8 @@ $appPartitionMetadata = $manifest.appPartition
 $recoveryPartitionMetadata = $manifest.recoveryPartition
 $otaDataPartitionMetadata = $manifest.otaDataPartition
 $partitionTableMetadata = $manifest.partitionTableChecksum
-if ($manifest.protocolVersion -ne 2 -or $manifest.otaJournalSchemaVersion -ne 1 -or
+if ($manifest.protocolVersion -ne 2 -or $manifest.manifestVersion -ne 2 -or
+    $manifest.otaJournalSchemaVersion -ne 1 -or
     $null -eq $imageMetadata -or $null -eq $bootloaderMetadata -or
     $null -eq $recoveryMetadata -or
     $null -eq $otaDataMetadata -or $null -eq $appPartitionMetadata -or

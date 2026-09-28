@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "apps/home/home_app.h"
 
 #include "apps/home/home_layout_model.h"
@@ -533,7 +534,8 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
     if (tile == nullptr || !lv_obj_is_valid(tile)) {
         return false;
     }
-    auto* grid = rodakos_layout_create_grid(tile, kGridCols, kGridRows,
+    auto* grid = rodakos::FailResource(rodakos::ResourceFailure::kHomePage) ? nullptr :
+        rodakos_layout_create_grid(tile, kGridCols, kGridRows,
                                              kCellWidth, kCellHeight,
                                              kGapX, kGapY);
     if (grid == nullptr) {

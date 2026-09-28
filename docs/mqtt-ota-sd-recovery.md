@@ -63,6 +63,7 @@ MQTT notify
   -> back up the running image to SD
   -> stream artifact to pending.bin.part
   -> verify size and SHA-256, fsync, rename to pending.bin
+  -> atomically write the RSA signature to pending.sig
   -> persist pending in ota_state
   -> reboot into recovery
   -> verify SD image again
@@ -107,6 +108,57 @@ Recovery ABI. Normal OTA images must continue writing v1; changing it requires a
 migration that replaces both Recovery and the main application. The package manifest records the
 required `otaJournalSchemaVersion`.
 
+## OTA Image Authentication
+
+Signed OTA uses `manifestVersion: 2`, `signatureType: "rsa2048-sha256"`, and exactly 512 lowercase
+hex characters in `signatureValue`. RSA-2048 PKCS#1 v1.5 signs the SHA-256 digest of these UTF-8
+lines, including the final newline:
+
+```text
+rodakos-ota-v2
+rymcu-bigsmart
+ota_0
+rsa2048-sha256
+<taskNo>
+<version>
+<fileSize as an unsigned decimal integer>
+<lowercase SHA-256>
+```
+
+Task and version fields reject control characters, exceedance of journal limits, and embedded
+newlines. Sizes must be integral and fit `ota_0`. The main application verifies the signature before
+backing up or downloading an image. It writes exactly 512 signature bytes to `pending.sig.part`,
+checks flush/close, and renames it to `pending.sig` before persisting the journal. The staged handoff
+verifies both files again. These sidecars preserve the journal v1 layout and phase codes.
+
+Recovery verifies the signature and the entire candidate file before setting `applying` and before
+`esp_ota_begin()`. Rejection from `pending` records a failure and leaves `ota_0` untouched. Rejection
+when resuming an interrupted `applying` phase restores the installed backup, since an earlier boot
+may already have erased the main slot. The write pass rehashes the bytes it actually flashes and
+rejects changes before `esp_ota_end()` can accept the image. Rollback uses the backup hash anchored in
+the internal journal; the SD card alone cannot replace that hash.
+
+Configure both firmware builds with `-DRODAK_OTA_PUBLIC_KEY=<absolute PEM path>`. This embeds only an
+RSA-2048 public key and its SHA-256 fingerprint. An unconfigured development build boots but rejects
+all signed OTA. There is no default development trust root in source. Keep private keys outside the
+repository; test keys generated during development belong in ignored build directories and never
+qualify a release as production-ready.
+
+`tools/sign_ota_manifest.ps1` verifies that its private key matches `VerificationKeyPath`, checks the
+actual image bytes, signs the metadata, and verifies the result. Packaging requires matching trust
+fingerprints in the main image and Recovery, matching compiled/application versions, a valid
+signature, and no embedded fault-injection marker. The Rodak manifest endpoint must deliver the
+same `taskNo`, `version`, size, checksum, and signature; changing a task requires signing again.
+The server integration has not been exercised by the host tests.
+
+Installing this verifier requires a wired Recovery migration even though the journal ABI is still
+v1. Existing unsigned Recovery cannot gain authentication through a main-only OTA. Key rotation also
+requires a new wired Recovery migration. Preserve a verified full flash backup before migration;
+never infer trust from a manifest version field alone.
+
+For release fault tests, see [OTA release readiness](ota-release-readiness.md). Software resets
+exercise state-machine resumption but do not prove filesystem or flash behavior under power loss.
+
 ## MQTT Worker Resources
 
 MQTT reserves one 6 KiB internal-SRAM worker before local wake monitoring starts.
@@ -144,7 +196,9 @@ Activate ESP-IDF, then run:
 
 ```powershell
 . .\activate_idf.ps1 -Version v6.0.2
-.\build_ota_bundle.ps1
+.\build_ota_bundle.ps1 -SigningKeyPath C:\secure\ota-private.pem `
+  -VerificationKeyPath C:\secure\ota-public.pem `
+  -SigningTaskNo <rodak-task> -SigningVersion <compiled-version>
 ```
 
 The script regenerates the Board Manager component before every package build so stale generated
@@ -155,7 +209,7 @@ The package contains:
 - `rodakos_sd_recovery_merged.bin`: exactly 16 MiB first wired migration image, flashed at `0x0`;
 - `rodakos.bin`: the only image uploaded to a normal Rodak OTA package;
 - `rodakos_recovery.bin`, bootloader and partition table for factory servicing;
-- `manifest.json` with the main image size and SHA-256.
+- `manifest.json` with authenticated main-image metadata and `ota-public.pem` with its verification key.
 
 Do not use root `idf.py flash` or `idf.py app-flash` with this layout. ESP-IDF selects the factory
 partition for those targets, while the root project builds the main image for `ota_0`.

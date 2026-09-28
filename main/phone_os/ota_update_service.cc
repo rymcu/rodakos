@@ -2,6 +2,8 @@
 
 #include "phone_os/device_cloud_config.h"
 #include "rodak_sha256.h"
+#include "rodak_ota_signature.h"
+#include "rodak_release_fault.h"
 #include "rodakos_adapters/file_service.h"
 
 #include <cJSON.h>
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -38,10 +41,13 @@ constexpr int kReportRetryInitialMs = 2 * 1000;
 constexpr int kReportRetryMaxMs = 30 * 1000;
 constexpr int kReportTaskCreationRetryMs = 5 * 1000;
 
+
+
 struct DownloadTaskContext {
     OtaUpdateService* service = nullptr;
     std::string payload;
 };
+
 
 std::string JsonString(cJSON* object, const char* key) {
     cJSON* item = cJSON_GetObjectItemCaseSensitive(object, key);
@@ -50,7 +56,9 @@ std::string JsonString(cJSON* object, const char* key) {
 
 uint64_t JsonUint64(cJSON* object, const char* key) {
     cJSON* item = cJSON_GetObjectItemCaseSensitive(object, key);
-    return cJSON_IsNumber(item) && item->valuedouble > 0
+    return cJSON_IsNumber(item) && std::isfinite(item->valuedouble) &&
+                   item->valuedouble > 0 && item->valuedouble <= 0xd50000 &&
+                   std::floor(item->valuedouble) == item->valuedouble
                ? static_cast<uint64_t>(item->valuedouble)
                : 0;
 }
@@ -357,10 +365,13 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "MANIFEST_FAILED", "无法获取 OTA manifest");
         return;
     }
-    if (manifest.task_no != task_no || manifest.version.empty() ||
+    if (manifest.manifest_version != kOtaManifestVersion ||
+        manifest.task_no != task_no || manifest.version.empty() ||
         manifest.version != target_version || manifest.url.empty() ||
         manifest.file_size == 0 || manifest.checksum_type != "sha256" ||
-        manifest.checksum_value.size() != 64) {
+        manifest.checksum_value.size() != 64 ||
+        manifest.signature_type != kOtaSignatureAlgorithm ||
+        !IsValidOtaSignatureHex(manifest.signature_value)) {
         FailStaging(task_no, "MANIFEST_INVALID", "OTA manifest 字段不完整或校验算法不受支持");
         return;
     }
@@ -368,6 +379,16 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         manifest.version.size() > kOtaVersionMaxBytes ||
         target_version.size() > kOtaVersionMaxBytes) {
         FailStaging(task_no, "MANIFEST_TOO_LONG", "OTA 任务号或版本字符串超过设备上限");
+        return;
+    }
+    OtaUpdateRecord signed_record;
+    signed_record.task_no = task_no;
+    signed_record.target_version = manifest.version;
+    signed_record.pending_size = manifest.file_size;
+    signed_record.pending_sha256 = manifest.checksum_value;
+    ESP_LOGI(TAG, "%s", OtaTrustMarker());
+    if (!VerifyOtaSignature(signed_record, manifest.signature_value)) {
+        FailStaging(task_no, "SIGNATURE_INVALID", "OTA signature verification failed");
         return;
     }
     ESP_LOGI(TAG, "OTA manifest accepted: task=%s version=%s size=%llu",
@@ -396,7 +417,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         return;
     }
     if (!DownloadToSd(manifest, config.mqtt_password, base_url)) {
-        FailStaging(task_no, "DOWNLOAD_FAILED", "固件下载或 SHA-256 校验失败");
+        FailStaging(task_no, "DOWNLOAD_FAILED", "固件下载、SHA-256 或签名暂存失败");
         return;
     }
 
@@ -409,6 +430,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "STATE_SAVE_FAILED", "无法保存 OTA 恢复状态");
         return;
     }
+    rodakos::OtaFaultPoint("after_pending_journal");
     if (!CompleteStagedHandoff()) {
         ScheduleStateRetry("staged progress acknowledgement failure");
     }
@@ -431,6 +453,7 @@ bool OtaUpdateService::CompleteStagedHandoff() {
     }
     if (!VerifySdImage(kOtaPendingImagePath, record.pending_size,
                        record.pending_sha256) ||
+        !VerifyPendingSignature(record) ||
         !VerifySdImage(kOtaInstalledImagePath, record.installed_size,
                        record.installed_sha256)) {
         FailStaging(record.task_no, "STAGED_IMAGE_INVALID",
@@ -539,9 +562,12 @@ bool OtaUpdateService::RequestManifest(const std::string& base_url, const std::s
     manifest.task_no = JsonString(data, "taskNo");
     manifest.version = JsonString(data, "version");
     manifest.url = JsonString(data, "url");
+    manifest.manifest_version = static_cast<uint32_t>(JsonUint64(data, "manifestVersion"));
     manifest.file_size = JsonUint64(data, "fileSize");
     manifest.checksum_type = JsonString(data, "checksumType");
     manifest.checksum_value = JsonString(data, "checksumValue");
+    manifest.signature_type = JsonString(data, "signatureType");
+    manifest.signature_value = JsonString(data, "signatureValue");
     std::transform(manifest.checksum_type.begin(), manifest.checksum_type.end(),
                    manifest.checksum_type.begin(), [](unsigned char value) {
                        return static_cast<char>(std::tolower(value));
@@ -561,6 +587,12 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     }
     if (file_service_->Exists(kOtaPendingPartPath)) {
         file_service_->DeleteFile(kOtaPendingPartPath);
+    }
+    if (file_service_->Exists(kOtaPendingSignaturePartPath)) {
+        file_service_->DeleteFile(kOtaPendingSignaturePartPath);
+    }
+    if (file_service_->Exists(kOtaPendingSignaturePath)) {
+        file_service_->DeleteFile(kOtaPendingSignaturePath);
     }
 
     const std::string output_path = SdPath(kOtaPendingPartPath);
@@ -635,6 +667,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     std::fclose(output);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    rodakos::OtaFaultPoint("after_download_fsync");
 
     ok = ok && Sha256ToHex(digest) == manifest.checksum_value;
     if (!ok) {
@@ -644,7 +677,42 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     if (file_service_->Exists(kOtaPendingImagePath)) {
         file_service_->DeleteFile(kOtaPendingImagePath);
     }
-    return file_service_->Rename(kOtaPendingPartPath, kOtaPendingImagePath);
+    if (!file_service_->Rename(kOtaPendingPartPath, kOtaPendingImagePath) ||
+        !WritePendingSignature(manifest)) {
+        file_service_->DeleteFile(kOtaPendingPartPath);
+        file_service_->DeleteFile(kOtaPendingImagePath);
+        file_service_->DeleteFile(kOtaPendingSignaturePartPath);
+        file_service_->DeleteFile(kOtaPendingSignaturePath);
+        return false;
+    }
+    rodakos::OtaFaultPoint("after_pending_sidecar");
+    return true;
+}
+
+bool OtaUpdateService::WritePendingSignature(const Manifest& manifest) {
+    if (manifest.signature_type != kOtaSignatureAlgorithm ||
+        !IsValidOtaSignatureHex(manifest.signature_value)) {
+        return false;
+    }
+    FILE* output = std::fopen(SdPath(kOtaPendingSignaturePartPath).c_str(), "wb");
+    if (output == nullptr) {
+        return false;
+    }
+    const bool written = std::fwrite(manifest.signature_value.data(), 1,
+                                     manifest.signature_value.size(), output) ==
+                         manifest.signature_value.size();
+    const bool flushed = written && std::fflush(output) == 0 && fsync(fileno(output)) == 0;
+    const bool closed = std::fclose(output) == 0;
+    if (!flushed || !closed) {
+        file_service_->DeleteFile(kOtaPendingSignaturePartPath);
+        return false;
+    }
+    if (file_service_->Exists(kOtaPendingSignaturePath) &&
+        !file_service_->DeleteFile(kOtaPendingSignaturePath)) {
+        file_service_->DeleteFile(kOtaPendingSignaturePartPath);
+        return false;
+    }
+    return file_service_->Rename(kOtaPendingSignaturePartPath, kOtaPendingSignaturePath);
 }
 
 bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
@@ -722,6 +790,7 @@ bool OtaUpdateService::PromotePendingImage(OtaUpdateRecord& record) {
         if (file_service_->Exists(kOtaInstalledImagePath) &&
             VerifySdImage(kOtaInstalledImagePath, record.pending_size,
                           record.pending_sha256)) {
+            file_service_->DeleteFile(kOtaPendingSignaturePath);
             record.installed_size = record.pending_size;
             record.installed_sha256 = record.pending_sha256;
             return true;
@@ -734,6 +803,7 @@ bool OtaUpdateService::PromotePendingImage(OtaUpdateRecord& record) {
     if (!file_service_->Rename(kOtaPendingImagePath, kOtaInstalledImagePath)) {
         return false;
     }
+    file_service_->DeleteFile(kOtaPendingSignaturePath);
     record.installed_size = record.pending_size;
     record.installed_sha256 = record.pending_sha256;
     return true;
@@ -741,39 +811,13 @@ bool OtaUpdateService::PromotePendingImage(OtaUpdateRecord& record) {
 
 bool OtaUpdateService::VerifySdImage(const char* relative_path, uint64_t expected_size,
                                      const std::string& expected_sha256) {
-    if (expected_size == 0 || expected_sha256.size() != 64) {
-        return false;
-    }
-    FILE* input = std::fopen(SdPath(relative_path).c_str(), "rb");
-    if (input == nullptr) {
-        return false;
-    }
+    return VerifyOtaImageFile(SdPath(relative_path), expected_size, expected_sha256);
+}
 
-    Sha256 sha;
-    bool ok = sha.Start();
-    std::unique_ptr<unsigned char[]> buffer(
-        new (std::nothrow) unsigned char[kIoBufferSize]);
-    if (buffer == nullptr) {
-        std::fclose(input);
-        return false;
-    }
-    uint64_t total = 0;
-    while (ok) {
-        const size_t read = std::fread(buffer.get(), 1, kIoBufferSize, input);
-        if (read > 0) {
-            total += read;
-            ok = sha.Update(buffer.get(), read);
-        }
-        if (read < kIoBufferSize) {
-            ok = ok && std::feof(input) != 0;
-            break;
-        }
-    }
-    std::fclose(input);
-
-    std::array<unsigned char, 32> digest = {};
-    ok = ok && sha.Finish(digest);
-    return ok && total == expected_size && Sha256ToHex(digest) == expected_sha256;
+bool OtaUpdateService::VerifyPendingSignature(const OtaUpdateRecord& record) {
+    std::string signature;
+    return ReadOtaSignatureFile(SdPath(kOtaPendingSignaturePath), signature) &&
+           VerifyOtaSignature(record, signature);
 }
 
 bool OtaUpdateService::ConfirmRunningImage() {
@@ -859,6 +903,7 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
         ESP_LOGE(TAG, "Failed to persist OTA boot confirmation state");
         return ConfirmationResult::kRetryableFailure;
     }
+    rodakos::OtaFaultPoint("after_boot_confirmation");
     return ConfirmationResult::kSuccess;
 }
 
@@ -996,7 +1041,8 @@ bool OtaUpdateService::ReportPendingResult() {
     }
 
     if (record.phase == OtaUpdatePhase::kReportAcknowledged) {
-        return ClearCompletedRecord(record);
+        rodakos::OtaFaultPoint("after_report_acknowledged");
+    return ClearCompletedRecord(record);
     }
 
     const bool success = record.phase == OtaUpdatePhase::kConfirmed;
@@ -1039,11 +1085,13 @@ bool OtaUpdateService::ReportPendingResult() {
         }
     }
 
+    rodakos::OtaFaultPoint("after_result_http_ack");
     record.phase = OtaUpdatePhase::kReportAcknowledged;
     if (!SaveOtaUpdateRecord(record)) {
         ESP_LOGE(TAG, "Failed to persist OTA result acknowledgement");
         return false;
     }
+    rodakos::OtaFaultPoint("after_report_acknowledged");
     return ClearCompletedRecord(record);
 }
 
@@ -1058,6 +1106,10 @@ bool OtaUpdateService::ClearCompletedRecord(OtaUpdateRecord& record) {
     if (!SaveOtaUpdateRecord(record)) {
         ESP_LOGE(TAG, "Failed to clear acknowledged OTA result");
         return false;
+    }
+    if (file_service_ != nullptr && file_service_->IsMounted()) {
+        file_service_->DeleteFile(kOtaPendingSignaturePath);
+        file_service_->DeleteFile(kOtaPendingSignaturePartPath);
     }
     {
         std::lock_guard<std::mutex> lock(report_mutex_);

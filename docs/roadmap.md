@@ -2,6 +2,12 @@
 
 RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web prototype. The current direction is to keep the OS, services, and UI framework clearly separated while making the device feel like a small real phone home screen instead of a debug menu.
 
+Planning update, 2026-09-29: the user confirms completion of the existing build, Home, voice,
+media, and MQTT functional verification. Historical evidence descriptions below are retained for
+provenance; they are not requests to repeat those gates. Current work uses COM13 and tracks new
+signed OTA, interruption and resource-pressure release gates in
+[OTA release readiness](ota-release-readiness.md).
+
 ## Current Baseline
 
 As of 2026-09-27:
@@ -180,10 +186,14 @@ Status: active; wired non-voice Device Cloud and MQTT credential-refresh verific
 - USB Serial/JTAG WiFi/bootstrap provisioning, NVS persistence, monotonic `token_version` rotation,
   old-credential rejection, bootstrap refresh, MQTT recovery, telemetry, and health soak have been
   verified in one COM3 session. This gate does not claim a local MultiNet wake.
+- Recovery source verifies a required RSA-2048/SHA-256 signature bound to the OTA task, version,
+  size, product, slot and image digest before writing `ota_0`. Host tests cover candidate rejection
+  without erase and reset resumption; hardware signature and actual power-cut gates remain open.
 
 Before production rollout:
 
-- Add cryptographic image signatures and provision the verification key in Recovery.
+- Configure the production verification key explicitly for both builds and complete signed-image
+  package acceptance on hardware.
 - Run power-cut tests at download, journal, erase, write, boot confirmation and rollback boundaries.
 - Verify the complete flow on hardware with Rodak-hosted artifacts.
 

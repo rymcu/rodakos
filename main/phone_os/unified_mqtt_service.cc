@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/unified_mqtt_service.h"
 
 #include "phone_os/audio_output_service.h"
@@ -378,7 +379,8 @@ void UnifiedMqttService::RunConnection() {
 }
 
 void UnifiedMqttService::Connect() {
-    auto next = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    auto next = std::unique_ptr<DeviceCloudConfig>(FailResource(ResourceFailure::kMqttConfig)
+        ? nullptr : new (std::nothrow) DeviceCloudConfig);
     if (next == nullptr) {
         ESP_LOGE(TAG, "Cannot allocate MQTT bootstrap configuration");
         return;
@@ -1146,12 +1148,16 @@ void UnifiedMqttService::PublishTelemetry() {
     cJSON_AddStringToObject(root, "ota_slot", running != nullptr ? running->label : "unknown");
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);
-    Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_telemetry), payload);
-    ESP_LOGI(TAG, "MQTT health: connected=%d internal_free=%u internal_largest=%u stack_min_free=%u",
+    const bool telemetry_queued = Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_telemetry), payload);
+    ESP_LOGI(TAG, "MQTT health: connected=%d internal_free=%u internal_largest=%u stack_min_free=%u "
+                 "psram_free=%u psram_largest=%u telemetry_queued=%d",
              connected_.load(),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
-             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             telemetry_queued);
 }
 
 void UnifiedMqttService::PublishShadowReport() {

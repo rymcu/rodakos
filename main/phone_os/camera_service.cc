@@ -1,3 +1,4 @@
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/camera_service.h"
 
 #include "rodakos_adapters/file_service.h"
@@ -248,7 +249,7 @@ bool CameraService::StartPreview(int width, int height) {
 
     TaskHandle_t task_handle = nullptr;
 #if configSUPPORT_STATIC_ALLOCATION == 1
-    task_handle = xTaskCreateStaticPinnedToCore(
+    task_handle = FailResource(ResourceFailure::kCameraTask) ? nullptr : xTaskCreateStaticPinnedToCore(
         PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize, this, 3,
         g_preview_task_stack, &g_preview_task_buffer,
 #if CONFIG_SOC_CPU_CORES_NUM > 1
@@ -259,7 +260,7 @@ bool CameraService::StartPreview(int width, int height) {
     );
     preview_task_ = task_handle;
 #else
-    const BaseType_t task_ret =
+    const BaseType_t task_ret = FailResource(ResourceFailure::kCameraTask) ? pdFAIL :
 #if CONFIG_SOC_CPU_CORES_NUM > 1
         xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
                                 this, 3, &preview_task_, 0);

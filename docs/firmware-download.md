@@ -70,12 +70,26 @@ partition layout.
 
 ## Recovery And OTA Package
 
-Build both images and create the handoff package with:
+Activate ESP-IDF 6.0.2, then build both images and create the handoff package with the signing
+arguments below.
+
+Signed packaging now requires explicit private/public keys, a Rodak task, and the exact compiled
+application version. Private key material never enters the firmware or package:
 
 ```powershell
-. .\activate_idf.ps1 -Version v6.0.2
-.\build_ota_bundle.ps1
+.\build_ota_bundle.ps1 `
+  -SigningKeyPath C:\secure\rodak-ota-release-private.pem `
+  -VerificationKeyPath C:\secure\rodak-ota-release-public.pem `
+  -SigningTaskNo ota-20260928-001 `
+  -SigningVersion 0.1.2-dev.1
 ```
+
+Use `-DevelopmentPackage` for isolated test keys; flashing those packages additionally requires
+`-AllowDevelopmentPackage`. Neither switch bypasses signature or Recovery trust-anchor checks.
+The main application and Recovery both receive the public key through CMake. `-SkipBuild` still
+checks the compiled fingerprints and refuses mismatched or unconfigured images. The manifest
+endpoint must return `manifestVersion: 2`, `signatureType`, and `signatureValue` along with the
+unchanged OTA task fields. Existing unsigned packages cannot be reused as signed Recovery baselines.
 
 The packaging script always regenerates the Board Manager component before building so a stale,
 gitignored IDF 5 artifact cannot enter a release package.
@@ -97,6 +111,9 @@ factory partition for this project layout.
 
 ### Three-page Home hardware gate
 
+In these commands, `$signing` is a PowerShell hashtable containing the four signing arguments
+shown above, with a new task number and the compiled version for this test build.
+
 The production-off `RODAKOS_HOME_HARDWARE_TEST_POPULATION` CMake option adds isolated test tiles
 until Home has 25 visible apps. It uses the separate `home_hwtest` NVS namespace, so Arrange tests
 do not modify the production `home/layout` value. Test packages are marked in `manifest.json`, and
@@ -105,7 +122,7 @@ do not modify the production `home/layout` value. Test packages are marked in `m
 ```powershell
 idf.py -DRODAKOS_HOME_HARDWARE_TEST_POPULATION=ON reconfigure
 idf.py build
-.\build_ota_bundle.ps1 -SkipBuild `
+.\build_ota_bundle.ps1 @signing -SkipBuild `
   -ImmutableRecoveryPackage .\build\packages\ota\<verified-package> `
   -AllowHomeHardwareTestPopulation
 .\flash_and_test.ps1 -Port COM3 -VerifyOnly -AllowHomeHardwareTestPopulation
@@ -117,7 +134,7 @@ After the gate, restore and rebuild the production flavor before leaving the dev
 ```powershell
 idf.py -DRODAKOS_HOME_HARDWARE_TEST_POPULATION=OFF reconfigure
 idf.py build
-.\build_ota_bundle.ps1 -SkipBuild `
+.\build_ota_bundle.ps1 @signing -SkipBuild `
   -ImmutableRecoveryPackage .\build\packages\ota\<verified-package>
 .\flash_and_test.ps1 -Port COM3 -VerifyOnly
 .\flash_and_test.ps1 -Port COM3 -NoMonitor
