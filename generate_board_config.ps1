@@ -14,11 +14,13 @@ if ($Board -ne "rymcu_bigsmart") {
 
 $repoRoot = $PSScriptRoot
 $boardManagerRoot = Join-Path $repoRoot "components/esp_board_manager"
+$boardPath = Join-Path $repoRoot "components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
 $generatedCmake = Join-Path $repoRoot "components/gen_bmgr_codes/CMakeLists.txt"
 $fixPaths = Join-Path $repoRoot "fix_gen_paths.ps1"
 if (-not (Test-Path -LiteralPath $boardManagerRoot) -or
+    -not (Test-Path -LiteralPath $boardPath) -or
     -not (Test-Path -LiteralPath $fixPaths)) {
-    throw "Board Manager 或生成路径修复脚本缺失"
+    throw "Board Manager、BigSmart board 或生成路径修复脚本缺失"
 }
 
 $originalExtraActionsPath = $env:IDF_EXTRA_ACTIONS_PATH
@@ -33,7 +35,7 @@ Push-Location $repoRoot
 try {
     for ($pass = 1; $pass -le $passes; ++$pass) {
         Write-Host "Board Manager generation pass $pass/$passes..." -ForegroundColor Yellow
-        & idf.py bmgr -b $Board
+        & idf.py bmgr -b $Board -c $boardPath
         if ($LASTEXITCODE -ne 0) {
             throw "Board Manager 配置生成失败（pass $pass/$passes）"
         }

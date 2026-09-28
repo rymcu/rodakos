@@ -35,6 +35,9 @@ dependencies:
   # silently change the button/camera baseline when the generated component is recreated.
   espressif/button: "4.2.0"
   espressif/esp_video: "2.3.0"
+  espressif/esp_sccb_intf: "0.0.8"
+  espressif/tinyusb: "0.21.0~1"
+  espressif/usb_host_uvc: "2.5.1"
 
   idf:
     version: "6.0.2"
