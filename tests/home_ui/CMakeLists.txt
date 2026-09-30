@@ -21,6 +21,8 @@ add_subdirectory("${LVGL_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/lvgl")
 add_executable(rodakos_home_ui_tests
     test_main.cc
     home_ui_test.cc
+    remote_text_input_test.cc
+    display_capture_test.cc
     fakes/test_fonts.cc
     "${RODAKOS_ROOT}/main/apps/home/home_app.cc"
     "${RODAKOS_ROOT}/main/apps/home/home_layout_model.cc"
@@ -33,6 +35,7 @@ add_executable(rodakos_home_ui_tests
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_layout.cc"
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc"
     "${RODAKOS_ROOT}/main/phone_ui/soft_keyboard.cc"
+    "${RODAKOS_ROOT}/main/phone_os/display_service.cc"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson/cJSON.c"
 )
 

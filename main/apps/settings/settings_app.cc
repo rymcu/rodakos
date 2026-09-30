@@ -341,6 +341,11 @@ void SettingsApp::NavigateBack() {
     NavigateHome();
 }
 
+bool SettingsApp::OnBackRequested() {
+    NavigateBack();
+    return true;
+}
+
 void SettingsApp::NavigateHome() {
     ESP_LOGI(TAG, "Header home button returning home");
     lv_async_call(DeferReturnHome, context_);

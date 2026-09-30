@@ -24,6 +24,11 @@ public:
         return return_home_result;
     }
 
+    bool Back() {
+        ++back_calls;
+        return back_result;
+    }
+
     bool Lock() {
         ++lock_calls;
         return lock_result;
@@ -59,6 +64,7 @@ public:
     bool launch_result = true;
     bool refresh_theme_result = true;
     bool return_home_result = true;
+    bool back_result = true;
     bool lock_result = true;
     bool toggle_control_center_result = true;
     bool set_lock_on_boot_result = true;
@@ -71,6 +77,7 @@ public:
     int launch_calls = 0;
     int refresh_theme_calls = 0;
     int return_home_calls = 0;
+    int back_calls = 0;
     int lock_calls = 0;
     int toggle_control_center_calls = 0;
     mutable int get_shell_preferences_calls = 0;

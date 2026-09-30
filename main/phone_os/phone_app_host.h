@@ -22,6 +22,7 @@ public:
     bool RefreshCurrentTheme(PhoneAppContext& context);
     bool RecreateCurrent(const PhoneAppDescriptor& descriptor, PhoneAppContext& context);
     bool HandleHomeRequest();
+    bool HandleBackRequest();
     void CloseCurrent();
     PhoneApp* current_app() { return current_.get(); }
     const std::string& current_app_id() const { return current_app_id_; }

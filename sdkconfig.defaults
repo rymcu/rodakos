@@ -95,3 +95,13 @@ CONFIG_CODEC_ES7210_SUPPORT=y
 # Use ESP-SR device AEC for BigSmart playback-time interruption
 CONFIG_USE_DEVICE_AEC=y
 # CONFIG_USE_SERVER_AEC is not set
+# esp_peer requires DTLS-SRTP for the BigSmart WebRTC camera session.
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_SSL_DTLS_SRTP=y
+CONFIG_MBEDTLS_X509_CREATE_C=y
+
+# DTLS 16 KiB receive buffers cannot fit beside camera DMA and wake audio in internal RAM.
+# Keep mbedTLS records and handshake state in external PSRAM so camera DVP DMA
+# retains enough contiguous internal DRAM for esp_peer_open().
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC is not set

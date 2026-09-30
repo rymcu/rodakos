@@ -7,6 +7,7 @@
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/touch_pointer_state.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
@@ -22,6 +23,9 @@
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/webrtc_camera_service.h"
+#include "phone_os/display_service.h"
+#include "phone_os/webrtc_display_service.h"
 #include "phone_os/voice_audio_frontend.h"
 #include "phone_os/voice_aec_diagnostic_console.h"
 #include "phone_os/voice_assistant_service.h"
@@ -31,6 +35,7 @@
 #include "phone_os/web_file_system_service.h"
 #include "phone_os/realtime_voice_transport.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/remote_text_input.h"
 #include "phone_ui/boot_animation.h"
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/phone_fonts.h"
@@ -48,12 +53,20 @@
 #include <freertos/task.h>
 #include <inttypes.h>
 #include <nvs_flash.h>
+#include <cJSON.h>
+#include <lvgl.h>
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
 
 namespace {
 constexpr const char* TAG = "RodakOS";
+using DisplayControlReply = rodakos::UnifiedMqttService::DisplayControlReply;
 
 struct TouchInputBridge {
     esp_lcd_touch_handle_t handle = nullptr;
@@ -69,9 +82,80 @@ struct TouchInputBridge {
     uint8_t release_samples = 0;
     bool suppress_until_release = false;
     uint8_t suppress_release_samples = 0;
+    bool remote_pressed = false;
+    lv_point_t remote_point = {0, 0};
+    bool remote_active = false;
+    bool remote_control_enabled = false;
+    bool remote_text_target_available = false;
+    lv_obj_t* remote_indicator = nullptr;
+    rodakos::TouchPointerState pointer_state;
 };
 
 TouchInputBridge g_touch_input;
+std::mutex g_remote_action_mutex;
+struct RemotePointerEvent {
+    bool pressed = false;
+    // move 可合并；down/up 是必须保序的边界。
+    bool move = false;
+    lv_point_t point = {0, 0};
+    DisplayControlReply reply;
+};
+struct RemoteAction {
+    std::string kind;
+    std::string value;
+    DisplayControlReply reply;
+};
+struct DeferredRemoteNavigation {
+    PhoneNavigation* navigation = nullptr;
+    std::string action;
+    DisplayControlReply reply;
+};
+std::deque<RemoteAction> g_remote_actions;
+std::deque<RemotePointerEvent> g_remote_pointer_events;
+PhoneNavigation* g_remote_navigation = nullptr;
+bool g_remote_navigation_pending = false;
+
+void ApplyDeferredRemoteNavigation(void* user_data) {
+    std::unique_ptr<DeferredRemoteNavigation> request(
+        static_cast<DeferredRemoteNavigation*>(user_data));
+    bool remote_enabled = false;
+    portENTER_CRITICAL(&g_touch_input.lock);
+    remote_enabled = g_touch_input.remote_control_enabled;
+    portEXIT_CRITICAL(&g_touch_input.lock);
+    const bool ok = remote_enabled && request->navigation != nullptr &&
+                    (request->action == "back" ? request->navigation->Back()
+                                                : request->navigation->ReturnHome());
+    {
+        std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+        g_remote_navigation_pending = false;
+    }
+    if (request->reply) request->reply(ok, ok ? nullptr : "navigation_rejected");
+    if (g_touch_input.indev != nullptr) {
+        lvgl_port_task_wake(LVGL_PORT_EVENT_TOUCH, g_touch_input.indev);
+    }
+}
+
+bool IsValidUtf8(const char* text) {
+    if (text == nullptr) return false;
+    const auto* p = reinterpret_cast<const unsigned char*>(text);
+    while (*p != 0) {
+        uint32_t codepoint = 0;
+        size_t length = 0;
+        if (*p < 0x80) { codepoint = *p; length = 1; }
+        else if (*p >= 0xc2 && *p <= 0xdf) { codepoint = *p & 0x1f; length = 2; }
+        else if (*p >= 0xe0 && *p <= 0xef) { codepoint = *p & 0x0f; length = 3; }
+        else if (*p >= 0xf0 && *p <= 0xf4) { codepoint = *p & 0x07; length = 4; }
+        else return false;
+        for (size_t i = 1; i < length; ++i) {
+            if ((p[i] & 0xc0) != 0x80) return false;
+            codepoint = (codepoint << 6) | (p[i] & 0x3f);
+        }
+        if ((length == 3 && codepoint < 0x800) || (length == 4 && codepoint < 0x10000) ||
+            codepoint > 0x10ffff || (codepoint >= 0xd800 && codepoint <= 0xdfff)) return false;
+        p += length;
+    }
+    return true;
+}
 
 struct SerialLaunchRequest {
     PhoneNavigation* navigation = nullptr;
@@ -95,13 +179,244 @@ void ResetTouchInputBridge(void* user_data) {
     }
 
     portENTER_CRITICAL(&touch->lock);
+    // App transitions call PhoneUi::ResetInputState() before and after
+    // replacing the current page. Release any held pointer state, but keep
+    // the explicit remote-control lease alive for the screen session.
+    const bool remote_enabled = touch->remote_control_enabled;
+    const bool had_pressed_input = touch->pressed || touch->remote_pressed;
     touch->pressed = false;
+    touch->remote_pressed = false;
+    touch->remote_active = remote_enabled;
+    touch->remote_text_target_available = false;
     touch->release_samples = 0;
-    touch->suppress_until_release = true;
+    // Only suppress a post-transition release when an input was actually
+    // held at reset time.  Unconditionally arming this gate made every page
+    // transition discard the next local tap (remote pointer up is already a
+    // release), which left the physical touch input apparently dead after a
+    // remote-control navigation.
+    touch->suppress_until_release = had_pressed_input;
     touch->suppress_release_samples = 0;
     portEXIT_CRITICAL(&touch->lock);
+    {
+        std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+        // 远程导航替换应用时可能同步重置输入桥。保留导航期间到达的
+        // 后续可靠动作和 pointer 边界，使快速 Home -> swipe 序列在切换
+        // 完成后继续执行；本地切换仍按原逻辑丢弃过期动作。
+        if (!g_remote_navigation_pending) {
+            g_remote_actions.clear();
+            g_remote_pointer_events.clear();
+        }
+    }
 }
 
+void ApplyRemoteActionsOnLvglThread() {
+    while (true) {
+        RemoteAction action;
+        {
+            std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+            if (g_remote_navigation_pending || g_remote_actions.empty()) return;
+            // pointer 与 shortcut/text 使用独立队列，但必须保持同一条远程
+            // 输入时序。当前 TouchReadCallback 会在本函数返回后消费一个
+            // pointer 事件，因此只要仍有 pointer 待处理，就让它先进入
+            // LVGL，再在下一轮处理可靠动作。这样 pointer up 后紧随的
+            // home/back 不会先触发导航并在 ResetTouchInputBridge() 中清掉
+            // 尚未确认的 pointer ACK；动作之后到达的 pointer 也不会越过
+            // 已经排队的导航。
+            if (!g_remote_pointer_events.empty()) return;
+            action = std::move(g_remote_actions.front());
+            g_remote_actions.pop_front();
+        }
+        const auto& kind = action.kind;
+        const auto& value = action.value;
+        if (kind == "shortcut" && (value == "back" || value == "home")) {
+            {
+                std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+                g_remote_navigation_pending = true;
+            }
+            auto* request = new DeferredRemoteNavigation{
+                .navigation = g_remote_navigation,
+                .action = value,
+                .reply = action.reply,
+            };
+            if (lv_async_call(ApplyDeferredRemoteNavigation, request) != LV_RESULT_OK) {
+                delete request;
+                std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+                g_remote_navigation_pending = false;
+                if (action.reply) action.reply(false, "navigation_queue_full");
+            }
+            return;
+        }
+        const auto result = rodakos::ApplyRemoteTextInput(kind, value);
+        if (action.reply) action.reply(result.accepted, result.reason);
+    }
+}
+
+void HandleRemoteControlPayload(const std::string& payload,
+                                DisplayControlReply reply) {
+    if (payload.empty()) {
+        lv_indev_t* indev = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+            g_remote_actions.clear();
+            g_remote_pointer_events.clear();
+            g_remote_navigation_pending = false;
+            portENTER_CRITICAL(&g_touch_input.lock);
+            g_touch_input.remote_pressed = false;
+            g_touch_input.remote_active = false;
+            g_touch_input.remote_control_enabled = false;
+            g_touch_input.remote_text_target_available = false;
+            // A stream teardown is also a control-lease teardown.  If no
+            // local contact is currently cached, there is no reason to keep
+            // a stale transition suppression gate armed; clear it before
+            // waking LVGL so the next physical tap is delivered immediately.
+            if (!g_touch_input.pressed) {
+                g_touch_input.suppress_until_release = false;
+                g_touch_input.suppress_release_samples = 0;
+            }
+            indev = g_touch_input.indev;
+            portEXIT_CRITICAL(&g_touch_input.lock);
+        }
+        if (indev != nullptr) lvgl_port_task_wake(LVGL_PORT_EVENT_TOUCH, indev);
+        if (reply) reply(true, nullptr);
+        return;
+    }
+    cJSON* root = cJSON_ParseWithLength(payload.data(), payload.size());
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        if (reply) reply(false, "invalid_json");
+        return;
+    }
+    const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+    const cJSON* kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
+    bool accepted = cJSON_IsNumber(version) && version->valueint == 1 && cJSON_IsString(kind);
+    if (accepted && std::strcmp(kind->valuestring, "control") == 0) {
+        const cJSON* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+        accepted = cJSON_IsString(action) &&
+                   (std::strcmp(action->valuestring, "enable") == 0 ||
+                    std::strcmp(action->valuestring, "disable") == 0);
+        if (accepted) {
+            const bool enabled = std::strcmp(action->valuestring, "enable") == 0;
+            portENTER_CRITICAL(&g_touch_input.lock);
+            g_touch_input.remote_control_enabled = enabled;
+            g_touch_input.remote_active = enabled;
+            if (!enabled) g_touch_input.remote_pressed = false;
+            if (!enabled && !g_touch_input.pressed) {
+                g_touch_input.suppress_until_release = false;
+                g_touch_input.suppress_release_samples = 0;
+            }
+            portEXIT_CRITICAL(&g_touch_input.lock);
+            if (!enabled) {
+                std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+                g_remote_actions.clear();
+                g_remote_pointer_events.clear();
+                g_remote_navigation_pending = false;
+            }
+            if (reply) reply(true, nullptr);
+        }
+    } else if (accepted && std::strcmp(kind->valuestring, "pointer") == 0) {
+        const cJSON* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+        const cJSON* x = cJSON_GetObjectItemCaseSensitive(root, "x");
+        const cJSON* y = cJSON_GetObjectItemCaseSensitive(root, "y");
+        accepted = cJSON_IsString(action) && cJSON_IsNumber(x) && cJSON_IsNumber(y) &&
+                   x->valuedouble >= 0.0 && x->valuedouble < 320.0 &&
+                   y->valuedouble >= 0.0 && y->valuedouble < 240.0 &&
+                   x->valuedouble == static_cast<double>(x->valueint) &&
+                   y->valuedouble == static_cast<double>(y->valueint);
+        const bool is_down = accepted && std::strcmp(action->valuestring, "down") == 0;
+        const bool is_up = accepted && std::strcmp(action->valuestring, "up") == 0;
+        const bool is_move = accepted && std::strcmp(action->valuestring, "move") == 0;
+        accepted = accepted && (is_down || is_up || is_move);
+        bool enabled = false;
+        if (accepted) {
+            portENTER_CRITICAL(&g_touch_input.lock);
+            enabled = g_touch_input.remote_control_enabled;
+            portEXIT_CRITICAL(&g_touch_input.lock);
+        }
+        accepted = accepted && enabled;
+        if (accepted) {
+            RemotePointerEvent event;
+            event.pressed = !is_up;
+            event.move = is_move;
+            event.point.x = static_cast<lv_coord_t>(x->valueint);
+            event.point.y = static_cast<lv_coord_t>(y->valueint);
+            event.reply = std::move(reply);
+            std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+            if (is_move) {
+                // 只保留连续 move 的最新事件；down/up 是保序边界，不能跨越合并。
+                if (!g_remote_pointer_events.empty() &&
+                    g_remote_pointer_events.back().move) {
+                    auto coalesced_reply = std::move(g_remote_pointer_events.back().reply);
+                    g_remote_pointer_events.back() = std::move(event);
+                    if (coalesced_reply) coalesced_reply(true, "coalesced");
+                } else if (g_remote_pointer_events.size() < 32) {
+                    g_remote_pointer_events.push_back(std::move(event));
+                } else {
+                    // 队列中全是 down/up 时无法安全挤出边界；move 可丢弃，
+                    // 但仍确认已接受，避免发送端等待一个永远不会执行的旧坐标。
+                    accepted = true;
+                    if (event.reply) event.reply(true, "coalesced");
+                    reply = {};
+                }
+            } else {
+                // 队列满时优先淘汰旧 move，为可靠的 down/up 腾出空间，
+                // 同时保留所有 down/up 的顺序边界。
+                while (g_remote_pointer_events.size() >= 32) {
+                    auto move_it = std::find_if(
+                        g_remote_pointer_events.begin(), g_remote_pointer_events.end(),
+                        [](const RemotePointerEvent& queued) { return queued.move; });
+                    if (move_it == g_remote_pointer_events.end()) break;
+                    g_remote_pointer_events.erase(move_it);
+                }
+                if (g_remote_pointer_events.size() >= 32) {
+                    accepted = false;
+                } else {
+                    g_remote_pointer_events.push_back(std::move(event));
+                }
+            }
+        }
+    } else if (accepted && std::strcmp(kind->valuestring, "text") == 0) {
+        const cJSON* text = cJSON_GetObjectItemCaseSensitive(root, "text");
+        bool enabled = false;
+        portENTER_CRITICAL(&g_touch_input.lock);
+        enabled = g_touch_input.remote_control_enabled;
+        portEXIT_CRITICAL(&g_touch_input.lock);
+        accepted = cJSON_IsString(text) && std::strlen(text->valuestring) <= 1024 &&
+                   IsValidUtf8(text->valuestring) && enabled;
+        if (!accepted && reply) {
+            if (!cJSON_IsString(text) || std::strlen(text->valuestring) > 1024) reply(false, "invalid_text");
+            else if (!IsValidUtf8(text->valuestring)) reply(false, "invalid_utf8");
+            else if (!enabled) reply(false, "control_disabled_or_invalid");
+            reply = {};
+        }
+        if (accepted) {
+            std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+            if (g_remote_actions.size() >= 16) accepted = false;
+            else g_remote_actions.push_back(RemoteAction{"text", text->valuestring, std::move(reply)});
+        }
+    } else if (accepted && std::strcmp(kind->valuestring, "shortcut") == 0) {
+        const cJSON* shortcut = cJSON_GetObjectItemCaseSensitive(root, "shortcut");
+        bool enabled = false;
+        portENTER_CRITICAL(&g_touch_input.lock);
+        enabled = g_touch_input.remote_control_enabled;
+        portEXIT_CRITICAL(&g_touch_input.lock);
+        accepted = cJSON_IsString(shortcut) && enabled;
+        if (accepted) {
+            const std::string value = shortcut->valuestring;
+            accepted = value == "back" || value == "home" || value == "enter" ||
+                       value == "escape" || value == "backspace" || value == "delete";
+            if (accepted) {
+                std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+                if (g_remote_actions.size() >= 16) accepted = false;
+                else g_remote_actions.push_back(RemoteAction{"shortcut", value, std::move(reply)});
+            }
+        }
+    } else {
+        accepted = false;
+    }
+    cJSON_Delete(root);
+    if (g_touch_input.indev != nullptr) lvgl_port_task_wake(LVGL_PORT_EVENT_TOUCH, g_touch_input.indev);
+    if (!accepted && reply) reply(false, "control_disabled_or_invalid");
+}
 void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
     auto* touch = static_cast<TouchInputBridge*>(lv_indev_get_driver_data(indev));
     if (touch == nullptr) {
@@ -109,15 +424,55 @@ void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
         return;
     }
 
+    ApplyRemoteActionsOnLvglThread();
+    RemotePointerEvent pointer_event;
+    bool has_pointer_event = false;
+    bool navigation_pending = false;
+    {
+        std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+        navigation_pending = g_remote_navigation_pending;
+        if (!navigation_pending && !g_remote_pointer_events.empty()) {
+            pointer_event = g_remote_pointer_events.front();
+            g_remote_pointer_events.pop_front();
+            has_pointer_event = true;
+        }
+    }
+
+    lv_obj_t* focused = rodakos::CurrentRemoteTextareaTarget();
+    const bool focused_textarea = focused != nullptr && lv_obj_check_type(focused, &lv_textarea_class);
+
     portENTER_CRITICAL(&touch->lock);
+    if (has_pointer_event && touch->remote_control_enabled) {
+        touch->remote_pressed = pointer_event.pressed;
+        touch->remote_point = pointer_event.point;
+        touch->remote_active = true;
+    }
     const bool pressed = touch->pressed;
     const lv_point_t point = touch->point;
+    const bool remote_pressed = touch->remote_pressed;
+    const lv_point_t remote_point = touch->remote_point;
+    const bool remote_active = touch->remote_active;
+    const bool remote_enabled = touch->remote_control_enabled;
+    touch->remote_text_target_available = remote_enabled && focused_textarea;
     portEXIT_CRITICAL(&touch->lock);
 
-    data->point = point;
-    data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    if (touch->remote_indicator != nullptr) {
+        if (remote_active) lv_obj_clear_flag(touch->remote_indicator, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(touch->remote_indicator, LV_OBJ_FLAG_HIDDEN);
+    }
+    touch->pointer_state.Read(pressed, point, remote_pressed, remote_point, *data);
+    if (has_pointer_event && pointer_event.reply) {
+        pointer_event.reply(remote_enabled,
+                            remote_enabled ? nullptr : "control_disabled_or_invalid");
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_remote_action_mutex);
+        // 远程 pointer 事件是一个有序的时序流。不要在同一轮 LVGL 输入
+        // 读取中通过 continue_reading 把 down/move/up 全部消费掉，否则
+        // tileview 等手势控件只能看到最终坐标，拖拽会退化成一次点击。
+        data->continue_reading = false;
+    }
 }
-
 void TouchPollTask(void* arg) {
     auto* touch = static_cast<TouchInputBridge*>(arg);
     TickType_t last_wake = xTaskGetTickCount();
@@ -142,6 +497,7 @@ void TouchPollTask(void* arg) {
 
         bool reported_pressed = false;
         bool changed = false;
+        bool local_pressed_now = false;
         lv_indev_t* indev = nullptr;
         uint32_t error_count = 0;
 
@@ -153,6 +509,8 @@ void TouchPollTask(void* arg) {
                 touch->pressed = false;
                 touch->release_samples = 0;
                 if (pressed) {
+                    local_pressed_now = true;
+                    touch->remote_pressed = false;
                     touch->suppress_release_samples = 0;
                 } else {
                     if (touch->suppress_release_samples < 2) {
@@ -163,6 +521,8 @@ void TouchPollTask(void* arg) {
                     }
                 }
             } else if (pressed) {
+                local_pressed_now = true;
+                touch->remote_pressed = false;
                 touch->release_samples = 0;
                 changed = !touch->pressed || touch->point.x != x || touch->point.y != y;
                 touch->pressed = true;
@@ -191,6 +551,10 @@ void TouchPollTask(void* arg) {
             reported_pressed = touch->pressed;
         }
         portEXIT_CRITICAL(&touch->lock);
+        if (local_pressed_now) {
+            std::lock_guard<std::mutex> queue_lock(g_remote_action_mutex);
+            g_remote_pointer_events.clear();
+        }
 
         if (ret != ESP_OK && (error_count == 1 || (error_count % 50) == 0)) {
             ESP_LOGW(TAG, "Touch read failed (%s), count=%" PRIu32, esp_err_to_name(ret), error_count);
@@ -208,8 +572,9 @@ void TouchPollTask(void* arg) {
         }
         touch->poll_count++;
         if ((touch->poll_count % 750) == 0) {
-            ESP_LOGD(TAG, "Touch poll alive: ret=%s points=%u pressed=%d",
-                     esp_err_to_name(ret), static_cast<unsigned>(point_count), reported_pressed ? 1 : 0);
+            ESP_LOGI(TAG, "Touch poll alive: ret=%s points=%u pressed=%d errors=%" PRIu32,
+                     esp_err_to_name(ret), static_cast<unsigned>(point_count),
+                     reported_pressed ? 1 : 0, error_count);
         }
 
         vTaskDelayUntil(&last_wake, period);
@@ -469,6 +834,19 @@ extern "C" void app_main(void) {
 
     static rodakos::CameraService camera_service(file_service);
     ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
+    static rodakos::WebRtcCameraService web_rtc_camera_service(&camera_service);
+    unified_mqtt_service.SetWebRtcCameraService(&web_rtc_camera_service);
+    ESP_LOGI(TAG, "WebRTC camera service ready - starts on MQTT camera.stream.start");
+    static rodakos::DisplayService display_service(disp);
+    if (lvgl_port_lock(1000)) {
+        if (!display_service.Attach()) {
+            ESP_LOGW(TAG, "Display capture listener unavailable");
+        }
+        lvgl_port_unlock();
+    }
+    static rodakos::WebRtcDisplayService web_rtc_display_service(&display_service);
+    unified_mqtt_service.SetWebRtcDisplayService(&web_rtc_display_service);
+    ESP_LOGI(TAG, "WebRTC display service ready - starts on MQTT display.stream.start");
 
     static PhoneServices services;
     services.SetBacklight(&backlight);
@@ -491,6 +869,8 @@ extern "C" void app_main(void) {
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
     services.SetDeviceCloudUnboundCallback([]() {
+        unified_mqtt_service.StopWebRtcCameraStream();
+        unified_mqtt_service.StopWebRtcDisplayStream();
         voice_assistant_service.StopInteraction();
         unified_mqtt_service.Stop();
     });
@@ -521,6 +901,19 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         boot_animation.Stop();
         return;
+    }
+
+    g_remote_navigation = &system.navigation();
+    unified_mqtt_service.SetWebRtcDisplayControlCallback(HandleRemoteControlPayload);
+    if (lvgl_port_lock(1000)) {
+        g_touch_input.remote_indicator = lv_label_create(lv_layer_top());
+        lv_label_set_text(g_touch_input.remote_indicator, "远程控制中");
+        // 默认 LVGL 字体只覆盖拉丁字符；使用组合字体渲染中文状态，避免显示五个缺字方框。
+        lv_obj_set_style_text_font(g_touch_input.remote_indicator, &phone_font_14, 0);
+        lv_obj_set_style_text_color(g_touch_input.remote_indicator, lv_color_hex(0xff4d4f), 0);
+        lv_obj_align(g_touch_input.remote_indicator, LV_ALIGN_TOP_MID, 0, 2);
+        lv_obj_add_flag(g_touch_input.remote_indicator, LV_OBJ_FLAG_HIDDEN);
+        lvgl_port_unlock();
     }
 
     boot_animation.Finish();

@@ -22,6 +22,11 @@ dependencies:
   # Voice cloud websocket transport
   espressif/esp_websocket_client: "1.8.0"
 
+  # Embedded WebRTC peer connection for the BigSmart camera stream.
+  # The component source is kept under components/esp_peer so the ESP32-S3
+  # prebuilt peer implementation is selected by the local board target.
+  espressif/esp_libsrtp: "^1.0.0"
+
   # Local custom wake-word detection and realtime Opus audio.
   espressif/esp-sr: "2.2.2"
   78/esp-opus: "1.0.5"

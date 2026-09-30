@@ -36,6 +36,9 @@ set(SOURCES
     "phone_os/motion_service.cc"
     "phone_os/button_binding_service.cc"
     "phone_os/camera_service.cc"
+    "phone_os/webrtc_camera_service.cc"
+    "phone_os/display_service.cc"
+    "phone_os/webrtc_display_service.cc"
     "phone_os/time_service.cc"
     "phone_os/voice_audio_frontend.cc"
     "phone_os/voice_identity.cc"
@@ -129,6 +132,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_usb_serial_jtag
         espressif__esp_websocket_client
+        esp_peer
         espressif__esp_codec_dev
         espressif__esp-sr
         78__esp-opus

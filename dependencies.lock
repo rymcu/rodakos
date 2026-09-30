@@ -75,7 +75,7 @@ dependencies:
       type: service
     version: 1.7.19~2
   espressif/dl_fft:
-    component_hash: 3e8f7d34e04bfa6333f289a6d126745bebe0cee9311b81a6a5d106047f63ef65
+    component_hash: 965be7152132b365061abf5fc5fc7b85e525f73b94a204cdda61cfe9572c0d77
     dependencies:
     - name: idf
       require: private
@@ -83,7 +83,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.7.0
+    version: 0.8.0
   espressif/esp-dsp:
     component_hash: 619639efc18cfa361a9e423739b9b0ffc14991effc6c027f955c2f2c3bf1754b
     dependencies:
@@ -182,6 +182,13 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.2.0~3
+  espressif/esp_libsrtp:
+    component_hash: 131560184c73ec09f77d8904a2db709307803f0f9f111898921b6966776eac15
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.0
   espressif/esp_lvgl_port:
     component_hash: fb6c1fdfe70d4ca39a035d63ca394a35f17ec84ce16ff98ecb13a54155d75da4
     dependencies:
@@ -395,6 +402,7 @@ direct_dependencies:
 - espressif/esp_io_expander
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_gt911
+- espressif/esp_libsrtp
 - espressif/esp_lvgl_port
 - espressif/esp_new_jpeg
 - espressif/esp_sccb_intf
@@ -407,6 +415,6 @@ direct_dependencies:
 - espressif/usb_host_uvc
 - idf
 - lvgl/lvgl
-manifest_hash: 725033997d0ae35efd23fa140172cfee2f941b3e4bb4bbc2ddd1c98424f42d60
+manifest_hash: 56964f082035deb997b2c0873b3091f9b1c689107927b49d6c7a8ae451236599
 target: esp32s3
 version: 3.0.0

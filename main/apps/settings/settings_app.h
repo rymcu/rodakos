@@ -51,6 +51,7 @@ public:
     void OnResume() override {}
     void OnPause() override {}
     void OnDestroy() override;
+    bool OnBackRequested() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
     void OnDeviceCloudRefreshComplete(bool ok,
                                       const rodakos::DeviceCloudConfig& config,

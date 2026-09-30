@@ -11,7 +11,8 @@ namespace rodakos_settings {
 void DeferReturnHome(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        context->navigation().ReturnHome();
+        // Settings 的页面返回由自己的异步导航处理，直接切换到 Home。
+        context->navigation().Launch("home");
     }
 }
 

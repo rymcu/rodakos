@@ -4,6 +4,8 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/voice_wake_service.h"
+#include "phone_os/webrtc_camera_service.h"
+#include "phone_os/webrtc_display_service.h"
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
@@ -15,6 +17,7 @@
 #include <esp_wifi.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <mbedtls/base64.h>
 
 #include <algorithm>
 #include <cctype>
@@ -134,6 +137,68 @@ bool IsPingCommand(const std::string& payload) {
     return is_ping;
 }
 
+const char* PeerMessageTypeName(esp_peer_msg_type_t type) {
+    switch (type) {
+        case ESP_PEER_MSG_TYPE_SDP:
+            return "sdp";
+        case ESP_PEER_MSG_TYPE_CANDIDATE:
+            return "candidate";
+        default:
+            return "unknown";
+    }
+}
+
+const char* PeerStateName(esp_peer_state_t state) {
+    switch (state) {
+        case ESP_PEER_STATE_NEW_CONNECTION:
+            return "new";
+        case ESP_PEER_STATE_CONNECTING:
+            return "connecting";
+        case ESP_PEER_STATE_CONNECTED:
+            return "connected";
+        case ESP_PEER_STATE_DATA_CHANNEL_CONNECTED:
+            return "data-channel-connected";
+        case ESP_PEER_STATE_DISCONNECTED:
+            return "disconnected";
+        case ESP_PEER_STATE_CONNECT_FAILED:
+            return "failed";
+        case ESP_PEER_STATE_CLOSED:
+            return "closed";
+        default:
+            return "unknown";
+    }
+}
+
+std::string EncodeBase64(const uint8_t* data, size_t size) {
+    if (data == nullptr || size == 0) {
+        return {};
+    }
+    // Mbed TLS includes the trailing NUL in the required destination capacity.
+    std::string encoded(((size + 2) / 3) * 4 + 1, '\0');
+    size_t output_size = 0;
+    if (mbedtls_base64_encode(reinterpret_cast<unsigned char*>(encoded.data()), encoded.size(),
+                              &output_size, data, size) != 0) {
+        return {};
+    }
+    encoded.resize(output_size);
+    return encoded;
+}
+
+std::vector<uint8_t> DecodeBase64(const char* data) {
+    if (data == nullptr || *data == '\0') {
+        return {};
+    }
+    const size_t input_size = std::strlen(data);
+    std::vector<uint8_t> decoded((input_size / 4) * 3 + 3);
+    size_t output_size = 0;
+    if (mbedtls_base64_decode(decoded.data(), decoded.size(), &output_size,
+                              reinterpret_cast<const unsigned char*>(data), input_size) != 0) {
+        return {};
+    }
+    decoded.resize(output_size);
+    return decoded;
+}
+
 void DelayWhileStarted(const std::atomic<bool>& started, int delay_ms) {
     int remaining_ms = delay_ms;
     while (started.load() && remaining_ms > 0) {
@@ -226,6 +291,11 @@ bool UnifiedMqttService::Start() {
 }
 
 void UnifiedMqttService::Stop() {
+    // A WebRTC stream owns camera/display tasks independently from the MQTT
+    // client. Tear both peers down before stopping MQTT so a reconnect or
+    // shutdown cannot leave a stale capture task holding the device resource.
+    StopWebRtcDisplayStream();
+    StopWebRtcCameraStream();
     if (!started_.exchange(false)) {
         return;
     }
@@ -1082,20 +1152,370 @@ void UnifiedMqttService::HandlePcStatus(const std::string& payload) {
     cJSON_Delete(root);
 }
 
+void UnifiedMqttService::StopWebRtcCameraStream() {
+    if (web_rtc_camera_service_ != nullptr) {
+        web_rtc_camera_service_->Stop();
+    }
+    std::lock_guard<std::mutex> lock(camera_mutex_);
+    camera_session_id_.clear();
+}
+
+void UnifiedMqttService::StopWebRtcDisplayStream() {
+    if (web_rtc_display_service_ != nullptr) {
+        web_rtc_display_service_->Stop();
+    }
+    std::lock_guard<std::mutex> lock(camera_mutex_);
+    display_session_id_.clear();
+}
+
 void UnifiedMqttService::HandleCommand(const std::string& command_no,
                                        const std::string& payload) {
-    const bool is_ping = IsPingCommand(payload);
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "status", is_ping ? "ok" : "error");
-    if (is_ping) {
-        cJSON* result = cJSON_CreateObject();
-        const esp_app_desc_t* app = esp_app_get_description();
+    cJSON* request = cJSON_Parse(payload.c_str());
+    std::string command;
+    if (cJSON_IsObject(request)) {
+        const cJSON* command_json = cJSON_GetObjectItemCaseSensitive(request, "command");
+        if (!cJSON_IsString(command_json)) {
+            command_json = cJSON_GetObjectItemCaseSensitive(request, "type");
+        }
+        if (cJSON_IsString(command_json) && command_json->valuestring != nullptr) {
+            command = command_json->valuestring;
+        }
+    } else if (payload == "ping") {
+        command = "ping";
+    }
+
+    bool handled = false;
+    bool success = false;
+    std::string error_code;
+    cJSON* result = cJSON_CreateObject();
+    if (command == "camera.stream.start" || command == "camera.stream.stop" || command == "camera.stream.signal") {
+        handled = true;
+        if (web_rtc_camera_service_ == nullptr) {
+            error_code = "camera_stream_unavailable";
+        } else if (!cJSON_IsObject(request)) {
+            error_code = "invalid_payload";
+        } else {
+            const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
+            const std::string session_id =
+                cJSON_IsString(session_json) && session_json->valuestring != nullptr
+                    ? session_json->valuestring
+                    : std::string();
+            if (session_id.empty()) {
+                error_code = "missing_session_id";
+            } else if (command == "camera.stream.start") {
+                WebRtcCameraService::Config config;
+                const cJSON* width = cJSON_GetObjectItemCaseSensitive(request, "width");
+                const cJSON* height = cJSON_GetObjectItemCaseSensitive(request, "height");
+                const cJSON* fps = cJSON_GetObjectItemCaseSensitive(request, "fps");
+                const cJSON* chunk_size = cJSON_GetObjectItemCaseSensitive(request, "chunkSize");
+                if (cJSON_IsNumber(width)) config.width = std::clamp(width->valueint, 160, 1280);
+                if (cJSON_IsNumber(height)) config.height = std::clamp(height->valueint, 120, 960);
+                if (cJSON_IsNumber(fps)) config.fps = static_cast<uint8_t>(std::clamp(fps->valueint, 1, 15));
+                if (cJSON_IsNumber(chunk_size)) {
+                    // Camera stream keeps its historical 10KB framing for
+                    // compatibility with existing receivers.
+                    config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 10000));
+                }
+
+                const std::string command_prefix = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
+                const std::string signal_topic = command_prefix.empty()
+                                                     ? std::string()
+                                                     : command_prefix.substr(0, command_prefix.size() - 1) +
+                                                           command_no + "/ack";
+                auto publish_signal = [this, signal_topic, session_id](const char* event,
+                                                                         const char* type,
+                                                                         const uint8_t* data,
+                                                                         size_t size) {
+                    if (signal_topic.empty()) return;
+                    cJSON* signal = cJSON_CreateObject();
+                    cJSON_AddStringToObject(signal, "status", "ok");
+                    cJSON* result = cJSON_CreateObject();
+                    cJSON* camera_stream = cJSON_CreateObject();
+                    cJSON_AddStringToObject(camera_stream, "sessionId", session_id.c_str());
+                    cJSON_AddStringToObject(camera_stream, "event", event);
+                    if (type != nullptr) cJSON_AddStringToObject(camera_stream, "type", type);
+                    if (data != nullptr && size > 0) {
+                        const std::string encoded = EncodeBase64(data, size);
+                        if (!encoded.empty()) {
+                            cJSON_AddStringToObject(camera_stream, "data", encoded.c_str());
+                        }
+                    }
+                    cJSON_AddItemToObject(result, "cameraStream", camera_stream);
+                    cJSON_AddItemToObject(signal, "result", result);
+                    const std::string encoded = EncodeJson(signal);
+                    cJSON_Delete(signal);
+                    Publish(signal_topic, encoded);
+                };
+                auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
+                                                     std::vector<uint8_t>&& data) {
+                    while (!data.empty() && data.back() == 0) data.pop_back();
+                    publish_signal("signal", PeerMessageTypeName(type), data.data(), data.size());
+                };
+                auto on_state = [this, publish_signal, session_id](esp_peer_state_t state) {
+                    publish_signal("state", PeerStateName(state), nullptr, 0);
+                    if (state == ESP_PEER_STATE_CLOSED || state == ESP_PEER_STATE_CONNECT_FAILED ||
+                        state == ESP_PEER_STATE_DISCONNECTED ||
+                        state == ESP_PEER_STATE_DATA_CHANNEL_CLOSED ||
+                        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED) {
+                        std::lock_guard<std::mutex> lock(camera_mutex_);
+                        if (camera_session_id_ == session_id) {
+                            camera_session_id_.clear();
+                        }
+                    }
+                };
+
+                bool already_running = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    already_running = !camera_session_id_.empty() || !display_session_id_.empty();
+                    if (!already_running) {
+                        // Start may synchronously emit signaling or terminal
+                        // callbacks, so reserve its session before calling it.
+                        camera_session_id_ = session_id;
+                    }
+                }
+                if (already_running) {
+                    error_code = "camera_stream_busy";
+                } else if (web_rtc_camera_service_->Start(config, std::move(on_signaling),
+                                                          std::move(on_state))) {
+                    success = true;
+                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    cJSON_AddStringToObject(result, "transport", "webrtc-datachannel");
+                } else {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    if (camera_session_id_ == session_id) {
+                        camera_session_id_.clear();
+                    }
+                    error_code = "camera_stream_start_failed";
+                }
+            } else if (command == "camera.stream.stop") {
+                bool matches = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    matches = camera_session_id_ == session_id;
+                }
+                if (!matches) {
+                    error_code = "camera_stream_not_found";
+                } else {
+                    web_rtc_camera_service_->Stop();
+                    {
+                        std::lock_guard<std::mutex> lock(camera_mutex_);
+                        camera_session_id_.clear();
+                    }
+                    success = true;
+                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                }
+            } else {
+                const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
+                const cJSON* data_json = cJSON_GetObjectItemCaseSensitive(request, "data");
+                const bool valid_type = cJSON_IsString(type_json) && type_json->valuestring != nullptr;
+                const bool valid_data = cJSON_IsString(data_json) && data_json->valuestring != nullptr;
+                esp_peer_msg_type_t message_type = ESP_PEER_MSG_TYPE_NONE;
+                if (valid_type && std::string(type_json->valuestring) == "sdp") {
+                    message_type = ESP_PEER_MSG_TYPE_SDP;
+                } else if (valid_type && std::string(type_json->valuestring) == "candidate") {
+                    message_type = ESP_PEER_MSG_TYPE_CANDIDATE;
+                }
+                bool matches = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    matches = camera_session_id_ == session_id;
+                }
+                if (!matches) {
+                    error_code = "camera_stream_not_found";
+                } else if (!valid_data || message_type == ESP_PEER_MSG_TYPE_NONE) {
+                    error_code = "invalid_signal";
+                } else {
+                    std::vector<uint8_t> decoded = DecodeBase64(data_json->valuestring);
+                    if (decoded.empty()) {
+                        error_code = "invalid_signal_encoding";
+                    } else if (!web_rtc_camera_service_->HandleRemoteMessage(message_type, decoded)) {
+                        error_code = "camera_signal_rejected";
+                    } else {
+                        success = true;
+                        cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    }
+                }
+                /* Keep the branch above explicit so malformed base64 never reaches esp_peer. */
+                if (!success && error_code.empty() && message_type != ESP_PEER_MSG_TYPE_NONE) {
+                    error_code = "camera_signal_rejected";
+                }
+            }
+        }
+    } else if (command == "display.stream.start" || command == "display.stream.stop" || command == "display.stream.signal") {
+        handled = true;
+        if (web_rtc_display_service_ == nullptr) {
+            error_code = "display_stream_unavailable";
+        } else if (!cJSON_IsObject(request)) {
+            error_code = "invalid_payload";
+        } else {
+            const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
+            const std::string session_id =
+                cJSON_IsString(session_json) && session_json->valuestring != nullptr
+                    ? session_json->valuestring
+                    : std::string();
+            if (session_id.empty()) {
+                error_code = "missing_session_id";
+            } else if (command == "display.stream.start") {
+                WebRtcDisplayService::Config config;
+                const cJSON* width = cJSON_GetObjectItemCaseSensitive(request, "width");
+                const cJSON* height = cJSON_GetObjectItemCaseSensitive(request, "height");
+                const cJSON* fps = cJSON_GetObjectItemCaseSensitive(request, "fps");
+                const cJSON* chunk_size = cJSON_GetObjectItemCaseSensitive(request, "chunkSize");
+                if (cJSON_IsNumber(width)) config.width = std::clamp(width->valueint, 160, 1280);
+                if (cJSON_IsNumber(height)) config.height = std::clamp(height->valueint, 120, 960);
+                if (cJSON_IsNumber(fps)) config.fps = static_cast<uint8_t>(std::clamp(fps->valueint, 1, 15));
+                if (cJSON_IsNumber(chunk_size)) {
+                    // A quality-65 320x240 screen JPEG normally fits one
+                    // 20KB chunk, reducing SCTP/main-loop round trips.
+                    config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 20000));
+                }
+
+                const std::string command_prefix = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
+                const std::string signal_topic = command_prefix.empty()
+                                                     ? std::string()
+                                                     : command_prefix.substr(0, command_prefix.size() - 1) +
+                                                           command_no + "/ack";
+                auto publish_signal = [this, signal_topic, session_id](const char* event,
+                                                                         const char* type,
+                                                                         const uint8_t* data,
+                                                                         size_t size) {
+                    if (signal_topic.empty()) return;
+                    cJSON* signal = cJSON_CreateObject();
+                    cJSON_AddStringToObject(signal, "status", "ok");
+                    cJSON* result = cJSON_CreateObject();
+                    cJSON* display_stream = cJSON_CreateObject();
+                    cJSON_AddStringToObject(display_stream, "sessionId", session_id.c_str());
+                    cJSON_AddStringToObject(display_stream, "event", event);
+                    if (type != nullptr) cJSON_AddStringToObject(display_stream, "type", type);
+                    if (data != nullptr && size > 0) {
+                        const std::string encoded = EncodeBase64(data, size);
+                        if (!encoded.empty()) {
+                            cJSON_AddStringToObject(display_stream, "data", encoded.c_str());
+                        }
+                    }
+                    cJSON_AddItemToObject(result, "displayStream", display_stream);
+                    cJSON_AddItemToObject(signal, "result", result);
+                    const std::string encoded = EncodeJson(signal);
+                    cJSON_Delete(signal);
+                    Publish(signal_topic, encoded);
+                };
+                auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
+                                                     std::vector<uint8_t>&& data) {
+                    while (!data.empty() && data.back() == 0) data.pop_back();
+                    publish_signal("signal", PeerMessageTypeName(type), data.data(), data.size());
+                };
+                auto on_state = [this, publish_signal, session_id](esp_peer_state_t state) {
+                    publish_signal("state", PeerStateName(state), nullptr, 0);
+                    if (state == ESP_PEER_STATE_CLOSED || state == ESP_PEER_STATE_CONNECT_FAILED ||
+                        state == ESP_PEER_STATE_DISCONNECTED ||
+                        state == ESP_PEER_STATE_DATA_CHANNEL_CLOSED ||
+                        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED) {
+                        std::lock_guard<std::mutex> lock(camera_mutex_);
+                        if (display_session_id_ == session_id) {
+                            display_session_id_.clear();
+                        }
+                    }
+                };
+
+                bool already_running = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    already_running = !display_session_id_.empty() || !camera_session_id_.empty();
+                    if (!already_running) {
+                        // Start may synchronously emit signaling or terminal
+                        // callbacks, so reserve its session before calling it.
+                        display_session_id_ = session_id;
+                    }
+                }
+                if (already_running) {
+                    error_code = "display_stream_busy";
+                } else if (web_rtc_display_service_->Start(config, std::move(on_signaling),
+                                                          std::move(on_state),
+                                                          display_control_callback_)) {
+                    success = true;
+                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    cJSON_AddStringToObject(result, "transport", "webrtc-datachannel");
+                } else {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    if (display_session_id_ == session_id) {
+                        display_session_id_.clear();
+                    }
+                    error_code = "display_stream_start_failed";
+                }
+            } else if (command == "display.stream.stop") {
+                bool matches = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    matches = display_session_id_ == session_id;
+                }
+                if (!matches) {
+                    error_code = "display_stream_not_found";
+                } else {
+                    web_rtc_display_service_->Stop();
+                    {
+                        std::lock_guard<std::mutex> lock(camera_mutex_);
+                        display_session_id_.clear();
+                    }
+                    success = true;
+                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                }
+            } else {
+                const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
+                const cJSON* data_json = cJSON_GetObjectItemCaseSensitive(request, "data");
+                const bool valid_type = cJSON_IsString(type_json) && type_json->valuestring != nullptr;
+                const bool valid_data = cJSON_IsString(data_json) && data_json->valuestring != nullptr;
+                esp_peer_msg_type_t message_type = ESP_PEER_MSG_TYPE_NONE;
+                if (valid_type && std::string(type_json->valuestring) == "sdp") {
+                    message_type = ESP_PEER_MSG_TYPE_SDP;
+                } else if (valid_type && std::string(type_json->valuestring) == "candidate") {
+                    message_type = ESP_PEER_MSG_TYPE_CANDIDATE;
+                }
+                bool matches = false;
+                {
+                    std::lock_guard<std::mutex> lock(camera_mutex_);
+                    matches = display_session_id_ == session_id;
+                }
+                if (!matches) {
+                    error_code = "display_stream_not_found";
+                } else if (!valid_data || message_type == ESP_PEER_MSG_TYPE_NONE) {
+                    error_code = "invalid_signal";
+                } else {
+                    std::vector<uint8_t> decoded = DecodeBase64(data_json->valuestring);
+                    if (decoded.empty()) {
+                        error_code = "invalid_signal_encoding";
+                    } else if (!web_rtc_display_service_->HandleRemoteMessage(message_type, decoded)) {
+                        error_code = "display_signal_rejected";
+                    } else {
+                        success = true;
+                        cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    }
+                }
+                /* Keep the branch above explicit so malformed base64 never reaches esp_peer. */
+                if (!success && error_code.empty() && message_type != ESP_PEER_MSG_TYPE_NONE) {
+                    error_code = "display_signal_rejected";
+                }
+            }
+        }
+    } else if (command == "ping" || IsPingCommand(payload)) {
+        handled = true;
+        success = true;
         cJSON_AddBoolToObject(result, "pong", true);
+        const esp_app_desc_t* app = esp_app_get_description();
         cJSON_AddStringToObject(result, "firmware", app != nullptr ? app->version : "unknown");
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", success ? "ok" : "error");
+    if (success) {
         cJSON_AddItemToObject(root, "result", result);
     } else {
-        cJSON_AddStringToObject(root, "errorCode", "unsupported_command");
+        cJSON_Delete(result);
+        cJSON_AddStringToObject(root, "errorCode",
+                                handled && !error_code.empty() ? error_code.c_str()
+                                                               : "unsupported_command");
     }
+    cJSON_Delete(request);
     const std::string ack_payload = EncodeJson(root);
     cJSON_Delete(root);
 
@@ -1105,7 +1525,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                                       : wildcard.substr(0, wildcard.size() - 1) + command_no + "/ack";
     if (Publish(ack_topic, ack_payload)) {
         ESP_LOGI(TAG, "Command %s acknowledged: %s", command_no.c_str(),
-                 is_ping ? "ok" : "unsupported");
+                 success ? "ok" : (handled ? "rejected" : "unsupported"));
     } else {
         ESP_LOGW(TAG, "Failed to acknowledge command %s", command_no.c_str());
     }

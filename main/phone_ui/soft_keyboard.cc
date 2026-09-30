@@ -22,6 +22,9 @@ void SoftKeyboard::Show(lv_obj_t* textarea, std::function<void()> on_ready) {
 
     target_textarea_ = textarea;
     on_ready_callback_ = std::move(on_ready);
+    // 对话框会直接展开键盘，通常没有 LVGL group 或 pointer focus 事件。
+    // 把正在编辑的字段显式标为焦点，供本地光标和远程文本注入共用。
+    lv_obj_add_state(textarea, LV_STATE_FOCUSED);
 
     keyboard_ = lv_keyboard_create(lv_scr_act());
     lv_keyboard_set_textarea(keyboard_, textarea);
@@ -39,7 +42,7 @@ void SoftKeyboard::Show(lv_obj_t* textarea, std::function<void()> on_ready) {
     lv_keyboard_set_mode(keyboard_, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_obj_add_event_cb(keyboard_, KeyboardEventHandler, LV_EVENT_ALL, this);
     if (!textarea_handler_registered_) {
-        lv_obj_add_event_cb(textarea, TextareaEventHandler, LV_EVENT_CLICKED, this);
+        lv_obj_add_event_cb(textarea, TextareaEventHandler, LV_EVENT_ALL, this);
         textarea_handler_registered_ = true;
     }
 
@@ -66,6 +69,7 @@ void SoftKeyboard::Show(lv_obj_t* textarea, std::function<void()> on_ready) {
 void SoftKeyboard::Hide() {
     if (target_textarea_ != nullptr && lv_obj_is_valid(target_textarea_)) {
         lv_obj_remove_event_cb_with_user_data(target_textarea_, TextareaEventHandler, this);
+        lv_obj_remove_state(target_textarea_, LV_STATE_FOCUSED);
     }
     textarea_handler_registered_ = false;
     DeleteKeyboardObjects();
@@ -76,6 +80,9 @@ void SoftKeyboard::Hide() {
 
 void SoftKeyboard::Collapse() {
     DeleteKeyboardObjects();
+    if (target_textarea_ != nullptr && lv_obj_is_valid(target_textarea_)) {
+        lv_obj_add_state(target_textarea_, LV_STATE_FOCUSED);
+    }
     ESP_LOGI(TAG, "Soft keyboard collapsed");
 }
 
@@ -111,11 +118,21 @@ void SoftKeyboard::KeyboardEventHandler(lv_event_t* e) {
 
 void SoftKeyboard::TextareaEventHandler(lv_event_t* e) {
     auto* self = static_cast<SoftKeyboard*>(lv_event_get_user_data(e));
-    if (self == nullptr || self->target_textarea_ == nullptr || self->keyboard_ != nullptr ||
-        !lv_obj_is_valid(self->target_textarea_)) {
-        return;
+    if (self == nullptr || self->target_textarea_ == nullptr) return;
+    const auto code = lv_event_get_code(e);
+    if (code == LV_EVENT_DELETE) {
+        self->target_textarea_ = nullptr;
+        self->textarea_handler_registered_ = false;
+        self->on_ready_callback_ = nullptr;
+        self->DeleteKeyboardObjects();
+    } else if ((code == LV_EVENT_READY || code == LV_EVENT_CANCEL) &&
+               self->keyboard_ == nullptr) {
+        const auto on_ready = self->on_ready_callback_;
+        if (code == LV_EVENT_READY && on_ready) on_ready();
+    } else if (code == LV_EVENT_CLICKED && self->keyboard_ == nullptr &&
+               lv_obj_is_valid(self->target_textarea_)) {
+        self->Show(self->target_textarea_, self->on_ready_callback_);
     }
-    self->Show(self->target_textarea_, self->on_ready_callback_);
 }
 
 void SoftKeyboard::HideButtonEventHandler(lv_event_t* e) {

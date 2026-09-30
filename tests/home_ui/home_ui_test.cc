@@ -23,6 +23,7 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/touch_pointer_state.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_theme.h"
@@ -246,6 +247,46 @@ struct HomeFixture {
     HomeApp home;
 };
 
+class CachedBridgePointer {
+public:
+    CachedBridgePointer() : indev_(lv_indev_create()) {
+        RODAK_CHECK(indev_ != nullptr);
+        lv_indev_set_type(indev_, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_mode(indev_, LV_INDEV_MODE_EVENT);
+        lv_indev_set_disp(indev_, lv_display_get_default());
+        lv_indev_set_driver_data(indev_, this);
+        lv_indev_set_read_cb(indev_, [](lv_indev_t* indev, lv_indev_data_t* data) {
+            auto* self = static_cast<CachedBridgePointer*>(lv_indev_get_driver_data(indev));
+            self->state_.Read(self->local_pressed_, self->local_point_,
+                              self->remote_pressed_, self->remote_point_, *data);
+        });
+    }
+
+    ~CachedBridgePointer() { lv_indev_delete(indev_); }
+
+    void Local(bool pressed, const lv_point_t& point) {
+        local_pressed_ = pressed;
+        local_point_ = point;
+        lv_indev_read(indev_);
+        Pump(20);
+    }
+
+    void Remote(bool pressed, const lv_point_t& point) {
+        remote_pressed_ = pressed;
+        remote_point_ = point;
+        lv_indev_read(indev_);
+        Pump(20);
+    }
+
+private:
+    lv_indev_t* indev_;
+    rodakos::TouchPointerState state_;
+    bool local_pressed_ = false;
+    lv_point_t local_point_ = {0, 0};
+    bool remote_pressed_ = false;
+    lv_point_t remote_point_ = {0, 0};
+};
+
 class FixedBatteryProvider final : public rodakos::BatteryStateProvider {
 public:
     explicit FixedBatteryProvider(rodakos::BatterySnapshot snapshot)
@@ -368,6 +409,51 @@ RODAK_TEST("multi-page app swipes respect boundaries without launching") {
     RODAK_CHECK_EQ(fixture.home.ActivePageIndex(), 0U);
     RODAK_CHECK(fixture.navigation.launches.empty());
     RODAK_CHECK_FALSE(fixture.home.HasEditingTarget());
+}
+
+RODAK_TEST("offline local tap keeps its release position through the touch bridge") {
+    ResetScreen();
+    ResetSettings();
+    HomeFixture fixture(4);
+    CachedBridgePointer pointer;
+    lv_area_t area;
+    lv_obj_get_coords(HomeButton(fixture.home, 2), &area);
+    const lv_point_t center = {(area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2};
+
+    pointer.Local(true, center);
+    pointer.Local(false, center);
+
+    RODAK_CHECK_EQ(fixture.navigation.launches.size(), 1U);
+    RODAK_CHECK_EQ(fixture.navigation.launches.front(), std::string("app002"));
+}
+
+RODAK_TEST("local tap ignores the previous remote release position") {
+    ResetScreen();
+    ResetSettings();
+    HomeFixture fixture(4);
+    CachedBridgePointer pointer;
+    pointer.Remote(true, {0, 239});
+    pointer.Remote(false, {0, 239});
+    lv_area_t area;
+    lv_obj_get_coords(HomeButton(fixture.home, 2), &area);
+    const lv_point_t center = {(area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2};
+
+    pointer.Local(true, center);
+    pointer.Local(false, center);
+
+    RODAK_CHECK_EQ(fixture.navigation.launches.size(), 1U);
+    RODAK_CHECK_EQ(fixture.navigation.launches.front(), std::string("app002"));
+}
+
+RODAK_TEST("remote release retains the last delivered coordinate") {
+    rodakos::TouchPointerState state;
+    lv_indev_data_t data = {};
+    state.Read(false, {211, 80}, true, {160, 120}, data);
+    RODAK_CHECK_EQ(data.state, LV_INDEV_STATE_PRESSED);
+    state.Read(false, {211, 80}, false, {0, 0}, data);
+    RODAK_CHECK_EQ(data.state, LV_INDEV_STATE_RELEASED);
+    RODAK_CHECK_EQ(data.point.x, 160);
+    RODAK_CHECK_EQ(data.point.y, 120);
 }
 
 RODAK_TEST("a vertical quick swipe on one page is not an app tap") {

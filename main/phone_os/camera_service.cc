@@ -11,6 +11,7 @@
 #include <cstring>
 #include <ctime>
 #include <inttypes.h>
+#include <utility>
 
 #include <esp_err.h>
 #include <esp_heap_caps.h>
@@ -43,10 +44,6 @@ constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
 constexpr const char* kGpioLogTag = "gpio";
 
-#if configSUPPORT_STATIC_ALLOCATION == 1
-StaticTask_t g_preview_task_buffer;
-StackType_t g_preview_task_stack[kPreviewTaskStackSize];
-#endif
 
 const char* ErrnoName() {
     return std::strerror(errno);
@@ -205,6 +202,7 @@ CameraService::CameraService(FileService* file_service) : file_service_(file_ser
 }
 
 CameraService::~CameraService() {
+    StopJpegStream();
     StopPreview();
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
@@ -216,70 +214,90 @@ bool CameraService::IsAvailable() const {
     return camera_device_.IsConfigured();
 }
 
-bool CameraService::StartPreview(int width, int height) {
+bool CameraService::StartPreview(PreviewOwner owner, int width, int height) {
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     if (!IsAvailable()) {
         SetError("Camera device is not configured");
         return false;
     }
-
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (preview_running_) {
-            xSemaphoreGive(mutex_);
-            return true;
-        }
-        stop_requested_ = false;
-        has_frame_ = false;
-        frame_count_ = 0;
-        latest_frame_ = {};
-        xSemaphoreGive(mutex_);
+    if (width <= 0 || height <= 0) {
+        SetError("Invalid camera preview dimensions");
+        return false;
     }
+    if (mutex_ == nullptr) {
+        SetError("Camera service mutex is not available");
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    bool& lease = PreviewLease(owner);
+    if (!preview_running_ && preview_task_ == nullptr) {
+        // An unexpected task exit invalidates all previously held leases.
+        local_preview_lease_ = false;
+        remote_preview_lease_ = false;
+    }
+    if (lease && preview_running_) {
+        const bool dimensions_match = active_width_ == width && active_height_ == height;
+        xSemaphoreGive(mutex_);
+        if (!dimensions_match) {
+            SetError("Camera preview is already running at a different resolution");
+            return false;
+        }
+        return true;
+    }
+    if (preview_running_) {
+        const bool dimensions_match = active_width_ == width && active_height_ == height;
+        if (!dimensions_match) {
+            xSemaphoreGive(mutex_);
+            SetError("Camera preview is already running at a different resolution");
+            return false;
+        }
+        lease = true;
+        xSemaphoreGive(mutex_);
+        return true;
+    }
+    if (preview_task_ != nullptr) {
+        xSemaphoreGive(mutex_);
+        SetError("Camera preview is still stopping");
+        return false;
+    }
+
+    stop_requested_ = false;
+    has_frame_ = false;
+    frame_count_ = 0;
+    latest_frame_ = {};
+    xSemaphoreGive(mutex_);
 
     if (!OpenStream(width, height)) {
         CloseStream();
         return false;
     }
 
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        preview_running_ = true;
-        xSemaphoreGive(mutex_);
-    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    preview_running_ = true;
+    lease = true;
+    xSemaphoreGive(mutex_);
 
     TaskHandle_t task_handle = nullptr;
-#if configSUPPORT_STATIC_ALLOCATION == 1
-    task_handle = FailResource(ResourceFailure::kCameraTask) ? nullptr : xTaskCreateStaticPinnedToCore(
-        PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize, this, 3,
-        g_preview_task_stack, &g_preview_task_buffer,
-#if CONFIG_SOC_CPU_CORES_NUM > 1
-        0
-#else
-        tskNO_AFFINITY
-#endif
-    );
-    preview_task_ = task_handle;
-#else
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    preview_task_ready_ = false;
     const BaseType_t task_ret = FailResource(ResourceFailure::kCameraTask) ? pdFAIL :
-#if CONFIG_SOC_CPU_CORES_NUM > 1
-        xTaskCreatePinnedToCore(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
-                                this, 3, &preview_task_, 0);
-#else
-        xTaskCreate(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
-                    this, 3, &preview_task_);
-#endif
-    if (task_ret == pdPASS) {
-        task_handle = preview_task_;
+        xTaskCreatePinnedToCoreWithCaps(PreviewTaskEntry, "camera_preview", kPreviewTaskStackSize,
+                                        this, 3, &task_handle, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_ret == pdPASS && task_handle != nullptr) {
+        preview_task_ = task_handle;
+        preview_task_ready_ = true;
     }
-#endif
+    xSemaphoreGive(mutex_);
     if (task_handle == nullptr) {
         LogPreviewTaskCreateFailure();
         SetError("Failed to start camera preview task");
-        if (mutex_ != nullptr) {
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            preview_running_ = false;
-            xSemaphoreGive(mutex_);
-        }
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        preview_running_ = false;
+        preview_task_ready_ = false;
+        lease = false;
+        xSemaphoreGive(mutex_);
         CloseStream();
         return false;
     }
@@ -295,36 +313,36 @@ bool CameraService::StartPreview(int width, int height) {
     return true;
 }
 
-void CameraService::StopPreview() {
+void CameraService::StopPreview(PreviewOwner owner) {
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
-    bool should_wait = false;
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        should_wait = preview_task_ != nullptr;
-        stop_requested_ = true;
-        xSemaphoreGive(mutex_);
+    if (mutex_ == nullptr) {
+        return;
     }
 
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    bool& lease = PreviewLease(owner);
+    lease = false;
+    const TaskHandle_t task = preview_task_;
+    const bool should_wait = task != nullptr && !local_preview_lease_ && !remote_preview_lease_;
     if (should_wait) {
-        for (int waited = 0; waited < 2000; waited += 20) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            if (mutex_ != nullptr) {
-                xSemaphoreTake(mutex_, portMAX_DELAY);
-                should_wait = preview_task_ != nullptr;
-                xSemaphoreGive(mutex_);
-            }
-            if (!should_wait) {
-                break;
-            }
-        }
+        stop_requested_ = true;
+    }
+    xSemaphoreGive(mutex_);
+
+    if (!should_wait || task == xTaskGetCurrentTaskHandle()) {
+        return;
     }
 
-    if (mutex_ != nullptr) {
+    // Do not destroy the service while the preview task can still touch its
+    // mutex or mapped camera buffers. The wait deliberately does not hold the
+    // service mutex, so a task can always publish its stopped state.
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(20));
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool task_still_alive = preview_task_ != nullptr;
+        const bool running = preview_task_ != nullptr;
         xSemaphoreGive(mutex_);
-        if (task_still_alive) {
-            ESP_LOGW(TAG, "Camera preview task did not stop in time");
+        if (!running) {
+            break;
         }
     }
 }
@@ -352,7 +370,8 @@ std::string CameraService::last_error() const {
     return error;
 }
 
-bool CameraService::CapturePhoto(std::string& saved_path) {
+bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
+    jpeg.clear();
     CameraFrame frame;
     if (!GetLatestFrame(frame)) {
         SetError("No camera frame is ready yet");
@@ -407,6 +426,89 @@ bool CameraService::CapturePhoto(std::string& saved_path) {
         return false;
     }
     encoded.resize(static_cast<size_t>(out_len));
+    jpeg = std::move(encoded);
+    return true;
+}
+
+bool CameraService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
+    if (fps == 0 || fps > 30 || !callback) {
+        SetError("Invalid JPEG stream configuration");
+        return false;
+    }
+
+    if (mutex_ == nullptr) {
+        SetError("Camera service mutex is not available");
+        return false;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (jpeg_stream_running_) {
+        xSemaphoreGive(mutex_);
+        SetError("JPEG stream is already running");
+        return false;
+    }
+    if (!preview_running_) {
+        xSemaphoreGive(mutex_);
+        SetError("Camera preview must be running before JPEG stream");
+        return false;
+    }
+    jpeg_stream_fps_ = fps;
+    jpeg_stream_callback_ = std::move(callback);
+    jpeg_stream_stop_requested_ = false;
+    jpeg_stream_running_ = true;
+    jpeg_stream_task_ready_ = false;
+
+    TaskHandle_t created_task = nullptr;
+    if (xTaskCreateWithCaps(JpegStreamTaskEntry, "camera_jpeg", 8192, this, 3,
+                            &created_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        jpeg_stream_running_ = false;
+        jpeg_stream_callback_ = {};
+        jpeg_stream_task_ = nullptr;
+        jpeg_stream_task_ready_ = false;
+        xSemaphoreGive(mutex_);
+        SetError("Failed to start JPEG stream task");
+        return false;
+    }
+    jpeg_stream_task_ = created_task;
+    jpeg_stream_task_ready_ = true;
+    xSemaphoreGive(mutex_);
+    return true;
+}
+
+void CameraService::StopJpegStream() {
+    if (mutex_ == nullptr) {
+        return;
+    }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const TaskHandle_t task = jpeg_stream_task_;
+    jpeg_stream_stop_requested_ = true;
+    xSemaphoreGive(mutex_);
+
+    if (task == nullptr || task == xTaskGetCurrentTaskHandle()) {
+        return;
+    }
+
+    // A callback may outlive the two-second polling window. Wait without
+    // holding the service mutex until the task has released the callback and
+    // cleared its handle, so destruction cannot race a callback using this
+    // service.
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool running = jpeg_stream_task_ != nullptr;
+        xSemaphoreGive(mutex_);
+        if (!running) {
+            break;
+        }
+    }
+}
+
+bool CameraService::CapturePhoto(std::string& saved_path) {
+    std::vector<uint8_t> encoded;
+    if (!CaptureJpeg(encoded)) {
+        return false;
+    }
 
     if (file_service_ == nullptr) {
         SetError("File service is not available");
@@ -463,10 +565,89 @@ void CameraService::PreviewTaskEntry(void* arg) {
     if (service != nullptr) {
         service->PreviewTask();
     }
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
+}
+
+void CameraService::JpegStreamTaskEntry(void* arg) {
+    auto* service = static_cast<CameraService*>(arg);
+    if (service != nullptr) {
+        service->JpegStreamTask();
+    }
+    vTaskDeleteWithCaps(nullptr);
+}
+
+void CameraService::JpegStreamTask() {
+    // Wait for StartJpegStream to publish the task handle. This closes the
+    // fast-exit race where task cleanup is overwritten by xTaskCreateWithCaps.
+    while (true) {
+        bool ready = false;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            ready = jpeg_stream_task_ready_;
+            xSemaphoreGive(mutex_);
+        }
+        if (ready) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    uint32_t last_sequence = 0;
+    while (true) {
+        uint8_t fps = 0;
+        JpegFrameCallback callback;
+        bool should_stop = false;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            should_stop = jpeg_stream_stop_requested_ || !jpeg_stream_running_;
+            fps = jpeg_stream_fps_;
+            callback = jpeg_stream_callback_;
+            xSemaphoreGive(mutex_);
+        }
+        if (should_stop || fps == 0 || !callback) {
+            break;
+        }
+
+        CameraFrame latest;
+        if (GetLatestFrame(latest) && latest.sequence != last_sequence) {
+            std::vector<uint8_t> jpeg;
+            if (CaptureJpeg(jpeg)) {
+                last_sequence = latest.sequence;
+                callback(std::move(jpeg), latest.sequence, latest.timestamp_us);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(std::max(1, 1000 / static_cast<int>(fps))));
+    }
+
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        jpeg_stream_running_ = false;
+        jpeg_stream_stop_requested_ = false;
+        jpeg_stream_fps_ = 0;
+        jpeg_stream_callback_ = {};
+        jpeg_stream_task_ = nullptr;
+        jpeg_stream_task_ready_ = false;
+        xSemaphoreGive(mutex_);
+    }
 }
 
 void CameraService::PreviewTask() {
+    // StartPreview holds mutex_ while creating the task and publishing its
+    // handle. Wait here so a fast camera failure cannot clear preview_task_
+    // before xTaskCreatePinnedToCoreWithCaps writes its output.
+    while (true) {
+        bool ready = false;
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            ready = preview_task_ready_;
+            xSemaphoreGive(mutex_);
+        }
+        if (ready) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     const size_t frame_size = static_cast<size_t>(active_stride_) * active_height_;
@@ -682,6 +863,10 @@ bool CameraService::OpenStream(int width, int height) {
 #endif
 }
 
+bool& CameraService::PreviewLease(PreviewOwner owner) {
+    return owner == PreviewOwner::kRemote ? remote_preview_lease_ : local_preview_lease_;
+}
+
 void CameraService::CloseStream() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     if (fd_ >= 0) {
@@ -721,8 +906,11 @@ void CameraService::MarkPreviewStopped() {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         preview_running_ = false;
+        local_preview_lease_ = false;
+        remote_preview_lease_ = false;
         stop_requested_ = false;
         preview_task_ = nullptr;
+        preview_task_ready_ = false;
         xSemaphoreGive(mutex_);
     }
 }

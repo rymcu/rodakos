@@ -50,6 +50,7 @@ public:
     virtual void OnDestroy() = 0;
     virtual bool OnThemeChanged(PhoneAppContext&) { return false; }
     virtual bool OnHomeRequested() { return false; }
+    virtual bool OnBackRequested() { return false; }
 };
 
 struct PhoneAppDescriptor {

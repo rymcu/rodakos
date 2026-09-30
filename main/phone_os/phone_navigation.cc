@@ -14,6 +14,10 @@ bool PhoneNavigation::ReturnHome() {
     return system_.ReturnHome();
 }
 
+bool PhoneNavigation::Back() {
+    return system_.Back();
+}
+
 bool PhoneNavigation::Lock() {
     return system_.Lock();
 }

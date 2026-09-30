@@ -27,9 +27,13 @@ class AudioOutputService;
 class DeviceCloudConfigService;
 class OtaUpdateService;
 class VoiceWakeService;
+class WebRtcCameraService;
+class WebRtcDisplayService;
 
 class UnifiedMqttService {
 public:
+    using DisplayControlReply = std::function<void(bool accepted, const char* reason)>;
+    using DisplayControlCallback = std::function<void(const std::string& payload, DisplayControlReply reply)>;
     UnifiedMqttService(DeviceCloudConfigService& config_service,
                        OtaUpdateService& ota_update,
                        AudioOutputService* audio_output,
@@ -44,6 +48,18 @@ public:
     // and event workers cannot cross broker or routing boundaries.
     void RequestCredentialRefresh();
     void SetVoiceWakeService(VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
+    // The camera peer is injected after the camera hardware service has been
+    // constructed. MQTT remains the control plane; JPEG payloads never pass
+    // through MQTT.
+    void SetWebRtcCameraService(WebRtcCameraService* camera_peer) {
+        web_rtc_camera_service_ = camera_peer;
+    }
+    void StopWebRtcCameraStream();
+    void SetWebRtcDisplayService(WebRtcDisplayService* display_peer) { web_rtc_display_service_ = display_peer; }
+    void SetWebRtcDisplayControlCallback(DisplayControlCallback callback) {
+        display_control_callback_ = std::move(callback);
+    }
+    void StopWebRtcDisplayStream();
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
 
@@ -99,6 +115,9 @@ private:
     BatteryStateProvider* battery_provider_ = nullptr;
     LightService* light_service_ = nullptr;
     VoiceWakeService* voice_wake_ = nullptr;
+    WebRtcCameraService* web_rtc_camera_service_ = nullptr;
+    WebRtcDisplayService* web_rtc_display_service_ = nullptr;
+    DisplayControlCallback display_control_callback_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     esp_mqtt_client_handle_t client_ = nullptr;
@@ -110,6 +129,9 @@ private:
     SemaphoreHandle_t publish_ack_semaphore_ = nullptr;
     std::mutex reliable_publish_mutex_;
     std::mutex client_api_mutex_;
+    std::mutex camera_mutex_;
+    std::string camera_session_id_;
+    std::string display_session_id_;
     mutable std::mutex mqtt_mutex_;
     uint32_t client_generation_ = 0;
     uint64_t published_event_sequence_ = 0;

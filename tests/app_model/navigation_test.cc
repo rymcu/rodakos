@@ -22,6 +22,10 @@ RODAK_TEST("navigation forwards the complete public contract to PhoneSystem") {
     RODAK_CHECK(navigation.ReturnHome());
     RODAK_CHECK_EQ(system.return_home_calls, 1);
 
+    system.back_result = true;
+    RODAK_CHECK(navigation.Back());
+    RODAK_CHECK_EQ(system.back_calls, 1);
+
     system.lock_result = false;
     RODAK_CHECK_FALSE(navigation.Lock());
     RODAK_CHECK_EQ(system.lock_calls, 1);

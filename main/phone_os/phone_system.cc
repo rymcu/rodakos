@@ -93,6 +93,12 @@ bool PhoneSystem::ReturnHome() {
     return LaunchApp(home->id);
 }
 
+bool PhoneSystem::Back() {
+    if (!shell_.PrepareNavigation()) return false;
+    if (host_.HandleBackRequest()) return true;
+    return ReturnHome();
+}
+
 bool PhoneSystem::Lock() {
     return shell_.Lock();
 }

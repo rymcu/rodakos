@@ -80,6 +80,14 @@ bool PhoneAppHost::HandleHomeRequest() {
     return handled;
 }
 
+bool PhoneAppHost::HandleBackRequest() {
+    if (transition_in_progress_ || current_ == nullptr) return false;
+    transition_in_progress_ = true;
+    const bool handled = current_->OnBackRequested();
+    transition_in_progress_ = false;
+    return handled;
+}
+
 bool PhoneAppHost::CreateAndReplace(const PhoneAppDescriptor& descriptor,
                                     PhoneAppContext& context) {
     if (!descriptor.create) {

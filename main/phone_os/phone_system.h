@@ -22,6 +22,7 @@ public:
     bool LaunchApp(std::string_view app_id);
     bool RefreshTheme();
     bool ReturnHome();
+    bool Back();
     bool Lock();
     bool ToggleControlCenter();
     PhoneShellPreferences GetShellPreferences() const { return shell_.preferences(); }
