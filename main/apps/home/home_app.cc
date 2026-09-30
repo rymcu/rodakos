@@ -229,6 +229,17 @@ void HomeApp::AppButtonDeleteEvent(lv_event_t* event) {
 void HomeApp::TileviewEvent(lv_event_t* event) {
     auto* self = static_cast<HomeApp*>(lv_event_get_user_data(event));
     if (self != nullptr) {
+        const size_t active_page = self->ActivePageIndex();
+        const lv_dir_t direction = self->tileview_ != nullptr
+                                       ? lv_obj_get_scroll_dir(self->tileview_)
+                                       : LV_DIR_NONE;
+        const int32_t scroll_x = self->tileview_ != nullptr
+                                     ? lv_obj_get_scroll_x(self->tileview_)
+                                     : 0;
+        ESP_LOGD(TAG, "Home tile scroll end: active=%u scroll_x=%d dir=%u",
+                 static_cast<unsigned>(active_page + 1),
+                 static_cast<int>(scroll_x),
+                 static_cast<unsigned>(direction));
         self->UpdatePageIndicator();
         self->QueuePageWindowRefresh();
     }
@@ -471,7 +482,26 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     if (initial_tile == nullptr && !page_tiles_.empty()) {
         initial_tile = page_tiles_.front();
     }
+    // Tile positions use percentage coordinates. After an app transition the
+    // new Home root may not have been laid out yet; resolving the initial tile
+    // before layout can leave tile_act on page 2 while the viewport remains on
+    // page 1, which then disables the direction needed for the next swipe.
+    lv_obj_update_layout(tileview_);
+    ESP_LOGI(TAG, "Home tile layout resolved: width=%d content_width=%d initial_page=%u",
+             static_cast<int>(lv_obj_get_width(tileview_)),
+             static_cast<int>(lv_obj_get_content_width(tileview_)),
+             static_cast<unsigned>(initial_page + 1));
+    for (size_t page_index = 0; page_index < page_tiles_.size(); ++page_index) {
+        ESP_LOGD(TAG, "Home tile %u x=%d y=%d",
+                 static_cast<unsigned>(page_index + 1),
+                 static_cast<int>(lv_obj_get_x(page_tiles_[page_index])),
+                 static_cast<int>(lv_obj_get_y(page_tiles_[page_index])));
+    }
     lv_tileview_set_tile(tileview_, initial_tile, LV_ANIM_OFF);
+    ESP_LOGI(TAG, "Home tile restored: active=%u scroll_x=%d dir=%u",
+             static_cast<unsigned>(ActivePageIndex() + 1),
+             static_cast<int>(lv_obj_get_scroll_x(tileview_)),
+             static_cast<unsigned>(lv_obj_get_scroll_dir(tileview_)));
     if (!RefreshHomePageWindow(initial_page)) {
         ESP_LOGE(TAG, "Failed to render the initial Home page window");
         return false;
@@ -695,6 +725,12 @@ void HomeApp::UpdateActivePageDirections(size_t active_page) {
         direction = static_cast<lv_dir_t>(direction | LV_DIR_RIGHT);
     }
     lv_obj_set_scroll_dir(tileview_, direction);
+    ESP_LOGD(TAG, "Home page directions: active=%u previous=%d next=%d dir=%u scroll_x=%d",
+             static_cast<unsigned>(active_page + 1),
+             active_page > 0 && page_populated_[active_page - 1] ? 1 : 0,
+             active_page + 1 < page_populated_.size() && page_populated_[active_page + 1] ? 1 : 0,
+             static_cast<unsigned>(direction),
+             static_cast<int>(lv_obj_get_scroll_x(tileview_)));
 }
 
 bool HomeApp::RefreshHomePageWindow(size_t active_page) {

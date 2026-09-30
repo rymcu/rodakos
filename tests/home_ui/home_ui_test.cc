@@ -456,6 +456,40 @@ RODAK_TEST("remote release retains the last delivered coordinate") {
     RODAK_CHECK_EQ(data.point.y, 120);
 }
 
+RODAK_TEST("recreated Home resolves the restored tile offset before paging") {
+    ResetScreen();
+    ResetSettings();
+
+    {
+        HomeFixture fixture(13);
+        lv_obj_update_layout(fixture.home.tileview_);
+        lv_tileview_set_tile(
+            fixture.home.tileview_, fixture.home.page_tiles_[0], LV_ANIM_OFF);
+        RODAK_CHECK_EQ(
+            lv_obj_send_event(fixture.home.tileview_, LV_EVENT_SCROLL_END, nullptr),
+            LV_RESULT_OK);
+        Pump();
+        RODAK_CHECK_EQ(fixture.home.ActivePageIndex(), 0U);
+
+        Swipe(HomeButton(fixture.home), -160);
+        Pump(1200);
+        RODAK_CHECK_EQ(fixture.home.ActivePageIndex(), 1U);
+    }
+
+    // 模块级 HomePageSession 现在恢复到第二页。仅恢复 tile 索引还不够，
+    // viewport 也必须定位到百分比坐标解析后的 x，否则下一次滑动会把方向
+    // 应用到第一页的旧偏移量。
+    HomeFixture recreated(13);
+    const int32_t page_width = lv_obj_get_content_width(recreated.home.tileview_);
+    RODAK_CHECK_EQ(recreated.home.ActivePageIndex(), 1U);
+    RODAK_CHECK(lv_obj_get_scroll_x(recreated.home.tileview_) >= page_width - 2);
+    RODAK_CHECK_EQ(lv_obj_get_scroll_dir(recreated.home.tileview_), LV_DIR_LEFT);
+
+    Swipe(HomeButton(recreated.home), 160);
+    Pump(1200);
+    RODAK_CHECK_EQ(recreated.home.ActivePageIndex(), 0U);
+}
+
 RODAK_TEST("a vertical quick swipe on one page is not an app tap") {
     ResetScreen();
     ResetSettings();
