@@ -66,6 +66,7 @@ set(SOURCES
     "phone_os/realtime_voice_reconnect_policy.cc"
     "phone_os/web_file_system_service.cc"
     "phone_ui/phone_ui.cc"
+    "phone_ui/boot_animation.cc"
     "phone_ui/phone_fonts.cc"
     "phone_ui/phone_theme.cc"
     "phone_ui/phone_screen.cc"

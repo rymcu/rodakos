@@ -31,6 +31,7 @@
 #include "phone_os/web_file_system_service.h"
 #include "phone_os/realtime_voice_transport.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/boot_animation.h"
 #include "phone_ui/rodakos_theme.h"
 #include "phone_ui/phone_fonts.h"
 #include "settings.h"
@@ -381,6 +382,9 @@ extern "C" void app_main(void) {
     backlight.RestoreBrightness();
     ESP_LOGI(TAG, "Backlight initialized and turned on");
 
+    BootAnimation boot_animation(ui);
+    boot_animation.Start();
+
     static WiFiAdapter* wifi = CreateWiFiAdapter();
     if (!wifi->Init()) {
         ESP_LOGE(TAG, "WiFi adapter initialization failed");
@@ -515,8 +519,11 @@ extern "C" void app_main(void) {
     });
     if (!system.Start()) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
+        boot_animation.Stop();
         return;
     }
+
+    boot_animation.Finish();
 
     button_binding_service.Init(system.navigation(), ui);
 
