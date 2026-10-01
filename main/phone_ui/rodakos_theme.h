@@ -68,6 +68,7 @@ void rodakos_theme_init(rodakos_theme_preset_t preset);
  * @return 实际应用的预设主题
  */
 rodakos_theme_preset_t rodakos_theme_init_from_name(const char* theme_id);
+void rodakos_theme_apply_preset_primary(const char* theme_id, uint32_t primary);
 
 /**
  * 判断指定主题是否应使用 PhoneUi 的浅色组件主题。

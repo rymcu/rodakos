@@ -7,6 +7,7 @@
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/appearance_service.h"
 #include "phone_os/touch_pointer_state.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/audio_output_service.h"
@@ -663,6 +664,11 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_LOGI(TAG, "Board manager initialized");
 
+    static rodakos::FileService* file_service = rodakos::CreateFileService();
+    static rodakos::DeviceCloudConfigService device_cloud_config_service;
+    static rodakos::AppearanceService appearance_service(device_cloud_config_service, file_service);
+    appearance_service.BeginBootLoad();
+
     // Get LCD configuration for resolution
     dev_display_lcd_config_t *lcd_cfg = nullptr;
     ESP_ERROR_CHECK(esp_board_manager_get_device_config("display_lcd",
@@ -672,7 +678,7 @@ extern "C" void app_main(void) {
     const std::string theme_name = display_settings.GetString("theme", "dark");
     rodakos_theme_init_from_name(theme_name.c_str());
     static PhoneUi ui(lcd_cfg->lcd_width, lcd_cfg->lcd_height);
-    ui.SetThemeName(rodakos_theme_is_light_name(theme_name.c_str()) ? "light" : "dark");
+    ui.SetThemeName(theme_name);
 
     // Initialize LVGL adapter with LCD and touch
     void *lcd_handle = nullptr;
@@ -731,6 +737,13 @@ extern "C" void app_main(void) {
     lv_indev_t* touch_indev = InitTouchInput(disp);
     ui.SetPrimaryInput(touch_indev);
     ui.SetInputResetCallback(ResetTouchInputBridge, &g_touch_input);
+    ui.SetPhysicalInputCallback([](void* data) {
+        auto* touch = static_cast<TouchInputBridge*>(data);
+        portENTER_CRITICAL(&touch->lock);
+        const bool physical = !touch->remote_control_enabled && !touch->remote_active;
+        portEXIT_CRITICAL(&touch->lock);
+        return physical;
+    }, &g_touch_input);
 
     ESP_LOGI(TAG, "LVGL port initialized");
 
@@ -747,8 +760,33 @@ extern "C" void app_main(void) {
     backlight.RestoreBrightness();
     ESP_LOGI(TAG, "Backlight initialized and turned on");
 
+    auto boot_assets = appearance_service.WaitBootAssets();
+    std::string local_theme;
+    uint32_t local_primary = 0;
+    if (boot_assets) {
+        rodakos_theme_apply_preset_primary(boot_assets->metadata.theme_preset.c_str(),
+                                          boot_assets->metadata.theme_primary);
+        ui.SyncThemeName(boot_assets->metadata.theme_preset);
+        if (const auto* wallpaper = boot_assets->metadata.FindResource(
+                boot_assets->metadata.wallpaper_resource_id); wallpaper != nullptr) {
+            ui.SetWallpaper(boot_assets->WallpaperBuffer(), wallpaper->width, wallpaper->height);
+        }
+    }
+    if (appearance_service.GetLocalTheme(local_theme, local_primary)) {
+        rodakos_theme_apply_preset_primary(local_theme.c_str(), local_primary);
+        ui.SyncThemeName(local_theme);
+    }
     BootAnimation boot_animation(ui);
-    boot_animation.Start();
+    bool appearance_confirm_pending = boot_assets != nullptr;
+    bool animation_started = boot_animation.Start(boot_assets);
+    if (!animation_started && boot_assets) {
+        appearance_service.RejectBootCandidate("animation_surface_unavailable");
+        appearance_confirm_pending = false;
+        ui.SetWallpaper({}, 0, 0);
+        ui.SetThemeName(theme_name);
+        animation_started = boot_animation.Start();
+    }
+    boot_assets.reset();
 
     static WiFiAdapter* wifi = CreateWiFiAdapter();
     if (!wifi->Init()) {
@@ -756,7 +794,6 @@ extern "C" void app_main(void) {
         // WiFi 失败不影响系统启动，继续运行
     }
 
-    static rodakos::FileService* file_service = rodakos::CreateFileService();
     ESP_LOGI(TAG, "File service ready - SD card will mount on demand");
 
     static rodakos::AudioOutputService audio_output_service;
@@ -771,13 +808,13 @@ extern "C" void app_main(void) {
         music_player_service, audio_output_service);
     static rodakos::AudioCodecInput audio_input;
     static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
-    static rodakos::DeviceCloudConfigService device_cloud_config_service;
     static rodakos::OtaUpdateService ota_update_service(
         device_cloud_config_service, file_service);
     static rodakos::BatteryMonitor battery_monitor;
     static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service,
         &battery_monitor, &light_service);
+    unified_mqtt_service.SetAppearanceService(&appearance_service);
     static rodakos::RodakRealtimeVoiceTransport voice_assistant_transport(
         device_cloud_config_service);
     static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
@@ -846,9 +883,16 @@ extern "C" void app_main(void) {
     }
     static rodakos::WebRtcDisplayService web_rtc_display_service(&display_service);
     unified_mqtt_service.SetWebRtcDisplayService(&web_rtc_display_service);
+    appearance_service.SetBusyGate([]() {
+        const auto voice = voice_assistant_service.GetState();
+        return ota_update_service.IsBusy() || voice.focus_active || voice.transport_active ||
+               voice.recorder_active || web_rtc_display_service.IsRunning() ||
+               web_rtc_camera_service.IsRunning();
+    });
     ESP_LOGI(TAG, "WebRTC display service ready - starts on MQTT display.stream.start");
 
     static PhoneServices services;
+    services.SetAppearance(&appearance_service);
     services.SetBacklight(&backlight);
     services.SetWiFi(wifi);
     services.SetBattery(&battery_monitor);
@@ -869,6 +913,7 @@ extern "C" void app_main(void) {
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
     services.SetDeviceCloudUnboundCallback([]() {
+        appearance_service.ForgetPublisher();
         unified_mqtt_service.StopWebRtcCameraStream();
         unified_mqtt_service.StopWebRtcDisplayStream();
         voice_assistant_service.StopInteraction();
@@ -879,7 +924,7 @@ extern "C" void app_main(void) {
     });
 
     static PhoneSystem system(ui, services);
-    serial_provisioning_service.SetAppLaunchCallback([&system](const std::string& requested_id) {
+    serial_provisioning_service.SetAppLaunchCallback([](const std::string& requested_id) {
         const auto* descriptor = system.registry().ResolveAlias(requested_id);
         if (descriptor == nullptr) {
             return false;
@@ -972,7 +1017,21 @@ extern "C" void app_main(void) {
 
     ESP_LOGI(TAG, "RodakOS started successfully");
 
+    uint32_t appearance_retry_ticks = 0;
     while (true) {
+        if (animation_started && boot_animation.HasCompleted()) {
+            appearance_service.RecordAnimationMs(boot_animation.duration_ms());
+            appearance_service.ReleaseBootAssets();
+            animation_started = false;
+        }
+        if (!animation_started && appearance_confirm_pending &&
+            appearance_service.ConfirmBootHealthy()) {
+            appearance_confirm_pending = false;
+        }
+        if (++appearance_retry_ticks >= 5) {
+            appearance_retry_ticks = 0;
+            if (unified_mqtt_service.IsConnected()) appearance_service.OnNetworkReady();
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

@@ -10,6 +10,10 @@ Last refreshed: 2026-09-27.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
+- Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
+  Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
+  boot with a 1500 ms loading acceptance budget and built-in EDIX fallback. See
+  [Appearance customization](docs/appearance-customization.md) for limits and hardware gates.
 - Home resolves a versioned exact-ID layout from `home/layout`, reconciles it against the Registry in
   RAM, and supports folder browsing plus draft-only reorder/create/rename/move/dissolve commands with
   one guarded save on Done. It restores its runtime page anchor and caps the managed desktop at eight
@@ -19,11 +23,12 @@ Last refreshed: 2026-09-27.
   only after its adjacent page is ready. Pending refreshes are canceled before theme rebuild or
   navigation teardown, and Home logs final internal-SRAM free space and largest free block.
 - `tests/home_ui` compiles the production Home UI against LVGL 9.3's in-memory display and test
-  pointer. Its thirteen tests cover tap-versus-drag suppression on one-page boundaries and real
+  pointer. Its tests cover tap-versus-drag suppression on one-page boundaries and real
   multi-page swipes, long press, Cancel/Done, repeated Home, theme rebuild, keyboard geometry, the
-  96/97-app `All Apps` boundary, and asynchronous active-plus-neighbors residency. The suite reports
-  13 tests and 0 failures, including 20 repeated normal runs and an ASan/UBSan run
-  with leak detection.
+  96/97-app `All Apps` boundary, asynchronous active-plus-neighbors residency, compiled boot-image
+  pixels, animation lifetime/touch restoration, Home wallpaper and unified theme colors. The current
+  WSL suite reports 43 tests and 0 failures in Debug and ASan/UBSan with leak detection. Its built-in
+  logo font is a host fake; this does not establish EDIX or wireless hardware acceptance.
 - The latest protected COM3 refresh reached Home with 13 visible apps and two resident pages. It
   proves the multi-page population boots, but not that page swipes, Arrange, page restoration, or
   GT911/ST7789 interaction work correctly. Two pages also keep both pages inside the active-plus-
@@ -117,9 +122,9 @@ The Home UI host target compiles the real `HomeApp`, `PhoneUi`, layout, theme, c
 ```powershell
 wsl -d Debian -- bash -lc '
   cmake -S /mnt/d/workspace/rodakos/tests/home_ui \
-        -B /tmp/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
-  cmake --build /tmp/rodakos-home-ui &&
-  ctest --test-dir /tmp/rodakos-home-ui --output-on-failure
+        -B ~/.cache/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+  cmake --build ~/.cache/rodakos-home-ui &&
+  ctest --test-dir ~/.cache/rodakos-home-ui --output-on-failure
 '
 ```
 
@@ -183,6 +188,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Appearance customization](docs/appearance-customization.md)
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)

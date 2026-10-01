@@ -4,12 +4,14 @@
 
 #include <cstdint>
 #include <string>
+#include <memory>
 
 #include <lvgl.h>
 
 class PhoneUi {
 public:
     using InputResetCallback = void (*)(void*);
+    using PhysicalInputCallback = bool (*)(void*);
 
     PhoneUi(int width, int height);
 
@@ -21,12 +23,20 @@ public:
     const PhoneTheme& theme() const { return theme_; }
 
     void SetThemeName(const std::string& name);
+    void SyncThemeName(const std::string& name);
+    void SetWallpaper(std::shared_ptr<uint8_t> data, uint16_t width, uint16_t height);
+    const lv_image_dsc_t* wallpaper() const { return wallpaper_data_ ? &wallpaper_ : nullptr; }
     const std::string& theme_name() const { return theme_name_; }
     uint32_t theme_revision() const { return theme_revision_; }
     void SetPrimaryInput(lv_indev_t* indev) { primary_input_ = indev; }
     lv_indev_t* primary_input() const { return primary_input_; }
     void SetInputResetCallback(InputResetCallback callback, void* user_data);
     void ResetInputState();
+    void SetPhysicalInputCallback(PhysicalInputCallback callback, void* user_data) {
+        physical_input_callback_ = callback;
+        physical_input_user_data_ = user_data;
+    }
+    bool IsPhysicalInput() const;
     void ShowToast(const char* message, int duration_ms = 1800);
     void ShowToastUnlocked(const char* message, int duration_ms = 1800);
 
@@ -35,12 +45,16 @@ private:
     int height_;
     std::string theme_name_ = "dark";
     PhoneTheme theme_;
+    std::shared_ptr<uint8_t> wallpaper_data_;
+    lv_image_dsc_t wallpaper_ = {};
     uint32_t theme_revision_ = 0;
     lv_obj_t* toast_ = nullptr;
     lv_timer_t* toast_timer_ = nullptr;
     lv_indev_t* primary_input_ = nullptr;
     InputResetCallback input_reset_callback_ = nullptr;
     void* input_reset_user_data_ = nullptr;
+    PhysicalInputCallback physical_input_callback_ = nullptr;
+    void* physical_input_user_data_ = nullptr;
 };
 
 class PhoneUiLock {

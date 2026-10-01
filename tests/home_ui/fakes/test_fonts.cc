@@ -3,6 +3,7 @@
 lv_font_t phone_font_12;
 lv_font_t phone_font_14;
 lv_font_t phone_font_18;
+const lv_font_t phone_font_logo = lv_font_montserrat_18;
 
 namespace {
 bool initialized = false;

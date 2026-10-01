@@ -75,7 +75,7 @@ int ThemeIndexFromId(const std::string& theme) {
 void ApplyThemeToRuntime(PhoneUi* ui, const ThemeOption& option) {
     rodakos_theme_init_from_name(option.id);
     if (ui != nullptr) {
-        ui->SetThemeName(option.phone_ui_light ? "light" : "dark");
+        ui->SyncThemeName(option.id);
     }
 }
 

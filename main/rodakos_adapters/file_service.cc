@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <algorithm>
+#include <mutex>
 
 namespace rodakos {
 
@@ -27,6 +28,7 @@ public:
     ~FileServiceImpl() override { Deinit(); }
 
     bool Init() override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (is_mounted_) {
             ESP_LOGW(TAG, "SD card already mounted");
             return true;
@@ -67,6 +69,7 @@ public:
     }
 
     void Deinit() override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             return;
         }
@@ -80,10 +83,12 @@ public:
     }
 
     bool IsMounted() const override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         return is_mounted_;
     }
 
     const char* GetMountPoint() const override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         return mount_point_.c_str();
     }
 
@@ -96,6 +101,7 @@ public:
     }
 
     bool GetCapacity(Capacity& capacity) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             return false;
         }
@@ -122,6 +128,7 @@ public:
     }
 
     bool ListDirectory(const std::string& path, std::vector<FileEntry>& entries) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -176,6 +183,7 @@ public:
     }
 
     bool ReadFile(const std::string& path, std::vector<uint8_t>& data) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -212,6 +220,7 @@ public:
     }
 
     bool WriteFile(const std::string& path, const std::vector<uint8_t>& data, bool append) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -238,6 +247,7 @@ public:
     }
 
     bool DeleteFile(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -254,6 +264,7 @@ public:
     }
 
     bool DeleteDirectory(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -291,6 +302,7 @@ public:
     }
 
     bool CreateDirectory(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -312,6 +324,7 @@ public:
     }
 
     bool Rename(const std::string& old_path, const std::string& new_path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
@@ -330,6 +343,7 @@ public:
     }
 
     bool Exists(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             return false;
         }
@@ -340,6 +354,7 @@ public:
     }
 
     size_t GetFileSize(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             return 0;
         }
@@ -353,7 +368,13 @@ public:
         return st.st_size;
     }
 
+    bool WithIoLock(const std::function<bool()>& operation) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+        return operation();
+    }
+
 private:
+    mutable std::recursive_mutex io_mutex_;
     bool is_mounted_ = false;
     sdmmc_card_t* card_ = nullptr;
     std::string mount_point_ = kMountPoint;

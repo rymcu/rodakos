@@ -29,6 +29,7 @@ class OtaUpdateService;
 class VoiceWakeService;
 class WebRtcCameraService;
 class WebRtcDisplayService;
+class AppearanceService;
 
 class UnifiedMqttService {
 public:
@@ -60,6 +61,7 @@ public:
         display_control_callback_ = std::move(callback);
     }
     void StopWebRtcDisplayStream();
+    void SetAppearanceService(AppearanceService* appearance);
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
 
@@ -117,6 +119,9 @@ private:
     VoiceWakeService* voice_wake_ = nullptr;
     WebRtcCameraService* web_rtc_camera_service_ = nullptr;
     WebRtcDisplayService* web_rtc_display_service_ = nullptr;
+    AppearanceService* appearance_ = nullptr;
+    std::atomic<bool> appearance_report_pending_{false};
+    std::string deferred_ota_payload_;
     DisplayControlCallback display_control_callback_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;

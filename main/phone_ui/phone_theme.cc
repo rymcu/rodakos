@@ -1,4 +1,28 @@
 #include "phone_ui/phone_theme.h"
+#include "phone_ui/rodakos_theme.h"
+#include <cmath>
+
+PhoneTheme PhoneThemeFromRodakos() {
+    const auto* theme = rodakos_theme_get();
+    const auto channel = [](uint32_t value) {
+        const float normalized = static_cast<float>(value) / 255.0F;
+        return normalized <= 0.04045F ? normalized / 12.92F
+            : std::pow((normalized + 0.055F) / 1.055F, 2.4F);
+    };
+    const float luminance = 0.2126F * channel((theme->primary >> 16) & 255) +
+                            0.7152F * channel((theme->primary >> 8) & 255) +
+                            0.0722F * channel(theme->primary & 255);
+    return {
+        .background = lv_color_hex(theme->bg_primary),
+        .surface = lv_color_hex(theme->bg_secondary),
+        .surface_alt = lv_color_hex(theme->bg_tertiary),
+        .border = lv_color_hex(theme->border),
+        .text_primary = lv_color_hex(theme->text_primary),
+        .text_secondary = lv_color_hex(theme->text_secondary),
+        .accent = lv_color_hex(theme->primary),
+        .accent_text = lv_color_hex(luminance > 0.179F ? 0x000000 : 0xffffff),
+    };
+}
 
 PhoneTheme PhoneDarkTheme() {
     return {

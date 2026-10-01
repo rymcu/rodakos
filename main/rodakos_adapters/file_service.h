@@ -158,6 +158,8 @@ public:
      * @return File size in bytes, 0 if failed
      */
     virtual size_t GetFileSize(const std::string& path) = 0;
+
+    virtual bool WithIoLock(const std::function<bool()>& operation) { return operation(); }
 };
 
 /**

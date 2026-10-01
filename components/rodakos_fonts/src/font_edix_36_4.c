@@ -411,5 +411,3 @@ lv_font_t font_edix_36_4 = {
 
 
 #endif /*#if FONT_EDIX_36_4*/
-
-\n

@@ -100,6 +100,7 @@ public:
     bool Refresh(DeviceCloudConfig& config);
     bool PrepareVoiceConfig(DeviceCloudConfig& config,
                             const std::function<bool()>& can_continue = {});
+    void InvalidateAccessTokenFreshness(const std::string& rejected_token);
     bool IsVoiceConfigCurrent(const DeviceCloudConfig& config) const;
     bool Unbind(DeviceCloudConfig& config);
     ProvisioningUrlSaveResult SaveProvisioningUrl(

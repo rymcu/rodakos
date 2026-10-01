@@ -7,6 +7,7 @@ class BacklightAdapter;
 class WiFiAdapter;
 
 namespace rodakos {
+class AppearanceService;
 class AudioFocusService;
 class AudioOutputService;
 class AudioService;
@@ -27,6 +28,8 @@ class WebFileSystemService;
 
 class PhoneServices {
 public:
+    void SetAppearance(rodakos::AppearanceService* appearance) { appearance_ = appearance; }
+    rodakos::AppearanceService* appearance() { return appearance_; }
     void SetBacklight(BacklightAdapter* backlight) { backlight_ = backlight; }
     BacklightAdapter* backlight() { return backlight_; }
 
@@ -104,6 +107,7 @@ public:
     }
 
 private:
+    rodakos::AppearanceService* appearance_ = nullptr;
     BacklightAdapter* backlight_ = nullptr;
     WiFiAdapter* wifi_ = nullptr;
     rodakos::BatteryStateProvider* battery_ = nullptr;

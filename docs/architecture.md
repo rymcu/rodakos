@@ -53,6 +53,8 @@ Important pieces:
 - `PhoneNavigation`: app launch, return-home, theme, lock, Control Center, and Shell-preference routing.
 - `PhoneShell`: owns Lock Screen and Control Center on `lv_layer_top()` without replacing or destroying the current app.
 - `PhoneServices`: dependency container for hardware and system services.
+- `AppearanceService`: publisher pinning, signed SD resources, bounded boot loading, revision trials
+  and local theme overrides. It is independent of firmware OTA and exposed through `PhoneServices`.
 
 RodakOS still uses statically linked apps. "Pluggable" means apps are modular at firmware architecture level: a new app registers a descriptor and factory, and Home discovers it from the registry.
 
@@ -82,13 +84,15 @@ forwarding without entering the firmware image. Its pure-model page-window tests
 eight pages, including boundary clamping and active/previous/next order; this target isolates policy.
 
 `tests/home_ui/` complements the model suite by compiling the production `HomeApp`, Home
-model/store, Registry, `PhoneUi`, layout, theme, components, and `SoftKeyboard` against LVGL 9.3's
+model/store, Registry, `PhoneUi`, layout, theme, components, `BootAnimation`, appearance metadata
+codec and `SoftKeyboard` against LVGL 9.3's
 in-memory 320x240 display. LVGL's test pointer drives the real widget/event tree while platform
-services, Settings, navigation, and fonts use host fakes. Its thirteen tests cover tap slop,
+services, Settings, navigation, and fonts use host fakes. The suite covers tap slop,
 one-page and multi-page drag suppression, boundary and bidirectional page swipes, long-press Arrange,
 Cancel/Done persistence, repeated Home, theme rebuilding, keyboard geometry, 96/97-app `All Apps`,
-and asynchronous active-plus-neighbors residency. The suite reports 13 tests and 0 failures,
-including 20 consecutive normal runs and ASan/UBSan with leak detection.
+and asynchronous active-plus-neighbors residency, boot-image formats/timing/lifetime, touch recovery,
+Home wallpaper and unified theme colors. The current WSL run reports 43 tests and 0 failures in
+Debug and ASan/UBSan with leak detection. The logo font fake does not verify built-in EDIX typography.
 
 The latest device run had 13 visible apps and a two-page `2/2` residency window. That proves the
 multi-page population boots, but page swiping, Arrange, page restoration, GT911 touch behavior, and
@@ -106,6 +110,8 @@ Home behavior and object lifetime, but it cannot replace those embedded and phys
 - `rodakos_theme` defines dark/light/blue/green theme tokens.
 - `rodakos_layout` provides fixed-screen helpers for header/body/footer, grids, and flex rows.
 - `phone_fonts` initializes the RodakOS-owned CJK and Font Awesome UI font subset.
+- `BootAnimation` renders the built-in EDIX fallback or compiled appearance units with elapsed LVGL
+  ticks. `PhoneUi` retains a shared RGB565 Home wallpaper and follows the global theme colors.
 - `image_library` scans and loads JPG/PNG/BMP images from FileService-backed storage, preferring SPIRAM.
 
 GT911 touch is registered through a cached polling bridge in `main.cc`: a low-priority task reads the touch controller and LVGL reads cached coordinates. This avoids doing I2C reads directly inside the LVGL task. `PhoneUi` retains the primary LVGL input device so system gestures can observe LVGL events without accessing GT911 or I2C.
@@ -131,6 +137,13 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
 
 ## Service Notes
+
+- Appearance resources use `components/rodak_appearance` for metadata/signature/revision policy and
+  `/rodakos/appearance/` on SD for two verified slots. A background loader overlaps display setup;
+  only results accepted within the total 1500 ms budget may enter the boot UI. The device requires
+  physical touch to pin a publisher key/origin. Runtime downloads defer during media/voice/OTA and
+  activate through a next-boot trial. See [Appearance resources](appearance-customization.md) for
+  the RAP1 layout, HTTP limitations, limits and still-required hardware evidence.
 
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.

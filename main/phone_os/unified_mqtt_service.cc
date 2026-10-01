@@ -6,6 +6,8 @@
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/webrtc_camera_service.h"
 #include "phone_os/webrtc_display_service.h"
+#include "phone_os/appearance_service.h"
+#include "rodak_appearance_policy.h"
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
@@ -21,7 +23,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <string>
@@ -135,6 +139,38 @@ bool IsPingCommand(const std::string& payload) {
                          std::string(command->valuestring) == "ping";
     cJSON_Delete(root);
     return is_ping;
+}
+
+bool ProjectAppearanceDesired(const cJSON* appearance, char* buffer, size_t capacity) {
+    const auto text = [&](const char* name) -> const char* {
+        const cJSON* item = cJSON_GetObjectItemCaseSensitive(appearance, name);
+        return cJSON_IsString(item) && item->valuestring != nullptr ? item->valuestring : nullptr;
+    };
+    const auto identifier = [](const char* value, bool allow_empty) {
+        if (value == nullptr) return false;
+        const size_t length = std::strlen(value);
+        if (length > 64 || (!allow_empty && length == 0)) return false;
+        for (size_t i = 0; i < length; ++i) {
+            const unsigned char ch = value[i];
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                  (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) return false;
+        }
+        return true;
+    };
+    const char* deployment = text("deploymentId");
+    const char* release = text("releaseId");
+    const char* key = text("keyId");
+    const char* mode = text("mode");
+    const cJSON* revision = cJSON_GetObjectItemCaseSensitive(appearance, "revision");
+    if (!identifier(deployment, false) || !identifier(release, true) || !identifier(key, false) ||
+        mode == nullptr || (std::strcmp(mode, "custom") != 0 && std::strcmp(mode, "builtin") != 0) ||
+        !cJSON_IsNumber(revision) || !std::isfinite(revision->valuedouble) ||
+        std::floor(revision->valuedouble) != revision->valuedouble ||
+        revision->valuedouble < 1 || revision->valuedouble > 0xffffffffu) return false;
+    const int length = std::snprintf(buffer, capacity,
+        "{\"deploymentId\":\"%s\",\"releaseId\":\"%s\",\"keyId\":\"%s\",\"mode\":\"%s\",\"revision\":%u}",
+        deployment, release, key, mode, static_cast<unsigned>(revision->valuedouble));
+    return length > 0 && static_cast<size_t>(length) < capacity;
 }
 
 const char* PeerMessageTypeName(esp_peer_msg_type_t type) {
@@ -423,6 +459,13 @@ void UnifiedMqttService::WorkerLoop() {
         }
         if (telemetry_pending_.exchange(false) && started_.load()) {
             PublishTelemetry();
+            if (appearance_ != nullptr) appearance_->OnNetworkReady();
+        }
+        if (appearance_report_pending_.exchange(false) && connected_.load()) PublishShadowReport();
+        if (appearance_ == nullptr || !appearance_->IsBusy()) {
+            std::string deferred;
+            { std::lock_guard<std::mutex> lock(mqtt_mutex_); deferred.swap(deferred_ota_payload_); }
+            if (!deferred.empty()) ota_update_.HandleNotification(deferred);
         }
         PendingMessage* raw = nullptr;
         if (xQueueReceive(message_queue_, &raw, pdMS_TO_TICKS(kBackgroundTaskPollMs)) == pdTRUE) {
@@ -963,6 +1006,7 @@ void UnifiedMqttService::OnConnected(uint32_t generation) {
         service->SubscribeTopics();
         if (service->IsCurrentClientGeneration(generation)) {
             service->ota_update_.OnNetworkReady();
+            if (service->appearance_ != nullptr) service->appearance_->OnNetworkReady();
             service->PublishTelemetry();
             service->PublishShadowReport();
         }
@@ -1012,6 +1056,11 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
     const std::string commands_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
     const std::string pc_status_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_pc_status);
     if (topic == ota_topic) {
+        if (appearance_ != nullptr && appearance_->IsBusy()) {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            deferred_ota_payload_ = payload;
+            return;
+        }
         ota_update_.HandleNotification(payload);
         return;
     }
@@ -1045,6 +1094,14 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
     cJSON* volume = cJSON_IsObject(desired)
                         ? cJSON_GetObjectItemCaseSensitive(desired, "volume")
                         : nullptr;
+    cJSON* appearance = cJSON_IsObject(desired)
+                            ? cJSON_GetObjectItemCaseSensitive(desired, "appearance") : nullptr;
+    if (cJSON_IsObject(appearance) && appearance_ != nullptr) {
+        char encoded_appearance[384] = {};
+        if (ProjectAppearanceDesired(appearance, encoded_appearance, sizeof(encoded_appearance))) {
+            appearance_->ApplyDesiredJson(encoded_appearance);
+        }
+    }
     if (cJSON_IsNumber(volume) && audio_output_ != nullptr) {
         audio_output_->SetVolume(std::clamp(volume->valueint, 0, 100));
     }
@@ -1108,7 +1165,7 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
             ESP_LOGW(TAG, "Rejected desired voice identity: %s", error.c_str());
         }
     }
-    if (cJSON_IsNumber(volume) || cJSON_IsObject(light) || cJSON_IsObject(voice_identity)) {
+    if (cJSON_IsNumber(volume) || cJSON_IsObject(light) || cJSON_IsObject(voice_identity) || cJSON_IsObject(appearance)) {
         PublishShadowReport();
     }
     cJSON_Delete(root);
@@ -1584,6 +1641,11 @@ void UnifiedMqttService::PublishShadowReport() {
     const esp_app_desc_t* app = esp_app_get_description();
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "firmware", app != nullptr ? app->version : "unknown");
+    if (appearance_ != nullptr) {
+        cJSON* appearance = cJSON_Parse(appearance_->ReportedJson().c_str());
+        if (cJSON_IsObject(appearance)) cJSON_AddItemToObject(root, "appearance", appearance);
+        else cJSON_Delete(appearance);
+    }
     if (audio_output_ != nullptr) {
         cJSON_AddNumberToObject(root, "volume", audio_output_->volume());
     }
@@ -1637,6 +1699,12 @@ void UnifiedMqttService::PublishShadowReport() {
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);
     Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_shadow_report), payload);
+}
+
+void UnifiedMqttService::SetAppearanceService(AppearanceService* appearance) {
+    if (appearance_ != nullptr) appearance_->SetStatePublisher({});
+    appearance_ = appearance;
+    if (appearance_ != nullptr) appearance_->SetStatePublisher([this]() { appearance_report_pending_.store(true); });
 }
 
 bool UnifiedMqttService::Publish(const std::string& topic, const std::string& payload) {

@@ -63,6 +63,7 @@ set(SOURCES
     "phone_os/serial_provisioning_service.cc"
     "phone_os/mqtt_credential_refresh_policy.cc"
     "phone_os/ota_update_service.cc"
+    "phone_os/appearance_service.cc"
     "phone_os/unified_mqtt_service.cc"
     "phone_os/realtime_voice_transport.cc"
     "phone_os/realtime_voice_contract.cc"
@@ -86,6 +87,7 @@ set(SOURCES
     "apps/home/home_app.cc"
     "apps/settings/settings_app.cc"
     "apps/settings/settings_app_internal.cc"
+    "apps/settings/settings_appearance_page.cc"
     "apps/settings/settings_buttons_page.cc"
     "apps/settings/settings_datetime_page.cc"
     "apps/settings/settings_device_cloud_page.cc"
@@ -145,6 +147,7 @@ idf_component_register(
         heap
         mbedtls
         rodak_ota_state
+        rodak_appearance
         led_strip
         spi_flash
         fatfs

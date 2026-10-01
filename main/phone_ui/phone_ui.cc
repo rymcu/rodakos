@@ -1,11 +1,12 @@
 #include "phone_ui/phone_ui.h"
 
 #include "phone_ui/phone_fonts.h"
+#include "phone_ui/rodakos_theme.h"
 
 #include <esp_lvgl_port.h>
 
 PhoneUi::PhoneUi(int width, int height)
-    : width_(width), height_(height), theme_(PhoneDarkTheme()) {}
+    : width_(width), height_(height), theme_(PhoneThemeFromRodakos()) {}
 
 bool PhoneUi::Lock(int timeout_ms) {
     return lvgl_port_lock(timeout_ms);
@@ -20,13 +21,35 @@ lv_obj_t* PhoneUi::screen() const {
 }
 
 void PhoneUi::SetThemeName(const std::string& name) {
-    theme_name_ = name == "light" ? "light" : "dark";
-    theme_ = theme_name_ == "light" ? PhoneLightTheme() : PhoneDarkTheme();
+    rodakos_theme_init_from_name(name.c_str());
+    SyncThemeName(name);
+}
+
+void PhoneUi::SyncThemeName(const std::string& name) {
+    if (name == "dark" || name == "light" || name == "blue" || name == "green") {
+        theme_name_ = name;
+    } else {
+        theme_name_ = "dark";
+    }
+    theme_ = PhoneThemeFromRodakos();
     if (toast_ != nullptr && lv_obj_is_valid(toast_)) {
         lv_obj_set_style_bg_color(toast_, theme_.surface_alt, 0);
         lv_obj_set_style_text_color(toast_, theme_.text_primary, 0);
     }
     ++theme_revision_;
+}
+
+void PhoneUi::SetWallpaper(std::shared_ptr<uint8_t> data, uint16_t width, uint16_t height) {
+    wallpaper_data_ = std::move(data);
+    wallpaper_ = {};
+    if (!wallpaper_data_ || width == 0 || height == 0) return;
+    wallpaper_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    wallpaper_.header.cf = LV_COLOR_FORMAT_RGB565;
+    wallpaper_.header.w = width;
+    wallpaper_.header.h = height;
+    wallpaper_.header.stride = width * 2;
+    wallpaper_.data_size = static_cast<uint32_t>(width) * height * 2;
+    wallpaper_.data = wallpaper_data_.get();
 }
 
 void PhoneUi::SetInputResetCallback(InputResetCallback callback, void* user_data) {
@@ -44,6 +67,12 @@ void PhoneUi::ResetInputState() {
         return;
     }
     lv_indev_reset(nullptr, nullptr);
+}
+
+bool PhoneUi::IsPhysicalInput() const {
+    return primary_input_ != nullptr && lv_indev_active() == primary_input_ &&
+           physical_input_callback_ != nullptr &&
+           physical_input_callback_(physical_input_user_data_);
 }
 
 void PhoneUi::ShowToast(const char* message, int duration_ms) {

@@ -10,6 +10,7 @@ extern "C" {
 extern lv_font_t phone_font_12;
 extern lv_font_t phone_font_14;
 extern lv_font_t phone_font_18;
+extern const lv_font_t phone_font_logo;
 
 const lv_font_t* PhoneIconFont(void);
 const lv_font_t* PhoneIconFontLarge(void);

@@ -364,12 +364,7 @@ bool HomeApp::OnCreate(PhoneAppContext& context) {
 }
 
 bool HomeApp::CreateUi(PhoneAppContext& context) {
-    // 从设置中加载并应用主题
-    Settings display_settings("display", false);
-    const std::string theme_name = display_settings.GetString("theme", "dark");
-
-    rodakos_theme_init_from_name(theme_name.c_str());
-    ESP_LOGI(TAG, "Theme initialized: %s", theme_name.c_str());
+    ESP_LOGI(TAG, "Theme initialized: %s", ui_->theme_name().c_str());
 
     TimeServiceApplySavedTimeZone();
 
@@ -389,6 +384,18 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     }
     body_ = body;
     footer_ = footer;
+    if (const auto* wallpaper = ui_->wallpaper(); wallpaper != nullptr) {
+        auto* image = lv_image_create(root_);
+        if (image != nullptr) {
+            lv_image_set_src(image, wallpaper);
+            lv_obj_add_flag(image, LV_OBJ_FLAG_IGNORE_LAYOUT);
+            lv_obj_add_flag(image, LV_OBJ_FLAG_FLOATING);
+            lv_obj_clear_flag(image, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_pos(image, 0, 0);
+            lv_obj_move_background(image);
+            lv_obj_set_style_bg_opa(body_, LV_OPA_50, 0);
+        }
+    }
     page_tiles_.clear();
     ESP_LOGI(TAG, "Layout containers created");
 

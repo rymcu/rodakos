@@ -3,6 +3,7 @@
 
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/appearance_service.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "rodakos_adapters/backlight_adapter.h"
@@ -18,9 +19,15 @@ using namespace rodakos_settings;
 void SettingsApp::CreateMainPage() {
     Settings display_settings(kDisplayNamespace, false);
     const int brightness = display_settings.GetInt(kBrightnessKey, 75);
-    const std::string theme = display_settings.GetString(kThemeKey, "dark");
+    std::string theme = display_settings.GetString(kThemeKey, "dark");
+    bool local_theme = true;
+    if (auto* appearance = context_->services().appearance(); appearance != nullptr) {
+        uint32_t primary = 0;
+        appearance->GetLocalTheme(theme, primary);
+        local_theme = appearance->ThemeIsLocal();
+    }
     const std::string language = display_settings.GetString(kLanguageKey, "en");
-    const int selected_theme = ThemeIndexFromId(theme);
+    const int selected_theme = local_theme ? ThemeIndexFromId(theme) : -1;
 
     lv_obj_add_flag(main_body_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(main_body_, LV_DIR_VER);
@@ -82,7 +89,7 @@ void SettingsApp::CreateMainPage() {
     auto* theme_card = CreateSettingCard(main_body_, 84);
     CreateSettingIcon(theme_card, FONT_AWESOME_MOON);
 
-    auto* theme_title = CreateSettingLabel(theme_card, "Theme");
+    auto* theme_title = CreateSettingLabel(theme_card, local_theme ? "Theme" : "Theme (remote)");
     lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 28, 0);
 
     auto* theme_row = lv_obj_create(theme_card);
@@ -122,8 +129,14 @@ void SettingsApp::CreateMainPage() {
         auto* btn = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
         auto* option = static_cast<const ThemeOption*>(lv_obj_get_user_data(btn));
         if (option != nullptr) {
-            Settings settings(kDisplayNamespace, true);
-            settings.SetString(kThemeKey, option->id);
+            auto* appearance = self->context_->services().appearance();
+            const uint32_t primary = option->preset == RODAKOS_THEME_LIGHT ? 0x2196F3 :
+                option->preset == RODAKOS_THEME_BLUE ? 0x1976D2 :
+                option->preset == RODAKOS_THEME_GREEN ? 0x388E3C : 0x79CBFF;
+            if (appearance == nullptr || !appearance->SetLocalTheme(option->id, primary)) {
+                self->ui_->ShowToastUnlocked("Theme save failed");
+                return;
+            }
             ApplyThemeToRuntime(self->ui_, *option);
             self->ui_->ShowToastUnlocked("Theme changed");
             ESP_LOGI(TAG, "Theme changed to %s, reloading settings", option->id);
@@ -296,5 +309,16 @@ void SettingsApp::CreateMainPage() {
     lv_obj_add_event_cb(usb_card, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->ShowUsbDiskDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* appearance_card = CreateSettingCard(main_body_, 606);
+    lv_obj_add_flag(appearance_card, LV_OBJ_FLAG_CLICKABLE);
+    CreateSettingIcon(appearance_card, FONT_AWESOME_LOCK);
+    auto* appearance_title = CreateSettingLabel(appearance_card, "外观定制与信任");
+    lv_obj_align(appearance_title, LV_ALIGN_LEFT_MID, 28, 0);
+    auto* appearance_arrow = CreateSettingLabel(appearance_card, ">", true);
+    lv_obj_align(appearance_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(appearance_card, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowPage(SettingsPage::kAppearance);
     }, LV_EVENT_CLICKED, this);
 }

@@ -184,6 +184,13 @@ bool rodakos_theme_is_light_name(const char* theme_id) {
     return theme_id != nullptr && strcmp(theme_id, "light") == 0;
 }
 
+void rodakos_theme_apply_preset_primary(const char* theme_id, uint32_t primary) {
+    rodakos_theme_init_from_name(theme_id);
+    custom_theme = *current_theme;
+    custom_theme.primary = primary & 0xffffff;
+    current_theme = &custom_theme;
+}
+
 void rodakos_theme_set_custom(const rodakos_theme_t* theme) {
     if (theme != nullptr) {
         custom_theme = *theme;

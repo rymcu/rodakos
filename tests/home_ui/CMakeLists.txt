@@ -21,6 +21,8 @@ add_subdirectory("${LVGL_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/lvgl")
 add_executable(rodakos_home_ui_tests
     test_main.cc
     home_ui_test.cc
+    boot_animation_test.cc
+    lvgl_creation_failures.cc
     remote_text_input_test.cc
     display_capture_test.cc
     fakes/test_fonts.cc
@@ -30,12 +32,15 @@ add_executable(rodakos_home_ui_tests
     "${RODAKOS_ROOT}/main/apps/home/home_layout_store.cc"
     "${RODAKOS_ROOT}/main/phone_os/phone_app_registry.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_components.cc"
+    "${RODAKOS_ROOT}/main/phone_ui/boot_animation.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_theme.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_ui.cc"
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_layout.cc"
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc"
     "${RODAKOS_ROOT}/main/phone_ui/soft_keyboard.cc"
     "${RODAKOS_ROOT}/main/phone_os/display_service.cc"
+    "${RODAKOS_ROOT}/components/rodak_appearance/rodak_appearance.cc"
+    "${RODAKOS_ROOT}/components/rodak_appearance/rodak_appearance_json.c"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson/cJSON.c"
 )
 
@@ -45,6 +50,7 @@ target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
     "${RODAKOS_ROOT}/main"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson"
     "${RODAKOS_ROOT}/components/rodakos_fonts/include"
+    "${RODAKOS_ROOT}/components/rodak_appearance/include"
 )
 
 target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl)
@@ -53,6 +59,15 @@ target_compile_definitions(rodakos_home_ui_tests PRIVATE RODAKOS_RELEASE_TESTS=1
 if(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(rodakos_home_ui_tests PRIVATE m Threads::Threads)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(rodakos_home_ui_tests PRIVATE RODAKOS_TEST_LVGL_WRAPPERS=1)
+    target_link_options(rodakos_home_ui_tests PRIVATE
+        "-Wl,--wrap=lv_obj_create"
+        "-Wl,--wrap=lv_image_create"
+        "-Wl,--wrap=lv_timer_create"
+    )
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -231,7 +231,14 @@ bool OtaUpdateService::HandleNotification(const std::string& payload) {
 void OtaUpdateService::DownloadTask(void* arg) {
     std::unique_ptr<DownloadTaskContext> context(static_cast<DownloadTaskContext*>(arg));
     if (context && context->service != nullptr) {
-        context->service->RunDownload(context->payload);
+        if (context->service->file_service_ != nullptr) {
+            context->service->file_service_->WithIoLock([&context]() {
+                context->service->RunDownload(context->payload);
+                return true;
+            });
+        } else {
+            context->service->RunDownload(context->payload);
+        }
         context->service->busy_.store(false);
     }
     // FreeRTOS task deletion does not unwind C++ locals.

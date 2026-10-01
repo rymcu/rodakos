@@ -15,3 +15,4 @@ struct PhoneTheme {
 
 PhoneTheme PhoneDarkTheme();
 PhoneTheme PhoneLightTheme();
+PhoneTheme PhoneThemeFromRodakos();

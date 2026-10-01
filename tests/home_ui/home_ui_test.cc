@@ -1,5 +1,6 @@
 #include "phone_os/resource_failure_injection.h"
 #include "test_framework.h"
+#include "framebuffer_test_helpers.h"
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,7 @@
 #include "phone_os/phone_services.h"
 #include "phone_os/touch_pointer_state.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_ui/phone_components.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/rodakos_theme.h"
 #include "settings.h"
@@ -214,8 +216,9 @@ size_t ResidentPageCount(const HomeApp& home) {
 }
 
 struct HomeFixture {
-    explicit HomeFixture(size_t app_count)
+    explicit HomeFixture(size_t app_count, std::shared_ptr<uint8_t> wallpaper = {})
         : ui(320, 240), context(ui, navigation, registry, services, settings) {
+        if (wallpaper) ui.SetWallpaper(std::move(wallpaper), 320, 240);
         for (size_t index = 0; index < app_count; ++index) {
             char id[16];
             char title[24];
@@ -411,6 +414,87 @@ RODAK_TEST("multi-page app swipes respect boundaries without launching") {
     RODAK_CHECK_FALSE(fixture.home.HasEditingTarget());
 }
 
+RODAK_TEST("Home renders a retained RGB565 wallpaper behind controls and clears it on builtin restore") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_init(RODAKOS_THEME_DARK);
+    bool released = false;
+    std::shared_ptr<uint8_t> wallpaper(new uint8_t[320 * 240 * 2], [&released](uint8_t* data) {
+        delete[] data;
+        released = true;
+    });
+    for (size_t index = 0; index < 320U * 240U; ++index) {
+        wallpaper.get()[index * 2] = 0;
+        wallpaper.get()[index * 2 + 1] = 0xf8;
+    }
+    {
+        HomeFixture fixture(4, wallpaper);
+        const auto* descriptor = fixture.ui.wallpaper();
+        RODAK_CHECK(descriptor != nullptr);
+        RODAK_CHECK_EQ(descriptor->header.cf, LV_COLOR_FORMAT_RGB565);
+        RODAK_CHECK_EQ(descriptor->header.stride, 640U);
+        RODAK_CHECK_EQ(descriptor->data_size, 320U * 240U * 2U);
+        auto* image = lv_obj_get_child(fixture.home.root_, 0);
+        RODAK_CHECK(lv_obj_check_type(image, &lv_image_class));
+        RODAK_CHECK_EQ(lv_image_get_src(image), descriptor);
+        RODAK_CHECK_FALSE(lv_obj_has_flag(image, LV_OBJ_FLAG_CLICKABLE));
+        RODAK_CHECK(lv_obj_has_flag(image, LV_OBJ_FLAG_IGNORE_LAYOUT));
+        RODAK_CHECK_EQ(lv_obj_get_style_bg_opa(fixture.home.body_, 0), LV_OPA_50);
+        wallpaper.reset();
+        RODAK_CHECK_FALSE(released);
+        const uint32_t pixel = rodakos_home_ui_test::FramebufferPixel(0, 120);
+        RODAK_CHECK((pixel >> 16) > 80U);
+        RODAK_CHECK((pixel >> 16) > ((pixel >> 8) & 255U));
+        RODAK_CHECK_EQ((pixel >> 8) & 255U, pixel & 255U);
+
+        fixture.home.OnDestroy();
+        fixture.ui.SetWallpaper({}, 0, 0);
+        RODAK_CHECK(released);
+        RODAK_CHECK(fixture.ui.wallpaper() == nullptr);
+        RODAK_CHECK(fixture.home.OnCreate(fixture.context));
+        Pump();
+        RODAK_CHECK_FALSE(lv_obj_check_type(lv_obj_get_child(fixture.home.root_, 0), &lv_image_class));
+        RODAK_CHECK_EQ(lv_obj_get_style_bg_opa(fixture.home.body_, 0), LV_OPA_TRANSP);
+        RODAK_CHECK_EQ(rodakos_home_ui_test::FramebufferPixel(0, 120), 0U);
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("Home and Phone components share every remote theme preset and custom primary") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    for (const char* preset : {"dark", "light", "blue", "green"}) {
+        rodakos_theme_init_from_name(preset);
+        const auto preset_theme = *rodakos_theme_get();
+        const uint32_t primary = std::string_view(preset) == "light" ? 0x000000U : 0xffffffU;
+        rodakos_theme_apply_preset_primary(preset, primary);
+        {
+            HomeFixture fixture(4);
+            fixture.ui.SyncThemeName(preset);
+            const auto& theme = fixture.ui.theme();
+            RODAK_CHECK_EQ(rodakos_theme_get()->primary, primary);
+            RODAK_CHECK_EQ(rodakos_theme_get()->bg_primary, preset_theme.bg_primary);
+            RODAK_CHECK(lv_color_eq(theme.background, lv_color_hex(preset_theme.bg_primary)));
+            RODAK_CHECK(lv_color_eq(theme.accent, lv_color_hex(primary)));
+            RODAK_CHECK(lv_color_eq(theme.accent_text, lv_color_hex(primary == 0 ? 0xffffff : 0)));
+            RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(fixture.home.root_, 0), theme.background));
+            RODAK_CHECK(lv_color_eq(lv_obj_get_style_text_color(fixture.home.clock_label_, 0), theme.text_primary));
+            auto* button = PhoneCreateTextButton(fixture.ui, fixture.home.root_, "Action", 80, 30);
+            RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(button, 0), theme.accent));
+            RODAK_CHECK(lv_color_eq(lv_obj_get_style_text_color(lv_obj_get_child(button, 0), 0), theme.accent_text));
+
+            fixture.home.OnDestroy();
+            fixture.ui.SetThemeName("light");
+            RODAK_CHECK(fixture.home.OnCreate(fixture.context));
+            RODAK_CHECK(lv_color_eq(fixture.ui.theme().accent, rodakos_theme_primary()));
+            RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(fixture.home.root_, 0), rodakos_theme_bg_primary()));
+        }
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
 RODAK_TEST("offline local tap keeps its release position through the touch bridge") {
     ResetScreen();
     ResetSettings();
@@ -564,6 +648,7 @@ RODAK_TEST("theme rebuild retains the unsaved Arrange session") {
     Click(fixture.home.editor_next_button_);
     const auto draft = fixture.home.draft_layout_;
     rodakos_home_ui_test::SetCommittedSetting("display", "theme", "light");
+    fixture.ui.SetThemeName("light");
     RODAK_CHECK_EQ(
         lv_obj_send_event(fixture.home.tileview_, LV_EVENT_SCROLL_END, nullptr),
         LV_RESULT_OK);

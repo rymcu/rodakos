@@ -1429,6 +1429,14 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
     return config.has_aiot_config;
 }
 
+void DeviceCloudConfigService::InvalidateAccessTokenFreshness(const std::string& rejected_token) {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+    if (fresh_access_token_ == rejected_token) {
+        fresh_access_token_.clear();
+        credential_freshness_.ObserveRefresh(false, 0, 0);
+    }
+}
+
 bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& config) const {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     return config.cloud_generation == config_generation_;

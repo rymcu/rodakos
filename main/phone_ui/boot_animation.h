@@ -2,6 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <memory>
+#include <vector>
+
+#include "rodak_appearance_assets.h"
 
 #include <lvgl.h>
 
@@ -15,9 +20,11 @@ public:
     BootAnimation(const BootAnimation&) = delete;
     BootAnimation& operator=(const BootAnimation&) = delete;
 
-    bool Start();
+    bool Start(std::shared_ptr<rodakos::AppearanceBootAssets> assets = {});
     void Finish();
     void Stop();
+    bool HasCompleted() const { return completed_.load(); }
+    uint32_t duration_ms() const { return completed_duration_ms_.load(); }
 
 private:
     static constexpr uint32_t kFramePeriodMs = 33;
@@ -44,4 +51,12 @@ private:
     uint32_t finish_elapsed_ms_ = 0;
     bool finish_requested_ = false;
     bool finishing_ = false;
+    uint32_t started_tick_ = 0;
+    uint32_t fade_started_tick_ = 0;
+    uint32_t minimum_display_ms_ = kMinimumDisplayMs;
+    std::shared_ptr<rodakos::AppearanceBootAssets> assets_;
+    std::vector<lv_obj_t*> custom_units_;
+    std::vector<lv_image_dsc_t> custom_images_;
+    std::atomic<bool> completed_{false};
+    std::atomic<uint32_t> completed_duration_ms_{0};
 };
