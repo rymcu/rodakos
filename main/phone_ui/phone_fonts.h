@@ -23,6 +23,7 @@ extern "C" {
 extern lv_font_t phone_font_12;
 extern lv_font_t phone_font_14;
 extern lv_font_t phone_font_18;
+extern lv_font_t phone_font_logo;
 
 // 纯图标字体访问器（用于只显示图标的控件）。
 const lv_font_t* PhoneIconFont(void);       // Font Awesome 20px（状态栏 / 列表图标）

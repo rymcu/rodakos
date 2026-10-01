@@ -5,10 +5,12 @@
 LV_FONT_DECLARE(font_puhui_16_4);    // 中文 / CJK
 LV_FONT_DECLARE(font_awesome_20_4);  // 图标（状态栏 / 列表 / 文本内联）
 LV_FONT_DECLARE(font_awesome_30_4);  // 图标（桌面大图标）
+LV_FONT_DECLARE(font_edix_36_4);     // EDIX 启动字标
 
 lv_font_t phone_font_12;
 lv_font_t phone_font_14;
 lv_font_t phone_font_18;
+lv_font_t phone_font_logo;
 
 namespace {
 
@@ -39,6 +41,7 @@ void PhoneFontsInit(void) {
     MakeComposite(&phone_font_12, &lv_font_montserrat_12, &s_icon_20);
     MakeComposite(&phone_font_14, &lv_font_montserrat_14, &s_icon_20);
     MakeComposite(&phone_font_18, &lv_font_montserrat_18, &s_icon_20);
+    phone_font_logo = font_edix_36_4;
 
     s_initialized = true;
 }

@@ -6,8 +6,27 @@
 
 #include <esp_log.h>
 
+#include <cmath>
+
 namespace {
 constexpr const char* TAG = "BootAnimation";
+constexpr char kLogoText[] = "RODAKOS";
+
+float SmoothStep(uint32_t elapsed_ms, uint32_t start_ms, uint32_t duration_ms) {
+    if (elapsed_ms <= start_ms) {
+        return 0.0F;
+    }
+    if (elapsed_ms >= start_ms + duration_ms) {
+        return 1.0F;
+    }
+    const float progress = static_cast<float>(elapsed_ms - start_ms) /
+                          static_cast<float>(duration_ms);
+    return progress * progress * (3.0F - 2.0F * progress);
+}
+
+lv_opa_t ScaleOpacity(float progress, lv_opa_t maximum = LV_OPA_COVER) {
+    return static_cast<lv_opa_t>(std::lround(progress * maximum));
+}
 }
 
 BootAnimation::BootAnimation(PhoneUi& ui) : ui_(ui) {}
@@ -41,33 +60,27 @@ bool BootAnimation::Start() {
     lv_obj_add_flag(root_, LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* spinner = lv_spinner_create(root_);
-    if (spinner == nullptr) {
-        DestroyUnlocked();
-        ESP_LOGW(TAG, "Unable to create startup spinner");
-        return false;
+    const int32_t logo_width =
+        static_cast<int32_t>(kLogoLetterCount * kLogoLetterCellWidth);
+    const int32_t logo_x = (ui_.width() - logo_width) / 2;
+    for (size_t i = 0; i < kLogoLetterCount; ++i) {
+        logo_letters_[i] = lv_label_create(root_);
+        if (logo_letters_[i] == nullptr) {
+            DestroyUnlocked();
+            ESP_LOGW(TAG, "Unable to create startup logo letter");
+            return false;
+        }
+        char letter[2] = {kLogoText[i], '\0'};
+        lv_label_set_text(logo_letters_[i], letter);
+        lv_obj_set_width(logo_letters_[i], kLogoLetterCellWidth);
+        lv_obj_set_style_text_align(logo_letters_[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(logo_letters_[i], &phone_font_logo, 0);
+        lv_obj_set_style_text_color(logo_letters_[i], rodakos_theme_text_primary(), 0);
+        lv_obj_set_style_opa(logo_letters_[i], LV_OPA_TRANSP, 0);
+        lv_obj_set_pos(logo_letters_[i],
+                       logo_x + static_cast<int32_t>(i * kLogoLetterCellWidth),
+                       kLogoBaseY + kLogoOffsetY);
     }
-    lv_obj_set_size(spinner, 58, 58);
-    lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -20);
-    lv_spinner_set_anim_params(spinner, 1000, 95);
-    lv_obj_set_style_arc_width(spinner, 6, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(spinner, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(spinner, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(spinner, 6, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(spinner, rodakos_theme_primary(), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(spinner, LV_OPA_COVER, LV_PART_INDICATOR);
-
-    auto* title = lv_label_create(root_);
-    lv_label_set_text(title, "RodakOS");
-    lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_set_style_text_color(title, rodakos_theme_text_primary(), 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 30);
-
-    auto* subtitle = lv_label_create(root_);
-    lv_label_set_text(subtitle, "Starting");
-    lv_obj_set_style_text_font(subtitle, &phone_font_12, 0);
-    lv_obj_set_style_text_color(subtitle, rodakos_theme_text_secondary(), 0);
-    lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 52);
 
     if (ui_.primary_input() != nullptr) {
         lv_indev_enable(ui_.primary_input(), false);
@@ -79,6 +92,7 @@ bool BootAnimation::Start() {
         ESP_LOGW(TAG, "Unable to create startup animation timer");
         return false;
     }
+    UpdateIntroUnlocked();
     ESP_LOGI(TAG, "Startup animation shown");
     return true;
 }
@@ -117,6 +131,7 @@ void BootAnimation::Tick() {
     }
     if (!finishing_) {
         elapsed_ms_ += kFramePeriodMs;
+        UpdateIntroUnlocked();
         if (finish_requested_ && elapsed_ms_ >= kMinimumDisplayMs) {
             finishing_ = true;
             finish_elapsed_ms_ = 0;
@@ -134,6 +149,22 @@ void BootAnimation::Tick() {
     }
 }
 
+void BootAnimation::UpdateIntroUnlocked() {
+    if (root_ == nullptr) {
+        return;
+    }
+
+    for (size_t i = 0; i < kLogoLetterCount; ++i) {
+        const uint32_t start_ms = kLogoStartMs + static_cast<uint32_t>(i) * kLetterStaggerMs;
+        const float progress = SmoothStep(elapsed_ms_, start_ms, kLetterDurationMs);
+        const auto opacity = ScaleOpacity(progress);
+        const int32_t y_offset = static_cast<int32_t>(std::lround(
+            (1.0F - progress) * static_cast<float>(kLogoOffsetY)));
+        lv_obj_set_style_opa(logo_letters_[i], opacity, 0);
+        lv_obj_set_y(logo_letters_[i], kLogoBaseY + y_offset);
+    }
+}
+
 void BootAnimation::DestroyUnlocked() {
     if (timer_ != nullptr) {
         lv_timer_delete(timer_);
@@ -143,6 +174,9 @@ void BootAnimation::DestroyUnlocked() {
         lv_obj_delete(root_);
     }
     root_ = nullptr;
+    for (auto& letter : logo_letters_) {
+        letter = nullptr;
+    }
     elapsed_ms_ = 0;
     finishing_ = false;
     finish_requested_ = false;
