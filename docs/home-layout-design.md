@@ -17,7 +17,7 @@ Persist one versioned JSON document in NVS namespace `home`, key `layout`:
   "v": 1,
   "rev": 4,
   "items": [
-    {"type": "app", "id": "settings"},
+    { "type": "app", "id": "settings" },
     {
       "type": "folder",
       "id": "f_7a31c4e2",
@@ -138,15 +138,15 @@ chains. With no valid explicit entry, the old ID is removed and the new app is a
   three-page resident window, and active/previous/next population order.
 - The host LVGL 9.3 target compiles the production `HomeApp`, Home model/store, Registry, `PhoneUi`,
   layout, theme, components, and `SoftKeyboard`. Its in-memory 320x240 display and LVGL test pointer
-  execute the real widget/event tree. The suite reports 13 tests and 0 failures for tap slop,
+  execute the real widget/event tree. The suite reports 43 tests and 0 failures for tap slop,
   one-page and multi-page drag suppression, bidirectional boundaries/page swipes, long-press Arrange,
   Cancel/Done semantics, repeated Home, theme rebuild, keyboard geometry, the 96/97-app `All Apps`
   boundary, and async active-plus-neighbors residency. The normal suite also passed 20 consecutive
   runs; ASan/UBSan with leak detection passed.
-- The latest protected COM3 refresh reached Home with 11 visible apps, `1/1` resident pages,
-  65,387 bytes of final internal SRAM free, and a 43,008-byte largest free block.
-  Because the current device exposes only one page, multi-page swiping and lazy turnover remain
-  unverified on hardware.
+- The latest protected COM3 refresh reached Home with 13 visible apps and a `2/2` resident-page
+  window. This proves the multi-page population boots, but not page swipes, Arrange, page-anchor
+  restoration, or three-page far-page release. A production-off 25-app population remains available
+  for that hardware gate.
 - GT911 touch interaction and ST7789 screen readability require manual observation or an external
   fixture; the host display and test pointer cannot close that gate.
 - True out-of-memory recovery is unproven. LVGL uses CLIB allocation with malloc assertions enabled,

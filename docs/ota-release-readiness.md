@@ -1,38 +1,41 @@
 # OTA Release Readiness
 
-The existing Home, voice, media, and MQTT functional gates are accepted as completed by the user.
-This document tracks only the new signed-release, interruption, and resource-failure work. Passing
-software tests does not close physical power-loss or full heap-exhaustion gates.
+The existing Home, voice, media, MQTT, WebRTC display, and signed-appearance functional gates are
+accepted as completed where their evidence is recorded in the repository. This document tracks only
+the remaining signed-firmware release, interruption, and resource-failure work. Passing software
+tests does not close physical power-loss or full heap-exhaustion gates.
 
 ## Current evidence
 
-On 2026-09-29, ESP-IDF 6.0.2 builds succeed for normal and fault-injection firmware. The normal
-application is 6,597,952 bytes and Recovery is 338,592 bytes, both within their partitions.
-The development-signed package is `build/packages/ota/20260929-000449`; all test options are disabled.
-Main SHA-256: `a9f8f935d7e9e184ef42342bdcc7ed3a5ef911f8eb408f615367ebb073b99d75`.
-Recovery SHA-256: `24dfbe4096e89d884e51e85ff8ad76c06ef8b666e37bbc426e9236113af0eb14`.
+Recorded evidence reviewed on 2026-10-03 (source baseline `c64cf06` / `f7e8c91`) includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The latest
+recorded signed package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
+(about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
+appearance revision 14 adoption; exact hashes and live evidence are recorded in
+[appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
+useful as the signed-OTA host baseline, but is not the current firmware identity.
 
-There are 200 app-model, 18 Home UI, 11 signature/journal, 3 one-shot fault, and 5 production
+There are 221 app-model, 43 Home UI, 11 signature/journal, 3 one-shot fault, and 5 production
 Recovery state-machine tests, all passing. ASan/UBSan with leak detection passes for every C++ target.
 Eight Python signing/capture-evidence tests pass. `build/logs/release-readiness.json` records the
 current NO_GO decision and evidence paths. No new firmware has been flashed to COM13. Its full 16 MiB flash backup is saved under
 `build/device-backup/com13-20260929-before-signed-recovery.bin`. After the read-only checks and
 backup, a further 40-second capture confirms MQTT connected with no runtime failures.
 
-| Gate | Evidence | State |
-| --- | --- | --- |
-| RSA verifier | Production C++ verifier: valid/repeated signatures, wrong key, metadata mutation, truncated/tampered/extra image bytes, strict sidecar | Host tests pass |
-| Recovery write/rollback behavior | Production Recovery with real signature/file checks and fake flash/reset: invalid pending image never erases, 12 reset boundaries resume | Five host integration tests pass |
-| Journal ABI and A/B recovery | Production journal v1 (712 bytes), torn new slot, uncertain commit, corrupt slots, I/O errors and acknowledged cleanup | Host tests pass |
-| One-shot reset | Production injection code preserves its consumed marker across simulated reset, skips reset on commit failure | Host tests pass |
-| Home resource failure | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully | Host test passes |
-| Other resource failures | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks | Embedded validation pending |
-| COM13 preflight | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes | Baseline observation only |
-| New Recovery deployment | COM13 read-only verification matches partition table but mismatches new Bootloader and Recovery | Wired migration required |
-| Actual power interruption | Power fixture and observed cut points | Not established |
-| Complete LVGL exhaustion | CLIB allocations and internal LVGL allocations can still assert | Release blocker |
-| Eight-hour release soak | Must identify the newly flashed build and capture 28,800 seconds | Not started |
-| Production signing root and server manifest | Operator-owned key and Rodak v2 signature fields | Not established |
+| Gate                                        | Evidence                                                                                                                                 | State                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| RSA verifier                                | Production C++ verifier: valid/repeated signatures, wrong key, metadata mutation, truncated/tampered/extra image bytes, strict sidecar   | Host tests pass                               |
+| Recovery write/rollback behavior            | Production Recovery with real signature/file checks and fake flash/reset: invalid pending image never erases, 12 reset boundaries resume | Five host integration tests pass              |
+| Journal ABI and A/B recovery                | Production journal v1 (712 bytes), torn new slot, uncertain commit, corrupt slots, I/O errors and acknowledged cleanup                   | Host tests pass                               |
+| One-shot reset                              | Production injection code preserves its consumed marker across simulated reset, skips reset on commit failure                            | Host tests pass                               |
+| Home resource failure                       | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully          | Host test passes                              |
+| Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
+| COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
+| Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
+| New Recovery deployment                     | COM13 read-only verification matches partition table but mismatches new Bootloader and Recovery                                          | Wired migration required                      |
+| Actual power interruption                   | Power fixture and observed cut points                                                                                                    | Not established                               |
+| Complete LVGL exhaustion                    | CLIB allocations and internal LVGL allocations can still assert                                                                          | Release blocker                               |
+| Eight-hour release soak                     | Must identify the newly flashed build and capture 28,800 seconds                                                                         | Not started                                   |
+| Production signing root and server manifest | Operator-owned key and Rodak v2 signature fields                                                                                         | Not established                               |
 
 ## Build and package
 
@@ -41,6 +44,11 @@ paths, task number, and the exact compiled version; see [firmware download](firm
 No private key is committed or placed in a firmware package. The test key under ignored build output
 is disposable. `-DevelopmentPackage` and `-AllowDevelopmentPackage` explicitly identify its packages.
 A manifest version alone cannot prove that an installed immutable Recovery enforces authentication.
+The Rodak server must deliver the signed `manifestVersion: 2` fields (`signatureType:
+"rsa2048-sha256"` and `signatureValue`) for the same task, version, size, product, slot, and image
+digest. Rodak's OTA service resolves and forwards the release manifest; it does not generate the
+firmware signature. Appearance resource signatures use a separate trust chain and do not satisfy the
+firmware OTA requirement.
 
 The package verifier checks the actual app descriptor version, signature, hashes, key fingerprints
 in both binaries, journal ABI, and absence of fault-injection markers. Production packages cannot
@@ -57,18 +65,18 @@ namespace stores the consumed trial before the reset, outside the journal A/B re
 same trial resumes instead of resetting forever. Use short ASCII trial names. Production builds
 leave the phase empty and `RODAKOS_RELEASE_TESTS=OFF`.
 
-| Project | Injection point | Expected next boot | Hardware evidence |
-| --- | --- | --- | --- |
-| Main | `after_download_fsync` | Incomplete staging does not select Recovery | Pending |
-| Main | `after_pending_sidecar` | Unjournaled files do not start installation | Pending |
-| Main | `after_pending_journal` | Resume staged acknowledgement then Recovery handoff | Pending |
-| Both | `before_journal_set`, `after_journal_set`, `after_journal_commit` | Select newest valid A/B generation; never erase default NVS | Pending |
-| Recovery | `after_applying_state`, `before_image_erase`, `after_image_erase`, `during_image_write` | Revalidate candidate and restart write or restore backup | Pending |
-| Recovery | `after_image_write`, `after_ready_to_boot` | Repeat safe write or resume boot handoff | Pending |
-| Recovery | `after_restore_state`, `before_restore_erase`, `after_restore_erase`, `during_restore_write` | Repeat validated backup restoration | Pending |
-| Recovery | `after_restore_write`, `after_rollback_ready` | Repeat restore or resume restored boot | Pending |
-| Main | `after_boot_confirmation` | Preserve local confirmation while offline | Pending |
-| Main | `after_result_http_ack`, `after_report_acknowledged` | Server deduplicates a lost acknowledgement; persisted acknowledgement skips resend | Pending |
+| Project  | Injection point                                                                              | Expected next boot                                                                 | Hardware evidence |
+| -------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------- |
+| Main     | `after_download_fsync`                                                                       | Incomplete staging does not select Recovery                                        | Pending           |
+| Main     | `after_pending_sidecar`                                                                      | Unjournaled files do not start installation                                        | Pending           |
+| Main     | `after_pending_journal`                                                                      | Resume staged acknowledgement then Recovery handoff                                | Pending           |
+| Both     | `before_journal_set`, `after_journal_set`, `after_journal_commit`                            | Select newest valid A/B generation; never erase default NVS                        | Pending           |
+| Recovery | `after_applying_state`, `before_image_erase`, `after_image_erase`, `during_image_write`      | Revalidate candidate and restart write or restore backup                           | Pending           |
+| Recovery | `after_image_write`, `after_ready_to_boot`                                                   | Repeat safe write or resume boot handoff                                           | Pending           |
+| Recovery | `after_restore_state`, `before_restore_erase`, `after_restore_erase`, `during_restore_write` | Repeat validated backup restoration                                                | Pending           |
+| Recovery | `after_restore_write`, `after_rollback_ready`                                                | Repeat restore or resume restored boot                                             | Pending           |
+| Main     | `after_boot_confirmation`                                                                    | Preserve local confirmation while offline                                          | Pending           |
+| Main     | `after_result_http_ack`, `after_report_acknowledged`                                         | Server deduplicates a lost acknowledgement; persisted acknowledgement skips resend | Pending           |
 
 Record trial, firmware hashes, trigger log, journal phase, resets, resulting image, and HTTP result.
 The software hooks bracket erase/write and journal operations; only a controlled power fixture can

@@ -4,16 +4,18 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-09-27.
+Last refreshed: 2026-10-03 (documentation baseline: `c64cf06` / `f7e8c91`).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated.
+- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the camera/display sessions are mutually exclusive and stop cleanly.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
   boot with a 1500 ms loading acceptance budget and built-in EDIX fallback. See
-  [Appearance customization](docs/appearance-customization.md) for limits and hardware gates.
+  [Appearance customization](docs/appearance-customization.md) for limits and hardware gates. The
+  2026-10-02 COM3 run applied revision 14 (remote Dark theme, retained wallpaper) and verified the
+  next-boot trial path.
 - Home resolves a versioned exact-ID layout from `home/layout`, reconciles it against the Registry in
   RAM, and supports folder browsing plus draft-only reorder/create/rename/move/dissolve commands with
   one guarded save on Done. It restores its runtime page anchor and caps the managed desktop at eight
@@ -29,15 +31,15 @@ Last refreshed: 2026-09-27.
   pixels, animation lifetime/touch restoration, Home wallpaper and unified theme colors. The current
   WSL suite reports 43 tests and 0 failures in Debug and ASan/UBSan with leak detection. Its built-in
   logo font is a host fake; this does not establish EDIX or wireless hardware acceptance.
-- The latest protected COM3 refresh reached Home with 13 visible apps and two resident pages. It
-  proves the multi-page population boots, but not that page swipes, Arrange, page restoration, or
-  GT911/ST7789 interaction work correctly. Two pages also keep both pages inside the active-plus-
-  neighbor window, so far-page release still needs a three-page test population. True out-of-memory
-  recovery remains unproven while LVGL uses CLIB allocation with malloc assertions enabled.
+- The latest protected COM3 refresh reached Home with the production app set and completed the local
+  OTA confirmation. The same 2026-10-01/02 evidence verifies six WebRTC display sessions (320x240,
+  four rounds, 283 JPEG samples), camera/display mutual exclusion, remote text/control cleanup, and
+  appearance revision 14. This proves the integrated paths on COM3; three-page Home turnover,
+  physical page gestures, and true LVGL out-of-memory recovery remain open.
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Current IDF 6.0.2 built artifact seen in `build/rodakos.bin`: about 6.28 MiB. The main application slot is
+- Current IDF 6.0.2 signed appearance package main artifact: 6,897,584 bytes (about 6.58 MiB). The main application slot is
   13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
@@ -146,6 +148,8 @@ components/
 docs/
 ├── architecture.md        # Layering and service/app model
 ├── firmware-download.md   # Build, flash, monitor, and esptool details
+├── esp-peer-integration.md # Camera/display WebRTC peer and hardware evidence
+├── appearance-verification.md # Signed appearance resource hardware evidence
 ├── home-layout-design.md  # ID-based Home ordering and folder design
 ├── openos-comparison.md   # OpenOS research and RodakOS design decisions
 └── roadmap.md             # Current baseline and near-term plan
@@ -189,9 +193,11 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 
 - [Architecture](docs/architecture.md)
 - [Appearance customization](docs/appearance-customization.md)
+- [Appearance verification](docs/appearance-verification.md)
 - [Roadmap](docs/roadmap.md)
 - [Firmware build and flash](docs/firmware-download.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
+- [BigSmart WebRTC peer integration](docs/esp-peer-integration.md)
 - [OTA release readiness](docs/ota-release-readiness.md)
 - [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)

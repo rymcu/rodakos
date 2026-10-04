@@ -2,15 +2,20 @@
 
 RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web prototype. The current direction is to keep the OS, services, and UI framework clearly separated while making the device feel like a small real phone home screen instead of a debug menu.
 
-Planning update, 2026-09-29: the user confirms completion of the existing build, Home, voice,
-media, and MQTT functional verification. Historical evidence descriptions below are retained for
-provenance; they are not requests to repeat those gates. Current work uses COM13 and tracks new
-signed OTA, interruption and resource-pressure release gates in
-[OTA release readiness](ota-release-readiness.md).
+Planning update, 2026-10-03 (source baseline `c64cf06` / `f7e8c91`): the current baseline includes
+canonical realtime voice with bounded reconnect, WebRTC camera/display peers, signed appearance
+resources, and their recorded COM3 gates.
+This roadmap records implementation state and the remaining acceptance gates; completed evidence is
+not phrased as work to repeat. Signed OTA interruption, production-key, and resource-pressure work
+remains tracked in [OTA release readiness](ota-release-readiness.md).
+
+Status vocabulary: **implemented** means source and host checks are present; **hardware-verified**
+means a recorded COM3 or fixture run exercised the path; **pending** means an explicit acceptance
+gate remains open. A passing host test never upgrades a hardware gate by itself.
 
 ## Current Baseline
 
-As of 2026-09-27:
+As of 2026-10-03:
 
 - ESP32-S3 target, 16MB flash, 8MB PSRAM.
 - ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
@@ -26,8 +31,8 @@ As of 2026-09-27:
   13-app/two-page device population boots; physical multi-page interaction remains open.
 - Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
   Music, Recorder, Assistant, Smart, and Wake.
-- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, and SD-staged OTA.
-- Current IDF 6.0.2 app binary is about 6.28 MiB of the 13.3125 MiB main application partition.
+- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, display capture, WebRTC camera/display peers, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak canonical voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, signed SD-staged OTA, and signed appearance resources.
+- Current signed appearance package main artifact is 6,897,584 bytes (about 6.58 MiB) of the 13.3125 MiB main application partition.
 
 ## Milestone 0: Hardware And Build Baseline
 
@@ -57,7 +62,7 @@ Status: active; source implementation requires hardware verification.
   previous, then next. Scroll directions stay restricted until the corresponding adjacent page is
   ready, queued refreshes are canceled before theme/navigation teardown, and final-ready logs report
   internal-SRAM free space and largest free block.
-- The host LVGL 9.3 target compiles the real Home UI and reports 13 tests and 0 failures covering
+- The host LVGL 9.3 target compiles the real Home UI and reports 43 tests and 0 failures covering
   tap-versus-drag suppression, bidirectional page swipes and boundaries, long press, Cancel/Done,
   repeated Home, theme rebuild, keyboard geometry, 96/97-app `All Apps`, and async
   active-plus-neighbors residency. Twenty repeated normal runs and ASan/UBSan with leak detection
@@ -91,6 +96,9 @@ Status: active.
 - File Manager browses FileService-backed storage.
 - Music scans `/music` and plays through the audio/music service stack.
 - Camera preview and capture are wired through CameraService.
+- Camera and display WebRTC peer services use MQTT signaling, JPEG framing, explicit read-only/control
+  channels, and mutual exclusion. The COM3 run verified six display sessions, camera starts 3/3,
+  and stop/navigation cleanup.
 - USB MSC mode exposes the SD card before normal UI starts.
 
 Next work:
@@ -142,7 +150,8 @@ Next work:
 
 Status: non-voice Device Cloud provisioning and credential rotation are hardware-verified.
 Real-person local wake/ASR/agent/TTS, same-session follow-up, bounded reconnect and retry exhaustion,
-and explicit "再见" termination are verified on COM3; the broader six-turn, coexistence, and
+and explicit "再见" termination are verified on COM3. The canonical `rodak-realtime-voice/v1`
+contract is the only current voice wire contract; the broader six-turn, coexistence, barge-in, and
 long-duration device gates remain.
 
 - Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
@@ -177,6 +186,8 @@ Next work:
 ## Milestone 6: Rodak Device And OTA Protocol
 
 Status: active; wired non-voice Device Cloud and MQTT credential-refresh verification is complete.
+Signed manifest v2 and Recovery verification are implemented; the latest signed appearance package
+booted on COM3, while production-key migration, power-cut, and long-soak gates remain open.
 
 - Unified MQTT v2 bootstrap, telemetry, reported/desired shadow and OTA notification transport.
 - SD-staged main image download with SHA-256 and a separate factory Recovery writer.
@@ -188,12 +199,17 @@ Status: active; wired non-voice Device Cloud and MQTT credential-refresh verific
   verified in one COM3 session. This gate does not claim a local MultiNet wake.
 - Recovery source verifies a required RSA-2048/SHA-256 signature bound to the OTA task, version,
   size, product, slot and image digest before writing `ota_0`. Host tests cover candidate rejection
-  without erase and reset resumption; hardware signature and actual power-cut gates remain open.
+  without erase and reset resumption. The COM3 appearance run proves signed resource download,
+  next-boot adoption, offline reuse, and reported state; it does not close firmware production-key
+  migration or actual power-cut gates.
 
 Before production rollout:
 
 - Configure the production verification key explicitly for both builds and complete signed-image
   package acceptance on hardware.
+- Ensure Rodak's manifest endpoint returns the signed `manifestVersion: 2` fields; Rodak forwards
+  release metadata and does not generate the firmware signature. Appearance signing remains a
+  separate resource trust chain.
 - Run power-cut tests at download, journal, erase, write, boot confirmation and rollback boundaries.
 - Verify the complete flow on hardware with Rodak-hosted artifacts.
 

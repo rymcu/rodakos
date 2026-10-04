@@ -18,6 +18,7 @@ flowchart TD
   "PhoneServices" --> "Backlight/WiFi/FileService"
   "PhoneServices" --> "Audio/Music/Voice"
   "PhoneServices" --> "Camera/WebFiles/Time/Buttons/Lights/Motion/Wake-on-LAN"
+  "PhoneServices" --> "WebRTC Camera/Display peers"
   "PhoneServices" --> "Unified MQTT/SD OTA"
   "Unified MQTT/SD OTA" --> "Factory Recovery"
   "PhoneUi" --> "PhoneSystem"
@@ -94,13 +95,14 @@ and asynchronous active-plus-neighbors residency, boot-image formats/timing/life
 Home wallpaper and unified theme colors. The current WSL run reports 43 tests and 0 failures in
 Debug and ASan/UBSan with leak detection. The logo font fake does not verify built-in EDIX typography.
 
-The latest device run had 13 visible apps and a two-page `2/2` residency window. That proves the
-multi-page population boots, but page swiping, Arrange, page restoration, GT911 touch behavior, and
-ST7789 readability still require manual or fixture validation. Two pages always fit the active-plus-
-neighbor window, so far-page release needs a three-page test population. True out-of-memory recovery
-is also unproven: LVGL currently uses CLIB allocation with malloc assertions enabled, so the SRAM
-logs provide observability rather than evidence of graceful recovery. The host LVGL suite validates
-Home behavior and object lifetime, but it cannot replace those embedded and physical gates.
+The latest 2026-10-01/02 COM3 evidence also covers the integrated media peers: six display sessions
+(320x240, four rounds, 283 JPEG samples), camera/display mutual exclusion, and clean stop/navigation
+cleanup. Remote text and explicit screen-control authorization were exercised against the real LVGL
+widget tree. This proves the WebRTC peer path on the tested device; it does not provide an HTTP
+camera snapshot/MJPEG endpoint or establish sustained high-frame-rate video. The 13-app/two-page
+Home population still proves boot only; page gestures, Arrange, page restoration, GT911/ST7789
+interaction, three-page far-page release, and graceful LVGL out-of-memory recovery remain physical
+gates. The host suite validates Home behavior and object lifetime but cannot replace those gates.
 
 ## Phone UI
 
@@ -166,6 +168,8 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 ## Related Docs
 
 - [Firmware build and flash](firmware-download.md)
+- [BigSmart WebRTC peer integration](esp-peer-integration.md)
+- [Appearance verification](appearance-verification.md)
 - [Project roadmap](roadmap.md)
 - [OpenOS comparison and design decisions](openos-comparison.md)
 - [Home layout and folder design](home-layout-design.md)
