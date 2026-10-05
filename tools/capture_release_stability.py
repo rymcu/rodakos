@@ -21,12 +21,17 @@ class Evidence:
         self.failures = set()
         self.exercise_requests = 0
         self.exercise_acks = 0
+        self.exercise_completions = 0
 
     def accept(self, line, elapsed):
         if re.search(r"Guru Meditation|assert failed|abort\(\)|watchdog.*trigger|rst:|ESP-ROM:|stack overflow|CORRUPT HEAP", line, re.I):
             self.failures.add("reset_or_runtime_failure")
         if 'RODAK_APP_LAUNCH_RESULT {"queued":true}' in line:
             self.exercise_acks += 1
+        if 'RODAK_APP_LAUNCH_COMPLETE {"ok":true}' in line:
+            self.exercise_completions += 1
+        if 'RODAK_APP_LAUNCH_COMPLETE {"ok":false}' in line:
+            self.failures.add("app_launch_failed")
         if "MQTT health:" not in line:
             return
         fields = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", line)}
@@ -35,11 +40,14 @@ class Evidence:
             self.failures.add("missing_release_health_fields")
             return
         timestamp = re.search(r"\((\d+)\)", line)
-        if timestamp:
-            uptime = int(timestamp[1])
-            if self.last_uptime is not None and uptime < self.last_uptime:
-                self.failures.add("uptime_regressed")
-            self.last_uptime = uptime
+        if not timestamp:
+            self.failures.add("missing_device_uptime")
+            return
+        uptime = int(timestamp[1])
+        if self.last_uptime is not None and uptime <= self.last_uptime:
+            self.failures.add("uptime_regressed" if uptime < self.last_uptime else "uptime_repeated")
+            return
+        self.last_uptime = uptime
         self.max_health_gap = max(self.max_health_gap, elapsed - (self.last_health or 0))
         self.last_health = elapsed
         self.samples += 1
@@ -63,13 +71,37 @@ class Evidence:
             failures.add("internal_heap_median_drop_over_8KiB")
         if complete and self.exercise_requests != self.exercise_acks:
             failures.add("unacknowledged_app_launch")
+        if complete and self.exercise_requests != self.exercise_completions:
+            failures.add("uncompleted_app_launch")
         passed = complete and elapsed >= requested and requested >= 28800 and self.samples >= 960 and not failures
         return dict(status="pass-observed" if passed else "no-go" if failures else "incomplete",
                     elapsed_seconds=round(elapsed, 2), requested_seconds=requested,
                     health_samples=self.samples, max_health_gap_seconds=round(gaps, 2),
                     minima=self.minima, internal_heap_median_drop=drop,
                     exercise_requests=self.exercise_requests, exercise_acks=self.exercise_acks,
+                    exercise_completions=self.exercise_completions,
                     failures=sorted(failures), complete=complete)
+
+
+class SerialEvidenceStream:
+    def __init__(self, evidence):
+        self.evidence = evidence
+        self.pending = bytearray()
+
+    def accept(self, data, elapsed):
+        self.pending.extend(data)
+        while b"\n" in self.pending:
+            line, _, self.pending = self.pending.partition(b"\n")
+            self.evidence.accept(line.decode("utf-8", errors="replace"), elapsed)
+        if len(self.pending) > 65536:
+            self.evidence.failures.add("unframed_serial_overflow")
+            self.pending.clear()
+
+    def finish(self, elapsed):
+        # A reset or panic can end the transport before its final newline arrives.
+        if self.pending:
+            self.evidence.accept(self.pending.decode("utf-8", errors="replace"), elapsed)
+            self.pending.clear()
 
 
 def main():
@@ -85,6 +117,7 @@ def main():
     import serial
     args.output.mkdir(parents=True, exist_ok=False)
     evidence = Evidence()
+    stream = SerialEvidenceStream(evidence)
     started = time.monotonic()
     identity = dict(started_utc=datetime.now(timezone.utc).isoformat(), build_id=args.build_id, port=args.port)
     def save(complete=False):
@@ -99,7 +132,6 @@ def main():
     next_status = 0
     next_action = 300
     apps = ("home", "photos", "camera", "home", "music", "home")
-    pending = bytearray()
     save()
     try:
         port.open()
@@ -108,12 +140,8 @@ def main():
                 elapsed = time.monotonic() - started
                 data = port.read(min(port.in_waiting or 1, 4096))
                 if data:
-                    log.write(data); log.flush(); pending.extend(data)
-                    while b"\n" in pending:
-                        line, _, pending = pending.partition(b"\n")
-                        evidence.accept(line.decode("utf-8", errors="replace"), elapsed)
-                    if len(pending) > 65536:
-                        evidence.failures.add("unframed_serial_overflow"); pending.clear()
+                    log.write(data); log.flush()
+                    stream.accept(data, elapsed)
                 if args.exercise_apps and elapsed >= next_action:
                     app = apps[evidence.exercise_requests % len(apps)]
                     port.write(f"RODAK_APP_LAUNCH_V1 {app}\n".encode())
@@ -123,9 +151,11 @@ def main():
                     save(); next_status += 30
     except (Exception, KeyboardInterrupt) as error:
         evidence.failures.add(type(error).__name__)
+        stream.finish(time.monotonic() - started)
         save()
         raise
     finally:
+        stream.finish(time.monotonic() - started)
         port.close()
     report = save(True)
     print(json.dumps(report, indent=2))

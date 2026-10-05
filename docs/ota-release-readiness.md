@@ -16,7 +16,9 @@ useful as the signed-OTA host baseline, but is not the current firmware identity
 
 There are 221 app-model, 43 Home UI, 11 signature/journal, 3 one-shot fault, and 5 production
 Recovery state-machine tests, all passing. ASan/UBSan with leak detection passes for every C++ target.
-Eight Python signing/capture-evidence tests pass. `build/logs/release-readiness.json` records the
+Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
+The added host cases reject missing/repeated device uptime and unterminated failure logs; they do
+not establish a hardware soak. `build/logs/release-readiness.json` records the
 current NO_GO decision and evidence paths. No new firmware has been flashed to COM13. Its full 16 MiB flash backup is saved under
 `build/device-backup/com13-20260929-before-signed-recovery.bin`. After the read-only checks and
 backup, a further 40-second capture confirms MQTT connected with no runtime failures.
@@ -106,11 +108,30 @@ python tools/capture_release_stability.py --port COM13 --duration 28800 `
 
 The collector opens the port once with DTR/RTS false, never reconnects, writes raw serial output, and
 updates `status.json` every 30 seconds. Optional exercise requests cycle Home, Photos, Camera and
-Music using existing app-launch commands. Physical page gestures and actual media playback still
+Music using existing app-launch commands. Every requested launch requires both `queued:true` and
+a successful `RODAK_APP_LAUNCH_COMPLETE`; explicit `ok:false` or a missing completion makes the
+completed capture NO-GO. Physical page gestures and actual media playback still
 need observation. `telemetry_queued` proves local enqueue, not broker delivery or server processing.
 
 The collector requires at least 960 complete MQTT samples over eight hours, no reboot/runtime
 failure, no health gap above 90 seconds, connected/enqueued telemetry, at least 8 KiB largest internal
 block and 512 bytes worker stack headroom, and no internal-free median drop above 8 KiB. These are
 local acceptance thresholds, not proof of sufficient memory for all concurrent device operations.
-Short or interrupted captures remain incomplete; empty logs and old health formats cannot pass.
+Health samples must carry strictly increasing device uptime; missing, repeated, or regressed uptime
+is a failure and cannot increase the valid sample count. The collector also inspects any final
+unterminated serial fragment before saving its result, including on an interrupted capture, so a
+trailing panic/reset or partial health record cannot be silently discarded.
+Short or interrupted captures remain incomplete unless an observed failure makes them NO-GO;
+empty logs and old health formats cannot pass.
+
+Rerun the signing and collector host regression from the repository root:
+
+```powershell
+wsl -d Debian -- python3 -m unittest discover `
+  -s /mnt/d/workspace/rodakos/tests/ota_security -p 'test_*.py' -v
+```
+
+The 2026-10-06 run against source baseline `2ed1e8c` plus the collector changes passed all 17 tests.
+Before the fix, two new regression cases incorrectly returned `pass-observed` for eight hours of
+health logs with missing or repeated uptime. The correction does not change the production-key,
+physical power-cut, complete LVGL exhaustion, or eight-hour hardware gates above.
