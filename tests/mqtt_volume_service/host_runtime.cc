@@ -10,10 +10,16 @@ struct HostMqttClient {
     std::mutex events_mutex;
     std::condition_variable changed;
     std::deque<esp_mqtt_event_t> events;
+    std::deque<esp_mqtt_event_t> custom_events;
+    bool legacy_shared_events = false;
+    unsigned dropped_native_events = 0;
     esp_event_handler_t callback = nullptr;
     void* context = nullptr;
     bool running = false;
     bool destroyed = false;
+    bool connected = false;
+    unsigned transport_epoch = 0;
+    std::deque<mqtt_host::Publication> outbox;
     unsigned id = 0;
     std::atomic<unsigned> credential_revision{0};
     std::thread thread;
@@ -24,22 +30,54 @@ std::mutex state_mutex;
 std::vector<std::unique_ptr<HostMqttClient>> clients;
 std::vector<std::thread> workers;
 std::vector<mqtt_host::Publication> publications;
+std::vector<mqtt_host::Publication> wire_publications;
+std::vector<mqtt_host::Publication> direct_publish_attempts;
 rodakos::DeviceCloudConfig stored_config;
 std::atomic<HostMqttClient*> current_client{nullptr};
 std::atomic<bool> hold_user_events{false};
 std::atomic<unsigned> restart_count{0};
+std::atomic<bool> hold_wire{false};
+std::atomic<bool> fail_next_direct_publish{false};
+std::atomic<bool> fail_next_custom_event{false};
+std::atomic<bool> fail_next_custom_transfer{false};
+std::atomic<uint64_t> queued_sequence{0};
+std::atomic<uint64_t> completed_sequence{0};
 thread_local bool in_sdk_callback = false;
 std::mutex dequeue_mutex;
 std::condition_variable dequeue_changed;
 bool pause_dequeue = false;
 bool dequeue_parked = false;
+std::mutex direct_mutex;
+std::condition_variable direct_changed;
+bool direct_paused = false;
+bool direct_entered = false;
+
+void FlushOutbox(HostMqttClient* client) {
+    // 调用者持 SDK API 锁；断线期间保留 outbox，重连才再次出线。
+    if (!client->connected || hold_wire) return;
+    std::lock_guard<std::mutex> lock(state_mutex);
+    while (!client->outbox.empty()) {
+        auto sent = client->outbox.front();
+        sent.transport_epoch = client->transport_epoch;
+        sent.credential_revision = client->credential_revision;
+        wire_publications.push_back(std::move(sent));
+        client->outbox.pop_front();
+    }
+}
 
 void QueueEvent(HostMqttClient* client, esp_mqtt_event_id_t id) {
+    std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+    if (id == MQTT_EVENT_CONNECTED) {
+        client->connected = true;
+        ++client->transport_epoch;
+    }
+    if (id == MQTT_EVENT_DISCONNECTED) client->connected = false;
     std::lock_guard<std::mutex> lock(client->events_mutex);
     esp_mqtt_event_t event;
     event.client = client;
     event.event_id = id;
-    client->events.push_back(event);
+    if (client->events.size() == 1) ++client->dropped_native_events;
+    else client->events.push_back(event);
     client->changed.notify_all();
 }
 
@@ -48,9 +86,61 @@ void Dispatch(esp_mqtt_event_t event) {
     // 与真实 ESP-MQTT 一致：持 SDK 递归 API 锁同步运行已注册回调。
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
     if (client->destroyed) throw std::runtime_error("callback used destroyed MQTT client");
+    const bool previous_callback = in_sdk_callback;
     in_sdk_callback = true;
     client->callback(client->context, "mqtt", event.event_id, &event);
-    in_sdk_callback = false;
+    in_sdk_callback = previous_callback;
+    FlushOutbox(client);
+}
+
+void RunNativeEvents(HostMqttClient* client) {
+    // esp_event_loop_run(..., 0) 只消费一条，callback 仍可同步嵌套运行自己的 native event。
+    esp_mqtt_event_t event;
+    {
+        std::lock_guard<std::mutex> lock(client->events_mutex);
+        if (client->events.empty()) return;
+        event = client->events.front();
+        client->events.pop_front();
+    }
+    Dispatch(event);
+}
+
+void PostNativeAndRun(esp_mqtt_event_t event) {
+    auto* client = event.client;
+    std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+    if (event.event_id == MQTT_EVENT_CONNECTED) {
+        client->connected = true;
+        ++client->transport_epoch;
+    }
+    if (event.event_id == MQTT_EVENT_DISCONNECTED) client->connected = false;
+    {
+        std::lock_guard<std::mutex> lock(client->events_mutex);
+        // 原 SDK 会忽略满队列时 lifecycle post 的错误，再运行已有队列。
+        if (client->events.size() == 1) ++client->dropped_native_events;
+        else client->events.push_back(event);
+    }
+    RunNativeEvents(client);
+}
+
+bool RunOneCustomEvent(HostMqttClient* client) {
+    {
+        std::lock_guard<std::mutex> lock(client->events_mutex);
+        if (client->legacy_shared_events) {
+            if (client->events.empty()) return false;
+        } else {
+            if (client->custom_events.empty()) return false;
+            const auto event = client->custom_events.front();
+            client->custom_events.pop_front();
+            if (!client->events.empty() || fail_next_custom_transfer.exchange(false)) {
+                // overlay 单轮只尝试一次；转投失败保留唤醒，下一轮再试。
+                if (client->custom_events.empty()) client->custom_events.push_front(event);
+                return true;
+            }
+            client->events.push_back(event);
+        }
+    }
+    RunNativeEvents(client);
+    return true;
 }
 }
 
@@ -71,16 +161,22 @@ QueueHandle_t xQueueCreate(unsigned capacity, unsigned) {
 int xQueueSend(QueueHandle_t queue, const void* item, TickType_t) {
     std::lock_guard<std::mutex> lock(queue->mutex);
     if (queue->items.size() >= queue->capacity) return pdFALSE;
-    queue->items.push_back(*static_cast<void* const*>(item));
+    queue->items.push_back({*static_cast<void* const*>(item), ++queued_sequence});
     queue->changed.notify_all();
     return pdTRUE;
 }
 int xQueueReceive(QueueHandle_t queue, void* output, TickType_t wait) {
+    thread_local uint64_t previous_sequence = 0;
+    if (wait != 0 && previous_sequence != 0) {
+        completed_sequence.store(previous_sequence);
+        previous_sequence = 0;
+    }
     {
         std::unique_lock<std::mutex> lock(queue->mutex);
         if (!queue->changed.wait_for(lock, std::chrono::milliseconds(wait),
                                     [&]() { return !queue->items.empty(); })) return pdFALSE;
-        *static_cast<void**>(output) = queue->items.front();
+        *static_cast<void**>(output) = queue->items.front().value;
+        if (wait != 0) previous_sequence = queue->items.front().sequence;
         queue->items.pop_front();
     }
     if (wait != 0) {
@@ -115,21 +211,24 @@ int esp_mqtt_client_start(HostMqttClient* client) {
     client->running = true;
     client->thread = std::thread([client]() {
         while (true) {
-            esp_mqtt_event_t event;
             {
                 std::unique_lock<std::mutex> lock(client->events_mutex);
                 client->changed.wait_for(lock, std::chrono::milliseconds(2), [&]() {
-                    return !client->running || (!client->events.empty() && !hold_user_events);
+                    return !client->running ||
+                        (!client->events.empty() && (!hold_user_events || client->events.front().event_id != MQTT_USER_EVENT)) ||
+                        (!client->custom_events.empty() && !hold_user_events);
                 });
                 if (!client->running) return;
-                auto next = std::find_if(client->events.begin(), client->events.end(), [](const auto& item) {
-                    return !hold_user_events || item.event_id != MQTT_USER_EVENT;
-                });
-                if (next == client->events.end()) continue;
-                event = *next;
-                client->events.erase(next);
             }
-            Dispatch(event);
+            std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+            bool native_ready = false;
+            {
+                std::lock_guard<std::mutex> lock(client->events_mutex);
+                native_ready = !client->events.empty() &&
+                    (!hold_user_events || client->events.front().event_id != MQTT_USER_EVENT);
+            }
+            if (native_ready) RunNativeEvents(client);
+            else if (!hold_user_events) RunOneCustomEvent(client);
         }
     });
     QueueEvent(client, MQTT_EVENT_CONNECTED);
@@ -142,11 +241,18 @@ int esp_mqtt_client_stop(HostMqttClient* client) {
         client->changed.notify_all();
     }
     if (client->thread.joinable()) client->thread.join();
+    {
+        std::lock_guard<std::mutex> lock(client->events_mutex);
+        client->custom_events.clear();
+        client->events.clear();
+    }
     return ESP_OK;
 }
 int esp_mqtt_client_destroy(HostMqttClient* client) {
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
     client->destroyed = true;
+    client->connected = false;
+    client->outbox.clear();
     return ESP_OK;
 }
 int esp_mqtt_client_reconnect(HostMqttClient* client) { QueueEvent(client, MQTT_EVENT_CONNECTED); return ESP_OK; }
@@ -155,7 +261,12 @@ int esp_mqtt_set_config(HostMqttClient* client, const esp_mqtt_client_config_t*)
     ++client->credential_revision;
     return ESP_OK;
 }
-int esp_mqtt_client_get_outbox_size(HostMqttClient*) { return 0; }
+int esp_mqtt_client_get_outbox_size(HostMqttClient* client) {
+    std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    size_t size = 0;
+    for (const auto& item : client->outbox) size += item.payload.size();
+    return static_cast<int>(size);
+}
 int esp_mqtt_client_subscribe(HostMqttClient* client, const char*, int) {
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
     return 1;
@@ -164,16 +275,60 @@ int esp_mqtt_client_enqueue(HostMqttClient* client, const char* topic, const cha
                             int length, int, int, bool) {
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
     if (client->destroyed) throw std::runtime_error("enqueue used destroyed MQTT client");
+    const mqtt_host::Publication item{topic, std::string(payload, length), client->id,
+                                      client->credential_revision, in_sdk_callback, true, client->transport_epoch};
+    int message_id = 0;
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex);
+        publications.push_back(item);
+        message_id = static_cast<int>(publications.size());
+    }
+    client->outbox.push_back(item);
+    FlushOutbox(client);
+    return message_id;
+}
+int esp_mqtt_client_publish(HostMqttClient* client, const char* topic, const char* payload,
+                            int length, int qos, int retain) {
+    std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    if (client->destroyed) throw std::runtime_error("publish used destroyed MQTT client");
+    if (qos != 0 || retain != 0) throw std::runtime_error("command direct publish must be QoS 0 non-retained");
+    const mqtt_host::Publication item{topic, std::string(payload, length), client->id,
+                                      client->credential_revision, in_sdk_callback, false, client->transport_epoch};
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        direct_publish_attempts.push_back(item);
+    }
+    {
+        std::unique_lock<std::mutex> lock(direct_mutex);
+        if (direct_paused) {
+            direct_entered = true;
+            direct_changed.notify_all();
+            direct_changed.wait(lock, []() { return !direct_paused; });
+            direct_entered = false;
+        }
+    }
+    if (fail_next_direct_publish.exchange(false)) {
+        esp_mqtt_event_t disconnected;
+        disconnected.client = client;
+        disconnected.event_id = MQTT_EVENT_DISCONNECTED;
+        PostNativeAndRun(disconnected);
+        return -1;
+    }
+    if (!client->connected) return -1;
     std::lock_guard<std::mutex> state_lock(state_mutex);
-    publications.push_back({topic, std::string(payload, length), client->id,
-                            client->credential_revision, in_sdk_callback});
-    return static_cast<int>(publications.size());
+    publications.push_back(item);
+    wire_publications.push_back(item);
+    return 0;
 }
 int esp_mqtt_dispatch_custom_event(HostMqttClient* client, esp_mqtt_event_t* event) {
     // 故意不取 api_mutex；真实 SDK 这里只投递事件，不能同步调用回调。
     std::lock_guard<std::mutex> lock(client->events_mutex);
+    if (fail_next_custom_event.exchange(false)) return ESP_FAIL;
     if (!client->running || client->destroyed) return ESP_FAIL;
-    client->events.push_back(*event);
+    auto& destination = client->legacy_shared_events ? client->events : client->custom_events;
+    const size_t capacity = 1;
+    if (destination.size() >= capacity) return ESP_FAIL;
+    destination.push_back(*event);
     client->changed.notify_all();
     return ESP_OK;
 }
@@ -192,6 +347,8 @@ void Reset() {
     std::lock_guard<std::mutex> lock(state_mutex);
     clients.clear();
     publications.clear();
+    wire_publications.clear();
+    direct_publish_attempts.clear();
     stored_config = {};
     stored_config.mqtt_protocol_version = 2;
     stored_config.mqtt_broker_address = "host-broker";
@@ -215,6 +372,12 @@ void Reset() {
     current_client = nullptr;
     hold_user_events = false;
     restart_count = 0;
+    hold_wire = false;
+    fail_next_direct_publish = false;
+    fail_next_custom_event = false;
+    fail_next_custom_transfer = false;
+    queued_sequence = 0;
+    completed_sequence = 0;
 }
 void JoinWorkers() {
     PauseDequeue(false);
@@ -232,7 +395,12 @@ rodakos::DeviceCloudConfig Config() {
 HostMqttClient* CurrentClient() { return current_client; }
 void Deliver(esp_mqtt_event_t event) {
     if (event.client == nullptr) event.client = CurrentClient();
-    Dispatch(event);
+    if (event.event_id != MQTT_USER_EVENT) {
+        PostNativeAndRun(event);
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> api_lock(event.client->api_mutex);
+    while (RunOneCustomEvent(event.client)) {}
 }
 void Fragment(const std::string& topic, const std::string& bytes, int offset, int total) {
     esp_mqtt_event_t event;
@@ -264,13 +432,68 @@ void RejectCredentials() {
     Deliver(event);
 }
 void HoldUserEvents(bool hold) { hold_user_events = hold; }
+void HoldWire(bool hold) {
+    hold_wire = hold;
+    if (hold) return;
+    auto* client = CurrentClient();
+    if (client == nullptr) return;
+    std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    FlushOutbox(client);
+}
+void FailNextDirectPublishWithDisconnect() { fail_next_direct_publish = true; }
+void FailNextCustomEvent() { fail_next_custom_event = true; }
+void FailNextCustomTransfer() { fail_next_custom_transfer = true; }
+bool RunOneSdkEvent() {
+    auto* client = CurrentClient();
+    std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+    return RunOneCustomEvent(client);
+}
+void PauseDirectPublish(bool pause) {
+    std::lock_guard<std::mutex> lock(direct_mutex);
+    direct_paused = pause;
+    direct_changed.notify_all();
+}
+bool WaitDirectPublishEntered() {
+    std::unique_lock<std::mutex> lock(direct_mutex);
+    return direct_changed.wait_for(lock, std::chrono::seconds(3), []() { return direct_entered; });
+}
 size_t PendingUserEvents() {
     auto* client = CurrentClient();
     std::lock_guard<std::mutex> lock(client->events_mutex);
-    return std::count_if(client->events.begin(), client->events.end(),
+    return client->custom_events.size() + std::count_if(client->events.begin(), client->events.end(),
         [](const auto& event) { return event.event_id == MQTT_USER_EVENT; });
 }
+void UseLegacySharedEventQueue() {
+    auto* client = CurrentClient();
+    std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+    std::lock_guard<std::mutex> lock(client->events_mutex);
+    if (!client->events.empty() || !client->custom_events.empty())
+        throw std::runtime_error("cannot change event queue model while events are pending");
+    client->legacy_shared_events = true;
+}
+unsigned DroppedNativeEvents() {
+    auto* client = CurrentClient();
+    std::lock_guard<std::mutex> lock(client->events_mutex);
+    return client->dropped_native_events;
+}
+size_t PendingNativeEvents() {
+    auto* client = CurrentClient();
+    std::lock_guard<std::mutex> lock(client->events_mutex);
+    return client->events.size();
+}
 std::vector<Publication> Publications() { std::lock_guard<std::mutex> lock(state_mutex); return publications; }
+std::vector<Publication> WirePublications() { std::lock_guard<std::mutex> lock(state_mutex); return wire_publications; }
+std::vector<Publication> DirectPublishAttempts() { std::lock_guard<std::mutex> lock(state_mutex); return direct_publish_attempts; }
+std::vector<Publication> QueuedPublications() {
+    auto* client = CurrentClient();
+    if (client == nullptr) return {};
+    std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    return {client->outbox.begin(), client->outbox.end()};
+}
+uint64_t LastQueuedMessage() { return queued_sequence; }
+bool WaitWorkerProcessed(uint64_t sequence) {
+    return WaitUntil([=]() { return completed_sequence.load() >= sequence; });
+}
 size_t ReceiptCount() {
     const auto all = Publications();
     return std::count_if(all.begin(), all.end(), [](const auto& item) {

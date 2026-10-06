@@ -47,6 +47,12 @@ int main(int argc, char** argv) {
             const std::string payload = payload_json->valuestring;
             mqtt_host::Message(topic, payload, payload.size() > 1);
             fixture.Barrier();
+            RODAK_CHECK(mqtt_host::WaitUntil([&]() {
+                const auto items = mqtt_host::Publications();
+                for (size_t index = previous; index < items.size(); ++index)
+                    if (items[index].topic == topic + "/ack") return true;
+                return false;
+            }));
             const auto publications = mqtt_host::Publications();
             const mqtt_host::Publication* acknowledgement = nullptr;
             for (size_t index = previous; index < publications.size(); ++index) {

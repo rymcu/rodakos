@@ -4,12 +4,13 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (reviewed baseline: `56eb7bf`, plus MQTT volume effect receipts).
+Last refreshed: 2026-10-06 (command publication work starts from `0d0f2bd`; current source and
+validation identity are recorded in the linked roadmap).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the camera/display sessions are mutually exclusive and stop cleanly.
+- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Connection-race cleanup remains tracked in the roadmap.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
@@ -50,6 +51,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   `effects/receipt`. The device preserves bounded deduplication across same-authority reconnects
   while connection epochs cancel old queued work/results. Plain reported volume remains state
   only. See [MQTT volume effects](docs/mqtt-volume-effects.md).
+- Ordinary command ACKs and video signal/state results are bound to their original MQTT connection
+  and sent without a replayable SDK outbox item. Stale queued results and late callbacks are dropped.
+  Command-number deduplication and stream lifecycle fencing remain open; see the
+  [command result boundary](docs/rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
   queued and successful completion evidence for app exercises. These host checks do not close the
   eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
@@ -72,6 +77,8 @@ intentional dependency upgrade.
 The root CMake build automatically validates and generates the codec volume correction after
 dependency resolution. See [dependency maintenance](docs/dependency-maintenance.md) for its
 source provenance, drift rejection, host tests and upgrade procedure.
+The same build also applies the checked MQTT custom-event queue correction; it requires the
+reviewed ESP-IDF event source and keeps managed components unchanged.
 
 ```powershell
 # Activate ESP-IDF (prefer the installed 6.0.2 baseline)

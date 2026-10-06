@@ -9,6 +9,9 @@ ESP-MQTT/network/codec facilities are faked; the service and business result are
 The fake MQTT SDK invokes callbacks under its recursive API lock and posts custom events
 asynchronously. This reproduces the lock-order boundary used by the production SDK. Fixtures can
 hold a dequeued message, a codec operation or an SDK user event to exercise cancellation.
+It distinguishes outbox enqueue from wire publication and models separate custom/native event
+queues. The checked [SDK overlay](../../docs/dependency-maintenance.md#mqtt-custom-event-queue-overlay)
+has its own source-level tests; this service target does not compile the network SDK.
 The light fixture also holds real driver refresh or fails exact pixel/refresh calls. Light business
 state is no longer faked; other device services remain fakes.
 
@@ -82,7 +85,7 @@ epochs, ordinary token refresh and replacement bindings. Native driver tests als
 ## Independent command fixture and tests
 
 The same library also provides `rodakos_mqtt_command_fixture` and the separate CTest target
-`rodakos_mqtt_command_service` (5 cases). These exercise the production command handler, not
+`rodakos_mqtt_command_service` (24 cases). These exercise the production command handler, not
 the volume/light effect protocol. Build targets are `rodakos_mqtt_command_fixture` and
 `rodakos_mqtt_command_service_tests`.
 
@@ -103,13 +106,23 @@ text uses one complete frame. Initial reports and the internal ping barrier are 
 and display services are not injected, so their commands return production `_stream_unavailable`
 errors. The fixture accepts its own command topics and reserves `host-barrier` for synchronization.
 
-The 5 independent command cases cover four ping shapes, malformed/unsupported requests, all six
+The independent command cases cover four ping shapes, malformed/unsupported requests, all six
 camera/display unavailable paths, reprocessing repeated command numbers, and rejecting an old
-queued command after a same-client reconnect. Rodak's independent runner is
+queued command after a same-client reconnect. Additional cases inject successful fake streams,
+hold result notifications, reconnect or replace credentials, replay saved callbacks, reject event
+posting and synchronously disconnect during direct publication. A negative control shows that
+stored QoS 0 outbox entries can cross a reconnect; command output must use direct publication.
+Rodak's independent runner is
 `scripts/run-rodakos-command-conformance.mjs`, with 19 real Broker/handler/ACK tests. It records
 separate source and binary evidence; command counts are not part of the existing 31 effect tests.
 
 Ordinary commands have no command-number deduplication ledger. The worker checks generation/epoch
-before entering the handler, but command execution and asynchronous stream ACK callbacks are not
-atomically bound to that epoch. These host tests do not establish exactly-once execution,
-cross-connection atomicity, real WebRTC success, firmware acceptance, or physical hardware results.
+before entering the handler. ACK/sideband output is bound to the original generation, epoch and
+topic through a bounded queue, SDK event-loop validation and direct QoS 0 publish. One shared wake
+notification allows synchronous stream callbacks and their final ACK to use the single custom
+event slot. Epoch changes clear result payloads; held or late callbacks cannot republish on a new
+connection. An already admitted direct send may finish on its original connection.
+
+The fake streams demonstrate publication behavior only. Side-effect admission, stream-instance
+leases, resource cleanup and delayed screen inputs remain open. These tests do not establish
+exactly-once execution, real WebRTC success, firmware acceptance or physical hardware results.

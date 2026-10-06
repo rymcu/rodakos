@@ -7,6 +7,12 @@ std::string Command(mqtt_host::Fixture& fixture, const std::string& payload,
     const size_t previous = mqtt_host::Publications().size();
     mqtt_host::Message(topic, payload, payload.size() > 1);
     fixture.Barrier();
+    RODAK_CHECK(mqtt_host::WaitUntil([&]() {
+        const auto items = mqtt_host::Publications();
+        for (size_t index = previous; index < items.size(); ++index)
+            if (items[index].topic == topic + "/ack") return true;
+        return false;
+    }));
     const auto publications = mqtt_host::Publications();
     std::string result;
     for (size_t index = previous; index < publications.size(); ++index) {

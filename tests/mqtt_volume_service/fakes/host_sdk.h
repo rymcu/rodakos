@@ -92,7 +92,8 @@ struct HostQueue {
     std::mutex mutex;
     std::condition_variable changed;
     size_t capacity;
-    std::deque<void*> items;
+    struct Entry { void* value; uint64_t sequence; };
+    std::deque<Entry> items;
 };
 using QueueHandle_t = HostQueue*;
 QueueHandle_t xQueueCreate(unsigned capacity, unsigned);
@@ -182,4 +183,5 @@ int esp_mqtt_set_config(esp_mqtt_client_handle_t, const esp_mqtt_client_config_t
 int esp_mqtt_client_get_outbox_size(esp_mqtt_client_handle_t);
 int esp_mqtt_client_subscribe(esp_mqtt_client_handle_t, const char*, int);
 int esp_mqtt_client_enqueue(esp_mqtt_client_handle_t, const char*, const char*, int, int, int, bool);
+int esp_mqtt_client_publish(esp_mqtt_client_handle_t, const char*, const char*, int, int, int);
 int esp_mqtt_dispatch_custom_event(esp_mqtt_client_handle_t, esp_mqtt_event_t*);

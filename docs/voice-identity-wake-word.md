@@ -43,10 +43,16 @@ Rodak writes this patch to the device desired shadow:
 }
 ```
 
-For a temporary configuration, add `mode: "temporary"` and an absolute `expiresAtMs`. RodakOS
-validates the fields and the monotonic revision, writes persistent settings to NVS, updates the
-MultiNet command graph without rebooting, and restores the persistent configuration after expiry.
-Rejected or expired updates leave the previous command active.
+For a temporary configuration, the wire contract requires `mode: "temporary"` and an absolute
+Unix-millisecond `expiresAtMs`. The implementation updates the MultiNet graph at runtime and
+stores persistent/active fields in NVS, but its expiry and recovery guarantees remain incomplete.
+
+The 2026-10-06 source audit found uptime used against Unix expiry values, revision/status access
+outside the service lock, multiple non-transactional NVS writes, and unchecked recovery results.
+Consequently, current `applied`/`expired` reports do not establish atomic persistence, successful
+rollback or reliable temporary expiry. A versioned record, revision watermark, synchronized state
+and explicit recovery-failure handling remain work in the [roadmap](roadmap.md). This documentation
+correction does not change voice identity firmware behavior.
 
 The device reports the active configuration under `voice_identity` in the reported shadow with
 `status` (`applied`, `rejected`, or `expired`), `runtime`, `model`, and an optional `error`. Rodak

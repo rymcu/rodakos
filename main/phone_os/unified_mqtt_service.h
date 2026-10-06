@@ -83,6 +83,17 @@ private:
         std::string payload;
     };
 
+    struct CommandPublishContext {
+        uint32_t client_generation = 0;
+        uint64_t connection_epoch = 0;
+        std::string ack_topic;
+    };
+
+    struct PendingCommandPublication {
+        CommandPublishContext context;
+        std::string payload;
+    };
+
     static void NetworkEventHandler(void* arg, esp_event_base_t event_base,
                                     int32_t event_id, void* event_data);
     static void MqttEventHandler(void* arg, esp_event_base_t event_base,
@@ -105,8 +116,12 @@ private:
     bool IsCurrentClientGeneration(uint32_t generation, uint64_t connection_epoch = 0) const;
     void AdvanceConnectionEpochLocked();
     void ResetEffectAuthorityLocked();
+    bool SchedulePublicationEventLocked();
     void QueueEffectReceipt(const std::string& payload, uint32_t generation,
                             uint64_t connection_epoch);
+    bool QueueCommandPublication(const CommandPublishContext& context,
+                                 const std::string& payload);
+    void DrainCommandPublications(esp_mqtt_client_handle_t event_client);
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
     void HandleMqttEvent(esp_mqtt_event_handle_t event);
     void HandleMessage(const std::string& topic, const std::string& payload,
@@ -118,7 +133,8 @@ private:
     void ApplyDesiredShadow(const std::string& payload, uint32_t generation,
                             uint64_t connection_epoch);
     void HandlePcStatus(const std::string& payload);
-    void HandleCommand(const std::string& command_no, const std::string& payload);
+    void HandleCommand(const std::string& command_no, const std::string& payload,
+                       const CommandPublishContext& context);
 
     DeviceCloudConfigService& config_service_;
     OtaUpdateService& ota_update_;
@@ -159,6 +175,11 @@ private:
         std::string payload;
     };
     std::deque<PendingEffectReceipt> effect_receipts_;
+    std::deque<PendingCommandPublication> command_publications_;
+    size_t command_publication_bytes_ = 0;
+    // Shared wakeup belongs to the SDK client's lifetime, not an epoch or
+    // credential generation. Its payload queues carry their own scopes.
+    bool publication_event_pending_ = false;
     uint64_t published_event_sequence_ = 0;
     std::array<PublishedEvent, 4> recent_published_events_ = {};
     size_t next_published_event_index_ = 0;

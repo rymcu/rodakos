@@ -201,7 +201,7 @@ Rodak now records native `status: error` replies as `failed`, retaining the firs
 timestamp and failure detail. Its first terminal command result is frozen: duplicate or conflicting
 replies and a late publish completion/failure cannot overwrite it. HTTP replies use the same
 classification, and both transports associate command numbers with the authenticated device.
-This desktop behavior adds no RodakOS production firmware change.
+Desktop terminal freezing is independent of the firmware result-publication boundary below.
 
 Camera/display callbacks reuse the start command's `/ack` topic. Their nested
 `result.cameraStream` / `result.displayStream` messages carry `event: signal/state`, session ID,
@@ -210,21 +210,32 @@ signaling does not settle the command, and later callbacks do not replace the fi
 
 The firmware has no command-number deduplication ledger. Repeated requests re-enter the handler;
 for example, a repeated start can become busy and a repeated stop can become not-found. The MQTT
-worker rejects stale generation/epoch messages before handler entry, but the command handler and
-asynchronous stream callbacks do not carry an atomic original-epoch authority boundary through
-execution and publication. Desktop terminal freezing is not device-side exactly-once execution
-or protection against every in-flight operation crossing a reconnect.
+worker rejects stale generation/epoch messages before handler entry. ACKs and asynchronous
+camera/display signal/state callbacks capture that original generation, epoch and ACK topic.
+A bounded result queue rejects stale callbacks and is cleared on epoch changes. The SDK user-event
+callback rechecks the scope and sends through direct QoS 0 publish with retain disabled, outside the
+service lock so synchronous disconnect callbacks can re-enter safely. This path does not store an
+SDK outbox item or fall back to ordinary Publish; a failed send is dropped without replay.
 
-Ordinary Publish currently uses QoS 0 enqueue with `store=true`. ESP-MQTT retains unsent
-outbox entries and can send them after the same client reconnects, so checking epoch only before
-enqueue is insufficient for strict connection isolation. The current host fake records enqueue
-directly as a publication and does not model this queued-versus-wire window.
+The queue allows 8 entries, at most 64 KiB per payload, 128 KiB total payload and 512 bytes per
+topic. Overflow or unavailable SDK events drop results with a warning. An admitted send may still
+complete on its original SDK connection; success is not a Broker acknowledgement. These limits
+do not prove that an unacknowledged command was never executed.
+
+Side-effect admission, stream-instance leases, disconnect cleanup, same-name session reuse and
+delayed screen inputs still need separate lifecycle fencing. Desktop terminal freezing and
+scoped publication are not device-side exactly-once execution. Ordinary telemetry/shadow Publish
+and effect receipt publishing retain their own SDK outbox behavior; server-side effect receipt
+matching to the original authenticated connection remains necessary.
 
 The independent [command host fixture](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
 uses the production registered MQTT callback, fragments, queue, worker, handler and captured
-publications. Its 5 host cases and Rodak's 19 cross-repository cases cover real ping shapes,
+publications. Its host cases and Rodak's 19 cross-repository cases cover real ping shapes,
 unsupported/malformed commands, unavailable camera/display services, terminal replay behavior
-and device identity isolation. SDK/hardware facilities remain fakes. The separate Rodak runner,
+and device identity isolation. Host cases also model queued-versus-wire outbox stages, held SDK
+events, reconnects, late stream callbacks and synchronous disconnect during direct publication.
+The network SDK remains a fake; direct QoS 0 outbox semantics are separately checked against the
+resolved ESP-MQTT source, whose hashes are recorded by the runner. The separate Rodak runner,
 `scripts/run-rodakos-command-conformance.mjs`, records frozen source/binary evidence; these counts
 do not extend the volume/light or MCP gate, and do not prove real WebRTC or hardware acceptance.
 
@@ -301,10 +312,11 @@ The shared `voice_identity` desired/reported object is:
 ```
 
 Persistent identities have no effective expiry. Temporary identities require a
-positive absolute `expiresAtMs`. RodakOS validates lengths, control
-characters, revisions, and expiry boundaries, then reports `status`, `runtime`,
-`model`, and an optional `error` in the shadow. An invalid desired update leaves
-the previous identity active.
+positive absolute Unix-millisecond `expiresAtMs`. RodakOS checks identity fields and reports
+`status`, `runtime`, `model`, and an optional `error` in the shadow. Current expiry-clock,
+revision locking, multi-key persistence and unchecked rollback gaps mean that these reports do
+not prove atomic application or recovery. See the
+[identity implementation limits](voice-identity-wake-word.md#shadow-contract).
 
 ## 6. Realtime voice handoff
 

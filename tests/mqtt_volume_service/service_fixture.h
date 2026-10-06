@@ -27,15 +27,23 @@ struct ResetGuard { ResetGuard() { Reset(); fake_codec::Reset(); fake_light::Res
 struct Fixture {
     ~Fixture() {
         PauseDequeue(false);
+        PauseDirectPublish(false);
         HoldUserEvents(false);
         service.Stop();
         JoinWorkers();
     }
     void Start() {
+        const size_t previous = Publications().size();
+        const std::string report_topic = Config().mqtt_topic_shadow_report;
         lights.Init();
         RODAK_CHECK(service.Start());
         RODAK_CHECK(WaitUntil([&]() { return service.IsConnected(); }));
-        RODAK_CHECK(WaitUntil([]() { return !Publications().empty(); }));
+        RODAK_CHECK(WaitUntil([&]() {
+            const auto items = Publications();
+            for (size_t index = previous; index < items.size(); ++index)
+                if (items[index].topic == report_topic) return true;
+            return false;
+        }));
     }
     void Send(const std::string& payload, bool fragmented = false) {
         Message(Config().mqtt_topic_shadow_desired, payload, fragmented);
@@ -51,20 +59,9 @@ struct Fixture {
         return {};
     }
     void Barrier() {
-        const size_t previous = Publications().size();
         Message("devices/" + Config().mqtt_device_key + "/commands/host-barrier", "ping");
-        auto sent_at = std::chrono::steady_clock::now();
-        RODAK_CHECK(WaitUntil([&]() {
-            const auto items = Publications();
-            for (size_t i = previous; i < items.size(); ++i)
-                if (items[i].topic.find("/commands/host-barrier/ack") != std::string::npos) return true;
-            // 凭据切换可合法丢弃旧 epoch 的 marker；新的 marker 仍须经真实队列。
-            if (std::chrono::steady_clock::now() - sent_at > std::chrono::milliseconds(50)) {
-                Message("devices/" + Config().mqtt_device_key + "/commands/host-barrier", "ping");
-                sent_at = std::chrono::steady_clock::now();
-            }
-            return false;
-        }));
+        // 下一次 receive 证明前一个 handler 已返回，不依赖被故意 hold 的 USER_EVENT ACK。
+        RODAK_CHECK(WaitWorkerProcessed(LastQueuedMessage()));
     }
     ResetGuard reset;
     rodakos::AudioOutputService output;

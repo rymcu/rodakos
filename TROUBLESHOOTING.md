@@ -377,6 +377,8 @@ The original transitive versions of `esp_sccb_intf`, `tinyusb`, and `usb_host_uv
 checks run under Linux with `tools/run_release_host_checks.sh`; install CMake, Ninja, a C++ compiler,
 `libmbedtls-dev`, and Python cryptography. The script uses a persistent cache directory instead of
 WSL's temporary directory, which can disappear when the distro stops.
+Set `RODAKOS_IDF_PATH` (or `IDF_PATH`) to the Linux-visible ESP-IDF 6.0.2 source tree for the MQTT
+event-overlay checks, for example `/mnt/c/esp/v6.0.2/esp-idf` in this Windows/WSL workspace.
 
 Test-only one-shot resource failures exercise cleanup at named boundaries. They do not demonstrate
 arbitrary LVGL heap exhaustion recovery. Keep that gate, real power interruption, the signed COM13

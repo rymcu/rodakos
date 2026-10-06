@@ -42,6 +42,10 @@ constexpr int kCredentialRefreshDelayMs = 2 * 1000;
 constexpr int kBackgroundTaskPollMs = 50;
 constexpr int kReliablePublishTimeoutMs = 10 * 1000;
 constexpr int kReliablePublishRetryMs = 50;
+constexpr size_t kMaxCommandPublications = 8;
+constexpr size_t kMaxCommandPublicationPayloadBytes = 64 * 1024;
+constexpr size_t kMaxCommandPublicationBytes = 128 * 1024;
+constexpr size_t kMaxCommandPublicationTopicBytes = 512;
 
 bool HasUniqueJsonKeys(const cJSON* object) {
     if (!cJSON_IsObject(object)) return false;
@@ -370,6 +374,7 @@ void UnifiedMqttService::Stop() {
         telemetry_timer_ = nullptr;
         client = client_;
         client_ = nullptr;
+        publication_event_pending_ = false;
         ++client_generation_;
         wake_publisher = reliable_publish_.message_id >= 0;
         reliable_publish_ = {};
@@ -586,6 +591,7 @@ void UnifiedMqttService::Connect() {
             broker_uri_ = std::move(next_broker_uri);
             client_id_ = std::move(next_client_id);
             client_ = client;
+            publication_event_pending_ = false;
             generation = ++client_generation_;
             AdvanceConnectionEpochLocked();
             attached = true;
@@ -601,6 +607,7 @@ void UnifiedMqttService::Connect() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (client_ == client && client_generation_ == generation) {
             client_ = nullptr;
+            publication_event_pending_ = false;
             ++client_generation_;
             AdvanceConnectionEpochLocked();
             destroy_client = true;
@@ -921,11 +928,26 @@ void UnifiedMqttService::AdvanceConnectionEpochLocked() {
     if (++connection_epoch_ == 0) ++connection_epoch_;
     message_assembly_ = {};
     effect_receipts_.clear();
+    command_publications_.clear();
+    command_publication_bytes_ = 0;
 }
 
 void UnifiedMqttService::ResetEffectAuthorityLocked() {
     volume_effect_.ResetAuthority();
     light_effect_.ResetAuthority();
+}
+
+bool UnifiedMqttService::SchedulePublicationEventLocked() {
+    // Both producers hold client_api_mutex_ and mqtt_mutex_. The SDK overlay
+    // only copies this wakeup into its independent zero-timeout custom queue;
+    // it must never take the SDK API lock or run callbacks here.
+    if (publication_event_pending_) return true;
+    esp_mqtt_event_t event = {};
+    event.event_id = MQTT_USER_EVENT;
+    event.client = client_;
+    if (esp_mqtt_dispatch_custom_event(client_, &event) != ESP_OK) return false;
+    publication_event_pending_ = true;
+    return true;
 }
 
 void UnifiedMqttService::QueueEffectReceipt(const std::string& payload,
@@ -939,12 +961,69 @@ void UnifiedMqttService::QueueEffectReceipt(const std::string& payload,
         effect_receipts_.size() >= 8) return;
     effect_receipts_.push_back({generation, connection_epoch,
         "devices/" + config_.mqtt_device_key + "/effects/receipt", payload});
-    esp_mqtt_event_t event = {};
-    event.event_id = MQTT_USER_EVENT;
-    event.client = client_;
-    if (esp_mqtt_dispatch_custom_event(client_, &event) != ESP_OK) {
+    if (!SchedulePublicationEventLocked()) {
         effect_receipts_.pop_back();
         ESP_LOGW(TAG, "Device effect receipt event queue is unavailable; outcome remains cached");
+    }
+}
+
+bool UnifiedMqttService::QueueCommandPublication(const CommandPublishContext& context,
+                                                const std::string& payload) {
+    if (context.ack_topic.empty() || context.ack_topic.size() > kMaxCommandPublicationTopicBytes ||
+        payload.size() > kMaxCommandPublicationPayloadBytes) {
+        ESP_LOGW(TAG, "Dropping command output: topic or payload exceeds the publication limit");
+        return false;
+    }
+    // Only post a zero-timeout SDK event here. Taking its API lock while holding
+    // mqtt_mutex_ would invert the SDK callback's existing lock order.
+    std::lock_guard<std::mutex> api_lock(client_api_mutex_);
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    if (!started_.load() || !connected_.load() || client_ == nullptr ||
+        client_generation_ != context.client_generation ||
+        connection_epoch_ != context.connection_epoch) {
+        ESP_LOGW(TAG, "Dropping command output: original MQTT connection is no longer current");
+        return false;
+    }
+    if (command_publications_.size() >= kMaxCommandPublications ||
+        payload.size() > kMaxCommandPublicationBytes - command_publication_bytes_) {
+        ESP_LOGW(TAG, "Dropping command output: publication queue is full");
+        return false;
+    }
+    command_publications_.push_back({context, payload});
+    command_publication_bytes_ += payload.size();
+    if (!SchedulePublicationEventLocked()) {
+        command_publication_bytes_ -= command_publications_.back().payload.size();
+        command_publications_.pop_back();
+        ESP_LOGW(TAG, "Dropping command output: SDK event loop is unavailable");
+        return false;
+    }
+    return true;
+}
+
+void UnifiedMqttService::DrainCommandPublications(esp_mqtt_client_handle_t event_client) {
+    // ESP-MQTT runs its event loop under its recursive API lock, keeping
+    // event_client alive and serializing reconnect. Do not acquire client_api_mutex_
+    // here: Stop may hold it while waiting for the SDK callback to finish.
+    for (size_t attempt = 0; attempt < kMaxCommandPublications; ++attempt) {
+        PendingCommandPublication publication;
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            if (!started_.load() || !connected_.load() || client_ != event_client ||
+                command_publications_.empty()) return;
+            publication = std::move(command_publications_.front());
+            command_publications_.pop_front();
+            command_publication_bytes_ -= publication.payload.size();
+            if (publication.context.client_generation != client_generation_ ||
+                publication.context.connection_epoch != connection_epoch_) continue;
+        }
+        // This admission may finish on the original client after Stop revokes
+        // service state. QoS0 direct publish cannot leave an outbox item for a
+        // later connection. A write failure can synchronously dispatch DISCONNECTED,
+        // so mqtt_mutex_ must be released and no queue/event reference may survive.
+        if (esp_mqtt_client_publish(event_client, publication.context.ack_topic.c_str(),
+                publication.payload.data(), static_cast<int>(publication.payload.size()), 0, 0) < 0) {
+            ESP_LOGW(TAG, "Command output was not sent; it will not be retried on another connection");
+        }
     }
 }
 
@@ -969,6 +1048,8 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     constexpr size_t kMaxMqttPayloadBytes = 256 * 1024;
     bool wake_publisher = false;
     bool schedule_message = false;
+    bool drain_command_publications = false;
+    const esp_mqtt_client_handle_t event_client = event->client;
     uint32_t event_generation = 0;
     uint64_t event_epoch = 0;
     std::string completed_topic;
@@ -988,6 +1069,10 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
             connected_.store(false);
             AdvanceConnectionEpochLocked();
         } else if (event->event_id == MQTT_USER_EVENT) {
+            // The SDK has consumed the shared wakeup. A producer arriving
+            // during the bounded drain may now reserve the next one.
+            publication_event_pending_ = false;
+            drain_command_publications = true;
             // ESP-MQTT 在持 SDK 递归 API 锁时运行此回调；同线程 enqueue 不反转锁序。
             while (!effect_receipts_.empty()) {
                 PendingEffectReceipt receipt = std::move(effect_receipts_.front());
@@ -1120,6 +1205,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
         default:
             break;
     }
+    if (drain_command_publications) DrainCommandPublications(event_client);
 }
 
 void UnifiedMqttService::OnConnected(uint32_t generation) {
@@ -1197,7 +1283,8 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
     }
     std::string command_no;
     if (ExtractCommandNo(topic, commands_topic, command_no)) {
-        HandleCommand(command_no, payload);
+        const CommandPublishContext context{generation, connection_epoch, topic + "/ack"};
+        HandleCommand(command_no, payload, context);
     }
 }
 
@@ -1357,7 +1444,8 @@ void UnifiedMqttService::StopWebRtcDisplayStream() {
 }
 
 void UnifiedMqttService::HandleCommand(const std::string& command_no,
-                                       const std::string& payload) {
+                                       const std::string& payload,
+                                       const CommandPublishContext& context) {
     cJSON* request = cJSON_Parse(payload.c_str());
     std::string command;
     if (cJSON_IsObject(request)) {
@@ -1405,16 +1493,10 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                     config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 10000));
                 }
 
-                const std::string command_prefix = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
-                const std::string signal_topic = command_prefix.empty()
-                                                     ? std::string()
-                                                     : command_prefix.substr(0, command_prefix.size() - 1) +
-                                                           command_no + "/ack";
-                auto publish_signal = [this, signal_topic, session_id](const char* event,
+                auto publish_signal = [this, context, session_id](const char* event,
                                                                          const char* type,
                                                                          const uint8_t* data,
                                                                          size_t size) {
-                    if (signal_topic.empty()) return;
                     cJSON* signal = cJSON_CreateObject();
                     cJSON_AddStringToObject(signal, "status", "ok");
                     cJSON* result = cJSON_CreateObject();
@@ -1432,7 +1514,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                     cJSON_AddItemToObject(signal, "result", result);
                     const std::string encoded = EncodeJson(signal);
                     cJSON_Delete(signal);
-                    Publish(signal_topic, encoded);
+                    QueueCommandPublication(context, encoded);
                 };
                 auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
                                                      std::vector<uint8_t>&& data) {
@@ -1559,16 +1641,10 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                     config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 20000));
                 }
 
-                const std::string command_prefix = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
-                const std::string signal_topic = command_prefix.empty()
-                                                     ? std::string()
-                                                     : command_prefix.substr(0, command_prefix.size() - 1) +
-                                                           command_no + "/ack";
-                auto publish_signal = [this, signal_topic, session_id](const char* event,
+                auto publish_signal = [this, context, session_id](const char* event,
                                                                          const char* type,
                                                                          const uint8_t* data,
                                                                          size_t size) {
-                    if (signal_topic.empty()) return;
                     cJSON* signal = cJSON_CreateObject();
                     cJSON_AddStringToObject(signal, "status", "ok");
                     cJSON* result = cJSON_CreateObject();
@@ -1586,7 +1662,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                     cJSON_AddItemToObject(signal, "result", result);
                     const std::string encoded = EncodeJson(signal);
                     cJSON_Delete(signal);
-                    Publish(signal_topic, encoded);
+                    QueueCommandPublication(context, encoded);
                 };
                 auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
                                                      std::vector<uint8_t>&& data) {
@@ -1707,12 +1783,8 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
     const std::string ack_payload = EncodeJson(root);
     cJSON_Delete(root);
 
-    const std::string wildcard = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
-    const std::string ack_topic = wildcard.empty()
-                                      ? std::string()
-                                      : wildcard.substr(0, wildcard.size() - 1) + command_no + "/ack";
-    if (Publish(ack_topic, ack_payload)) {
-        ESP_LOGI(TAG, "Command %s acknowledged: %s", command_no.c_str(),
+    if (QueueCommandPublication(context, ack_payload)) {
+        ESP_LOGI(TAG, "Command %s response queued for its original connection: %s", command_no.c_str(),
                  success ? "ok" : (handled ? "rejected" : "unsupported"));
     } else {
         ESP_LOGW(TAG, "Failed to acknowledge command %s", command_no.c_str());

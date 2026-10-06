@@ -36,7 +36,49 @@ manifest, lock and upstream source changes trigger CMake configuration again. A 
 file is recreated by its build rule. Any unreviewed version, source or target-layout drift stops
 configuration rather than compiling an unpatched fallback.
 
-## Validation
+## MQTT custom-event queue overlay
+
+The resolved `espressif/mqtt` 1.0.0 uses one event-loop queue for native lifecycle events and
+custom events. With the default one-slot queue, a queued custom event can occupy the slot needed
+by a disconnect notification. Its synchronous dispatch ignores a failed post, so application
+connection state can remain stale. Raising capacity alone does not establish a lifecycle reserve.
+
+`cmake/mqtt_event_patch.cmake` and `tools/prepare_mqtt_event_patch.py` generate checked build copies
+from `patches/esp_mqtt/1.0.0/`. Managed sources stay untouched. The overlay gives custom events a
+separate bounded queue; the SDK event loop takes one custom event under its API lock and dispatches
+it immediately through the otherwise native event queue. Custom producers therefore cannot occupy
+the native lifecycle slot. Source/header identities and resolved component provenance are checked
+before CMake substitutes the generated implementation and private header.
+
+RodakOS shares one pending wake notification between command results and effect receipts. Result
+payloads retain their own queue limits and connection checks; an old wake notification carries no
+authority to publish an old result. Command ACKs use direct QoS 0 publishing, while effect receipts
+retain their existing outbox and server-side correlation rules. This correction does not turn
+network delivery, allocation failures or device hardware into guaranteed outcomes.
+
+The independent `tests/mqtt_event_patch` target compiles native/custom dispatch and event-pump
+functions extracted from the generated SDK copy. Seven scenarios include the upstream failure
+control, split queues, nested disconnect and allocation-failure retry; FreeRTOS and event-loop
+facilities are fakes. Eight Python checks verify source drift rejection and generation. The
+service-level fake remains in `tests/mqtt_volume_service`; full SDK compilation is a firmware
+build check, not a host network test.
+
+```powershell
+$env:RODAKOS_IDF_PATH = 'C:/esp/v6.0.2/esp-idf'
+python -m unittest discover -s tests/mqtt_event_patch -p 'test_*.py'
+wsl -d Debian -- cmake -S /mnt/d/workspace/rodakos/tests/mqtt_event_patch `
+  -B /home/ronger/.cache/rodakos-mqtt-event-patch -G Ninja `
+  -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf
+wsl -d Debian -- cmake --build /home/ronger/.cache/rodakos-mqtt-event-patch
+wsl -d Debian -- ctest --test-dir /home/ronger/.cache/rodakos-mqtt-event-patch --output-on-failure
+```
+
+The release host script also runs this target with sanitizers and the Python checks. Pass the
+Linux-visible `RODAKOS_IDF_PATH` (or `IDF_PATH`) when invoking that script in WSL; it refuses an
+unavailable source tree instead of skipping the new gate. Retain the source pin when upgrading
+MQTT or ESP-IDF, review event-loop semantics again, and rerun these checks plus a firmware build.
+
+## Codec validation
 
 Resolve the pinned dependencies through the normal [firmware build](firmware-download.md) first.
 The dedicated host target compiles the generated full upstream `esp_codec_dev.c`, real

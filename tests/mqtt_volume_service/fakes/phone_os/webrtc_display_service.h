@@ -6,6 +6,8 @@ class WebRtcDisplayService : public WebRtcCameraService {
 public:
     using ControlReply = std::function<void(bool, const char*)>;
     using ControlCallback = std::function<void(const std::string&, ControlReply)>;
-    bool Start(const Config&, SignalingCallback, StateCallback, ControlCallback) { return false; }
+    bool Start(const Config& config, SignalingCallback signal, StateCallback state, ControlCallback) {
+        return WebRtcCameraService::Start(config, std::move(signal), std::move(state));
+    }
 };
 }

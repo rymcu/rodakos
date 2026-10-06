@@ -241,6 +241,41 @@ host fakes. RGB output, RMT timing, persistence, resource pressure and real task
 remain hardware gates. No serial, flash or NVS operation was performed. The main-image versus
 factory-Recovery size warning retains its previously documented meaning.
 
+## 2026-10-06 command publication validation
+
+This unflashed slice starts from RodakOS `0d0f2bd` and Rodak `d152df19`, plus the frozen command
+publication and SDK queue changes. The command handler captures its original generation, epoch
+and ACK topic; results drain through direct QoS 0 publish without an SDK outbox entry. A checked
+ESP-MQTT 1.0.0 overlay separates custom notifications from the native lifecycle event slot.
+
+- Production service host: 31 effect and 24 command cases pass in Debug and ASan/UBSan with
+  `ASAN_OPTIONS=detect_leaks=1`. Cases include an old shared-queue negative control, new separate
+  queues, stored-outbox replay control, synchronous/late stream callbacks, nested disconnect,
+  transfer retry, credential changes, Stop, queue limits and shared wake scheduling.
+- SDK function target: 7 scenarios pass in Debug and sanitizer; 8 Python provenance/generation
+  tests pass. The target compiles functions extracted from generated SDK source, with fake
+  FreeRTOS and event-loop facilities; it is not a full networking or device test.
+- Rodak command gate: 19/19 cross-repository cases, 24 host cases, 7 SDK scenarios and 8 generator
+  checks pass. The existing MQTT volume/light gate also passes 8/8. Before/after source and
+  binary hashes agree. Rodak evidence files are `.codex-temp/command-epoch-conformance.json`
+  and `.codex-temp/command-epoch-effect-conformance.json`.
+- Final ESP-IDF 6.0.2 build passes. Main image: **6,945,936 bytes** within the 13,959,168-byte
+  `ota_0` slot; SHA-256 **`e29716a72cd38192afeffadb5948a5866154772b3f4fe6556a768484d04333d6`**.
+  `compile_commands.json` selects `build/rodak_patches/esp_mqtt/mqtt_client.c` and puts its
+  generated private-header directory first. Managed sources, dependency lock and `sdkconfig`
+  are unchanged; the Home test population remains OFF and the existing local test public key
+  remains configured. No new signed package, production key or hardware acceptance is claimed.
+
+The command gate's RodakOS input source SHA-256 is
+`69c1319c8c52fb0d30e6b3a33b5a16204d64ea2b2a7b173a71a104da1e721101`.
+Rodak stores the 25 changed source/test hashes in `.codex-temp/command-epoch-source-snapshot.json`,
+firmware identity in `.codex-temp/command-epoch-firmware.json`, and the final build log in
+`.codex-temp/command-epoch-idf-build.log`. Documentation and commits follow that software freeze.
+
+This does not add command-number deduplication, cancel admitted side effects, establish stream
+leases/cleanup, fence delayed screen input or fix voice identity persistence/expiry. No serial
+port, flash or device NVS was accessed; release, acoustic, power-cut and long-duration gates stay open.
+
 ## Build and package
 
 Set the same `RODAK_OTA_PUBLIC_KEY` for both projects. Build/package with explicit private/public key
