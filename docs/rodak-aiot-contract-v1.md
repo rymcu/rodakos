@@ -185,6 +185,49 @@ signaling; see [WebRTC peer integration](esp-peer-integration.md). Unsupported
 commands return an `unsupported_command` error status. There is currently no
 `volume.set` command handler on this acknowledgement channel.
 
+### Command results and replay boundary
+
+The ordinary failure envelope is `{"status":"error","errorCode":"unsupported_command"}`.
+Camera/display failures use `camera_stream_unavailable` / `display_stream_unavailable`,
+`camera_stream_busy` / `display_stream_busy`, `camera_stream_start_failed` /
+`display_stream_start_failed`, `camera_stream_not_found` / `display_stream_not_found`, and
+`camera_signal_rejected` / `display_signal_rejected`. Shared validation codes are
+`invalid_payload`, `missing_session_id`, `invalid_signal` and `invalid_signal_encoding`.
+Service availability is checked before session validation. Successful stream commands return
+`result.sessionId`; start also returns `result.transport: webrtc-datachannel`. These are ordinary
+command replies, without effect ID/hash, configuration revision, persistence or physical evidence.
+
+Rodak now records native `status: error` replies as `failed`, retaining the first ACK body,
+timestamp and failure detail. Its first terminal command result is frozen: duplicate or conflicting
+replies and a late publish completion/failure cannot overwrite it. HTTP replies use the same
+classification, and both transports associate command numbers with the authenticated device.
+This desktop behavior adds no RodakOS production firmware change.
+
+Camera/display callbacks reuse the start command's `/ack` topic. Their nested
+`result.cameraStream` / `result.displayStream` messages carry `event: signal/state`, session ID,
+peer state or SDP/candidate data. Rodak treats these as sideband messages: forwarding valid video
+signaling does not settle the command, and later callbacks do not replace the first command result.
+
+The firmware has no command-number deduplication ledger. Repeated requests re-enter the handler;
+for example, a repeated start can become busy and a repeated stop can become not-found. The MQTT
+worker rejects stale generation/epoch messages before handler entry, but the command handler and
+asynchronous stream callbacks do not carry an atomic original-epoch authority boundary through
+execution and publication. Desktop terminal freezing is not device-side exactly-once execution
+or protection against every in-flight operation crossing a reconnect.
+
+Ordinary Publish currently uses QoS 0 enqueue with `store=true`. ESP-MQTT retains unsent
+outbox entries and can send them after the same client reconnects, so checking epoch only before
+enqueue is insufficient for strict connection isolation. The current host fake records enqueue
+directly as a publication and does not model this queued-versus-wire window.
+
+The independent [command host fixture](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
+uses the production registered MQTT callback, fragments, queue, worker, handler and captured
+publications. Its 5 host cases and Rodak's 19 cross-repository cases cover real ping shapes,
+unsupported/malformed commands, unavailable camera/display services, terminal replay behavior
+and device identity isolation. SDK/hardware facilities remain fakes. The separate Rodak runner,
+`scripts/run-rodakos-command-conformance.mjs`, records frozen source/binary evidence; these counts
+do not extend the volume/light or MCP gate, and do not prove real WebRTC or hardware acceptance.
+
 ### Volume configuration and evidence
 
 Desired shadow accepts `volume` inside either root `desired` or `state.desired`
@@ -303,3 +346,8 @@ rollback, and journal schema remain firmware facts documented in
   `flash_and_test.ps1` path.
 - Rodak server gates: device pairing, token refresh, MQTT/OTA, shadow, and
   hardware gate suites in the Rodak repository.
+- Ordinary commands: independent `tests/mqtt_volume_service/mqtt_command_service_test.cc`
+  and the command CLI, plus Rodak `tests/main-integration/command-ack-gateway.test.ts`.
+  The initial 5 host cases passed in Debug and ASan/UBSan with leak detection; 19 cross-repository
+  cases passed in a directed software run. Use the separate frozen-input runner output for
+  release evidence. No firmware build, flash, NVS write or hardware run was performed for this slice.

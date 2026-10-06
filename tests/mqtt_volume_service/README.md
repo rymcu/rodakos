@@ -78,3 +78,38 @@ Light cases include 70 continuous updates, old-frame and cross-light replay afte
 partial patches, driver failure retention, metadata routing, reports, Stop, reconnect, fragmented
 epochs, ordinary token refresh and replacement bindings. Native driver tests also live in
 [`tests/light_service`](../light_service/README.md). See the [wire contract](../../docs/mqtt-light-effects.md).
+
+## Independent command fixture and tests
+
+The same library also provides `rodakos_mqtt_command_fixture` and the separate CTest target
+`rodakos_mqtt_command_service` (5 cases). These exercise the production command handler, not
+the volume/light effect protocol. Build targets are `rodakos_mqtt_command_fixture` and
+`rodakos_mqtt_command_service_tests`.
+
+```text
+rodakos_mqtt_command_fixture --device-key=device-1
+```
+
+Each stdin line is a transport wrapper whose `payload` is the original command text:
+
+```json
+{"topic":"devices/device-1/commands/command-1","payload":"ping"}
+```
+
+Stdout wraps only the actual captured production ACK publication as
+`{processed,topic,payload}`. The ACK body remains a string; the fixture never constructs a success
+or failure result. All inputs of at least two bytes pass through two MQTT fragments; shorter
+text uses one complete frame. Initial reports and the internal ping barrier are omitted. Camera
+and display services are not injected, so their commands return production `_stream_unavailable`
+errors. The fixture accepts its own command topics and reserves `host-barrier` for synchronization.
+
+The 5 independent command cases cover four ping shapes, malformed/unsupported requests, all six
+camera/display unavailable paths, reprocessing repeated command numbers, and rejecting an old
+queued command after a same-client reconnect. Rodak's independent runner is
+`scripts/run-rodakos-command-conformance.mjs`, with 19 real Broker/handler/ACK tests. It records
+separate source and binary evidence; command counts are not part of the existing 31 effect tests.
+
+Ordinary commands have no command-number deduplication ledger. The worker checks generation/epoch
+before entering the handler, but command execution and asynchronous stream ACK callbacks are not
+atomically bound to that epoch. These host tests do not establish exactly-once execution,
+cross-connection atomicity, real WebRTC success, firmware acceptance, or physical hardware results.
