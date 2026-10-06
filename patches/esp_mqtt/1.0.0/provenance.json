@@ -1,0 +1,16 @@
+{
+  "component": "espressif/mqtt",
+  "version": "1.0.0",
+  "registry_url": "https://components.espressif.com/",
+  "component_hash": "ffdad5659706b4dc14bc63f8eb73ef765efa015bf7e9adf71c813d52a2dc9342",
+  "repository": "https://github.com/espressif/esp-mqtt",
+  "source_hashes_lf": {
+    "mqtt_client.c": "4b24720b34c2bd44b0857a5251f5392663225c618595229540b35f1529663a9a",
+    "lib/include/mqtt_client_priv.h": "ee8f464f6cbf77a83468126bf22d91833b9c2b8985ba5860381acb99a655c565",
+    "include/mqtt_client.h": "6b05afe12c80f9a77127f776c2ed787a67e22cba3be7ad66358efe470b221bd5",
+    "lib/include/mqtt_config.h": "1237445252e445f5fae23b2c9171ce101445667be9b8de1d87c4e34702eac948",
+    "idf_component.yml": "de5eb67afef8fd3f7f0cc769a83e3f133ac9b892c9135e8b69b131c3b6e47b9e"
+  },
+  "idf_event_source_sha256_lf": "30b9d6bf74d47ee2c2a5015866b3d01c1a04be404b2952f75108864c03cd8016",
+  "license": "Apache-2.0"
+}
