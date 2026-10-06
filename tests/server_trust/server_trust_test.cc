@@ -10,6 +10,28 @@ using rodakos::DeviceCloudConfigService;
 using rodakos::ProvisioningUrlSaveResult;
 
 namespace {
+std::string LegacyAuthorityRecord(const rodakos::ServerAuthority& authority, int version) {
+    auto* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "version", version);
+    for (const auto& [name, endpoint] : std::vector<std::pair<const char*, rodakos::ServerEndpoint>>{
+             {"active", authority.active}, {"pending", authority.pending}}) {
+        if (endpoint.trust.empty()) { cJSON_AddNullToObject(root, name); continue; }
+        auto* item = cJSON_AddObjectToObject(root, name);
+        cJSON_AddStringToObject(item, "bootstrap_url", endpoint.bootstrap_url.c_str());
+        cJSON_AddBoolToObject(item, "requires_bound_identity", endpoint.requires_bound_identity);
+        if (version == 2) cJSON_AddStringToObject(item, "connect_address", endpoint.connect_address.c_str());
+        auto* trust = cJSON_AddObjectToObject(item, "trust");
+        cJSON_AddNumberToObject(trust, "version", endpoint.trust.version);
+        cJSON_AddStringToObject(trust, "server_id", endpoint.trust.server_id.c_str());
+        cJSON_AddStringToObject(trust, "tls_name", endpoint.trust.tls_name.c_str());
+        cJSON_AddStringToObject(trust, "ca_pem", endpoint.trust.ca_pem.c_str());
+    }
+    char* json = cJSON_PrintUnformatted(root);
+    const std::string encoded = json;
+    cJSON_free(json); cJSON_Delete(root);
+    return encoded;
+}
+
 void Install(DeviceCloudConfigService& service) {
     const auto trust = trust_test::TestTrust();
     std::string proof;
@@ -370,7 +392,7 @@ RODAK_TEST("Numeric dial routes retain the logical origin and fixed TLS name") {
         "https://" + cloud.server_trust.tls_name + ".evil.local/token", cloud.server_connect_address).empty());
 }
 
-RODAK_TEST("Authority v1 remains readable while v2 persists only numeric routing hints") {
+RODAK_TEST("Authority v1 and v2 remain readable while v3 persists numeric routing hints") {
     rodakos::ServerAuthority authority;
     authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};
     std::string encoded;
@@ -379,13 +401,10 @@ RODAK_TEST("Authority v1 remains readable while v2 persists only numeric routing
     std::string error;
     RODAK_CHECK(rodakos::DecodeServerAuthority(encoded, decoded, error));
     RODAK_CHECK_EQ(decoded.active.connect_address, "192.168.137.9");
-    cJSON* legacy = cJSON_Parse(encoded.c_str());
-    cJSON_SetNumberValue(cJSON_GetObjectItemCaseSensitive(legacy, "version"), 1);
-    cJSON_DeleteItemFromObjectCaseSensitive(cJSON_GetObjectItemCaseSensitive(legacy, "active"), "connect_address");
-    char* json = cJSON_PrintUnformatted(legacy);
-    RODAK_CHECK(rodakos::DecodeServerAuthority(json, decoded, error));
-    RODAK_CHECK(decoded.active.connect_address.empty());
-    cJSON_free(json); cJSON_Delete(legacy);
+    for (int version : {1, 2}) {
+        RODAK_CHECK(rodakos::DecodeServerAuthority(LegacyAuthorityRecord(authority, version), decoded, error));
+        RODAK_CHECK_EQ(decoded.active.connect_address, version == 1 ? "" : "192.168.137.9");
+    }
     authority.active.connect_address = "attacker.local";
     RODAK_CHECK_FALSE(rodakos::EncodeServerAuthority(authority, encoded));
 }
@@ -528,4 +547,102 @@ RODAK_TEST("Discovery deduplicates address-port pairs and bounds invalid or scop
     trust_test::discoveries.front().addresses.assign(8, "127.0.0.1");
     trust_test::discoveries.front().addresses.push_back("192.168.137.9");
     RODAK_CHECK(rodakos::DiscoverServerTrustRoutes(trust).empty());
+}
+
+RODAK_TEST("Compact authority keeps one trust and rejects conflicting or ambiguous identities") {
+    rodakos::ServerAuthority authority;
+    authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};
+    authority.pending = {trust_test::BootstrapUrl(9555), trust_test::TestTrust(), true, {}};
+    std::string encoded;
+    RODAK_CHECK(rodakos::EncodeServerAuthority(authority, encoded));
+    RODAK_CHECK(encoded.size() + authority.active.trust.ca_pem.size() < LegacyAuthorityRecord(authority, 2).size());
+    RODAK_CHECK(encoded.size() <= rodakos::kServerAuthorityMaxStoredRecordBytes);
+    const std::string valid = encoded;
+    for (int mutation = 0; mutation < 8; ++mutation) {
+        auto* root = cJSON_Parse(valid.c_str());
+        auto* pending = cJSON_GetObjectItemCaseSensitive(root, "pending");
+        if (mutation == 0) cJSON_AddNumberToObject(root, "version", 3);
+        if (mutation == 1) cJSON_DeleteItemFromObjectCaseSensitive(root, "trust");
+        if (mutation == 2) cJSON_AddItemToObject(pending, "trust", cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(root, "trust"), true));
+        if (mutation == 3) cJSON_DeleteItemFromObjectCaseSensitive(pending, "requires_bound_identity");
+        if (mutation == 4) cJSON_AddStringToObject(pending, "connect_address", "192.168.137.8");
+        if (mutation == 5) {
+            cJSON_ReplaceItemInObjectCaseSensitive(root, "active", cJSON_CreateNull());
+            cJSON_ReplaceItemInObjectCaseSensitive(root, "pending", cJSON_CreateNull());
+        }
+        if (mutation == 6) cJSON_AddBoolToObject(root, "unknown", true);
+        if (mutation == 7) cJSON_ReplaceItemInObjectCaseSensitive(
+            cJSON_GetObjectItemCaseSensitive(root, "trust"), "server_id",
+            cJSON_CreateString(std::string(64, '0').c_str()));
+        char* json = cJSON_PrintUnformatted(root);
+        rodakos::ServerAuthority decoded;
+        std::string error;
+        RODAK_CHECK_FALSE(rodakos::DecodeServerAuthority(json, decoded, error));
+        cJSON_free(json); cJSON_Delete(root);
+    }
+    authority.pending.trust.server_id.back() = '0';
+    RODAK_CHECK_FALSE(rodakos::EncodeServerAuthority(authority, encoded));
+    RODAK_CHECK(encoded.empty());
+    authority.pending.trust = trust_test::TestTrust();
+    authority.pending.trust.ca_pem += "\n";
+    std::string error;
+    RODAK_CHECK(rodakos::ValidateServerTrust(authority.pending.trust, error));
+    for (int version : {1, 2}) {
+        rodakos::ServerAuthority decoded;
+        RODAK_CHECK_FALSE(rodakos::DecodeServerAuthority(LegacyAuthorityRecord(authority, version), decoded, error));
+    }
+    RODAK_CHECK_FALSE(rodakos::EncodeServerAuthority(authority, encoded));
+}
+
+RODAK_TEST("Legacy authority migrates through bounded same-trust USB writes without replacing identity") {
+    for (int version : {1, 2}) {
+        trust_test::Reset(); trust_test::SeedBoundLegacy();
+        rodakos::ServerAuthority authority;
+        authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};
+        trust_test::strings["device_cloud/server_auth"] = LegacyAuthorityRecord(authority, version);
+        trust_test::booleans["device_cloud/server_pinned"] = true;
+        authority.pending = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, {}};
+        std::string compact;
+        RODAK_CHECK(rodakos::EncodeServerAuthority(authority, compact));
+        trust_test::authority_write_capacity = compact.size() + 1;
+        RODAK_CHECK(LegacyAuthorityRecord(authority, 2).size() + 1 > trust_test::authority_write_capacity);
+        DeviceCloudConfigService service;
+        Install(service);
+        DeviceCloudConfigService rebooted;
+        DeviceCloudConfig config;
+        rebooted.Load(config);
+        RODAK_CHECK(config.server_trust_pending);
+        RODAK_CHECK(config.server_requires_bound_identity);
+        RODAK_CHECK(config.server_connect_address.empty());
+        RODAK_CHECK_EQ(config.aiot_device_secret, "existing-device-secret");
+        RODAK_CHECK_FALSE(config.has_mqtt_config);
+        trust_test::RespondBound();
+        RODAK_CHECK(rebooted.Refresh(config));
+        RODAK_CHECK_FALSE(config.server_trust_pending);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            Install(rebooted);
+            RODAK_CHECK(rebooted.Refresh(config));
+            RODAK_CHECK_EQ(config.aiot_device_secret, "existing-device-secret");
+            RODAK_CHECK_EQ(config.server_trust.server_id, authority.active.trust.server_id);
+        }
+    }
+}
+
+RODAK_TEST("An exhausted authority write preserves the previous record and identity") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    rodakos::ServerAuthority authority;
+    authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, {}};
+    const std::string previous = LegacyAuthorityRecord(authority, 2);
+    trust_test::strings["device_cloud/server_auth"] = previous;
+    trust_test::booleans["device_cloud/server_pinned"] = true;
+    trust_test::authority_write_capacity = 32;
+    DeviceCloudConfigService service;
+    std::string proof;
+    RODAK_CHECK_EQ(service.SaveSerialProvisioning(trust_test::BootstrapUrl(), "", proof,
+                                                  &authority.active.trust),
+                   ProvisioningUrlSaveResult::kStateUncertain);
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/server_auth"], previous);
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/device_secret"], "existing-device-secret");
+    RODAK_CHECK(trust_test::booleans["device_cloud/server_pinned"]);
+    RODAK_CHECK(proof.empty());
 }

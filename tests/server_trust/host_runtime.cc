@@ -18,6 +18,7 @@ std::vector<Request> requests;
 std::vector<Discovery> discoveries;
 std::string read_error_key;
 std::string write_error_key;
+size_t authority_write_capacity = 4000;
 unsigned discovery_calls = 0;
 std::function<void(const std::string&)> on_http_open;
 std::function<void()> on_discovery;
@@ -26,6 +27,7 @@ void Reset() {
     strings.clear(); booleans.clear(); integers.clear(); replies.clear(); requests.clear();
     discoveries.clear(); read_error_key.clear(); write_error_key.clear(); discovery_calls = 0;
     on_http_open = {}; on_discovery = {};
+    authority_write_capacity = 4000;
 }
 
 rodakos::ServerTrust TestTrust() {
@@ -98,6 +100,10 @@ std::string Settings::GetString(const std::string& key, const std::string& fallb
 SettingsStringWriteStatus Settings::WriteString(const std::string& key, const std::string& value) {
     const auto name = ns_ + "/" + key;
     if (trust_test::write_error_key == name) return SettingsStringWriteStatus::kError;
+    if (value.size() + 1 > 4000 ||
+        (name == "device_cloud/server_auth" && value.size() + 1 > trust_test::authority_write_capacity)) {
+        return SettingsStringWriteStatus::kError;
+    }
     trust_test::strings[name] = value;
     return SettingsStringWriteStatus::kOk;
 }

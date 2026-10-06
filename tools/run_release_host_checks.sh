@@ -11,13 +11,13 @@ fi
 export RODAKOS_IDF_PATH="$rodak_idf_source"
 mkdir -p "$rodak_checks"
 for rodak_suite in app_model home_ui ota_security codec_volume mqtt_event_patch mqtt_volume_service websocket_redirect_patch \
-    serial_provisioning server_trust wifi_adapter \
+    serial_provisioning server_trust server_trust_nvs_storage wifi_adapter \
     voice_wake_service voice_audio_frontend_identity voice_identity_integration \
     file_path_lease web_file_upload file_directory audio_playback_service music_ui file_writer \
     recording_service recorder_ui camera_capture camera_ui; do
     rodak_target="$rodak_checks/asan-$rodak_suite"
     rodak_suite_options=()
-    if [[ "$rodak_suite" == mqtt_event_patch || "$rodak_suite" == websocket_redirect_patch ]]; then
+    if [[ "$rodak_suite" == mqtt_event_patch || "$rodak_suite" == websocket_redirect_patch || "$rodak_suite" == server_trust_nvs_storage ]]; then
         rodak_suite_options+=("-DRODAKOS_IDF_PATH=$rodak_idf_source")
     fi
     cmake -S "$rodak_root/tests/$rodak_suite" -B "$rodak_target" -G Ninja \

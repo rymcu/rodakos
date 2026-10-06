@@ -27,10 +27,12 @@ firmware build does not change an existing hardware gate.
   see the [Rodak verification record](https://github.com/rymcu/rodak/blob/main/docs/trusted-network-verification.md).
   This does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
   or extended soak.
-  Independent numeric-address probing, authority v2 persistence, transport reuse and
+  Independent numeric-address probing, authority persistence, transport reuse and
   continued WiFi retry are now host-verified; their identified-package hardware gate
-  remains open. Version-1-only package 006 cannot read a written v2 authority; recovery
-  must preserve NVS using a v2-capable repair package. Damaged-trust recovery and
+  remains open. Package 007 failed its first USB NVS write gate; 008 adds diagnostics.
+  Compact authority v3 shares one trust object and retains v1/v2 read compatibility.
+  Version-1-only 006 and version-2-only 007/008 cannot read newer records; recovery
+  must preserve NVS using a package supporting the stored version. Damaged-trust recovery and
   physical power-cut acceptance are still open;
   see [trusted server discovery](trusted-server-discovery.md).
 
@@ -41,7 +43,7 @@ firmware build does not change an existing hardware gate.
 - On-demand media hardware, SD/USB MSC, local MultiNet wake, canonical
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
-  see [appearance verification](appearance-verification.md). The latest COM3 firmware package is
+  see [appearance verification](appearance-verification.md). The last bounded strict COM3 pass is
   development-signed `20261007-010516`, verified for trusted serial refresh, MQTTS,
   telemetry and bidirectional port recovery with retained binding; see
   [trusted serial evidence](serial-provisioning.md#2026-10-07-trusted-network-gate).
@@ -100,7 +102,7 @@ firmware build does not change an existing hardware gate.
 
 | Area | Remaining work | Evidence / owner document |
 | --- | --- | --- |
-| Trusted server recovery | Identified-package hardware acceptance for same-port numeric-address failover, route reuse after restart and continued AP-loss recovery; non-scoped IPv6 and WSS numeric Host compatibility; scoped IPv6 is unsupported. Broader negative cases, explicit recovery for a damaged/missing trust record and power interruption between the pin latch and authority commit remain open. Recovery uses controlled restarts and v2-capable packages with preserved NVS. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
+| Trusted server recovery | Identified-package hardware acceptance for compact authority writes, same-port numeric-address failover, route reuse after restart and continued AP-loss recovery; non-scoped IPv6 and WSS numeric Host compatibility; scoped IPv6 is unsupported. Broader negative cases, explicit recovery for a damaged/missing trust record and power interruption between the pin latch and authority commit remain open. Recovery uses controlled restarts and packages supporting the stored authority version with preserved NVS. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
 | Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |

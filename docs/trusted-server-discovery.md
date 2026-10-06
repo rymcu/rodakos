@@ -42,10 +42,14 @@ newly pinned TLS channel; rejected authentication never starts a replacement pai
 ## Persistence and recovery
 
 `device_cloud/server_auth` is one bounded, versioned JSON record with `active` and
-`pending` endpoints. Each endpoint contains the canonical URL, trust object,
-`requires_bound_identity`, and the authenticated numeric `connect_address` route.
-An empty route uses normal resolution. Readers accept version 1 records; successful
-writes use version 2. The USB trust frame remains version 1. The existing secret and
+`pending` endpoints. Version 3 stores their common trust object once at the root;
+each endpoint retains the canonical URL, `requires_bound_identity`, and the
+authenticated numeric `connect_address` route. An empty route uses normal resolution.
+Readers still accept version 1 and 2 records, including their per-endpoint trust;
+successful writes use version 3. Encoding rejects different active/pending pins
+before sharing the trust. Output is limited to 3999 bytes, plus NVS's terminating
+NUL, and the complete new value must fit before the old value is replaced.
+The USB trust frame remains version 1. The existing secret and
 registration flags remain in their existing keys. USB installs a candidate without
 overwriting the last active endpoint.
 Cached MQTT and voice capabilities are disabled while a USB candidate is pending.
@@ -61,9 +65,10 @@ Persistence failures restore the previous record and caches where possible and
 report uncertainty when rollback cannot be established.
 
 Once version 2 is written, package `20261007-010516` (006) and earlier version-1-only
-readers fail closed on this record. They are not a supported network-recovery
-rollback. Keep NVS and the immutable Recovery; repair and rebuild from a source
-that reads version 2, then use the normal preserved-NVS refresh workflow. Erasing
+readers fail closed on this record. Once version 3 is written, version-2-only 007/008
+readers also fail closed. They are not supported network-recovery rollbacks.
+Keep NVS and the immutable Recovery; repair and rebuild from a source that reads
+the stored version, then use the normal preserved-NVS refresh workflow. Erasing
 NVS to force compatibility discards the binding and is not part of this migration.
 
 `device_cloud/server_pinned` is committed before the first authority record. Once
@@ -155,20 +160,33 @@ The network migration never rewrites or grants publisher trust.
 ## Validation
 
 `tests/server_trust` compiles the production trust codec, HTTP TLS configuration,
-DNS-SD filtering and `DeviceCloudConfigService`. Its 26 Debug and ASan/UBSan tests
+DNS-SD filtering and `DeviceCloudConfigService`. Its 29 Debug and ASan/UBSan tests
 with leak detection cover public-key digest mismatch, URL confusion, downgrade,
 TLS-open failure before secret writes, successful existing-binding promotion,
 credential rejection without pairing, malicious MQTT descriptors, spoofed discovery
 followed by a valid candidate, candidate exhaustion, reboot/repeat USB refresh,
 authority/identity and transaction-barrier read faults, write failure, missing-record
 downgrade rejection, same-port address failover, route persistence/reboot, v1/v2
-records, fixed Host/SNI with numeric dialing, bounded address filtering and USB
+records, compact shared-trust migration with bounded writes, conflicting pins and
+ambiguous fields, fixed Host/SNI with numeric dialing, bounded address filtering and USB
 refresh serialization. The MQTT targets additionally verify numeric route client
 recreation and route-change restart isolation; voice-identity integration remains
 green with the route source linked. The production WiFi adapter has 22 Debug and
 ASan/UBSan/leak host cases covering retry/cancellation/deadline and stale events.
 HTTP, mDNS and NVS are injected host boundaries; this suite does not implement a
 real TLS handshake or prove physical flash power-loss behavior.
+
+`tests/server_trust_nvs_storage` additionally compiles the production authority
+codec with the reviewed ESP-IDF NVS Storage/Page/PageManager implementation and
+official CRC source. Its six Debug and ASan/UBSan/leak cases use synthetic six-page
+NOR storage and the public test certificate, never a device partition or secret.
+They reproduce an old-format write failing despite aggregate free space, verify
+the previous authority and unrelated sentry remain intact, then write the compact
+record successfully on the identical layout. Thirty pending/active cycles exercise
+60 updates, readback/reload and actual SDK garbage collection. SDK source drift is
+rejected before building. These tests establish the storage regression and repair;
+they do not retrospectively identify 007's unlogged hardware error or establish
+physical power-cut behavior.
 
 The numeric-route, redirect and continued WiFi-recovery changes are host-verified;
 their identified package still needs independent-address and AP-loss hardware
@@ -545,3 +563,42 @@ build/software evidence only. Same-port multi-address recovery, preserved routes
 after reboot, real AP disappearance and the new package's resource margins still
 require their own hardware run. Once its authority v2 record is written, recover
 with a v2-capable package preserving NVS; do not use 006 as a network rollback.
+
+### Seventh hardware attempt: NVS write gate failed
+
+007 passed preserved-NVS Recovery/Home boot, but its first trusted USB refresh
+returned `nvs_state_uncertain`; it did not pass network acceptance. The failure
+branch is after successful authority encoding/roundtrip validation, during NVS
+pin/authority persistence. A protected read-only snapshot showed an intact v2
+active authority with an empty route, so v1-to-v2 migration had already succeeded.
+The existing device ID and server token version 4 remained unchanged.
+
+The snapshot's active record was 994 bytes. Adding the pending endpoint duplicated
+the certificate, producing a 1946-byte v2 record needing 62 contiguous NVS entries.
+The active page had 43 tail entries; after GC the best page was exactly at the
+62-entry boundary. This post-rollback snapshot alone cannot identify the failing
+API/error: an in-memory run of the actual IDF NVS implementation could write that
+candidate successfully. Separate synthetic pressure reproduced
+`ESP_ERR_NVS_NOT_ENOUGH_SPACE` while preserving the old value, despite sufficient
+aggregate free entries. It establishes a storage-design weakness, not the original
+hardware error code. The host map fake had not modeled this single-page restriction.
+
+Evidence is Rodak's `.codex-temp/trusted-network-seventh-hardware.log` and
+`.codex-temp/trusted-network-hardware-serial-1791310298167.log`. The device's original
+NVS backup stays private; no credential values or raw partition data belong in Git.
+
+### NVS diagnostic build
+
+Package `20261007-022059`, task `trusted-server-nvs-diagnostic-008`, was built from
+`38d79bb3fb5f9a704d52d841a0c0ebab54b11d80`. It only adds diagnostic logs to the
+production Settings writer: namespace/key, failed SDK result, string byte count,
+size-read result and NVS entry statistics. It does not log values or change the
+storage/identity policy and is not a repair or a successful hardware gate.
+
+ESP-IDF 6.0.2 and signed preserved-Recovery packaging passed. Main is 7,094,080 bytes,
+SHA-256 `05865dc206b40474d4c380bc7d4f3e1acc7c4f31653596024caa80f889964618`;
+merged SHA-256 is `61fec43fc33726f7227ef4031710a2a831ef6d786305b13bd2b1a03558e0af1a`.
+The retained ELF is `build/logs/trusted-network-nvs-eighth.elf`, SHA-256
+`640748619c9690391510e4430132c17861af83a76ec9b5f750d9f36307493c30`.
+Immutable Recovery, SDK configuration, dependencies, version and development signing
+are unchanged; the production app flavor still disables fault/Home test injection.

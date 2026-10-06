@@ -10,6 +10,8 @@ namespace rodakos {
 
 inline constexpr size_t kServerTrustMaxCertificateBytes = 1536;
 inline constexpr size_t kServerAuthorityMaxRecordBytes = 6144;
+// NVS strings are a single-page item and include their terminating NUL.
+inline constexpr size_t kServerAuthorityMaxStoredRecordBytes = 3999;
 
 struct ServerTrust {
     int version = 1;

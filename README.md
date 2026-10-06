@@ -13,7 +13,8 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 - Optional USB-installed server trust now enables pinned HTTPS, MQTTS and WSS with
   a stable `.local` server name. Bounded DNS-SD address/port candidates are authenticated before
   endpoint promotion, preserving an existing device binding. Numeric routes now persist
-  in authority v2 and are reused by every trusted transport; host tests cover same-port
+  and are reused by every trusted transport; compact authority v3 shares the server
+  trust and keeps v1/v2 read compatibility. Host tests cover same-port
   address failover. WiFi recovery keeps retrying after AP loss. The new paths still
   require identified-firmware hardware acceptance. Package `20261007-010516`
   passed trusted USB refresh, MQTTS/telemetry and both port migrations on COM3 with
@@ -88,8 +89,9 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   transport package `20261007-010516` has a 7,081,040-byte main image; its bounded
   hardware evidence and remaining gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md#validation).
-  Numeric-route/WiFi-recovery package `20261007-020911` was built from `8188e7e`
-  with a 7,093,088-byte main image; its new hardware gates remain open.
+  Numeric-route/WiFi-recovery package `20261007-020911`, built from `8188e7e`, failed
+  its first USB NVS write gate. Package `20261007-022059` adds diagnostic logs;
+  it is not a storage repair. The compact v3 writer is being validated separately.
   The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build

@@ -1,0 +1,30 @@
+{
+  "idf_version": "6.0.2",
+  "license": "Apache-2.0",
+  "source_hashes_lf": {
+    "components/nvs_flash/src/nvs_storage.cpp": "0d13b31fa0880c4174d1a13071150fd444c79a83c4ac2cb703a1fabb2d7ac222",
+    "components/nvs_flash/src/nvs_page.cpp": "e77a3cb5c9baa6011df2a0cb0053d7f84a003ac1d26d0a7845beadcfaefbfd49",
+    "components/nvs_flash/src/nvs_pagemanager.cpp": "9429ba340a539f7ec62427b12f9e6c630748566cc72f2a589a8e70d06e5c4118",
+    "components/nvs_flash/src/nvs_types.cpp": "a4f2b6e18897c1543592a284c8922316727f3c477aa1e7e38ff5c5b7d8c13fa4",
+    "components/nvs_flash/src/nvs_item_hash_list.cpp": "be05b0db494a038b5a39496bcd09135580beed7669d01829a5459b0dc534e927",
+    "components/nvs_flash/src/nvs.hpp": "7ed78d8cc4fd33b9f58a61333bfae14f1b7bcc0e04e86a5dc231f6002c2b719b",
+    "components/nvs_flash/src/nvs_storage.hpp": "88e839630d864221f7ad13b1c7af7eea70b92ad040ca91940d94c00372d6aabe",
+    "components/nvs_flash/src/nvs_page.hpp": "5169df79ad3a76146cd92258abdcb09209080d259cc9325d0e55de4c01a568d3",
+    "components/nvs_flash/src/nvs_pagemanager.hpp": "cfdffe1c2d9e572633a8d456f8f08dd3b7436cdbd6f7d8d5edc9be5722dcc750",
+    "components/nvs_flash/src/nvs_types.hpp": "c38628905b46e2b880153cc83dead50b6877a47ef640830324c322e461e86f6a",
+    "components/nvs_flash/src/nvs_item_hash_list.hpp": "a19bf27728c9ebdd4e7504717bfc6be291d62c5a9e01fd01e7f37f0b149c05d3",
+    "components/nvs_flash/src/nvs_memory_management.hpp": "24982f5525a212b57bb7a1e42ce27106a061b27b23c3049914a5b472e7a6993d",
+    "components/nvs_flash/src/partition.hpp": "171a7e288db436982f067db8804fa108a5f270b60af70e560bd3808ba8642321",
+    "components/nvs_flash/src/intrusive_list.h": "a21a667c3ca43d7c5b2f1ed447fbaf9e105f8a2b5a218d65a784c9e5df7cb60f",
+    "components/nvs_flash/src/compressed_enum_table.hpp": "7a4e2a673966acacd44216ec08e1636f5684844085fc9c69b5bbc236e0057efc",
+    "components/nvs_flash/include/nvs.h": "e5cef94b3983f2f962351ac93ee827c4f69ca25fb47a9345f8f01f62d702427a",
+    "components/nvs_flash/include/nvs_handle.hpp": "c8417220bb08883a8684942cc0b943d4465ae487d17186b01808e9915a5f8d39",
+    "components/nvs_flash/private_include/nvs_internal.h": "ad3618e339d998c5d7dbdfcefaff822eb0c69a629459d55c4d88cb75383ea94a",
+    "components/nvs_flash/private_include/nvs_constants.h": "e10b89107d46f66eba89e5b55bfb888e1825eb5aded5ee7b37665e1eda3c2f6f",
+    "components/esp_rom/linux/esp_rom_crc.c": "a16c4d0eb8614370288bf2ef9c3362376ecb020037051b019b8943d115cb52cc",
+    "components/esp_rom/include/esp_rom_crc.h": "bd91ce2ccc86f340f73b91d953635a8ea9e6c999a2658328066ec8c0c8d93f5c",
+    "components/esp_common/include/esp_err.h": "dcea6a47531d34026f988052a143fd3a9a9af4b176dbc86931dc3c519275afad",
+    "components/esp_common/include/esp_compiler.h": "b1ab8253896b57ea893601de4922b9eeb6a5338a5d89fb36a9d04f1e8893de48",
+    "components/esp_common/include/esp_idf_version.h": "d240bb67f8ed6491cf90ec1bd90888efd65cf7c21c1eb22fe9414543af9a8e73"
+  }
+}

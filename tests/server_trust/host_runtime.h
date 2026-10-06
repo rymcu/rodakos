@@ -38,6 +38,7 @@ extern std::vector<Request> requests;
 extern std::vector<Discovery> discoveries;
 extern std::string read_error_key;
 extern std::string write_error_key;
+extern size_t authority_write_capacity;
 extern unsigned discovery_calls;
 extern std::function<void(const std::string&)> on_http_open;
 extern std::function<void()> on_discovery;
