@@ -1,6 +1,6 @@
 # Home Layout And Folder Design
 
-Status: phase 4 residency is implemented in source. Pure policy tests and a production-HomeApp host
+Status: active-plus-neighbors residency is implemented in source. Pure policy tests and a production-HomeApp host
 LVGL suite pass; multi-page hardware, physical interaction/readability, and true out-of-memory
 recovery gates remain open.
 
@@ -116,7 +116,10 @@ chains. With no valid explicit entry, the old ID is removed and the new app is a
   native Home layout; the Home status bar and device cloud expose the shared board-backed
   battery/charging telemetry instead.
 
-## Delivery Phases
+## Implementation Record
+
+The original phases below are completed implementation history. Open acceptance work is maintained
+in the [current roadmap](roadmap.md); do not recreate these phases as a new delivery plan.
 
 1. Done in source: pure model types, strict cJSON codec, reconciliation, guarded NVS store, boundary
    tests, resolved rendering, read-only folder access, and the eight-page `All Apps` projection.
@@ -132,7 +135,7 @@ chains. With no valid explicit entry, the old ID is removed and the new app is a
    render-plan policy, while host LVGL tests execute the production Home UI. Multi-page device
    behavior and true embedded OOM recovery remain open.
 
-## Phase 4 Validation Boundary
+## Validation Boundary
 
 - Pure model tests pass across one through eight pages, including empty/clamped inputs, a maximum
   three-page resident window, and active/previous/next population order.
@@ -153,6 +156,7 @@ chains. With no valid explicit entry, the old ID is removed and the new app is a
   so a real exhaustion path may assert before Home can recover; the SRAM logs are measurements, not
   a recovery test. Host sanitizer and leak checks do not reproduce that embedded allocation path.
 
-Tests must cover round trips, malformed JSON, unknown versions, duplicate/missing/hidden IDs, new app
-append, folder overflow, the 3072-byte limit, commit failure, 0/11/13/97 apps, OTA reconciliation,
-long-press launch suppression, and reboot persistence.
+Host coverage includes round trips, malformed JSON, unknown versions, duplicate/missing/hidden IDs,
+new app append, folder overflow, the 3072-byte limit, commit failure, population boundaries, OTA
+reconciliation, and long-press launch suppression. Real reboot persistence and physical interaction
+remain part of the device acceptance boundary above.

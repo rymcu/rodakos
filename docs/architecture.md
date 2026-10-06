@@ -84,6 +84,12 @@ validation, transactional lifecycle order, theme recreation, re-entrancy guards,
 forwarding without entering the firmware image. Its pure-model page-window tests pass for one through
 eight pages, including boundary clamping and active/previous/next order; this target isolates policy.
 
+The same target now compiles production `AudioOutputService`, `AudioService`, and
+`AudioCodecOutput` with fake lower-level board/codec APIs. It verifies volume API error propagation,
+configuration-cache retention and initial-open cleanup/retry. The managed codec library itself is
+outside that host fixture; see [local audio validation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation)
+for the current results and hardware limits.
+
 `tests/home_ui/` complements the model suite by compiling the production `HomeApp`, Home
 model/store, Registry, `PhoneUi`, layout, theme, components, `BootAnimation`, appearance metadata
 codec and `SoftKeyboard` against LVGL 9.3's
@@ -149,6 +155,16 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
+- `AudioOutputService` owns the shared output configuration. With an open codec it commits a new
+  volume only after `AudioCodecOutput::SetVolume` succeeds; `AudioService` follows that result before
+  updating its playback/UI cache. With the codec closed, a volume setter only accepts configuration
+  for the next open. Failure of the initial codec volume API call closes that open attempt and
+  clears its format state so a later request can retry. This preserves on-demand hardware ownership.
+- MQTT desired-volume application checks the setter result and reports the retained configuration
+  on failure. The current managed `esp_codec_dev_set_out_vol` implementation can hide lower-level
+  codec/software-volume errors, so API success does not establish hardware or acoustic success.
+  Ordinary shadow reports contain no volume effect ID or applied desired version; see the
+  [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
   audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and starts
   the next input turn on that same session; a user saying “再见” results in `session.end`, while 30 seconds of follow-up silence, errors, or a

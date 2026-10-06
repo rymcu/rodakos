@@ -174,11 +174,44 @@ health, and valid `battery`/`charging` readings. Reported shadow includes
 firmware, volume, light, battery/charging, and `voice_identity`. A failed
 battery ADC read omits the field; it does not publish a guessed value.
 
-The current command surface accepts `ping` as a raw string, JSON string, or
+The command surface accepts `ping` as a raw string, JSON string, or
 `{"command":"ping"}`/`{"type":"ping"}` object. The acknowledgement is
 `{"status":"ok","result":{"pong":true,"firmware":"..."}}` on
-`devices/{deviceKey}/commands/{commandNo}/ack`; unsupported commands return an
-`unsupported_command` error status.
+`devices/{deviceKey}/commands/{commandNo}/ack`. It also supports
+`camera.stream.start/stop/signal` and `display.stream.start/stop/signal`, with a
+required `sessionId`, mutually exclusive camera/display sessions and SDP/ICE
+signaling; see [WebRTC peer integration](esp-peer-integration.md). Unsupported
+commands return an `unsupported_command` error status. There is currently no
+`volume.set` command handler on this acknowledgement channel.
+
+### Volume configuration and evidence
+
+Desired shadow accepts `volume` inside either root `desired` or `state.desired`
+and clamps it to 0–100. `AudioOutputService` reports its accepted runtime
+configuration. If an already open codec returns an API error when setting volume,
+the previous shared configuration is retained; `AudioService` also preserves its
+playback/UI cache on failure. MQTT logs the failure and reports that retained value.
+With the codec closed, setting volume accepts configuration without opening it;
+the next playback open applies that configuration. If the initial volume API call
+fails, the open attempt is closed and its format state is cleared for retry.
+
+This is an API error boundary, not full hardware verification. The current managed
+`esp_codec_dev_set_out_vol` caches the requested volume and returns success without
+propagating every codec/software-volume driver failure. Software success or a
+reported volume therefore does not establish I2C register application or audible
+speaker output.
+
+The firmware does not consume root `version`/`shadowVersion` as a volume applied
+revision and reports no volume `effectId`, desired revision or per-effect result.
+Connection establishment and unrelated state updates also publish ordinary shadow
+reports. A matching reported value, a newer server shadow version, or a successful
+MQTT publish cannot prove that a particular Agent Runtime effect executed on the
+device. Rodak's local desired-state compensation likewise does not prove physical
+restoration. Correlated execution receipts need a separately versioned contract;
+this update does not introduce them. `voice_identity` has its own revision/status
+semantics below and must not be generalized into a volume receipt.
+
+### Voice identity
 
 The shared `voice_identity` desired/reported object is:
 

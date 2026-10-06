@@ -1103,7 +1103,9 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
         }
     }
     if (cJSON_IsNumber(volume) && audio_output_ != nullptr) {
-        audio_output_->SetVolume(std::clamp(volume->valueint, 0, 100));
+        if (!audio_output_->SetVolume(std::clamp(volume->valueint, 0, 100))) {
+            ESP_LOGW(TAG, "Failed to apply desired volume; retaining accepted configuration");
+        }
     }
     cJSON* light = cJSON_IsObject(desired)
                        ? cJSON_GetObjectItemCaseSensitive(desired, "light")

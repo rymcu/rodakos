@@ -388,14 +388,17 @@ bool AudioService::SetVolume(int volume) {
     const int clamped = std::clamp(volume, 0, 100);
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    // 串行化硬件写入和两个缓存，避免并发调用乱序提交。
+    const bool accepted = output_.SetVolume(clamped);
+    if (accepted) {
         volume_ = clamped;
         state_.volume = volume_;
-        xSemaphoreGive(mutex_);
-    } else {
-        volume_ = clamped;
     }
-
-    return output_.SetVolume(volume_);
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
+    }
+    return accepted;
 }
 
 int AudioService::volume() const {

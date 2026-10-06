@@ -27,6 +27,7 @@ add_executable(rodakos_app_model_tests
     battery_level_model_test.cc
     wifi_connection_policy_test.cc
     ota_signature_format_test.cc
+    audio_output_service_test.cc
     ../appearance/package_test.cc
     ../appearance/policy_test.cc
     ../appearance/json_allocator_test.cc
@@ -53,6 +54,9 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/realtime_voice_reconnect_policy.cc
     ../../main/phone_os/realtime_voice_transport_harness.cc
     ../../main/phone_os/battery_level_model.cc
+    ../../main/phone_os/audio_output_service.cc
+    ../../main/phone_os/audio_service.cc
+    ../../main/rodakos_adapters/audio_codec_output.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
     ../../components/rodak_ota_state/rodak_ota_signature_format.cc
     ../../components/rodak_appearance/rodak_appearance.cc

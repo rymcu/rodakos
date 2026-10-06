@@ -230,8 +230,11 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-Current observed IDF 6.0.2 signed-package `build\rodakos.bin` size is 6,897,584 bytes
-(about 6.58 MiB). The main `ota_0` partition is 13.3125 MiB; the independently built Recovery must fit its 2.5 MiB factory partition.
+The last recorded signed device package `20261001-234748` contains a 6,897,584-byte main image
+(about 6.58 MiB); see [appearance verification](appearance-verification.md). A later local build
+has its own size/hash and does not replace that device evidence. Record new build results in
+[OTA release readiness](ota-release-readiness.md). The main `ota_0` partition is 13.3125 MiB;
+the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash
 

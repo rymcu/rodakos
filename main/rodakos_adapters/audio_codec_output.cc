@@ -105,6 +105,8 @@ bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bi
     const int vol_ret = esp_codec_dev_set_out_vol(codec, volume);
     if (vol_ret != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set volume to %d", volume);
+        Close();
+        return false;
     }
     return true;
 }

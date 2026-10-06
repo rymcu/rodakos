@@ -85,19 +85,12 @@ bool AudioOutputService::OpenForOwner(const char* owner,
         return false;
     }
 
-    int volume = 60;
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        volume = volume_;
-        xSemaphoreGive(mutex_);
-    }
-
     bool ok = false;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
     if (owner_.empty() || owner_ == owner) {
-        ok = output_.Open(sample_rate, channels, bits_per_sample, volume);
+        ok = output_.Open(sample_rate, channels, bits_per_sample, volume_);
         if (ok) {
             owner_ = owner;
         } else if (!output_.IsOpen()) {
@@ -145,8 +138,6 @@ bool AudioOutputService::SetVolume(int volume) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
-    volume_ = clamped;
-
     if (output_.IsOpen()) {
         if (!output_.SetVolume(clamped)) {
             if (mutex_ != nullptr) {
@@ -156,6 +147,8 @@ bool AudioOutputService::SetVolume(int volume) {
             return false;
         }
     }
+    // codec 关闭时只保存配置，下一次按需打开时再应用。
+    volume_ = clamped;
     if (mutex_ != nullptr) {
         xSemaphoreGive(mutex_);
     }

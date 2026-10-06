@@ -4,7 +4,8 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-03 (documentation baseline: `c64cf06` / `f7e8c91`).
+Last refreshed: 2026-10-06 (reviewed baseline: `d935cf6` / `2ed1e8c`, plus the audio-volume
+failure correction). Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -39,8 +40,16 @@ Last refreshed: 2026-10-03 (documentation baseline: `c64cf06` / `f7e8c91`).
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Current IDF 6.0.2 signed appearance package main artifact: 6,897,584 bytes (about 6.58 MiB). The main application slot is
-  13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
+- Audio volume setters retain the previous configuration when the codec API reports failure.
+  A closed codec accepts configuration without opening hardware. Reported volume is not proof of
+  physical speaker output or a correlated device effect receipt; see the
+  [shadow contract](docs/rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+- Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
+  queued and successful completion evidence for app exercises. These host checks do not close the
+  eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
+- Last recorded signed device package `20261001-234748`: 6,897,584-byte main image (about 6.58 MiB).
+  It identifies the earlier COM3 appearance run, not subsequent local builds. The main application
+  slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
 
@@ -112,9 +121,9 @@ ESP-IDF 6.0.2 baseline, so no host JSON package or active IDF shell is required:
 ```powershell
 wsl -d Debian -- bash -lc '
   cmake -S /mnt/d/workspace/rodakos/tests/app_model \
-        -B /tmp/rodakos-app-model -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
-  cmake --build /tmp/rodakos-app-model &&
-  ctest --test-dir /tmp/rodakos-app-model --output-on-failure
+        -B ~/.cache/rodakos-app-model -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+  cmake --build ~/.cache/rodakos-app-model &&
+  ctest --test-dir ~/.cache/rodakos-app-model --output-on-failure
 '
 ```
 
@@ -155,7 +164,7 @@ docs/
 └── roadmap.md             # Current baseline and near-term plan
 
 tests/
-├── app_model/             # Host-side Home model/store, Registry, Host, and Navigation tests
+├── app_model/             # Host-side models, lifecycle, policy and audio-volume service tests
 └── home_ui/               # Production HomeApp exercised against host LVGL 9.3
 ```
 
@@ -207,10 +216,13 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Serial provisioning](docs/serial-provisioning.md)
 - [OpenOS comparison and design decisions](docs/openos-comparison.md)
 - [Home layout and folder design](docs/home-layout-design.md)
+- [Historical plans](docs/archive/README.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Agent/developer notes](AGENTS.md)
 
-Historical migration notes, one-off progress reports, screenshots, and test helpers are not part of the current documentation set. Current build, protocol, and runtime knowledge should be kept in the documents above.
+The archive preserves superseded plans for traceability. Current build, protocol, runtime knowledge
+and open acceptance work belong in the documents above; dated hardware evidence retains the exact
+package it observed.
 
 ## Acknowledgments
 

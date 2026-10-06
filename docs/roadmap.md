@@ -1,238 +1,76 @@
 # RodakOS Roadmap
 
-RodakOS is an embedded Phone OS experiment for the RYMCU BigSmart, not a web prototype. The current direction is to keep the OS, services, and UI framework clearly separated while making the device feel like a small real phone home screen instead of a debug menu.
+Updated: 2026-10-06. Reviewed source baseline: `d935cf6` (collector regression) and
+`2ed1e8c` (documentation alignment), plus the audio-volume failure correction described below.
 
-Planning update, 2026-10-03 (source baseline `c64cf06` / `f7e8c91`): the current baseline includes
-canonical realtime voice with bounded reconnect, WebRTC camera/display peers, signed appearance
-resources, and their recorded COM3 gates.
-This roadmap records implementation state and the remaining acceptance gates; completed evidence is
-not phrased as work to repeat. Signed OTA interruption, production-key, and resource-pressure work
-remains tracked in [OTA release readiness](ota-release-readiness.md).
+This is the active work list. Completed implementation details live in
+[architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
+plan is retained in the [documentation archive](archive/README.md).
 
-Status vocabulary: **implemented** means source and host checks are present; **hardware-verified**
-means a recorded COM3 or fixture run exercised the path; **pending** means an explicit acceptance
-gate remains open. A passing host test never upgrades a hardware gate by itself.
+**Implemented** means the source path exists; **host-verified** means a recorded software test
+exercised it; **hardware-verified** requires a recorded device or fixture run. A new host test or
+firmware build does not change an existing hardware gate.
 
-## Current Baseline
+## Current baseline
 
-As of 2026-10-03:
+- ESP32-S3 BigSmart: 16 MiB flash, 8 MiB PSRAM, ESP-IDF 6.0.2, LVGL 9.3,
+  `esp_lvgl_port` 2.8, local Board Manager definitions and pinned component resolution.
+- Static native app registry/host/navigation; Shell-owned Lock Screen and Control Center;
+  exact-ID Home layouts, folders, one-save Arrange drafts, and active-plus-neighbors page residency.
+- On-demand media hardware, SD/USB MSC, local MultiNet wake, canonical
+  `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
+- Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence.
+  The signed firmware package `20261001-234748` is the last recorded device package, not an
+  identity for subsequent local builds; see [appearance verification](appearance-verification.md).
+- Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
+  A closed codec accepts configuration without opening hardware; the next open applies it and
+  fails with cleanup if the initial API call fails. Reported volume is software configuration, not
+  an effect acknowledgement or proof of speaker output.
+  The managed codec API can mask lower-level driver failures; see the shadow contract below.
+- Release-soak collection requires increasing device uptime and both queued and successful
+  app-launch completion evidence. Its 17 Python regression tests pass; the eight-hour device
+  gate remains open. See [OTA release readiness](ota-release-readiness.md).
 
-- ESP32-S3 target, 16MB flash, 8MB PSRAM.
-- ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain and an exact environment gate.
-- Local Board Manager configuration and BigSmart board definition for `rymcu_bigsmart`.
-- LVGL 9.3 with `esp_lvgl_port` 2.8, double buffering, the RodakOS-owned
-  `rodakos_fonts` subset, and theme/layout helpers.
-- IDF 6 managed MQTT 1.0.0 and cJSON 1.7.19 dependencies.
-- ST7789 display, LEDC backlight, GT911 touch via cached polling, WiFi STA, SD FileService, USB MSC mode.
-- App registry/host/navigation model is in place, validates a unique Home role, and gives the host sole ownership of app lifecycle.
-- Native Lock Screen and Control Center overlays are owned by PhoneSystem rather than modeled as apps.
-- Home Phase 4 keeps stable page tile shells while retaining grids/buttons only for the active page
-  and immediate neighbors. Pure policy tests and a production-HomeApp host LVGL suite pass. A
-  13-app/two-page device population boots; physical multi-page interaction remains open.
-- Built-in apps: Home, Settings, Photos, Camera, Clock, Calendar, File Manager, Gyro, System Info,
-  Music, Recorder, Assistant, Smart, and Wake.
-- Services in use or scaffolded: backlight, WiFi, file service, web file service, camera, display capture, WebRTC camera/display peers, audio input/output, music player, recording, audio focus, hardware-backed local voice wake, Rodak canonical voice assistant, device cloud config, time, button binding, lights, motion, Wake-on-LAN, unified MQTT, signed SD-staged OTA, and signed appearance resources.
-- Current signed appearance package main artifact is 6,897,584 bytes (about 6.58 MiB) of the 13.3125 MiB main application partition.
+## Remaining acceptance and implementation work
 
-## Milestone 0: Hardware And Build Baseline
+| Area | Remaining work | Evidence / owner document |
+| --- | --- | --- |
+| Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
+| Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak) |
+| Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
+| Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
+| Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
+| Audio | Propagate lower-level errors via a reproducible upstream version or managed dependency patch; codec startup/shutdown failure recovery, volume failure/retry and audible output checks; correlated device effect receipts require a separate versioned protocol change | [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties), [codec limitation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation) |
+| Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
+| Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 
-Status: done, with ongoing maintenance.
+Already recorded COM3 voice, provisioning, WebRTC, and appearance gates remain accepted within
+their documented limits. Ordinary regression reruns must not be presented as new production-key,
+power-loss, acoustic, or resource-exhaustion evidence.
 
-- Keep `idf.py build` working behind the ESP-IDF 6.0.2 environment gate.
-- Keep `generate_board_config.ps1` cold bootstrap and its internal path normalization aligned with Board Manager.
-- Keep `build_rodakos.ps1`, `build_ota_bundle.ps1`, and `flash_and_test.ps1` aligned with that workflow.
-- Keep the 16 MiB Recovery/ota_0 partition table stable after the wired OTA migration.
-- Keep the guarded first-boot capture green before allowing an interactive monitor to attach.
-- Keep generated `components/gen_bmgr_codes/` out of git.
+## Deferred design decisions
 
-## Milestone 1: Phone Shell
+- Keep free drag deferred until physical paging and touch are proven together.
+- Extend host LVGL coverage into PhoneSystem policy when hardware dependencies can be isolated.
+- Refine service-backed status, app capability visibility in Settings/System Info, and consistent
+  back/home transitions. Decide the preferred capture location between `/photos` and `/DCIM`.
+- Native capabilities remain descriptive metadata. Any future untrusted MiniApp runtime needs
+  a separate capability broker, per-app storage, resource limits, authenticated transport and
+  signed staged installation. See [OpenOS comparison](openos-comparison.md).
+- Swipe unlock remains a privacy cover until PIN, encrypted storage, Secure Boot and Flash
+  Encryption policies are implemented.
+- Consider Board Manager IMU metadata only when a first-class device type exists.
 
-Status: active; source implementation requires hardware verification.
+## Maintenance rules
 
-- Home is a real desktop, not a debug list.
-- Home supports 4x3 pages driven by the registered app list.
-- Home has a versioned exact-ID layout model, strict JSON codec, Registry reconciliation, guarded NVS
-  persistence, folder browsing, and an eight-page `All Apps` overflow projection.
-- Home restores its page anchor in runtime RAM across app returns and theme rebuilding. Long-press
-  Arrange supports adjacent App/Folder moves, folder create/rename/dissolve, and member moves within,
-  out of, or between folders. Cancel discards the whole draft and Done performs one guarded save;
-  failures preserve the live layout and unsafe write states lock the current Home session.
-- Home keeps all tile shells stable but only the active page plus existing previous/next pages retain
-  their LVGL child trees. Scroll-end work asynchronously releases far pages and populates active,
-  previous, then next. Scroll directions stay restricted until the corresponding adjacent page is
-  ready, queued refreshes are canceled before theme/navigation teardown, and final-ready logs report
-  internal-SRAM free space and largest free block.
-- The host LVGL 9.3 target compiles the real Home UI and reports 43 tests and 0 failures covering
-  tap-versus-drag suppression, bidirectional page swipes and boundaries, long press, Cancel/Done,
-  repeated Home, theme rebuild, keyboard geometry, 96/97-app `All Apps`, and async
-  active-plus-neighbors residency. Twenty repeated normal runs and ASan/UBSan with leak detection
-  also pass.
-- Apps register through descriptors and factories.
-- Lock Screen and Control Center use native top-layer overlays and do not consume an app lifecycle slot.
-- Settings controls startup locking and the top-edge Control Center gesture.
-- Button bindings expose Lock and Control Center; IO10 defaults to Control Center / Smart / Lock for single / double / long press.
-- Settings manages brightness, theme, WiFi, USB disk mode, file tools, and time/cloud-related settings.
-- Touch input is available through cached polling rather than direct LVGL I2C reads.
+Use [firmware download](firmware-download.md) for the supported build/package/flash flow.
+Keep the Recovery partition layout and generated Board Manager ownership intact. Record current
+build size/hash with its source baseline in the evidence document; preserve older device-package
+identities as dated evidence. Test-only populations and fault-injection flavors must be disabled
+before normal device use.
 
-Next polish:
+Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud provisioning
+gate as a regression check; its prior hardware acceptance does not remove ongoing diagnostics.
 
-- Keep free drag deferred until paging and touch are proven together.
-- Use live service state consistently in status UI.
-- Tighten navigation transitions and back/home behavior across all apps.
-- Use the current 13-app/two-page population to verify bidirectional swiping and page restoration.
-  The production-off, isolated 25-app hardware-test population is available for the three-page
-  far-page release and lazy turnover gate.
-- Validate Home Arrange, page restoration, GT911 gestures, ST7789 readability, System Shell
-  preferences, and both physical-button paths manually or with an external fixture.
-- Define and execute a true low-memory recovery gate. Current LVGL CLIB allocation with malloc
-  assertions means the SRAM residency logs do not yet prove graceful out-of-memory recovery.
-- Treat swipe unlock as a privacy cover only until PIN, encrypted storage, Secure Boot, and Flash Encryption policies exist.
-
-## Milestone 2: Media And Storage Apps
-
-Status: active.
-
-- Photos scans SD-backed image folders and renders JPG/PNG/BMP images.
-- File Manager browses FileService-backed storage.
-- Music scans `/music` and plays through the audio/music service stack.
-- Camera preview and capture are wired through CameraService.
-- Camera and display WebRTC peer services use MQTT signaling, JPEG framing, explicit read-only/control
-  channels, and mutual exclusion. The COM3 run verified six display sessions, camera starts 3/3,
-  and stop/navigation cleanup.
-- USB MSC mode exposes the SD card before normal UI starts.
-
-Next work:
-
-- Verify media apps on real SD cards with large files and low-memory conditions.
-- Add clearer empty/error states for missing SD card, unsupported images, no tracks, and camera unavailable.
-- Decide whether captured photos should prefer `/photos`, `/DCIM`, or both.
-
-## Milestone 3: System Services
-
-Status: partially implemented.
-
-- WiFi scan/connect/auto-connect exists.
-- Time sync entry points exist.
-- Audio playback and voice assistant services exist, with heavy hardware opened on demand.
-- Light and button binding services exist.
-- Wake-on-LAN validates and sends UDP magic packets on demand; the Wake app stores up to eight
-  named devices with configurable MAC, broadcast address, and port.
-
-Next work:
-
-- Verify the BigSmart battery/charging telemetry on hardware and keep placeholder status values
-  out of user-facing device data.
-- Harden audio codec startup/shutdown and failure recovery.
-- Verify Recorder preemption, resume, and failure recovery across the integrated recording service.
-- Add diagnostics for I2C bus health, SD card status, and memory pressure.
-- Consider moving QMI8658 metadata into the board definition once Board Manager has a first-class IMU device type.
-
-## Milestone 4: App Model
-
-Status: static native app model is hardened.
-
-- Registry finalization rejects invalid identities, alias conflicts, missing factories, and invalid Home roles.
-- Lifecycle is `OnCreate -> OnResume -> OnPause -> OnDestroy`, owned only by PhoneAppHost.
-- App launch is transactional: a failed candidate does not destroy the current app.
-- Continuous playback, recording, and other background behavior belongs to services rather than retained UI app instances.
-- Host-side tests execute production Registry, Host, and Navigation sources and cover lifecycle, validation, theme recreation, and forwarding contracts.
-- A separate host LVGL target executes production `HomeApp`, layout/theme, `SoftKeyboard`, and its
-  real LVGL event/object tree against an in-memory 320x240 display.
-
-Next work:
-
-- Extend host LVGL coverage into PhoneSystem policy when it can be isolated from NVS and hardware.
-- Keep app-specific code inside `main/apps/<app>/` and avoid central switch statements.
-- Make app capabilities visible to Settings/System Info where useful.
-- Keep native apps statically linked; do not treat descriptive native capabilities as access control.
-
-## Milestone 5: Assistant And Cloud
-
-Status: non-voice Device Cloud provisioning and credential rotation are hardware-verified.
-Real-person local wake/ASR/agent/TTS, same-session follow-up, bounded reconnect and retry exhaustion,
-and explicit "再见" termination are verified on COM3. The canonical `rodak-realtime-voice/v1`
-contract is the only current voice wire contract; the broader six-turn, coexistence, barge-in, and
-long-duration device gates remain.
-
-- Local Chinese MultiNet5 monitors for "你好达克" without an idle cloud connection.
-- A wake match acquires audio focus, buffers 16 kHz mono PCM, opens one Rodak WebSocket, uploads
-  60 ms Opus frames, and decodes downlink Opus. Every non-terminal reply drains TTS and resumes
-  listening on the same session; a user saying "再见" ends the session with `session.end`, while 30 seconds of follow-up silence, terminal errors, or a
-  connection/listening watchdog disconnect and re-arm local monitoring. Established retryable transport
-  failures use bounded service-owned reconnect/backoff and restore `session.ready`, `wake.detected`, and
-  `input.start` before becoming active. Active TTS playback is not
-  terminated by that watchdog.
-- Wake, Recorder, and assistant capture use explicit ADC owners and priorities.
-- The Assistant app is a persistent enable/configuration and status surface, not a Talk/Stop page.
-- The selected ESP-SR model bundle is embedded in `ota_0`; the immutable Recovery layout is unchanged.
-
-Next work:
-
-- Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud gate as a
-  regression check.
-- Complete the remaining [voice assistant hardware verification](voice-assistant.md#verification-gates):
-  at least six same-session turns, follow-up silence, music resume, Recorder preemption, repeated wake
-  suppression, and TTS tail playback.
-- Extend hardware fault injection beyond the verified retryable reconnect and retry-exhaustion
-  scenarios to cover server `retryable: false`, close `1002`/`4001`, stale audio discard, and
-  stop/deinitialization cancellation.
-- Measure false accepts, false rejects, idle CPU load, heap/PSRAM use, and long-duration stability.
-- TTS-time interruption is now wired through the existing session: an AEC/VAD-confirmed barge-in
-  aborts playback, keeps capture and the existing session alive, and rejects late TTS frames
-  without opening a second session.
-  Hardware validation remains required, and true full duplex still depends on AEC and
-  echo-suppression validation.
-
-## Milestone 6: Rodak Device And OTA Protocol
-
-Status: active; wired non-voice Device Cloud and MQTT credential-refresh verification is complete.
-Signed manifest v2 and Recovery verification are implemented; the latest signed appearance package
-booted on COM3, while production-key migration, power-cut, and long-soak gates remain open.
-
-- Unified MQTT v2 bootstrap, telemetry, reported/desired shadow and OTA notification transport.
-- SD-staged main image download with SHA-256 and a separate factory Recovery writer.
-- Isolated OTA journal, startup confirmation, rollback restore and Rodak result reporting.
-- Wired first-flash Recovery handoff, local image confirmation, and a direct second boot have been
-  verified on the COM3 BigSmart device.
-- USB Serial/JTAG WiFi/bootstrap provisioning, NVS persistence, monotonic `token_version` rotation,
-  old-credential rejection, bootstrap refresh, MQTT recovery, telemetry, and health soak have been
-  verified in one COM3 session. This gate does not claim a local MultiNet wake.
-- Recovery source verifies a required RSA-2048/SHA-256 signature bound to the OTA task, version,
-  size, product, slot and image digest before writing `ota_0`. Host tests cover candidate rejection
-  without erase and reset resumption. The COM3 appearance run proves signed resource download,
-  next-boot adoption, offline reuse, and reported state; it does not close firmware production-key
-  migration or actual power-cut gates.
-
-Before production rollout:
-
-- Configure the production verification key explicitly for both builds and complete signed-image
-  package acceptance on hardware.
-- Ensure Rodak's manifest endpoint returns the signed `manifestVersion: 2` fields; Rodak forwards
-  release metadata and does not generate the firmware signature. Appearance signing remains a
-  separate resource trust chain.
-- Run power-cut tests at download, journal, erase, write, boot confirmation and rollback boundaries.
-- Verify the complete flow on hardware with Rodak-hosted artifacts.
-
-## Milestone 7: Sandboxed Mini Apps
-
-Status: design only.
-
-- Do not import the OpenOS OSA VM, `.osa/.osac` format, or writable-SD privileged system scripts.
-- Define a versioned manifest around stable ID, version, entry point, declared capabilities, and resource limits.
-- Run untrusted code behind a capability broker; never expose `PhoneServices` or raw hardware handles.
-- Give each MiniApp an isolated storage root and bounded memory, execution time, UI objects, and network access.
-- Require authenticated transport and package signatures rooted in an immutable trust key.
-- Use staged install, path traversal checks, size limits, backup, and rollback before activating a package.
-
-The source comparison and rationale are recorded in [OpenOS comparison and design decisions](openos-comparison.md).
-
-The current cross-repository wire contracts are [Rodak AIoT v1](rodak-aiot-contract-v1.md) and
-[Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md). Product behavior and hardware
-verification remain in [Voice assistant integration](voice-assistant.md) and
-[Voice AEC and barge-in integration](voice-aec-integration.md).
-
-## Non-Goals For Now
-
-- Runtime binary plug-in loading on ESP32-S3.
-- Reintroducing a hand-written board layer parallel to Board Manager.
-- Direct execution of application images from SD card.
+Runtime binary plug-in loading, execution of application images directly from SD, and a parallel
+hand-written board layer remain outside the current scope.

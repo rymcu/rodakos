@@ -7,15 +7,19 @@ tests does not close physical power-loss or full heap-exhaustion gates.
 
 ## Current evidence
 
-Recorded evidence reviewed on 2026-10-03 (source baseline `c64cf06` / `f7e8c91`) includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The latest
+Evidence review updated on 2026-10-06. The earlier source baseline `c64cf06` / `f7e8c91`
+includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
 recorded signed package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
 (about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
-useful as the signed-OTA host baseline, but is not the current firmware identity.
+useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
+audio-volume build recorded below.
 
-There are 221 app-model, 43 Home UI, 11 signature/journal, 3 one-shot fault, and 5 production
-Recovery state-machine tests, all passing. ASan/UBSan with leak detection passes for every C++ target.
+The app-model suite now passes 230 tests in both Debug and ASan/UBSan, including nine audio-volume
+regressions. The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
+5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
+with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
 Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
 The added host cases reject missing/repeated device uptime and unterminated failure logs; they do
 not establish a hardware soak. `build/logs/release-readiness.json` records the
@@ -30,6 +34,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Journal ABI and A/B recovery                | Production journal v1 (712 bytes), torn new slot, uncertain commit, corrupt slots, I/O errors and acknowledged cleanup                   | Host tests pass                               |
 | One-shot reset                              | Production injection code preserves its consumed marker across simulated reset, skips reset on commit failure                            | Host tests pass                               |
 | Home resource failure                       | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully          | Host test passes                              |
+| Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: retained caches, failed first-open cleanup, retry and deferred configuration | Nine host regressions pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -38,6 +43,41 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Complete LVGL exhaustion                    | CLIB allocations and internal LVGL allocations can still assert                                                                          | Release blocker                               |
 | Eight-hour release soak                     | Must identify the newly flashed build and capture 28,800 seconds                                                                         | Not started                                   |
 | Production signing root and server manifest | Operator-owned key and Rodak v2 signature fields                                                                                         | Not established                               |
+
+## 2026-10-06 local audio-volume validation
+
+Source baseline: `d935cf6` plus the audio-volume correction. The host target compiles the real
+`AudioOutputService`, `AudioService`, and `AudioCodecOutput`; only lower-level board, codec,
+FreeRTOS and decoder facilities are faked. All 230 tests pass in Debug and ASan/UBSan.
+The nine added tests cover rejected volume writes retaining shared/playback/UI caches,
+successful retry, clamping, closed-codec configuration without hardware opening, and failed
+initial volume setup closing/clearing the attempted open before a retry.
+
+An ESP-IDF 6.0.2 `idf.py build` completed successfully:
+
+| Artifact | Result |
+| --- | --- |
+| Local main image | `build/rodakos.bin`, 6,897,792 bytes |
+| SHA-256 | `876dde19bf0933a44cd18c684d78f7ed378e3a195f9cb9c2057e412adb011aee` |
+| Main slot | Fits the 13.3125 MiB `ota_0` partition; 7,061,376 bytes remain |
+| Device / signed-package status | Not flashed; does not replace package `20261001-234748` or its COM3 evidence |
+
+The main-image size check also warns that this image exceeds the 2.5 MiB factory Recovery
+partition. That is expected for the main target in this layout: use `build_ota_bundle.ps1` to
+validate the main and separate Recovery artifacts against their proper slots. Root
+`idf.py flash` / `app-flash` remain unsupported for this layout.
+
+The corrected cache behavior applies when the codec API reports failure. In
+`managed_components/espressif__esp_codec_dev/esp_codec_dev.c`, the managed
+`esp_codec_dev_set_out_vol` implementation updates its own cached volume and returns success
+without propagating the return values from either `codec->set_vol` or `sw_vol->set_vol`;
+it was not changed here. A durable fix needs a reviewed upstream version or reproducible
+dependency patch, rather than an untracked edit to the resolved managed component.
+With the codec closed, an accepted setter is configuration for the next open, not a hardware write.
+These tests and the build therefore establish neither physical I2C/speaker behavior nor a
+correlated wire effect receipt. MQTT checks the service result and reports the retained value on
+failure, but ordinary shadow reports carry no volume effect ID or applied desired revision.
+See the [shadow contract](rodak-aiot-contract-v1.md#volume-configuration-and-evidence).
 
 ## Build and package
 
