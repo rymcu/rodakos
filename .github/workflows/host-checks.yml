@@ -1,0 +1,143 @@
+name: RodakOS host checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodakos-host-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Linux host tests (ASan, UBSan)
+    runs-on: ubuntu-24.04
+    container: debian:13-slim
+    timeout-minutes: 45
+    env:
+      IDF_COMPONENT_CACHE_PATH: /root/.cache/rodakos-components
+      RODAKOS_IDF_PATH: ${{ github.workspace }}/.host-idf
+      RODAKOS_CHECKS: ${{ github.workspace }}/host-check-results
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Debian 13 host dependencies
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            ca-certificates git build-essential cmake ninja-build libmbedtls-dev \
+            python3 python3-venv python3-cryptography zstd
+          python3 -m venv --system-site-packages /opt/rodakos-host-python
+          /opt/rodakos-host-python/bin/python -m pip install idf-component-manager==3.0.3
+          echo '/opt/rodakos-host-python/bin' >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Restore component source cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: /root/.cache/rodakos-components
+          key: rodakos-host-components-v1-${{ hashFiles('dependencies.lock') }}
+
+      - name: Checkout reviewed ESP-IDF source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: espressif/esp-idf
+          ref: 7101770dc6db2667b3c477cc31365dd1acd6db4e # v6.0.2
+          path: .host-idf
+          persist-credentials: false
+          sparse-checkout: |
+            components/esp_event
+            components/tcp_transport
+            components/esp_common/include
+
+      - name: Record source and tool identities
+        run: |
+          mkdir -p "$RODAKOS_CHECKS"
+          {
+            git rev-parse HEAD
+            git -C "$RODAKOS_IDF_PATH" rev-parse HEAD
+            cat /etc/os-release
+            cmake --version
+            ninja --version
+            c++ --version
+            python3 --version
+            python3 -m pip freeze
+            dpkg-query -W libmbedtls-dev python3-cryptography
+            sha256sum dependencies.lock main/idf_component.yml
+          } | tee "$RODAKOS_CHECKS/identities.log"
+
+      - name: Fetch and verify locked host components
+        run: |
+          python3 .github/workflows/scripts/prepare_host_dependencies.py \
+            2>&1 | tee "$RODAKOS_CHECKS/dependencies.log"
+          git diff --exit-code -- dependencies.lock main/idf_component.yml
+
+      - name: Run release host checks
+        run: |
+          bash tools/run_release_host_checks.sh "$RODAKOS_CHECKS" \
+            2>&1 | tee "$RODAKOS_CHECKS/release-runner.log"
+
+      - name: Run additional existing host suites
+        run: |
+          for suite in voice_volume_service remote_input display_control_ack_service light_service appearance; do
+            target="$RODAKOS_CHECKS/asan-$suite"
+            cmake -S "tests/$suite" -B "$target" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Debug \
+              '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+              '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+              > "$RODAKOS_CHECKS/$suite.log" 2>&1
+            cmake --build "$target" -j 6 >> "$RODAKOS_CHECKS/$suite.log" 2>&1
+            ctest --test-dir "$target" --output-on-failure \
+              2>&1 | tee "$RODAKOS_CHECKS/$suite-tests.log"
+          done
+
+      - name: Upload host evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rodakos-host-${{ github.sha }}
+          path: |
+            ${{ github.workspace }}/host-check-results/*.log
+            ${{ github.workspace }}/host-check-results/**/Testing/Temporary/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  powershell:
+    name: PowerShell syntax
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Parse tracked PowerShell scripts without executing them
+        shell: pwsh
+        run: |
+          $failed = $false
+          $scripts = @(git ls-files '*.ps1')
+          if ($LASTEXITCODE -ne 0 -or $scripts.Count -eq 0) {
+            throw '无法枚举 PowerShell 脚本'
+          }
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $script), [ref]$tokens, [ref]$parseErrors)
+            foreach ($parseError in $parseErrors) {
+              Write-Output "$script`: $parseError"
+              $failed = $true
+            }
+          }
+          Write-Output "PowerShell $($PSVersionTable.PSVersion): 已检查 $($scripts.Count) 个脚本"
+          if ($failed) { throw 'PowerShell 语法检查失败' }
