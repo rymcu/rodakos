@@ -1,4 +1,14 @@
 #include "fake_cloud.h"
+#include <lvgl.h>
+
+extern "C" lv_result_t __real_lv_async_call(lv_async_cb_t callback, void* user_data);
+extern "C" lv_result_t __wrap_lv_async_call(lv_async_cb_t callback, void* user_data) {
+    if (cloud_ui_test::reject_next_async_call) {
+        cloud_ui_test::reject_next_async_call = false;
+        return LV_RESULT_INVALID;
+    }
+    return __real_lv_async_call(callback, user_data);
+}
 
 namespace rodakos {
 bool DeviceCloudConfigService::Load(DeviceCloudConfig& result) { result = cloud_ui_test::config; return true; }

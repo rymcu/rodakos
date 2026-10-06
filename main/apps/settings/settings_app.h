@@ -17,10 +17,12 @@ class PhoneAppRegistry;
 class PhoneUi;
 class SettingsApp;
 
+enum class SettingsCloudRefreshFailure { kNone, kTaskStart, kCompletionDelivery };
+
 struct SettingsCloudRefreshGuard {
     std::atomic<SettingsApp*> app{nullptr};
     std::atomic<bool> refresh_in_progress{false};
-    std::atomic<bool> refresh_completion_failed{false};
+    std::atomic<SettingsCloudRefreshFailure> refresh_failure{SettingsCloudRefreshFailure::kNone};
     std::atomic<uint32_t> refresh_generation{0};
 };
 

@@ -7,12 +7,20 @@ production class/DTO declarations. Unrelated Settings pages are link stubs. The 
 source alone uses `-fno-access-control` to select its page and inject a generation boundary;
 production declarations and access control are unchanged.
 
-Eleven cases cover typed, fixed diagnoses; explicit Settings navigation; cancellation of queued
+Fifteen cases cover typed, fixed diagnoses; explicit Settings navigation; cancellation of queued
 navigation at destruction; successful cloud recovery after a voice failure; retry and unbind
 hit regions; failed-refresh recovery without raw backend text; late refresh completion after
 Settings destruction; stale-generation rejection; worker allocation failure; and a lost completion
-after the worker cannot acquire the UI lock. The retry case uses a real LVGL pointer
-click after scrolling the control into view. Cloud/voice ordering also covers events in the same
+after the worker cannot acquire the UI lock or queue its LVGL completion. A host-only linker wrapper
+rejects one `lv_async_call` without changing the production LVGL implementation. Idle/error titles
+must agree with the selected diagnosis while active phases remain visible. Task-start and delivery
+failures retain their own fixed UI text across navigation, timer ticks and theme rebuilding, keep
+retry available and preserve the cloud diagnosis/revision and binding. Disabled wake replaces only
+otherwise-ready idle guidance; cloud/voice errors, disconnected WiFi and active phases retain
+priority, and re-enabling wake restores the ready text. Task-start and delivery
+failures clear when a new manual retry is admitted; stale-generation delivery failures cannot
+replace current state. The retry case uses a real LVGL pointer click after scrolling the control
+into view. Cloud/voice ordering also covers events in the same
 millisecond and counter rollover. The cloud service target verifies actual rejection, refresh and
 expiry revision transitions; this UI target consumes that shared DTO with controlled service fakes.
 Host fonts do not prove Chinese glyph availability
