@@ -1,0 +1,74 @@
+name: RodakOS firmware build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodakos-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: ESP-IDF 6.0.2 development package
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v6.0.2
+    timeout-minutes: 75
+    env:
+      IDF_CCACHE_ENABLE: '1'
+      CCACHE_DIR: /root/.cache/rodakos-firmware-ccache
+      IDF_COMPONENT_CACHE_PATH: /root/.cache/rodakos-firmware-components
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Initialize container workspace
+        run: |
+          git config --global --add safe.directory "$(pwd -P)"
+          git config --global --add safe.directory "$IDF_PATH"
+          mkdir -p firmware-ci-results
+
+      - name: Restore dependency and compiler caches
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            /root/.cache/rodakos-firmware-components
+            /root/.cache/rodakos-firmware-ccache
+          key: rodakos-firmware-idf602-v1-${{ hashFiles('dependencies.lock', 'sdkconfig.defaults', 'recovery/sdkconfig.defaults') }}-${{ github.sha }}
+          restore-keys: |
+            rodakos-firmware-idf602-v1-${{ hashFiles('dependencies.lock', 'sdkconfig.defaults', 'recovery/sdkconfig.defaults') }}-
+
+      - name: Build and verify development packages
+        run: |
+          . "$IDF_PATH/export.sh"
+          python -m pip install idf-component-manager==3.0.3 PyYAML==6.0.2
+          python .github/workflows/scripts/firmware_ci.py build \
+            2>&1 | tee firmware-ci-results/build.log
+
+      - name: Upload build evidence and development packages
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rodakos-development-firmware-${{ github.sha }}
+          path: |
+            firmware-ci-results/*.log
+            firmware-ci-results/*.json
+            firmware-ci-results/*.txt
+            firmware-ci-results/generated-board/
+            firmware-ci-results/development-baseline/
+            firmware-ci-results/development-refresh/
+            build/rodakos.elf
+            build/rodakos.map
+            recovery/build/rodakos_recovery.elf
+            recovery/build/rodakos_recovery.map
+          if-no-files-found: warn
+          retention-days: 14
