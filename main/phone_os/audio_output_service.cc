@@ -1,6 +1,7 @@
 #include "phone_os/audio_output_service.h"
 
 #include <algorithm>
+#include <limits>
 
 #include <esp_log.h>
 
@@ -134,25 +135,51 @@ bool AudioOutputService::WriteForOwner(const char* owner, const void* data, int 
 }
 
 bool AudioOutputService::SetVolume(int volume) {
-    const int clamped = std::clamp(volume, 0, 100);
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
+    return ApplyVolume(AudioVolumeOperation::kSet, std::clamp(volume, 0, 100)).accepted;
+}
+
+AudioVolumeResult AudioOutputService::ApplyVolume(AudioVolumeOperation operation, int value) {
+    AudioVolumeResult result;
+    if (mutex_ == nullptr) {
+        return result;
     }
-    if (output_.IsOpen()) {
-        if (!output_.SetVolume(clamped)) {
-            if (mutex_ != nullptr) {
-                xSemaphoreGive(mutex_);
-            }
-            ESP_LOGW(TAG, "Failed to set volume to %d", clamped);
-            return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    result.previous_volume = volume_;
+    result.volume = volume_;
+    result.configuration_revision = configuration_revision_;
+
+    int requested = volume_;
+    bool valid = false;
+    switch (operation) {
+        case AudioVolumeOperation::kSet:
+            valid = value >= 0 && value <= 100;
+            requested = value;
+            break;
+        case AudioVolumeOperation::kUp:
+            valid = value >= 1 && value <= 100;
+            if (valid) requested = std::min(100, volume_ + value);
+            break;
+        case AudioVolumeOperation::kDown:
+            valid = value >= 1 && value <= 100;
+            if (valid) requested = std::max(0, volume_ - value);
+            break;
+    }
+
+    if (valid && configuration_revision_ != std::numeric_limits<uint32_t>::max()) {
+        const bool open = output_.IsOpen();
+        if (!open || output_.SetVolume(requested)) {
+            // 同一锁区生成回执；不能在另一次查询时推断本次写入是否经过 codec。
+            volume_ = requested;
+            ++configuration_revision_;
+            result.accepted = true;
+            result.volume = volume_;
+            result.configuration_revision = configuration_revision_;
+            result.application = open ? AudioVolumeApplication::kCodecApplied
+                                      : AudioVolumeApplication::kDeferred;
         }
     }
-    // codec 关闭时只保存配置，下一次按需打开时再应用。
-    volume_ = clamped;
-    if (mutex_ != nullptr) {
-        xSemaphoreGive(mutex_);
-    }
-    return true;
+    xSemaphoreGive(mutex_);
+    return result;
 }
 
 int AudioOutputService::volume() const {

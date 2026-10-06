@@ -6,6 +6,7 @@
 #include "phone_os/voice_conversation_policy.h"
 #include "phone_os/voice_barge_in_policy.h"
 #include "phone_os/voice_recorder_service.h"
+#include "phone_os/voice_volume_mcp.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -118,6 +119,7 @@ private:
     VoiceAssistantTransport& transport_;
     VoiceRecorderService& recorder_;
     AudioOutputService& audio_output_;
+    VoiceVolumeMcp volume_mcp_;
     std::unique_ptr<VoiceAssistantAudioCodec> audio_codec_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t io_task_ = nullptr;

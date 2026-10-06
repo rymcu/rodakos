@@ -88,6 +88,12 @@ buffered at 64 KiB). See the canonical
 [voice contract](rodak-realtime-voice-contract-v1.md) for event schemas,
 generation/session/epoch gates, MCP, error handling, and the complete RAV1 layout.
 
+The installed volume dispatcher enables `features.mcp` and exposes absolute/up/down tools after
+MCP `initialize`. Early MCP messages near ready are queued until startup or reconnect commits.
+Calls use atomic shared output configuration and return a versioned software receipt; Stop and
+new transport generations clear the deduplication scope. See
+[voice volume MCP](voice-volume-mcp.md) for strict arguments, correlation and evidence limits.
+
 VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`.
 When the server selects `server-authoritative`, the device keeps streaming audio
 but suppresses device VAD events. `hybrid-fallback` permits device boundaries
@@ -176,10 +182,11 @@ Before hardware testing:
 3. `build/rodakos.bin` fits `ota_0`; do not use the Recovery size warning as the main-image target.
 4. `flash_and_test.ps1 -Port COM3 -VerifyOnly` confirms the installed partition table and immutable
    Recovery hash before any write.
-5. The app-model tests cover only the pure realtime-voice contract and reconnect coordinator with a
-   fake transport. They do not instantiate `VoiceAssistantService`, so production Stop/Deinit
-   cancellation, release of a blocked open attempt, and decoder reset at the recovery boundary still
-   require firmware and hardware verification.
+5. Run app-model tests for the realtime contract, reconnect coordinator, audio stack and MCP
+   dispatcher. The separate `tests/voice_volume_service` target instantiates production
+   `VoiceAssistantService` and exercises its I/O task, queue, startup/Stop and reconnect boundaries.
+   Real FreeRTOS/WebSocket timing, DNS/HTTP cancellation, decoder/audio behavior and hardware
+   volume application still require firmware and device verification.
 
 On hardware, verify:
 

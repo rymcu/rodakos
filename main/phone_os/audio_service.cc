@@ -176,7 +176,6 @@ uint16_t PeakAbs16(const uint8_t* data, size_t bytes) {
 AudioService::AudioService(AudioOutputService& output)
     : output_(output) {
     mutex_ = xSemaphoreCreateMutex();
-    state_.volume = volume_;
 }
 
 AudioService::~AudioService() {
@@ -240,7 +239,6 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
         state_.file_path = path;
         state_.title = title.empty() ? ExtractTitle(path) : title;
         state_.message = "Loading";
-        state_.volume = volume_;
         xSemaphoreGive(mutex_);
     }
 
@@ -385,30 +383,11 @@ void AudioService::TogglePause() {
 }
 
 bool AudioService::SetVolume(int volume) {
-    const int clamped = std::clamp(volume, 0, 100);
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-    }
-    // 串行化硬件写入和两个缓存，避免并发调用乱序提交。
-    const bool accepted = output_.SetVolume(clamped);
-    if (accepted) {
-        volume_ = clamped;
-        state_.volume = volume_;
-    }
-    if (mutex_ != nullptr) {
-        xSemaphoreGive(mutex_);
-    }
-    return accepted;
+    return output_.SetVolume(volume);
 }
 
 int AudioService::volume() const {
-    if (mutex_ == nullptr) {
-        return volume_;
-    }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const int volume = volume_;
-    xSemaphoreGive(mutex_);
-    return volume;
+    return output_.volume();
 }
 
 AudioPlaybackState AudioService::GetState() {
@@ -418,6 +397,8 @@ AudioPlaybackState AudioService::GetState() {
         copy = state_;
         xSemaphoreGive(mutex_);
     }
+    // MQTT、MCP、播放和 UI 共用同一配置源，播放状态不能保留另一份音量。
+    copy.volume = output_.volume();
     return copy;
 }
 
@@ -488,7 +469,6 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         SetState(AudioPlaybackStatus::kError, "Codec open failed");
         return false;
     }
-    SetVolume(volume_);
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -693,7 +673,6 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
                 break;
             }
             codec_ready = true;
-            SetVolume(volume_);
 
             if (mutex_ != nullptr) {
                 xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -762,7 +741,6 @@ void AudioService::SetState(AudioPlaybackStatus status, const char* message) {
         if (message != nullptr) {
             state_.message = message;
         }
-        state_.volume = volume_;
         xSemaphoreGive(mutex_);
     }
 }
@@ -774,7 +752,6 @@ void AudioService::SetGenericPlaybackErrorIfNeeded() {
             state_.status = AudioPlaybackStatus::kError;
             state_.message = "Playback failed";
         }
-        state_.volume = volume_;
         xSemaphoreGive(mutex_);
     }
 }

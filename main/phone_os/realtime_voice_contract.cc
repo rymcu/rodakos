@@ -13,6 +13,28 @@
 
 namespace rodakos {
 
+bool IsBoundedRealtimeVoiceControlJson(const std::string& text, size_t max_depth) {
+    if (text.find('\0') != std::string::npos) return false;
+    size_t depth = 0;
+    bool quoted = false;
+    for (size_t index = 0; index < text.size(); ++index) {
+        const char ch = text[index];
+        if (quoted) {
+            if (ch == '\\') {
+                if (++index >= text.size()) return false;
+                if (text[index] == 'u' && text.compare(index + 1, 4, "0000") == 0) return false;
+            } else if (ch == '"') quoted = false;
+            else if (static_cast<unsigned char>(ch) < 0x20) return false;
+        } else if (ch == '"') quoted = true;
+        else if (ch == '{' || ch == '[') { if (++depth > max_depth) return false; }
+        else if (ch == '}' || ch == ']') {
+            if (depth == 0) return false;
+            --depth;
+        }
+    }
+    return !quoted && depth == 0;
+}
+
 bool RealtimeVoiceSessionGate::Establish(uint32_t generation,
                                          const std::string& session_id) {
     if (generation == 0 || session_id.empty() || generation_ != 0 ||
@@ -509,6 +531,46 @@ bool IsRealtimeVoiceMcpPayloadObject(const cJSON* envelope) {
         return false;
     }
     return cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(envelope, "payload"));
+}
+
+bool ParseRealtimeVoiceMcpInbound(const cJSON* envelope, uint32_t generation,
+                                  const RealtimeVoiceSessionGate& session,
+                                  VoiceInboundEvent& event, std::string& error) {
+    event = {};
+    error.clear();
+    if (!IsRealtimeVoiceMcpPayloadObject(envelope)) {
+        error = "canonical mcp payload must be an object";
+        return false;
+    }
+    for (const cJSON* item = envelope->child; item != nullptr; item = item->next) {
+        for (const cJSON* next = item->next; next != nullptr; next = next->next) {
+            if (item->string == nullptr || next->string == nullptr ||
+                std::strcmp(item->string, next->string) == 0) {
+                error = "canonical mcp envelope has duplicate fields";
+                return false;
+            }
+        }
+    }
+    const cJSON* event_name = cJSON_GetObjectItemCaseSensitive(envelope, "event");
+    const cJSON* session_id = cJSON_GetObjectItemCaseSensitive(envelope, "sessionId");
+    if (!cJSON_IsString(event_name) || event_name->valuestring == nullptr ||
+        std::strcmp(event_name->valuestring, kRealtimeVoiceEventMcp) != 0 ||
+        !cJSON_IsString(session_id) || session_id->valuestring == nullptr ||
+        !session.Matches(generation, session_id->valuestring)) {
+        error = "canonical mcp session or generation does not match";
+        return false;
+    }
+    char* payload = cJSON_PrintUnformatted(
+        cJSON_GetObjectItemCaseSensitive(envelope, "payload"));
+    if (payload == nullptr) {
+        error = "canonical mcp payload serialization failed";
+        return false;
+    }
+    event.type = VoiceInboundEventType::kMcp;
+    event.transport_generation = generation;
+    event.payload = payload;
+    cJSON_free(payload);
+    return true;
 }
 
 bool ParseRealtimeVoiceServerError(const cJSON* envelope,

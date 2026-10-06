@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,64 @@ RODAK_TEST("canonical realtime voice generations never emit the reserved zero") 
     RODAK_CHECK_EQ(rodakos::NextRealtimeVoiceGeneration(1), 2u);
     RODAK_CHECK_EQ(rodakos::NextRealtimeVoiceGeneration(UINT32_MAX - 1), UINT32_MAX);
     RODAK_CHECK_EQ(rodakos::NextRealtimeVoiceGeneration(UINT32_MAX), 1u);
+}
+
+RODAK_TEST("canonical MCP inbound adapter extracts inner JSON-RPC and preserves effect metadata") {
+    rodakos::RealtimeVoiceSessionGate gate;
+    RODAK_CHECK(gate.Establish(7, "session-mcp"));
+    const std::string payload = R"({"jsonrpc":"2.0","id":"call:1","method":"tools/call","params":{"name":"self.audio_speaker.volume_up","arguments":{},"_meta":{"rodak/deviceEffect":{"effectId":"effect:1","parametersHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}})";
+    const std::string wire = rodakos::BuildRealtimeVoiceMcpMessage("session-mcp", payload);
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(wire.c_str()), cJSON_Delete);
+    rodakos::VoiceInboundEvent event;
+    std::string error;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceMcpInbound(root.get(), 7, gate, event, error));
+    RODAK_CHECK(error.empty());
+    RODAK_CHECK_EQ(event.type, rodakos::VoiceInboundEventType::kMcp);
+    RODAK_CHECK_EQ(event.transport_generation, 7u);
+    RODAK_CHECK_EQ(event.payload, payload);
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> inner(
+        cJSON_Parse(event.payload.c_str()), cJSON_Delete);
+    RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(inner.get(), "event") == nullptr);
+    RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(inner.get(), "sessionId") == nullptr);
+    RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(inner.get(), "payload") == nullptr);
+}
+
+RODAK_TEST("canonical MCP inbound adapter rejects stale scopes and malformed outer payloads") {
+    rodakos::RealtimeVoiceSessionGate gate;
+    RODAK_CHECK(gate.Establish(7, "session-mcp"));
+    const std::vector<std::pair<const char*, uint32_t>> cases = {
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":{}})", 0},
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":{}})", 6},
+        {R"({"event":"mcp","sessionId":"old-session","payload":{}})", 7},
+        {R"({"event":"mcp","sessionId":"","payload":{}})", 7},
+        {R"({"event":"mcp","payload":{}})", 7},
+        {R"({"event":"output.start","sessionId":"session-mcp","payload":{}})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp"})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":[]})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":3})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":"{}"})", 7},
+        {R"({"event":"mcp","event":"mcp","sessionId":"session-mcp","payload":{}})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp","sessionId":"old-session","payload":{}})", 7},
+        {R"({"event":"mcp","sessionId":"session-mcp","payload":{},"payload":{}})", 7},
+        {R"({"jsonrpc":"2.0","id":1,"method":"initialize"})", 7}
+    };
+    for (const auto& [wire, generation] : cases) {
+        std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(wire), cJSON_Delete);
+        rodakos::VoiceInboundEvent event;
+        event.payload = "stale output";
+        std::string error;
+        RODAK_CHECK_FALSE(rodakos::ParseRealtimeVoiceMcpInbound(
+            root.get(), generation, gate, event, error));
+        RODAK_CHECK_FALSE(error.empty());
+        RODAK_CHECK(event.payload.empty());
+        RODAK_CHECK_EQ(event.transport_generation, 0u);
+    }
+    gate.Clear();
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(
+        R"({"event":"mcp","sessionId":"session-mcp","payload":{}})"), cJSON_Delete);
+    rodakos::VoiceInboundEvent event;
+    std::string error;
+    RODAK_CHECK_FALSE(rodakos::ParseRealtimeVoiceMcpInbound(root.get(), 7, gate, event, error));
 }
 
 RODAK_TEST("canonical realtime voice session open rejects an unestablished generation") {

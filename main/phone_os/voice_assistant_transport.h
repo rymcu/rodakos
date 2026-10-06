@@ -123,6 +123,7 @@ public:
                             uint32_t playback_epoch = 0) = 0;
     virtual bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) = 0;
     virtual void SetInboundHandler(VoiceInboundHandler handler) = 0;
+    virtual void SetMcpEndpointAvailable(bool) {}
 
     virtual const char* name() const = 0;
     virtual std::string last_error() const = 0;

@@ -86,12 +86,17 @@ eight pages, including boundary clamping and active/previous/next order; this ta
 
 The same target now compiles production `AudioOutputService`, `AudioService`, and
 `AudioCodecOutput` with fake lower-level board/codec APIs. It verifies volume API error propagation,
-configuration-cache retention and initial-open cleanup/retry. `tests/codec_volume/` separately
+configuration-cache retention, atomic relative updates and initial-open cleanup/retry. It also
+compiles the production volume MCP dispatcher. `tests/voice_volume_service/` compiles the real
+`VoiceAssistantService`, inbound queue, I/O loop and reconnect coordinator with host dependencies,
+covering early initialize, Stop cancellation, stale generations and session ledger reset.
+`tests/codec_volume/` separately
 compiles the real dependency source with the project's volume correction and real software-volume
 implementation, injecting failures at the lower-level driver callbacks. See
 [dependency maintenance](dependency-maintenance.md) for source identity and build integration,
 and [local audio validation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation)
-for the service fixture's results and hardware limits.
+for the earlier service fixture's results and hardware limits. Current wire behavior and
+software-receipt boundaries live in [voice volume MCP](voice-volume-mcp.md).
 
 `tests/home_ui/` complements the model suite by compiling the production `HomeApp`, Home
 model/store, Registry, `PhoneUi`, layout, theme, components, `BootAnimation`, appearance metadata
@@ -159,8 +164,9 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
 - `AudioOutputService` owns the shared output configuration. With an open codec it commits a new
-  volume only after `AudioCodecOutput::SetVolume` succeeds; `AudioService` follows that result before
-  updating its playback/UI cache. With the codec closed, a volume setter only accepts configuration
+  volume only after `AudioCodecOutput::SetVolume` succeeds. `AudioService` reads that shared value
+  for playback/UI, and atomic set/up/down operations serialize calculation, hardware application,
+  revision and receipt under the output mutex. With the codec closed, a setter accepts configuration
   for the next open. Failure of the initial codec volume API call closes that open attempt and
   clears its format state so a later request can retry. This preserves on-demand hardware ownership.
 - MQTT desired-volume application checks the setter result and reports the retained configuration

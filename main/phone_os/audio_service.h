@@ -86,7 +86,6 @@ private:
     bool pause_requested_ = false;
     bool playback_io_idle_ = false;
     bool playback_hardware_suspended_ = false;
-    int volume_ = 60;
     AudioPlaybackState state_;
 };
 

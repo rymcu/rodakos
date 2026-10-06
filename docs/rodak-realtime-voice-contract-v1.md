@@ -121,7 +121,7 @@ error and cannot reset the session's playback or audio counters.
   "generation": 7,
   "vadStrategies": ["server-authoritative"],
   "preferredVadStrategy": "server-authoritative",
-  "features": {"mcp": false, "device_vad_epoch": 0},
+  "features": {"mcp": true, "device_vad_epoch": 0},
   "uplink": {"codec":"opus","sampleRateHz":16000,"channels":1,"frameDurationMs":60},
   "downlink": {"codec":"opus","sampleRateHz":24000,"channels":1,"frameDurationMs":60}
 }
@@ -133,6 +133,10 @@ negotiated Opus mono `downlink` object. `sampleRateHz` and `frameDurationMs`
 must use the supported values above. `vadStrategy` is optional and defaults to
 `server-authoritative`, but a supplied value must have been offered by the
 descriptor.
+
+`features.mcp` is enabled only when `VoiceAssistantService` installs its volume MCP handler.
+The three registered volume tools, initialization and software receipts are specified in
+[voice volume MCP](voice-volume-mcp.md). Transports without that handler advertise `false`.
 
 ## 3. Control events
 
@@ -164,6 +168,12 @@ action that causes the server to send `session.end`; `goodbye` is not a wire
 event in this contract.
 
 An MCP `payload` must be a JSON object. Scalar and array payloads are rejected.
+Outer control JSON is bounded to twelve nesting levels before parsing; the volume MCP
+dispatcher additionally limits its payload to 4 KiB and eight levels. A ready-adjacent MCP
+message is queued until the service's listen handshake commits, including during reconnect.
+The transport validates the current session/generation and extracts only the inner object
+`payload` into the service event. Replies wrap the JSON-RPC response in a new canonical `mcp`
+envelope for the same generation/session. Duplicate outer MCP fields are rejected.
 An `error` without all three error fields is rejected. Control messages that
 exceed the effective transport or negotiated control limit are discarded and
 are not delivered to the voice state machine.

@@ -28,6 +28,7 @@ add_executable(rodakos_app_model_tests
     wifi_connection_policy_test.cc
     ota_signature_format_test.cc
     audio_output_service_test.cc
+    test_voice_volume_mcp.cc
     ../appearance/package_test.cc
     ../appearance/policy_test.cc
     ../appearance/json_allocator_test.cc
@@ -56,6 +57,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/battery_level_model.cc
     ../../main/phone_os/audio_output_service.cc
     ../../main/phone_os/audio_service.cc
+    ../../main/phone_os/voice_volume_mcp.cc
     ../../main/rodakos_adapters/audio_codec_output.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
     ../../components/rodak_ota_state/rodak_ota_signature_format.cc
@@ -92,3 +94,27 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_test(NAME rodakos_app_model COMMAND rodakos_app_model_tests)
+
+# Cross-repository conformance reuses the production dispatcher and audio stack;
+# only the hardware API headers come from the host fake directory.
+add_executable(rodakos_mcp_fixture
+    voice_volume_mcp_fixture.cc
+    ../../main/phone_os/voice_volume_mcp.cc
+    ../../main/phone_os/realtime_voice_contract.cc
+    ../../main/phone_os/audio_output_service.cc
+    ../../main/phone_os/audio_service.cc
+    ../../main/rodakos_adapters/audio_codec_output.cc
+    "${TEST_CJSON_DIR}/cJSON.c"
+)
+target_include_directories(rodakos_mcp_fixture BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../main"
+    "${TEST_CJSON_DIR}"
+)
+target_compile_features(rodakos_mcp_fixture PRIVATE cxx_std_17)
+if(UNIX)
+    target_link_libraries(rodakos_mcp_fixture PRIVATE m Threads::Threads)
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(rodakos_mcp_fixture PRIVATE -Wall -Wextra -Wpedantic)
+endif()

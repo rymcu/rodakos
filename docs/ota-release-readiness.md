@@ -16,9 +16,12 @@ appearance revision 14 adoption; exact hashes and live evidence are recorded in
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
 audio-volume build recorded below.
 
-The app-model suite now passes 230 tests in both Debug and ASan/UBSan, including nine audio-volume
-regressions. The subsequent dependency correction also passes 14 real-codec tests in both modes
-and 13 generator validation tests; see the [codec overlay evidence](#2026-10-06-codec-dependency-correction).
+The app-model suite now passes 248 tests in Debug and ASan/UBSan, including sixteen audio-volume,
+nine MCP dispatcher and two canonical-envelope adapter regressions. Ten additional tests instantiate the real voice service
+and exercise its queue and lifecycle in both modes with leak detection; see
+[voice-volume MCP evidence](#2026-10-06-voice-volume-mcp-validation). The earlier dependency
+correction passed 14 real-codec tests in both modes and 13 generator validation tests; see the
+[codec overlay evidence](#2026-10-06-codec-dependency-correction).
 The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
 5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
 with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
@@ -36,7 +39,8 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Journal ABI and A/B recovery                | Production journal v1 (712 bytes), torn new slot, uncertain commit, corrupt slots, I/O errors and acknowledged cleanup                   | Host tests pass                               |
 | One-shot reset                              | Production injection code preserves its consumed marker across simulated reset, skips reset on commit failure                            | Host tests pass                               |
 | Home resource failure                       | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully          | Host test passes                              |
-| Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: retained caches, failed first-open cleanup, retry and deferred configuration | Nine host regressions pass; hardware unverified |
+| Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: atomic relative changes, shared configuration, retained failure caches, failed first-open cleanup and deferred configuration | Sixteen host regressions pass; hardware unverified |
+| Voice volume MCP / lifecycle                 | Production envelope parser, dispatcher and real service queue/I/O task: startup initialize, Stop, stale generations, reconnect, bounded deduplication, receipt roundtrips | Nine dispatcher, two adapter and ten service host regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
@@ -119,6 +123,45 @@ in that same logs directory. The managed `esp_codec_dev.c` remains at normalized
 No device was flashed and no NVS was changed. The main-image/factory-Recovery size warning has
 the same meaning as in the earlier build above. Other upstream API failure paths, actual I2C or
 speaker behavior and correlated device effect receipts remain outside these host/build results.
+
+## 2026-10-06 voice-volume MCP validation
+
+Source baseline: `a141297` plus the voice-volume MCP integration. The production service installs
+the handler, advertises MCP, retains ready-adjacent requests in its bounded queue and routes
+initialized calls through the atomic output service. The detailed
+[volume contract](voice-volume-mcp.md) defines the three tools, correlation, deduplication and
+`rodakos.volume-receipt.v1` software evidence.
+
+- App-model: **248/248** in Debug and ASan/UBSan with leak detection. This includes sixteen
+  production audio/output/playback/adapter tests (including 32 concurrent relative operations)
+  and nine production MCP dispatcher tests, plus two production adapter cases for extracting
+  inner JSON-RPC from canonical envelopes, metadata preservation and malformed/stale scope rejection.
+- Real voice service: **10/10** in Debug and ASan/UBSan with leak detection. The dedicated host
+  target compiles production `VoiceAssistantService`, its inbound queue, I/O task, dispatcher
+  and reconnect coordinator. Public startup and installed transport callbacks verify early
+  initialize, handshake-before-call, cached repeats, stale generations, Stop canceling queued
+  work, Stop during open, reconnect handshake/ledger reset and 64-event queue pressure.
+  Normal inbound messages traverse the production canonical-envelope parser; response roundtrips
+  use the production builder and preserve typed RPC IDs, effect correlation and receipt contents.
+  No copied guard or static source-string assertion substitutes for service execution.
+- ESP-IDF **6.0.2** `idf.py build` succeeds with the checked codec overlay. No dependency-lock
+  or sdkconfig content change was required.
+
+| Artifact | Result |
+| --- | --- |
+| Local main image | `build/rodakos.bin`, 6,911,216 bytes |
+| SHA-256 | `41b48507f59b832999ea6a36ed82fe5bd55bde49a61010ea82eccfb0f464918a` |
+| Main slot | Fits `ota_0` (13,959,168 bytes); 7,047,952 bytes remain |
+| Device / signed-package status | Not flashed or signed; package `20261001-234748` remains the last recorded device package |
+
+The WebSocket transport I/O, FreeRTOS scheduling primitives, recorder, audio focus, Opus and hardware
+APIs are fakes. The envelope extraction and response-building helpers are production code; their
+adapter evidence is distinct from the full service lifecycle tests and the cross-repository
+canonical WebSocket-to-production-dispatcher fixture. These tests establish software control flow and configuration evidence, not
+real network/RTOS timing, codec register readback, audible volume, physical restoration,
+NVS persistence or release approval. All volume receipts explicitly remain volatile and
+`physicalVerified: false`. MQTT shadow evidence is unchanged. No serial, flash or NVS operation
+was performed. The main-image/factory-Recovery size warning retains its earlier meaning.
 
 ## Build and package
 

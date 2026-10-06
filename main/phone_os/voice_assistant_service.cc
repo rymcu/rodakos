@@ -164,15 +164,18 @@ VoiceAssistantService::VoiceAssistantService(AudioFocusService& audio_focus,
       transport_(transport),
       recorder_(recorder),
       audio_output_(audio_output),
+      volume_mcp_(audio_output),
       audio_codec_(std::make_unique<VoiceAssistantAudioCodec>()) {
     mutex_ = xSemaphoreCreateMutex();
     transport_.SetInboundHandler([this](VoiceInboundEvent&& event) {
         HandleInbound(std::move(event));
     });
+    transport_.SetMcpEndpointAvailable(mutex_ != nullptr);
 }
 
 VoiceAssistantService::~VoiceAssistantService() {
     Deinit();
+    transport_.SetMcpEndpointAvailable(false);
     transport_.SetInboundHandler({});
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
@@ -662,6 +665,7 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     }
 
     stopping_ = true;
+    volume_mcp_.Stop();
     cleanup_resources_released_ = false;
     cleanup_task_ = current_task;
     cancelled_interaction_generation = interaction_generation_;
@@ -810,9 +814,10 @@ bool VoiceAssistantService::OpenTransportForInteraction(VoiceAssistantTrigger tr
         return false;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool current = initialized_ && !deinitializing_ &&
+    bool current = initialized_ && !deinitializing_ &&
                          interaction_generation_ == generation && !stopping_ &&
                          phase_ == VoiceAssistantPhase::kConnecting;
+    if (current) current = volume_mcp_.Bind(opened_transport_generation);
     if (current) {
         transport_generation_ = opened_transport_generation;
         transport_generation = opened_transport_generation;
@@ -876,8 +881,7 @@ bool VoiceAssistantService::StartIoTask() {
         xSemaphoreGive(mutex_);
         return false;
     }
-    inbound_events_.clear();
-    inbound_event_bytes_ = 0;
+    // session.ready can be followed by initialize before this task has been created.
     io_running_ = true;
     if (io_task_ != nullptr) {
         xSemaphoreGive(mutex_);
@@ -1036,8 +1040,14 @@ void VoiceAssistantService::HandleInbound(VoiceInboundEvent&& event) {
         return;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (io_running_ && transport_generation_ != 0 &&
-        event.transport_generation == transport_generation_) {
+    const bool active = io_running_ && transport_generation_ != 0 &&
+                        event.transport_generation == transport_generation_;
+    const bool opening_mcp = event.type == VoiceInboundEventType::kMcp &&
+        initialized_ && !deinitializing_ && !stopping_ &&
+        phase_ == VoiceAssistantPhase::kConnecting && (start_in_progress_ || reconnect_pending_) &&
+        event.transport_generation != 0 &&
+        event.transport_generation == transport_.connection_generation();
+    if (active || opening_mcp) {
         const size_t event_bytes = InboundEventBytes(event);
         if (event_bytes > kMaxInboundEventBytes && IsDroppableInboundEvent(event)) {
             xSemaphoreGive(mutex_);
@@ -1203,10 +1213,21 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             DrainPlayback();
             StopInteraction();
             break;
-        case VoiceInboundEventType::kMcp:
-            ESP_LOGI(TAG, "Received assistant MCP message (%u bytes)",
-                     static_cast<unsigned>(event.payload.size()));
+        case VoiceInboundEventType::kMcp: {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const auto can_execute = [this, &event]() {
+                return initialized_ && !deinitializing_ && !stopping_ && io_running_ &&
+                    transport_active_ && event.transport_generation == transport_generation_ &&
+                    transport_.IsAudioChannelOpen() &&
+                    transport_.connection_generation() == event.transport_generation;
+            };
+            // Stop takes the same lock: cancellation cannot land between the guard and codec commit.
+            const std::string response = volume_mcp_.Handle(event.payload,
+                event.transport_generation, can_execute);
+            xSemaphoreGive(mutex_);
+            if (!response.empty()) transport_.SendMcpMessage(response, event.transport_generation);
             break;
+        }
         case VoiceInboundEventType::kError:
             if (event.failure.kind == VoiceTransportFailureKind::kNone) {
                 event.failure.kind = VoiceTransportFailureKind::kProtocol;
@@ -1270,6 +1291,7 @@ void VoiceAssistantService::HandleTransportFailure(VoiceTransportFailure failure
             interaction_generation_ == interaction_generation &&
             transport_generation_ == transport_generation && transport_active_) {
             transport_active_ = false;
+            volume_mcp_.Stop();
             transport_generation_ = 0;
             reconnect_pending_ = true;
             inbound_events_.clear();
@@ -1351,10 +1373,11 @@ void VoiceAssistantService::ProcessReconnect(uint32_t interaction_generation) {
             return esp_timer_get_time() / 1000;
         }, [this, interaction_generation](uint32_t opened_transport_generation) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
-            const bool accepted = initialized_ && !deinitializing_ && !stopping_ &&
+            bool accepted = initialized_ && !deinitializing_ && !stopping_ &&
                                   io_running_ && !transport_active_ && reconnect_pending_ &&
                                   transport_generation_ == 0 &&
                                   interaction_generation_ == interaction_generation;
+            if (accepted) accepted = volume_mcp_.Bind(opened_transport_generation);
             if (accepted) {
                 transport_generation_ = opened_transport_generation;
             }

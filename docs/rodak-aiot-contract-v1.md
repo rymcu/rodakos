@@ -188,9 +188,9 @@ commands return an `unsupported_command` error status. There is currently no
 
 Desired shadow accepts `volume` inside either root `desired` or `state.desired`
 and clamps it to 0–100. `AudioOutputService` reports its accepted runtime
-configuration. If an already open codec returns an API error when setting volume,
-the previous shared configuration is retained; `AudioService` also preserves its
-playback/UI cache on failure. MQTT logs the failure and reports that retained value.
+configuration. `AudioService` and playback/UI read this shared output configuration. If an
+already open codec returns an API error when setting volume, the previous shared configuration
+is retained. MQTT logs the failure and reports that retained value.
 With the codec closed, setting volume accepts configuration without opening it;
 the next playback open applies that configuration. If the initial volume API call
 fails, the open attempt is closed and its format state is cleared for retry.
@@ -202,15 +202,17 @@ only on success. The original managed source remains unchanged; see
 [dependency maintenance](dependency-maintenance.md). Software success or a reported
 volume still does not establish I2C register application or audible speaker output.
 
-The firmware does not consume root `version`/`shadowVersion` as a volume applied
+The MQTT shadow path does not consume root `version`/`shadowVersion` as a volume applied
 revision and reports no volume `effectId`, desired revision or per-effect result.
 Connection establishment and unrelated state updates also publish ordinary shadow
 reports. A matching reported value, a newer server shadow version, or a successful
 MQTT publish cannot prove that a particular Agent Runtime effect executed on the
 device. Rodak's local desired-state compensation likewise does not prove physical
-restoration. Correlated execution receipts need a separately versioned contract;
-this update does not introduce them. `voice_identity` has its own revision/status
-semantics below and must not be generalized into a volume receipt.
+restoration. The separate voice MCP path now returns
+[`rodakos.volume-receipt.v1`](voice-volume-mcp.md), with optional effect correlation and an
+output-local configuration revision; that contract does not upgrade MQTT shadow evidence.
+`voice_identity` has its own revision/status semantics below and must not be generalized
+into a volume receipt.
 
 ### Voice identity
 

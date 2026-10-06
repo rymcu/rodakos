@@ -4,8 +4,8 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (reviewed baseline: `f7dd117`, plus the checked codec-volume
-dependency correction). Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
+Last refreshed: 2026-10-06 (reviewed baseline: `a141297`, plus the voice-volume MCP integration).
+Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -40,12 +40,12 @@ dependency correction). Current work and dated evidence are separated in the [ro
 - IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Audio volume setters retain the previous configuration when the codec API reports failure.
-  A checked build overlay for esp_codec_dev 1.5.7 now propagates hardware/software driver errors
-  and commits the dependency's cache only on success; managed source files stay unchanged.
-  A closed codec accepts configuration without opening hardware. Reported volume is not proof of
-  physical speaker output or a correlated device effect receipt; see the
-  [shadow contract](docs/rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+- Voice sessions expose three MCP tools for setting, raising and lowering volume, with atomic
+  shared configuration, bounded session deduplication and `rodakos.volume-receipt.v1` software
+  receipts. The checked esp_codec_dev 1.5.7 overlay propagates driver errors without changing
+  managed sources. A closed codec accepts RAM configuration without opening hardware; receipts
+  do not claim persistence or physical speaker verification. MQTT shadow reports retain their
+  separate evidence boundary. See [voice volume MCP](docs/voice-volume-mcp.md).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
   queued and successful completion evidence for app exercises. These host checks do not close the
   eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
@@ -171,6 +171,7 @@ docs/
 
 tests/
 ├── app_model/             # Host-side models, lifecycle, policy and audio-volume service tests
+├── voice_volume_service/  # Real voice service startup/queue/stop/reconnect with host dependencies
 └── home_ui/               # Production HomeApp exercised against host LVGL 9.3
 ```
 
@@ -218,6 +219,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
+- [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
 - [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
 - [Rodak identity and wake word](docs/voice-identity-wake-word.md)
 - [Serial provisioning](docs/serial-provisioning.md)

@@ -1267,7 +1267,7 @@ std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage(uint32_t genera
 #else
         false;
 #endif
-    return BuildRealtimeVoiceSessionOpenMessage(descriptor, false,
+    return BuildRealtimeVoiceSessionOpenMessage(descriptor, mcp_endpoint_available_.load(),
                                                 supports_device_vad_epoch,
                                                 generation);
 }
@@ -1283,6 +1283,10 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         return;
     }
     std::string payload(data, len);
+    if (!IsBoundedRealtimeVoiceControlJson(payload, 12)) {
+        ESP_LOGW(TAG, "Realtime voice control JSON exceeds nesting/string limits");
+        return;
+    }
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
         ESP_LOGW(TAG, "Invalid JSON from voice cloud: %.*s", len, data);
@@ -1440,17 +1444,18 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             }, generation);
         }
     } else if (is_mcp) {
-        if (!IsRealtimeVoiceMcpPayloadObject(root)) {
+        VoiceInboundEvent inbound;
+        std::string mcp_error;
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool accepted = !closing_ && connection_generation_ == generation &&
+            ParseRealtimeVoiceMcpInbound(root, generation, session_gate_, inbound, mcp_error);
+        xSemaphoreGive(mutex_);
+        if (!accepted) {
             cJSON_Delete(root);
-            SetError("Invalid realtime voice MCP payload", generation);
+            if (!mcp_error.empty()) SetError(mcp_error, generation);
             return;
         }
-        EmitInbound(VoiceInboundEvent{
-            .type = VoiceInboundEventType::kMcp,
-            .audio = {},
-            .payload = payload,
-            .failure = {},
-        }, generation);
+        EmitInbound(std::move(inbound), generation);
     } else if (is_error) {
         RealtimeVoiceServerError server_error;
         std::string server_error_parse_failure;

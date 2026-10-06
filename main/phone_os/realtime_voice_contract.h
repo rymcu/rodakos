@@ -9,7 +9,10 @@ struct cJSON;
 
 namespace rodakos {
 
+bool IsBoundedRealtimeVoiceControlJson(const std::string& payload, size_t max_depth = 12);
+
 enum class VoiceAbortReason;
+struct VoiceInboundEvent;
 
 inline constexpr char kRodakRealtimeVoiceSchema[] = "rodak-realtime-voice/v1";
 inline constexpr char kRodakRealtimeVoiceProtocol[] = "rodak-realtime-voice";
@@ -120,6 +123,10 @@ bool IsSupportedRealtimeVoiceFrameDuration(int frame_duration_ms);
 // Validate the canonical MCP envelope payload before it reaches the device
 // event bus. Canonical MCP payloads are JSON objects, never scalar/array text.
 bool IsRealtimeVoiceMcpPayloadObject(const cJSON* envelope);
+// Decode the canonical envelope into the inner JSON-RPC event using the current session gate.
+bool ParseRealtimeVoiceMcpInbound(const cJSON* envelope, uint32_t generation,
+                                  const RealtimeVoiceSessionGate& session,
+                                  VoiceInboundEvent& event, std::string& error);
 
 // Decode the canonical server error without coupling the wire contract to a
 // transport lifecycle. The transport maps this value to its failure type and
