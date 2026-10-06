@@ -29,6 +29,8 @@
    artifact 名称和证据文件中的源码 SHA 应对应这个 checkout。另行记录 PR head/base 和
    Actions API 的 `headSha`，不能无条件把它们当作同一个 SHA。比较测试合并提交的父提交
    与当前 PR head/base，确认本次检查覆盖当前候选，不能把旧 `main` push run 当作 PR 检查。
+   `refs/pull/<编号>/merge` 会随 head/base 更新；保存 run 实际 checkout 的 SHA 及其父提交，
+   不用后来变化的 merge ref 替代历史运行身份。
 5. 核对 artifact 中的源码/工具身份与 run。Host 日志、固件 `identity.json` /
    `result.json` 及验包方法见 [host CI](host-ci.md) 和 [firmware CI](firmware-ci.md)。
    日志工件默认保留 14 天；无法取得必需证据时重新运行，不能据已过期链接宣称已复核。
@@ -56,7 +58,7 @@ PR 绿灯证明该候选的软件检查与开发包校验通过。CI 使用 runn
 设备已安装的 Recovery 根或生产密钥；两个 CI 包的 immutable 一致性只覆盖该次 run。
 不能把 CI 包直接替换为设备兼容包或生产发布包。
 
-这些检查不访问 COM/NVS，也不替代真人唤醒、触屏、声学、物理断电、资源压力或长稳。
+这些检查不访问串口或设备 NVS，也不替代真人唤醒、触屏、声学、物理断电、资源压力或长稳。
 对应事项继续按 [发布验收](ota-release-readiness.md) 和 [路线图](roadmap.md) 管理。
 [#26](https://github.com/rymcu/rodakos/issues/26) 的实际 PR 检查证据应记录 PR、当前 head/base、
 测试合并提交及两个 workflow run；不能仅凭本文件宣称 PR 展示已经验证。
