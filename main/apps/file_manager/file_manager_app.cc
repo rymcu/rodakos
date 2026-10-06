@@ -12,6 +12,7 @@
 #include <esp_log.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -118,13 +119,7 @@ bool FileManagerApp::OnCreate(PhoneAppContext& context) {
     ui_ = &context.ui();
     file_service_ = context.services().file_service();
 
-    storage_ready_ = file_service_ != nullptr &&
-                     (file_service_->IsMounted() || file_service_->Init());
-    if (storage_ready_) {
-        LoadDirectory("/");
-    } else {
-        ESP_LOGW(TAG, "SD card not available for File Manager");
-    }
+    LoadDirectory("/");
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -140,8 +135,9 @@ bool FileManagerApp::OnCreate(PhoneAppContext& context) {
 
 void FileManagerApp::OnDestroy() {
     if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_);
+        PhoneUiLock lock(*ui_, 0);
         if (lock.locked()) {
+            lv_async_call_cancel(DeferReturnHome, context_);
             ReleaseCurrentImage();
             if (root_ != nullptr && lv_obj_is_valid(root_)) {
                 lv_obj_delete(root_);
@@ -157,10 +153,15 @@ void FileManagerApp::OnDestroy() {
     preview_body_ = nullptr;
     preview_image_ = nullptr;
     preview_title_label_ = nullptr;
+    preview_error_label_ = nullptr;
+    preview_retry_button_ = nullptr;
     info_body_ = nullptr;
     info_title_label_ = nullptr;
     info_detail_label_ = nullptr;
     entries_.clear();
+    preview_entry_ = {};
+    current_path_ = "/";
+    directory_status_ = DirectoryStatus::kServiceUnavailable;
     context_ = nullptr;
     ui_ = nullptr;
     file_service_ = nullptr;
@@ -259,21 +260,23 @@ void FileManagerApp::RebuildList() {
         lv_label_set_text(path_label_, DisplayPath().c_str());
     }
 
-    if (!storage_ready_) {
-        auto* empty = CreateText(list_container_, "SD card not mounted", &phone_font_14,
+    if (directory_status_ != DirectoryStatus::kReady || entries_.empty()) {
+        auto* empty = CreateText(list_container_, DirectoryMessage(), &phone_font_14,
                                  rodakos_theme_text_secondary());
         lv_obj_set_width(empty, 280);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(empty, LV_ALIGN_CENTER, 0, 0);
-        return;
-    }
+        lv_obj_align(empty, LV_ALIGN_CENTER, 0, -22);
 
-    if (entries_.empty()) {
-        auto* empty = CreateText(list_container_, "Empty folder", &phone_font_14,
-                                 rodakos_theme_text_secondary());
-        lv_obj_set_width(empty, 280);
-        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(empty, LV_ALIGN_CENTER, 0, 0);
+        auto* retry = lv_btn_create(list_container_);
+        lv_obj_set_size(retry, 110, 36);
+        lv_obj_align(retry, LV_ALIGN_CENTER, 0, 24);
+        auto* label = CreateText(retry, directory_status_ == DirectoryStatus::kReady ? "Refresh" : "Retry",
+                                 &phone_font_14, rodakos_theme_text_primary());
+        lv_obj_center(label);
+        lv_obj_add_event_cb(retry, [](lv_event_t* e) {
+            auto* self = static_cast<FileManagerApp*>(lv_event_get_user_data(e));
+            self->RefreshDirectory();
+        }, LV_EVENT_CLICKED, this);
         return;
     }
 
@@ -325,28 +328,48 @@ void FileManagerApp::RebuildList() {
 }
 
 bool FileManagerApp::LoadDirectory(const std::string& path) {
+    // The path can alias current_path_; retain the attempted folder for Retry and Back.
+    current_path_ = path.empty() ? "/" : path;
+    entries_.clear();
+    file_service_ = context_->services().file_service();
     if (file_service_ == nullptr) {
+        directory_status_ = DirectoryStatus::kServiceUnavailable;
         return false;
     }
     if (!file_service_->IsMounted() && !file_service_->Init()) {
-        storage_ready_ = false;
-        entries_.clear();
+        directory_status_ = DirectoryStatus::kStorageUnavailable;
         return false;
     }
 
     std::vector<rodakos::FileEntry> entries;
-    if (!file_service_->ListDirectory(path, entries)) {
-        if (root_ != nullptr) {
-            ui_->ShowToastUnlocked("Open folder failed");
+    errno = 0;
+    if (!file_service_->ListDirectory(current_path_, entries)) {
+        const int error = errno;
+        if (!file_service_->IsMounted() || error == ENODEV) {
+            directory_status_ = DirectoryStatus::kStorageUnavailable;
+        } else if (error == ENOENT || error == ENOTDIR) {
+            directory_status_ = DirectoryStatus::kMissing;
+        } else {
+            directory_status_ = DirectoryStatus::kReadFailed;
         }
         return false;
     }
 
     entries_ = std::move(entries);
-    current_path_ = path.empty() ? "/" : path;
-    storage_ready_ = true;
+    directory_status_ = DirectoryStatus::kReady;
     ESP_LOGI(TAG, "Loaded directory %s (%zu entries)", current_path_.c_str(), entries_.size());
     return true;
+}
+
+const char* FileManagerApp::DirectoryMessage() const {
+    switch (directory_status_) {
+        case DirectoryStatus::kServiceUnavailable: return "Storage service unavailable";
+        case DirectoryStatus::kStorageUnavailable: return "SD card unavailable";
+        case DirectoryStatus::kMissing: return "Folder unavailable";
+        case DirectoryStatus::kReadFailed: return "Could not read folder";
+        case DirectoryStatus::kReady: return "Empty folder";
+    }
+    return "Could not read folder";
 }
 
 void FileManagerApp::ShowListView() {
@@ -360,9 +383,8 @@ void FileManagerApp::OpenEntry(size_t index) {
 
     const auto entry = entries_[index];
     if (entry.is_directory) {
-        if (LoadDirectory(JoinPath(current_path_, entry.name))) {
-            RebuildList();
-        }
+        LoadDirectory(JoinPath(current_path_, entry.name));
+        RebuildList();
         return;
     }
 
@@ -401,26 +423,54 @@ void FileManagerApp::ShowImagePreview(const rodakos::FileEntry& entry) {
         lv_label_set_long_mode(preview_title_label_, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(preview_title_label_, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(preview_title_label_, LV_ALIGN_BOTTOM_MID, 0, -2);
+
+        preview_error_label_ = CreateText(preview_body_, "", &phone_font_14,
+                                          rodakos_theme_text_secondary());
+        lv_obj_set_width(preview_error_label_, 280);
+        lv_obj_set_style_text_align(preview_error_label_, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(preview_error_label_, LV_ALIGN_CENTER, 0, -25);
+        preview_retry_button_ = lv_btn_create(preview_body_);
+        lv_obj_set_size(preview_retry_button_, 110, 36);
+        lv_obj_align(preview_retry_button_, LV_ALIGN_CENTER, 0, 22);
+        auto* retry_label = CreateText(preview_retry_button_, "Retry", &phone_font_14,
+                                       rodakos_theme_text_primary());
+        lv_obj_center(retry_label);
+        lv_obj_add_event_cb(preview_retry_button_, [](lv_event_t* e) {
+            auto* self = static_cast<FileManagerApp*>(lv_event_get_user_data(e));
+            self->ShowImagePreview(self->preview_entry_);
+        }, LV_EVENT_CLICKED, this);
     } else {
         lv_obj_clear_flag(preview_body_, LV_OBJ_FLAG_HIDDEN);
     }
 
     view_mode_ = ViewMode::kPreview;
+    preview_entry_ = entry;
     ReleaseCurrentImage();
-    current_image_ = rodakos::ImageLibrary::LoadImageForDisplay(entry.path);
+    lv_label_set_text(preview_title_label_, entry.name.c_str());
+    lv_obj_add_flag(preview_error_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(preview_retry_button_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+
+    file_service_ = context_->services().file_service();
+    if (file_service_ == nullptr) {
+        ShowPreviewError("Storage service unavailable");
+        return;
+    }
+    if (!file_service_->IsMounted() && !file_service_->Init()) {
+        ShowPreviewError("SD card unavailable");
+        return;
+    }
+    auto result = rodakos::ImageLibrary::LoadImageForDisplayDetailed(entry.path);
+    current_image_ = std::move(result.image);
     if (current_image_ == nullptr) {
-        lv_image_set_src(preview_image_, nullptr);
-        lv_label_set_text(preview_title_label_, "Failed to load image");
-        ui_->ShowToastUnlocked("Image load failed");
+        ShowPreviewError(rodakos::ImageLibrary::ImageLoadErrorText(result.status));
         return;
     }
 
     const void* source = current_image_->GetImageSource();
     lv_image_header_t header = {};
     if (lv_image_decoder_get_info(source, &header) != LV_RESULT_OK || header.w == 0 || header.h == 0) {
-        ReleaseCurrentImage();
-        lv_label_set_text(preview_title_label_, "Unsupported image");
-        ui_->ShowToastUnlocked("Unsupported image");
+        ShowPreviewError("Unsupported image");
         return;
     }
 
@@ -493,9 +543,8 @@ void FileManagerApp::NavigateBack() {
     }
 
     if (current_path_ != "/") {
-        if (LoadDirectory(ParentPath())) {
-            RebuildList();
-        }
+        LoadDirectory(ParentPath());
+        RebuildList();
         return;
     }
 
@@ -504,7 +553,18 @@ void FileManagerApp::NavigateBack() {
 
 void FileManagerApp::NavigateHome() {
     ESP_LOGI(TAG, "Header home button returning home");
-    lv_async_call(DeferReturnHome, context_);
+    lv_async_call_cancel(DeferReturnHome, context_);
+    if (lv_async_call(DeferReturnHome, context_) != LV_RESULT_OK) {
+        ui_->ShowToastUnlocked("Navigation unavailable");
+    }
+}
+
+void FileManagerApp::ShowPreviewError(const char* message) {
+    ReleaseCurrentImage();
+    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(preview_error_label_, message);
+    lv_obj_clear_flag(preview_error_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(preview_retry_button_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void FileManagerApp::RefreshDirectory() {

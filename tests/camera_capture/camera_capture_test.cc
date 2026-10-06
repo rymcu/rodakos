@@ -4,6 +4,7 @@
 #include "rodakos_adapters/file_service.h"
 
 #include <chrono>
+#include <cerrno>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -314,4 +315,23 @@ RODAK_TEST("file service write leases reject overlapping mutators without blocki
     release.set_value();
     RODAK_CHECK(lease.get());
     RODAK_CHECK(f.files->WriteNewFile("/recordings/clip.wav", {1, 2}));
+}
+
+RODAK_TEST("directory read without a mounted device clears stale entries and reports ENODEV") {
+    Fixture f;
+    std::vector<FileEntry> entries{{"stale", "/stale", false, 0, 0}};
+    errno = ENOENT;
+    RODAK_CHECK_FALSE(f.files->ListDirectory("/", entries));
+    RODAK_CHECK_EQ(errno, ENODEV);
+    RODAK_CHECK(entries.empty());
+}
+
+RODAK_TEST("directory reader preserves missing-directory errno through adapter logging") {
+    Fixture f;
+    RODAK_CHECK(f.files->Init());
+    std::vector<FileEntry> entries{{"stale", "/stale", false, 0, 0}};
+    errno = EBUSY;
+    RODAK_CHECK_FALSE(f.files->ListDirectory("/missing-folder", entries));
+    RODAK_CHECK_EQ(errno, ENOENT);
+    RODAK_CHECK(entries.empty());
 }

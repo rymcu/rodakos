@@ -36,6 +36,10 @@
 真实服务 fixture、串口配网、服务器信任、唤醒/身份、文件读写及媒体/UI 回归，并运行
 OTA/采集器、codec 和 MQTT 补丁生成器的 Python 测试。
 
+媒体浏览新增 `photos_ui` 与 `file_manager_ui`：前者编译生产 Photos / ImageLibrary，
+后者编译生产 Files / PhoneAppHost，均使用真实 LVGL。图片解码、FileService 和硬件
+替身范围见各测试 README；界面/读取失败回归不代表真实 SD、触摸或 OOM 验收。
+
 工作流额外编译并运行已有的 `voice_volume_service`、`remote_input`、
 `display_control_ack_service`、`light_service`、`appearance` 五个 CMake 测试目录。
 所有 C/C++ 主机测试启用 ASan/UBSan、栈帧指针和泄漏检查；UBSan 报错会使 job 失败。

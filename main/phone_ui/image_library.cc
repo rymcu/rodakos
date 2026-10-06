@@ -7,11 +7,16 @@
 #include <esp_heap_caps.h>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstdio>
 #include <cstring>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
 #include "jpg/jpeg_to_image.h"
+#include <src/draw/lv_image_decoder_private.h>
+#include <src/misc/cache/instance/lv_image_header_cache.h>
 
 namespace rodakos {
 
@@ -87,6 +92,7 @@ bool ParseBmpSize(const uint8_t* data, size_t size, int* width, int* height) {
 
     *width = static_cast<int>(ReadLe32(data + 18));
     int32_t signed_height = static_cast<int32_t>(ReadLe32(data + 22));
+    if (signed_height == INT32_MIN) return false;
     if (signed_height < 0) {
         signed_height = -signed_height;
     }
@@ -147,24 +153,28 @@ bool ParseImageSize(const uint8_t* data, size_t size, int* width, int* height) {
            ParseBmpSize(data, size, width, height);
 }
 
-void ScanDirectory(FileService* fs, const std::string& dir, int depth, int max_depth,
-                  std::vector<std::string>& files) {
-    if (depth > max_depth || fs == nullptr) {
-        return;
-    }
-
+bool ScanDirectory(FileService* fs, const std::string& dir, int depth, int max_depth,
+                   ImageLibrary::ImageScanResult& result) {
+    if (depth > max_depth) return true;
     std::vector<FileEntry> entries;
+    errno = 0;
     if (!fs->ListDirectory(dir, entries)) {
-        return;
+        const int failure = errno;
+        result.status = failure == ENODEV ? ImageLibrary::ImageScanStatus::kStorageUnavailable
+            : failure == ENOENT ? ImageLibrary::ImageScanStatus::kDirectoryMissing
+                               : ImageLibrary::ImageScanStatus::kReadFailed;
+        result.failed_path = dir;
+        return false;
     }
 
     for (const auto& entry : entries) {
         if (entry.is_directory) {
-            ScanDirectory(fs, entry.path, depth + 1, max_depth, files);
+            if (!ScanDirectory(fs, entry.path, depth + 1, max_depth, result)) return false;
         } else if (ImageLibrary::IsSupportedImage(entry.name)) {
-            files.push_back(entry.path);
+            result.paths.push_back(entry.path);
         }
     }
+    return true;
 }
 
 }  // namespace
@@ -182,10 +192,14 @@ LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, FreeFunc free_fu
     image_dsc_.data = static_cast<const uint8_t*>(data);
     image_dsc_.data_size = size;
 
-    if (lv_image_decoder_get_info(&image_dsc_, &image_dsc_.header) != LV_RESULT_OK) {
+    lv_image_header_t decoded_header{};
+    if (lv_image_decoder_get_info(&image_dsc_, &decoded_header) != LV_RESULT_OK) {
         ESP_LOGE(TAG, "Failed to get image info, data=%p size=%u", data, static_cast<unsigned>(size));
         throw std::runtime_error("Failed to get image info");
     }
+    // Keep the encoded format; marking compressed PNG bytes as ARGB skips decoding on draw.
+    image_dsc_.header.w = decoded_header.w;
+    image_dsc_.header.h = decoded_header.h;
 }
 
 LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, int width, int height,
@@ -203,6 +217,7 @@ LvglAllocatedImage::LvglAllocatedImage(void* data, size_t size, int width, int h
 }
 
 LvglAllocatedImage::~LvglAllocatedImage() {
+    lv_image_cache_drop(&image_dsc_);
     if (image_dsc_.data != nullptr) {
         void* data = const_cast<uint8_t*>(image_dsc_.data);
         if (free_func_ != nullptr) {
@@ -214,6 +229,7 @@ LvglAllocatedImage::~LvglAllocatedImage() {
 }
 
 LvglFileImage::LvglFileImage(std::string lvgl_path) : lvgl_path_(std::move(lvgl_path)) {}
+LvglFileImage::~LvglFileImage() { lv_image_cache_drop(lvgl_path_.c_str()); }
 
 // ImageLibrary namespace functions
 namespace ImageLibrary {
@@ -242,207 +258,214 @@ bool IsFileRenderableImage(const std::string& filename) {
     return EndsWith(filename, ".bmp");
 }
 
-std::shared_ptr<LvglImage> DecodeJpegScaled(const std::string& path,
-                                            const uint8_t* data,
-                                            size_t data_size,
-                                            size_t target_width,
-                                            size_t target_height,
-                                            const char* log_label) {
-    uint8_t* decoded = nullptr;
-    size_t decoded_len = 0;
-    size_t decoded_width = 0;
-    size_t decoded_height = 0;
-    size_t decoded_stride = 0;
-    esp_err_t ret = jpeg_to_image_scaled(
-        data, data_size,
-        &decoded, &decoded_len, &decoded_width, &decoded_height, &decoded_stride,
-        target_width, target_height);
-
-    if (ret != ESP_OK || decoded == nullptr || decoded_len == 0 ||
-        decoded_width == 0 || decoded_height == 0 || decoded_stride == 0) {
-        if (decoded != nullptr) {
-            jpeg_free_align(decoded);
-        }
-        ESP_LOGW(TAG, "Failed to decode JPEG %s: %s (%s)",
-                 log_label, path.c_str(), esp_err_to_name(ret));
-        return nullptr;
+namespace {
+ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t height) {
+    FILE* file = fopen(path.c_str(), "rb");
+    if (file == nullptr) return {ImageLoadStatus::kReadFailed, {}};
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return {ImageLoadStatus::kReadFailed, {}};
     }
-
-    const bool is_thumbnail = std::strcmp(log_label, "thumbnail") == 0;
-    ESP_LOG_LEVEL(is_thumbnail ? ESP_LOG_DEBUG : ESP_LOG_INFO, TAG,
-                  "Decoded JPEG %s: %s (%ux%u, stride=%u, %u bytes)",
-                  log_label,
-                  path.c_str(),
-                  static_cast<unsigned>(decoded_width),
-                  static_cast<unsigned>(decoded_height),
-                  static_cast<unsigned>(decoded_stride),
-                  static_cast<unsigned>(decoded_len));
-    try {
-        return std::make_shared<LvglAllocatedImage>(
-            decoded, decoded_len, static_cast<int>(decoded_width), static_cast<int>(decoded_height),
-            static_cast<int>(decoded_stride), LV_COLOR_FORMAT_RGB888, jpeg_free_align);
-    } catch (...) {
-        jpeg_free_align(decoded);
-        ESP_LOGW(TAG, "Failed to create decoded JPEG image: %s", path.c_str());
-        return nullptr;
+    const long size = ftell(file);
+    if (size < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return {ImageLoadStatus::kReadFailed, {}};
     }
-}
-
-std::vector<std::string> ScanImages(const std::string& directory, int max_depth) {
-    // Note: This function needs FileService instance
-    // For now, return empty vector - will be called from PhotosApp with context
-    std::vector<std::string> files;
-    return files;
-}
-
-std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
-    FILE* f = fopen(path.c_str(), "rb");
-    if (f == nullptr) {
-        ESP_LOGW(TAG, "Failed to open image: %s", path.c_str());
-        return nullptr;
+    if (size == 0) {
+        fclose(file);
+        return {ImageLoadStatus::kDecodeFailed, {}};
     }
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (file_size <= 0) {
-        fclose(f);
-        return nullptr;
-    }
-
-    // Allocate in SPIRAM
-    const bool injected_failure = rodakos::FailResource(rodakos::ResourceFailure::kImage);
-    void* data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool injected = FailResource(ResourceFailure::kImage);
+    void* data = injected ? nullptr : heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (data == nullptr && !injected) data = heap_caps_malloc(size, MALLOC_CAP_8BIT);
     if (data == nullptr) {
-        // Fallback to internal RAM if SPIRAM not available
-        data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
-        if (data == nullptr) {
-            fclose(f);
-            ESP_LOGW(TAG, "Failed to allocate memory for image, size=%ld", file_size);
-            return nullptr;
-        }
+        fclose(file);
+        return {ImageLoadStatus::kInsufficientMemory, {}};
     }
-
-    size_t read_size = fread(data, 1, file_size, f);
-    fclose(f);
-
-    if (read_size != static_cast<size_t>(file_size)) {
+    const size_t count = fread(data, 1, size, file);
+    const bool read_ok = count == static_cast<size_t>(size) && ferror(file) == 0;
+    const int close_result = fclose(file);
+    if (!read_ok || close_result != 0) {
         heap_caps_free(data);
-        ESP_LOGW(TAG, "Failed to read image completely: %s", path.c_str());
-        return nullptr;
+        return {ImageLoadStatus::kReadFailed, {}};
     }
-
-    int width = 0;
-    int height = 0;
-    if (!ParseImageSize(static_cast<const uint8_t*>(data), static_cast<size_t>(file_size),
-                        &width, &height)) {
-        ESP_LOGW(TAG, "Failed to parse image size: %s", path.c_str());
-    } else {
-        ESP_LOGI(TAG, "Loaded image: %s (%dx%d, %ld bytes)", path.c_str(), width, height, file_size);
+    int parsed_width = 0, parsed_height = 0;
+    if (!ParseImageSize(static_cast<const uint8_t*>(data), size, &parsed_width, &parsed_height)) {
+        heap_caps_free(data);
+        return {ImageLoadStatus::kDecodeFailed, {}};
     }
-
     if (IsJpeg(path)) {
-        auto image = DecodeJpegScaled(path,
-                                      static_cast<const uint8_t*>(data),
-                                      static_cast<size_t>(file_size),
-                                      kDisplayWidth,
-                                      kDisplayHeight,
-                                      "display");
+        uint8_t* decoded = nullptr;
+        size_t length = 0, decoded_width = 0, decoded_height = 0, stride = 0;
+        const esp_err_t result = jpeg_to_image_scaled(static_cast<const uint8_t*>(data), size,
+            &decoded, &length, &decoded_width, &decoded_height, &stride, width, height);
         heap_caps_free(data);
-        return image;
-    }
-
-    try {
-        return std::make_shared<LvglAllocatedImage>(data, file_size);
-    } catch (...) {
-        heap_caps_free(data);
-        ESP_LOGW(TAG, "Failed to create image: %s", path.c_str());
-        return nullptr;
-    }
-}
-
-std::shared_ptr<LvglImage> LoadImageForDisplay(const std::string& path) {
-    if (IsFileRenderableImage(path)) {
-        std::string lvgl_path = ToLvglStdioPath(path);
-        ESP_LOGI(TAG, "Using LVGL file source for image: %s", lvgl_path.c_str());
-        return std::make_shared<LvglFileImage>(std::move(lvgl_path));
-    }
-
-    if (!IsMemoryRenderableImage(path)) {
-        ESP_LOGW(TAG, "Unsupported image display format: %s", path.c_str());
-        return nullptr;
-    }
-
-    return LoadImage(path);
-}
-
-std::shared_ptr<LvglImage> LoadThumbnail(const std::string& path, int width, int height) {
-    if (!IsJpeg(path) || width <= 0 || height <= 0) {
-        return nullptr;
-    }
-
-    FILE* f = fopen(path.c_str(), "rb");
-    if (f == nullptr) {
-        ESP_LOGW(TAG, "Failed to open thumbnail: %s", path.c_str());
-        return nullptr;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (file_size <= 0) {
-        fclose(f);
-        return nullptr;
-    }
-
-    const bool injected_failure = rodakos::FailResource(rodakos::ResourceFailure::kImage);
-    void* data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (data == nullptr) {
-        data = injected_failure ? nullptr : heap_caps_malloc(file_size, MALLOC_CAP_8BIT);
-        if (data == nullptr) {
-            fclose(f);
-            ESP_LOGW(TAG, "Failed to allocate memory for thumbnail, size=%ld", file_size);
-            return nullptr;
+        if (result != ESP_OK || decoded == nullptr || length == 0 || decoded_width == 0 ||
+            decoded_height == 0 || stride == 0) {
+            if (decoded != nullptr) jpeg_free_align(decoded);
+            return {result == ESP_ERR_NO_MEM ? ImageLoadStatus::kInsufficientMemory
+                                             : ImageLoadStatus::kDecodeFailed, {}};
+        }
+        try {
+            return {ImageLoadStatus::kLoaded, std::make_shared<LvglAllocatedImage>(decoded, length,
+                static_cast<int>(decoded_width), static_cast<int>(decoded_height),
+                static_cast<int>(stride), LV_COLOR_FORMAT_RGB888, jpeg_free_align)};
+        } catch (const std::bad_alloc&) {
+            jpeg_free_align(decoded);
+            return {ImageLoadStatus::kInsufficientMemory, {}};
+        } catch (...) {
+            jpeg_free_align(decoded);
+            return {ImageLoadStatus::kDecodeFailed, {}};
         }
     }
-
-    size_t read_size = fread(data, 1, file_size, f);
-    fclose(f);
-
-    if (read_size != static_cast<size_t>(file_size)) {
+    std::shared_ptr<LvglImage> image;
+    try {
+        image = std::make_shared<LvglAllocatedImage>(data, size);
+    } catch (const std::bad_alloc&) {
         heap_caps_free(data);
-        ESP_LOGW(TAG, "Failed to read thumbnail completely: %s", path.c_str());
-        return nullptr;
+        return {ImageLoadStatus::kInsufficientMemory, {}};
+    } catch (...) {
+        heap_caps_free(data);
+        return {ImageLoadStatus::kDecodeFailed, {}};
     }
-
-    auto image = DecodeJpegScaled(path,
-                                  static_cast<const uint8_t*>(data),
-                                  static_cast<size_t>(file_size),
-                                  static_cast<size_t>(width),
-                                  static_cast<size_t>(height),
-                                  "thumbnail");
-    heap_caps_free(data);
-    return image;
+    lv_image_decoder_dsc_t decoder{};
+    lv_image_decoder_args_t args{};
+    args.no_cache = true;
+    // Header inspection alone accepts truncated PNGs; exercise the actual decoder.
+    if (lv_image_decoder_open(&decoder, image->GetImageSource(), &args) != LV_RESULT_OK)
+        return {ImageLoadStatus::kDecodeFailed, {}};
+    const bool decoded = decoder.decoded != nullptr;
+    lv_image_decoder_close(&decoder);
+    if (!decoded) return {ImageLoadStatus::kDecodeFailed, {}};
+    return {ImageLoadStatus::kLoaded, std::move(image)};
 }
-
-std::vector<std::string> ScanImagesWithFileService(FileService* fs, const std::string& directory, int max_depth) {
-    std::vector<std::string> files;
-    if (fs == nullptr || !fs->IsMounted()) {
-        return files;
-    }
-
-    ScanDirectory(fs, directory, 0, max_depth, files);
-
-    // Sort by name
-    std::sort(files.begin(), files.end(), [](const std::string& a, const std::string& b) {
-        return ToLower(a) < ToLower(b);
+void SortPaths(ImageScanResult& result) {
+    std::sort(result.paths.begin(), result.paths.end(), [](const auto& left, const auto& right) {
+        return ToLower(left) < ToLower(right);
     });
+    result.paths.erase(std::unique(result.paths.begin(), result.paths.end()), result.paths.end());
+}
+}  // namespace
 
-    return files;
+ImageLoadResult LoadImageForDisplayDetailed(const std::string& path) {
+    if (!IsSupportedImage(path)) return {ImageLoadStatus::kUnsupported, {}};
+    if (!IsFileRenderableImage(path)) return LoadMemoryImage(path, kDisplayWidth, kDisplayHeight);
+    std::unique_ptr<FILE, decltype(&fclose)> file(fopen(path.c_str(), "rb"), fclose);
+    if (file == nullptr) return {ImageLoadStatus::kReadFailed, {}};
+    uint8_t header_bytes[54]{};
+    const size_t count = fread(header_bytes, 1, sizeof(header_bytes), file.get());
+    uint8_t masks[12]{};
+    const bool bitfields = header_bytes[28] == 16 && ReadLe32(header_bytes + 30) == 3;
+    const size_t mask_count = bitfields ? fread(masks, 1, sizeof(masks), file.get()) : 0;
+    const bool read_error = ferror(file.get()) != 0;
+    const int seek_result = fseek(file.get(), 0, SEEK_END);
+    const long file_size = seek_result == 0 ? ftell(file.get()) : -1;
+    if (read_error || file_size < 0) return {ImageLoadStatus::kReadFailed, {}};
+    if (count != sizeof(header_bytes) || header_bytes[0] != 'B' || header_bytes[1] != 'M')
+        return {ImageLoadStatus::kDecodeFailed, {}};
+    const uint32_t dib_size = ReadLe32(header_bytes + 14);
+    const uint32_t width = ReadLe32(header_bytes + 18);
+    const uint32_t height = ReadLe32(header_bytes + 22);
+    const uint16_t planes = header_bytes[26] | static_cast<uint16_t>(header_bytes[27]) << 8;
+    const uint16_t bits = header_bytes[28] | static_cast<uint16_t>(header_bytes[29]) << 8;
+    const uint32_t compression = ReadLe32(header_bytes + 30);
+    const uint32_t offset = ReadLe32(header_bytes + 10);
+    const uint32_t declared_size = ReadLe32(header_bytes + 2);
+    if (dib_size < 40 || width == 0 || height == 0 || width > INT16_MAX || height > INT16_MAX ||
+        planes != 1 || offset < 14ULL + dib_size) return {ImageLoadStatus::kDecodeFailed, {}};
+    // LVGL's streaming decoder supports direct pixels, not palettes, RLE or top-down rows.
+    const bool rgb565 = bits == 16 && compression == 3 && mask_count == sizeof(masks) &&
+        offset >= 66 && ReadLe32(masks) == 0xf800 && ReadLe32(masks + 4) == 0x7e0 &&
+        ReadLe32(masks + 8) == 0x1f;
+    if (!rgb565 && ((bits != 24 && bits != 32) || compression != 0))
+        return {ImageLoadStatus::kUnsupported, {}};
+    const uint64_t row_bytes = ((static_cast<uint64_t>(width) * bits + 31) / 32) * 4;
+    const uint64_t required = offset + row_bytes * height;
+    if (required > static_cast<uint64_t>(file_size) || declared_size < required ||
+        declared_size > static_cast<uint64_t>(file_size)) return {ImageLoadStatus::kDecodeFailed, {}};
+    if (fseek(file.get(), static_cast<long>(offset), SEEK_SET) != 0)
+        return {ImageLoadStatus::kReadFailed, {}};
+    uint8_t pixels[512];
+    for (uint64_t remaining = required - offset; remaining > 0;) {
+        const size_t expected = static_cast<size_t>(std::min<uint64_t>(remaining, sizeof(pixels)));
+        if (fread(pixels, 1, expected, file.get()) != expected || ferror(file.get()) != 0)
+            return {ImageLoadStatus::kReadFailed, {}};
+        remaining -= expected;
+    }
+    if (fclose(file.release()) != 0) return {ImageLoadStatus::kReadFailed, {}};
+    try {
+        auto image = std::make_shared<LvglFileImage>(ToLvglStdioPath(path));
+        lv_image_header_cache_drop(image->GetImageSource());
+        lv_image_header_t header = {};
+        if (lv_image_decoder_get_info(image->GetImageSource(), &header) != LV_RESULT_OK ||
+            header.w != width || header.h != height) return {ImageLoadStatus::kDecodeFailed, {}};
+        return {ImageLoadStatus::kLoaded, std::move(image)};
+    } catch (const std::bad_alloc&) {
+        return {ImageLoadStatus::kInsufficientMemory, {}};
+    }
+}
+ImageLoadResult LoadThumbnailDetailed(const std::string& path, int width, int height) {
+    if (!IsJpeg(path) || width <= 0 || height <= 0) return {ImageLoadStatus::kUnsupported, {}};
+    return LoadMemoryImage(path, width, height);
+}
+const char* ImageLoadErrorText(ImageLoadStatus status) {
+    switch (status) {
+        case ImageLoadStatus::kLoaded: return "";
+        case ImageLoadStatus::kUnsupported: return "Unsupported image format";
+        case ImageLoadStatus::kReadFailed: return "Could not read image";
+        case ImageLoadStatus::kInsufficientMemory: return "Not enough image memory";
+        default: return "Could not load image";
+    }
+}
+std::shared_ptr<LvglImage> LoadImage(const std::string& path) {
+    return LoadMemoryImage(path, kDisplayWidth, kDisplayHeight).image;
+}
+std::shared_ptr<LvglImage> LoadImageForDisplay(const std::string& path) {
+    return LoadImageForDisplayDetailed(path).image;
+}
+std::shared_ptr<LvglImage> LoadThumbnail(const std::string& path, int width, int height) {
+    return LoadThumbnailDetailed(path, width, height).image;
+}
+std::vector<std::string> ScanImages(const std::string&, int) {
+    return {};
+}
+ImageScanResult ScanImagesWithFileServiceDetailed(FileService* fs, const std::string& directory, int max_depth) {
+    if (fs == nullptr) return {ImageScanStatus::kServiceUnavailable, {}, directory};
+    if (!fs->IsMounted()) return {ImageScanStatus::kStorageUnavailable, {}, directory};
+    if (max_depth < 0) return {ImageScanStatus::kReadFailed, {}, directory};
+    ImageScanResult result;
+    if (!ScanDirectory(fs, directory, 0, max_depth, result)) result.paths.clear();
+    else SortPaths(result);
+    return result;
+}
+ImageScanResult ScanPhotoLibrary(FileService* fs) {
+    if (fs == nullptr) return {ImageScanStatus::kServiceUnavailable, {}, {}};
+    if ((!fs->IsMounted() && !fs->Init()) || !fs->IsMounted())
+        return {ImageScanStatus::kStorageUnavailable, {}, {}};
+    // A successful root listing distinguishes absent optional albums from I/O failures.
+    std::vector<FileEntry> entries;
+    errno = 0;
+    if (!fs->ListDirectory("/", entries)) {
+        const int failure = errno;
+        return {failure == ENODEV ? ImageScanStatus::kStorageUnavailable
+                : failure == ENOENT ? ImageScanStatus::kDirectoryMissing
+                                    : ImageScanStatus::kReadFailed, {}, "/"};
+    }
+    ImageScanResult result;
+    for (const auto& entry : entries) {
+        const auto name = ToLower(entry.name);
+        if (!entry.is_directory || (name != "photos" && name != "dcim")) continue;
+        auto album = ScanImagesWithFileServiceDetailed(fs, entry.path, 3);
+        if (album.status != ImageScanStatus::kReady) return album;
+        result.paths.insert(result.paths.end(), album.paths.begin(), album.paths.end());
+    }
+    if (result.paths.empty()) return ScanImagesWithFileServiceDetailed(fs, "/", 2);
+    SortPaths(result);
+    return result;
+}
+std::vector<std::string> ScanImagesWithFileService(FileService* fs, const std::string& directory, int max_depth) {
+    return ScanImagesWithFileServiceDetailed(fs, directory, max_depth).paths;
 }
 
 }  // namespace ImageLibrary
-
 }  // namespace rodakos

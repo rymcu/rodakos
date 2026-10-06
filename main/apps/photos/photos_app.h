@@ -50,6 +50,7 @@ private:
         lv_obj_t* label = nullptr;
         std::shared_ptr<rodakos::LvglImage> thumbnail;
         bool thumbnail_unavailable = false;
+        bool load_failed = false;
     };
 
     // 页面管理
@@ -59,6 +60,8 @@ private:
 
     // 图片扫描
     void ScanPhotos();
+    void RefreshPhotos();
+    void UpdateGridStatus();
 
     // 导航
     void ShowNextPhoto();
@@ -87,6 +90,7 @@ private:
     lv_obj_t* grid_body_ = nullptr;
     lv_obj_t* grid_container_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
+    lv_obj_t* refresh_button_ = nullptr;
     lv_timer_t* thumbnail_timer_ = nullptr;
     std::vector<ThumbnailItem> thumbnail_items_;
 
@@ -94,10 +98,13 @@ private:
     lv_obj_t* fullscreen_body_ = nullptr;
     lv_obj_t* photo_img_ = nullptr;
     lv_obj_t* filename_label_ = nullptr;
+    lv_obj_t* preview_retry_button_ = nullptr;
     std::shared_ptr<rodakos::LvglImage> current_image_;
 
     std::vector<PhotoEntry> photos_;
     size_t current_photo_index_ = 0;
+    rodakos::ImageLibrary::ImageScanStatus scan_status_ = rodakos::ImageLibrary::ImageScanStatus::kReady;
+    bool thumbnail_timer_failed_ = false;
 };
 
 void RegisterPhotosApp(PhoneAppRegistry& registry);
