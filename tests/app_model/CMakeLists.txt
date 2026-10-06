@@ -29,6 +29,7 @@ add_executable(rodakos_app_model_tests
     ota_signature_format_test.cc
     audio_output_service_test.cc
     test_voice_volume_mcp.cc
+    mqtt_volume_effect_test.cc
     ../appearance/package_test.cc
     ../appearance/policy_test.cc
     ../appearance/json_allocator_test.cc
@@ -58,6 +59,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/audio_output_service.cc
     ../../main/phone_os/audio_service.cc
     ../../main/phone_os/voice_volume_mcp.cc
+    ../../main/phone_os/mqtt_volume_effect.cc
     ../../main/rodakos_adapters/audio_codec_output.cc
     ../../main/rodakos_adapters/wifi_connection_policy.cc
     ../../components/rodak_ota_state/rodak_ota_signature_format.cc

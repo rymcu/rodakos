@@ -1,7 +1,7 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. Reviewed source baseline: `a141297` (checked codec dependency overlay),
-plus the voice-volume MCP integration and canonical-envelope adapter validation described below.
+Updated: 2026-10-06. Reviewed source baseline: `56eb7bf` (voice-volume MCP and adapter validation),
+plus MQTT volume effect receipts and actual service lifecycle validation described below.
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -28,6 +28,8 @@ firmware build does not change an existing hardware gate.
   with atomic shared configuration and bounded per-session duplicate suppression. Its versioned
   software receipts carry optional effect correlation; MQTT shadow values still do not correlate
   effects, and neither path proves physical speaker output. See [voice volume MCP](voice-volume-mcp.md).
+  Single-dispatch MQTT volume effects now use their own correlated result topic, bounded
+  same-authority ledger and transport-epoch cancellation; see [MQTT volume effects](mqtt-volume-effects.md).
   The pinned codec dependency now uses a source-verified build overlay to propagate lower-level
   volume driver errors and commit its own cache only on success; see
   [dependency maintenance](dependency-maintenance.md).
@@ -44,7 +46,7 @@ firmware build does not change an existing hardware gate.
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
-| Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT correlated receipts remain unimplemented, and voice MCP receipts prove only volatile software configuration | [Volume MCP](voice-volume-mcp.md), [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties), [dependency correction](dependency-maintenance.md) |
+| Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
 | Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 

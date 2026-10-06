@@ -176,6 +176,11 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   remain outside this focused correction; success does not establish hardware or acoustic success.
   Ordinary shadow reports contain no volume effect ID or applied desired version; see the
   [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+  Correlated MQTT volume effects use a separate `effects/receipt` publication and a bounded
+  authority-scoped ledger. Real connection epochs travel through fragment assembly and the
+  worker queue; the scope check and `ApplyVolume` share the MQTT service lock with cancellation.
+  Receipt enqueue runs in the SDK custom-event callback to preserve SDK/service lock order.
+  See [MQTT volume effects](mqtt-volume-effects.md) for the contract and host service tests.
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
   audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and starts
   the next input turn on that same session; a user saying “再见” results in `session.end`, while 30 seconds of follow-up silence, errors, or a

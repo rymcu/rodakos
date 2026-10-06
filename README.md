@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (reviewed baseline: `a141297`, plus the voice-volume MCP integration).
+Last refreshed: 2026-10-06 (reviewed baseline: `56eb7bf`, plus MQTT volume effect receipts).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
@@ -46,6 +46,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   managed sources. A closed codec accepts RAM configuration without opening hardware; receipts
   do not claim persistence or physical speaker verification. MQTT shadow reports retain their
   separate evidence boundary. See [voice volume MCP](docs/voice-volume-mcp.md).
+- MQTT volume effects now carry single-dispatch correlation and publish software results on
+  `effects/receipt`. The device preserves bounded deduplication across same-authority reconnects
+  while connection epochs cancel old queued work/results. Plain reported volume remains state
+  only. See [MQTT volume effects](docs/mqtt-volume-effects.md).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
   queued and successful completion evidence for app exercises. These host checks do not close the
   eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
@@ -172,6 +176,7 @@ docs/
 tests/
 ├── app_model/             # Host-side models, lifecycle, policy and audio-volume service tests
 ├── voice_volume_service/  # Real voice service startup/queue/stop/reconnect with host dependencies
+├── mqtt_volume_service/   # Real MQTT callback/fragment/worker/epoch and receipt publishing
 └── home_ui/               # Production HomeApp exercised against host LVGL 9.3
 ```
 
@@ -220,6 +225,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
 - [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
+- [MQTT volume effects and software receipts](docs/mqtt-volume-effects.md)
 - [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
 - [Rodak identity and wake word](docs/voice-identity-wake-word.md)
 - [Serial provisioning](docs/serial-provisioning.md)

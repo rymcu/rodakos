@@ -2,6 +2,7 @@
 #include "phone_os/unified_mqtt_service.h"
 
 #include "phone_os/audio_output_service.h"
+#include "phone_os/realtime_voice_contract.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/webrtc_camera_service.h"
@@ -141,6 +142,17 @@ bool IsPingCommand(const std::string& payload) {
     return is_ping;
 }
 
+bool HasSameVolumeAuthority(const DeviceCloudConfig& current,
+                            const DeviceCloudConfig& next) {
+    // 密码正常轮换不改变同一 boot 的去重域；重新绑定、authority 或路由变化必须隔离。
+    return HasSameMqttSessionIdentity(current, next) &&
+           current.provisioning_url == next.provisioning_url &&
+           current.aiot_device_secret == next.aiot_device_secret &&
+           current.aiot_registered == next.aiot_registered &&
+           current.aiot_activated == next.aiot_activated &&
+           current.unbind_pending == next.unbind_pending;
+}
+
 bool ProjectAppearanceDesired(const cJSON* appearance, char* buffer, size_t capacity) {
     const auto text = [&](const char* name) -> const char* {
         const cJSON* item = cJSON_GetObjectItemCaseSensitive(appearance, name);
@@ -271,6 +283,7 @@ UnifiedMqttService::UnifiedMqttService(DeviceCloudConfigService& config_service,
     : config_service_(config_service),
       ota_update_(ota_update),
       audio_output_(audio_output),
+      volume_effect_(audio_output),
       battery_provider_(battery_provider),
       light_service_(light_service) {
     publish_ack_semaphore_ = xSemaphoreCreateBinaryStatic(&publish_ack_semaphore_storage_);
@@ -332,15 +345,15 @@ void UnifiedMqttService::Stop() {
     // shutdown cannot leave a stale capture task holding the device resource.
     StopWebRtcDisplayStream();
     StopWebRtcCameraStream();
-    if (!started_.exchange(false)) {
-        return;
-    }
-    connected_.store(false);
     TimerHandle_t telemetry_timer = nullptr;
     esp_mqtt_client_handle_t client = nullptr;
     bool wake_publisher = false;
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!started_.exchange(false)) return;
+        connected_.store(false);
+        volume_authority_active_ = false;
+        AdvanceConnectionEpochLocked();
         telemetry_timer = telemetry_timer_;
         telemetry_timer_ = nullptr;
         client = client_;
@@ -400,6 +413,12 @@ void UnifiedMqttService::RequestCredentialRefresh() {
     // attached a client. Restart unconditionally so that neither an old
     // cached config nor an old MQTT outbox can cross the new boundary.
     ESP_LOGI(TAG, "Provisioning changed cloud configuration; restarting device");
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        volume_authority_active_ = false;
+        AdvanceConnectionEpochLocked();
+        volume_effect_.ResetAuthority();
+    }
     std::fflush(stdout);
     // Give the shared USB console a scheduling window to deliver the marker
     // before reset disconnects the device from the host.
@@ -470,8 +489,9 @@ void UnifiedMqttService::WorkerLoop() {
         PendingMessage* raw = nullptr;
         if (xQueueReceive(message_queue_, &raw, pdMS_TO_TICKS(kBackgroundTaskPollMs)) == pdTRUE) {
             std::unique_ptr<PendingMessage> message(raw);
-            if (IsCurrentClientGeneration(message->client_generation)) {
-                HandleMessage(message->topic, message->payload);
+            if (IsCurrentClientGeneration(message->client_generation, message->connection_epoch)) {
+                HandleMessage(message->topic, message->payload,
+                              message->client_generation, message->connection_epoch);
             }
         }
     }
@@ -548,11 +568,14 @@ void UnifiedMqttService::Connect() {
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (started_.load() && client_ == nullptr) {
+            if (!HasSameVolumeAuthority(config_, next_config)) volume_effect_.ResetAuthority();
             config_ = std::move(next_config);
+            volume_authority_active_ = !config_.unbind_pending;
             broker_uri_ = std::move(next_broker_uri);
             client_id_ = std::move(next_client_id);
             client_ = client;
             generation = ++client_generation_;
+            AdvanceConnectionEpochLocked();
             attached = true;
             broker_uri = broker_uri_;
             username = config_.mqtt_username;
@@ -567,6 +590,7 @@ void UnifiedMqttService::Connect() {
         if (client_ == client && client_generation_ == generation) {
             client_ = nullptr;
             ++client_generation_;
+            AdvanceConnectionEpochLocked();
             destroy_client = true;
         }
     }
@@ -692,6 +716,19 @@ void UnifiedMqttService::RefreshCredentials() {
             return;
         }
         config_service_.Load(*refreshed);
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            if (refreshed->unbind_pending || !refreshed->has_mqtt_config ||
+                !HasSameVolumeAuthority(config_, *refreshed)) {
+                volume_authority_active_ = false;
+                AdvanceConnectionEpochLocked();
+                volume_effect_.ResetAuthority();
+            }
+        }
+        if (refreshed->unbind_pending) {
+            FinishCredentialRefresh();
+            return;
+        }
         ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
         if (!config_service_.Refresh(*refreshed) || !refreshed->has_mqtt_config) {
             ESP_LOGE(TAG, "MQTT credential refresh failed: %s",
@@ -718,6 +755,12 @@ void UnifiedMqttService::RefreshCredentials() {
     // Voice preparation may have refreshed again while application was deferred.
     config_service_.Load(refreshed_config);
     if (!refreshed_config.has_mqtt_config || refreshed_config.unbind_pending) {
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            volume_authority_active_ = false;
+            AdvanceConnectionEpochLocked();
+            volume_effect_.ResetAuthority();
+        }
         ESP_LOGW(TAG, "MQTT recovery cancelled: persisted configuration is unavailable");
         FinishCredentialRefresh();
         return;
@@ -739,6 +782,12 @@ void UnifiedMqttService::RefreshCredentials() {
     MqttCredentialRefreshAction action = MqttCredentialRefreshAction::kKeepCurrentClient;
     const bool same_session_identity =
         client != nullptr && HasSameMqttSessionIdentity(active_config, refreshed_config);
+    if (!HasSameVolumeAuthority(active_config, refreshed_config)) {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        volume_authority_active_ = false;
+        AdvanceConnectionEpochLocked();
+        volume_effect_.ResetAuthority();
+    }
     if (client == nullptr) {
         MqttCredentialRefreshState state;
         state.refresh_succeeded = true;
@@ -782,6 +831,7 @@ void UnifiedMqttService::RefreshCredentials() {
                     std::lock_guard<std::mutex> lock(mqtt_mutex_);
                     if (client_ == client) {
                         ++client_generation_;
+                        AdvanceConnectionEpochLocked();
                         wake_publisher = reliable_publish_.message_id >= 0;
                         reliable_publish_ = {};
                     }
@@ -794,7 +844,10 @@ void UnifiedMqttService::RefreshCredentials() {
                     {
                         std::lock_guard<std::mutex> lock(mqtt_mutex_);
                         if (client_ == client) {
+                            if (!HasSameVolumeAuthority(config_, refreshed_config))
+                                volume_effect_.ResetAuthority();
                             config_ = std::move(refreshed_config);
+                            volume_authority_active_ = !config_.unbind_pending;
                             broker_uri_ = std::move(broker_uri);
                             client_id_ = std::move(client_id);
                         }
@@ -824,6 +877,11 @@ void UnifiedMqttService::RefreshCredentials() {
         StartConnectionAsync();
     }
     if (action == MqttCredentialRefreshAction::kRestart && started_.load()) {
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            volume_authority_active_ = false;
+            AdvanceConnectionEpochLocked();
+        }
         credential_restart_pending_ = true;
         if (!ShouldDeferCredentialRefresh()) {
             ESP_LOGW(TAG, "Restarting to isolate refreshed MQTT session");
@@ -839,10 +897,38 @@ bool UnifiedMqttService::HasClient() const {
     return client_ != nullptr;
 }
 
-bool UnifiedMqttService::IsCurrentClientGeneration(uint32_t generation) const {
+bool UnifiedMqttService::IsCurrentClientGeneration(uint32_t generation,
+                                                   uint64_t connection_epoch) const {
     std::lock_guard<std::mutex> lock(mqtt_mutex_);
     return started_.load() && connected_.load() && client_ != nullptr &&
-           client_generation_ == generation;
+           client_generation_ == generation &&
+           (connection_epoch == 0 || connection_epoch_ == connection_epoch);
+}
+
+void UnifiedMqttService::AdvanceConnectionEpochLocked() {
+    if (++connection_epoch_ == 0) ++connection_epoch_;
+    message_assembly_ = {};
+    volume_receipts_.clear();
+}
+
+void UnifiedMqttService::QueueVolumeReceipt(const std::string& payload,
+                                            uint32_t generation, uint64_t connection_epoch) {
+    // dispatch_custom_event 只以零超时投递 SDK event queue，不获取 SDK API 锁。
+    // client_api_mutex_ 保证指针在投递期间不会被 Stop/destroy 或凭据替换。
+    std::lock_guard<std::mutex> api_lock(client_api_mutex_);
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    if (!started_.load() || !connected_.load() || !volume_authority_active_ || client_ == nullptr ||
+        client_generation_ != generation || connection_epoch_ != connection_epoch ||
+        volume_receipts_.size() >= 8) return;
+    volume_receipts_.push_back({generation, connection_epoch,
+        "devices/" + config_.mqtt_device_key + "/effects/receipt", payload});
+    esp_mqtt_event_t event = {};
+    event.event_id = MQTT_USER_EVENT;
+    event.client = client_;
+    if (esp_mqtt_dispatch_custom_event(client_, &event) != ESP_OK) {
+        volume_receipts_.pop_back();
+        ESP_LOGW(TAG, "Volume receipt event queue is unavailable; outcome remains cached");
+    }
 }
 
 std::string UnifiedMqttService::CopyTopic(
@@ -867,6 +953,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     bool wake_publisher = false;
     bool schedule_message = false;
     uint32_t event_generation = 0;
+    uint64_t event_epoch = 0;
     std::string completed_topic;
     std::string completed_payload;
     {
@@ -875,13 +962,27 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
             return;
         }
         if (event->event_id == MQTT_EVENT_CONNECTED) {
+            AdvanceConnectionEpochLocked();
             connected_.store(true);
             transport_recovery_.MarkConnected();
             connected_pending_ = true;
             connected_pending_generation_ = client_generation_;
         } else if (event->event_id == MQTT_EVENT_DISCONNECTED) {
             connected_.store(false);
-            message_assembly_ = {};
+            AdvanceConnectionEpochLocked();
+        } else if (event->event_id == MQTT_USER_EVENT) {
+            // ESP-MQTT 在持 SDK 递归 API 锁时运行此回调；同线程 enqueue 不反转锁序。
+            while (!volume_receipts_.empty()) {
+                PendingVolumeReceipt receipt = std::move(volume_receipts_.front());
+                volume_receipts_.pop_front();
+                if (connected_.load() && volume_authority_active_ &&
+                    receipt.client_generation == client_generation_ &&
+                    receipt.connection_epoch == connection_epoch_) {
+                    if (esp_mqtt_client_enqueue(client_, receipt.topic.c_str(),
+                            receipt.payload.data(), receipt.payload.size(), 0, 0, true) < 0)
+                        ESP_LOGW(TAG, "Volume receipt could not enter the current MQTT outbox");
+                }
+            }
         } else if (event->event_id == MQTT_EVENT_ERROR && event->error_handle != nullptr &&
                    event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
             transport_recovery_.RecordTransportFailure();
@@ -901,7 +1002,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                    reliable_publish_.message_id == event->msg_id) {
             reliable_publish_ = {};
             wake_publisher = true;
-        } else if (event->event_id == MQTT_EVENT_DATA) {
+        } else if (event->event_id == MQTT_EVENT_DATA && connected_.load()) {
             const bool valid_lengths = event->current_data_offset >= 0 &&
                                        event->data_len >= 0 && event->total_data_len >= 0 &&
                                        static_cast<size_t>(event->total_data_len) <=
@@ -915,6 +1016,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 if (valid_lengths) {
                     message_assembly_.active = true;
                     message_assembly_.client_generation = client_generation_;
+                    message_assembly_.connection_epoch = connection_epoch_;
                     message_assembly_.total_length =
                         static_cast<size_t>(event->total_data_len);
                     if (event->topic != nullptr && event->topic_len > 0) {
@@ -929,6 +1031,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 }
             } else if (valid_lengths && message_assembly_.active &&
                        message_assembly_.client_generation == client_generation_ &&
+                       message_assembly_.connection_epoch == connection_epoch_ &&
                        message_assembly_.total_length ==
                            static_cast<size_t>(event->total_data_len) &&
                        message_assembly_.payload.size() ==
@@ -945,6 +1048,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                                                  message_assembly_.total_length) {
                 schedule_message = true;
                 event_generation = message_assembly_.client_generation;
+                event_epoch = message_assembly_.connection_epoch;
                 completed_topic = std::move(message_assembly_.topic);
                 completed_payload = std::move(message_assembly_.payload);
                 message_assembly_ = {};
@@ -970,6 +1074,7 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 auto context = std::unique_ptr<PendingMessage>(
                     new (std::nothrow) PendingMessage{
                         event_generation,
+                        event_epoch,
                         std::move(completed_topic),
                         std::move(completed_payload),
                     });
@@ -1050,7 +1155,8 @@ void UnifiedMqttService::SubscribeTopics() {
 }
 
 void UnifiedMqttService::HandleMessage(const std::string& topic,
-                                       const std::string& payload) {
+                                       const std::string& payload, uint32_t generation,
+                                       uint64_t connection_epoch) {
     const std::string ota_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_ota_notify);
     const std::string shadow_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_shadow_desired);
     const std::string commands_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
@@ -1065,7 +1171,7 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
         return;
     }
     if (topic == shadow_topic) {
-        ApplyDesiredShadow(payload);
+        ApplyDesiredShadow(payload, generation, connection_epoch);
         return;
     }
     if (topic == pc_status_topic) {
@@ -1078,7 +1184,19 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
     }
 }
 
-void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
+void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload,
+                                           uint32_t generation, uint64_t connection_epoch) {
+    if (payload.size() > 256 * 1024 || !IsBoundedRealtimeVoiceControlJson(payload, 16)) return;
+    std::string receipt;
+    bool volume_handled = false;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!started_.load() || !connected_.load() || !volume_authority_active_ || client_ == nullptr ||
+            client_generation_ != generation || connection_epoch_ != connection_epoch) return;
+        // 与 Stop/断线/凭据切换共享锁，不能在 scope 检查后释放锁再写 codec。
+        receipt = volume_effect_.Handle(payload, config_.mqtt_device_key, volume_handled);
+    }
+    if (!receipt.empty()) QueueVolumeReceipt(receipt, generation, connection_epoch);
     cJSON* root = cJSON_Parse(payload.c_str());
     if (!cJSON_IsObject(root)) {
         cJSON_Delete(root);
@@ -1100,11 +1218,6 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload) {
         char encoded_appearance[384] = {};
         if (ProjectAppearanceDesired(appearance, encoded_appearance, sizeof(encoded_appearance))) {
             appearance_->ApplyDesiredJson(encoded_appearance);
-        }
-    }
-    if (cJSON_IsNumber(volume) && audio_output_ != nullptr) {
-        if (!audio_output_->SetVolume(std::clamp(volume->valueint, 0, 100))) {
-            ESP_LOGW(TAG, "Failed to apply desired volume; retaining accepted configuration");
         }
     }
     cJSON* light = cJSON_IsObject(desired)

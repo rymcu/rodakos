@@ -1,0 +1,33 @@
+#pragma once
+#include "host_sdk.h"
+#include "phone_os/device_cloud_config.h"
+
+namespace mqtt_host {
+struct Publication {
+    std::string topic;
+    std::string payload;
+    unsigned client_id;
+    unsigned credential_revision;
+    bool in_sdk_callback;
+};
+void Reset();
+void JoinWorkers();
+void SetConfig(const rodakos::DeviceCloudConfig& config);
+rodakos::DeviceCloudConfig Config();
+esp_mqtt_client_handle_t CurrentClient();
+void Deliver(esp_mqtt_event_t event);
+void Fragment(const std::string& topic, const std::string& bytes, int offset, int total);
+void Message(const std::string& topic, const std::string& payload, bool fragmented = false);
+void Disconnect();
+void Connect();
+void RejectCredentials();
+void HoldUserEvents(bool hold);
+size_t PendingUserEvents();
+std::vector<Publication> Publications();
+size_t ReceiptCount();
+unsigned CredentialRevision();
+unsigned Restarts();
+void PauseDequeue(bool pause);
+bool WaitDequeued();
+bool WaitUntil(const std::function<bool()>& predicate);
+}

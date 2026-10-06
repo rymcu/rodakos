@@ -121,8 +121,9 @@ failure responses without eviction:
 This is session-scoped duplicate suppression. It does not promise exactly-once execution across
 reconnects/reboots or recovery after a response is lost at the connection boundary.
 
-MQTT desired/reported volume retains its existing configuration semantics and has no correlated
-receipt. See the [shadow evidence boundary](rodak-aiot-contract-v1.md#volume-configuration-and-evidence).
+Plain MQTT desired/reported volume retains its configuration-only evidence boundary. A separate
+[MQTT effect contract](mqtt-volume-effects.md) now correlates single-dispatch volume writes on
+`effects/receipt`; it does not upgrade ordinary shadow reports into execution evidence.
 
 ## Verification
 

@@ -48,6 +48,7 @@ set(SOURCES
     "phone_os/voice_assistant_reconnect_coordinator.cc"
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_volume_mcp.cc"
+    "phone_os/mqtt_volume_effect.cc"
     "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_barge_in_policy.cc"
     "phone_os/voice_assistant_transport.cc"

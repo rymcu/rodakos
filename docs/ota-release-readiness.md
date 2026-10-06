@@ -16,9 +16,13 @@ appearance revision 14 adoption; exact hashes and live evidence are recorded in
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
 audio-volume build recorded below.
 
-The app-model suite now passes 248 tests in Debug and ASan/UBSan, including sixteen audio-volume,
-nine MCP dispatcher and two canonical-envelope adapter regressions. Ten additional tests instantiate the real voice service
-and exercise its queue and lifecycle in both modes with leak detection; see
+The app-model suite now passes 266 tests in Debug and ASan/UBSan, including eighteen MQTT volume
+effect cases. Fourteen new tests instantiate the actual MQTT service and exercise callbacks,
+fragment/queue epochs, cancellation and SDK-task receipt publishing in both modes with leak
+detection; see [MQTT volume evidence](#2026-10-06-mqtt-volume-effect-validation).
+The earlier sixteen audio-volume, nine MCP dispatcher and two canonical-envelope adapter cases
+remain in that suite. The previously recorded ten real voice service tests exercise its queue
+and lifecycle in both modes with leak detection; see
 [voice-volume MCP evidence](#2026-10-06-voice-volume-mcp-validation). The earlier dependency
 correction passed 14 real-codec tests in both modes and 13 generator validation tests; see the
 [codec overlay evidence](#2026-10-06-codec-dependency-correction).
@@ -41,6 +45,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Home resource failure                       | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully          | Host test passes                              |
 | Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: atomic relative changes, shared configuration, retained failure caches, failed first-open cleanup and deferred configuration | Sixteen host regressions pass; hardware unverified |
 | Voice volume MCP / lifecycle                 | Production envelope parser, dispatcher and real service queue/I/O task: startup initialize, Stop, stale generations, reconnect, bounded deduplication, receipt roundtrips | Nine dispatcher, two adapter and ten service host regressions pass; hardware unverified |
+| MQTT volume effects / lifecycle              | Production helper and actual UnifiedMqttService: correlation, ordering, authority ledger, real connection epoch, SDK callback/queue, Stop, refresh, unbind and scoped receipt publishing | Eighteen helper and fourteen service host regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
@@ -162,6 +167,44 @@ real network/RTOS timing, codec register readback, audible volume, physical rest
 NVS persistence or release approval. All volume receipts explicitly remain volatile and
 `physicalVerified: false`. MQTT shadow evidence is unchanged. No serial, flash or NVS operation
 was performed. The main-image/factory-Recovery size warning retains its earlier meaning.
+
+## 2026-10-06 MQTT volume effect validation
+
+Source baseline: `56eb7bf` plus the MQTT volume effect integration. The
+[MQTT contract](mqtt-volume-effects.md) defines single-publication metadata and the independent
+`effects/receipt` result topic; ordinary shadow reports remain configuration snapshots.
+
+- App-model: **266/266**, including **18** production MQTT helper cases, in Debug and
+  ASan/UBSan with leak detection. The bounded ledger stores the original result, checks repeats
+  before the version watermark, rejects conflicts/capacity, and reserves the calculated response
+  capacity before mutation. Maximum legal identifiers and longest success/rejection layouts pass.
+- Actual MQTT service: **14/14**, in Debug and ASan/UBSan with leak detection. The target compiles
+  production `UnifiedMqttService`, its real event callback, fragment assembly, queue, worker,
+  desired handler and result publishing path. It covers Stop after dequeue, same-client automatic
+  reconnect, fragments spanning disconnect, delayed results, token refresh, binding replacement,
+  explicit unbind and an in-progress codec commit versus Stop.
+- The fake SDK invokes event callbacks while holding its recursive API lock, matching the pinned
+  SDK's ordering. Production receipt delivery uses a custom event inside that SDK task; the worker
+  protects the client pointer while posting without taking the SDK API lock. Old-epoch results are
+  discarded from the service-owned pending queue instead of being moved to a replacement client.
+  Already-enqueued SDK outbox messages cannot be recalled; Rodak must reject late results using
+  the original authenticated connection binding.
+- ESP-IDF **6.0.2** `idf.py build` succeeds. The final incremental build log is
+  `build/logs/mqtt-volume-effects-build.log`; dependency-lock and sdkconfig content are unchanged.
+
+| Artifact | Result |
+| --- | --- |
+| Local main image | `build/rodakos.bin`, 6,921,328 bytes |
+| SHA-256 | `c2056d47d7ba3e0c291a10ef31207d78216da3eb508c81aac166b714480ffb36` |
+| Main slot | Fits `ota_0` (13,959,168 bytes); 7,037,840 bytes remain |
+| Device / signed-package status | Not flashed or signed; the recorded COM3 package is unchanged |
+
+The standalone `rodakos_mqtt_volume_fixture` runs the same real service and exposes its actual
+result publications for a Rodak broker integration run. Host helper/service evidence and the
+cross-repository broker fixture are distinct; neither exercises a board's real MQTT task,
+codec/I2C or acoustic output. Receipts remain volatile software evidence with
+`physicalVerified: false`. No serial, flash or NVS operation was performed. The main image's
+factory-Recovery size warning retains the earlier documented meaning.
 
 ## Build and package
 
