@@ -188,9 +188,11 @@ rejected before building. These tests establish the storage regression and repai
 they do not retrospectively identify 007's unlogged hardware error or establish
 physical power-cut behavior.
 
-The numeric-route, redirect and continued WiFi-recovery changes are host-verified;
-their identified package still needs independent-address and AP-loss hardware
-acceptance. The dated 006 evidence below predates these changes. Additional 006
+The numeric-route, redirect and continued WiFi-recovery changes are host-verified.
+Compact-v3 package 009 additionally passed the bounded trusted USB/port/telemetry
+hardware gate, a separate 45-second known-hotspot recovery and a two-address
+same-port failure/success gate below. Wider candidate/AP/network failures remain open.
+The dated 006 evidence below predates these changes. Additional 006
 cross-network, MQTTS-negative and WSS observations are tracked in Rodak's
 [network verification record](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 
@@ -208,8 +210,8 @@ signed firmware. Package 006 passed the bounded COM3 gate for trusted USB refres
 authenticated MQTT/telemetry and bidirectional SRV port recovery, as recorded below.
 Later 006 subnet/WSS observations are linked above; 007 failure, 008 diagnosis and
 009's compact-record build are recorded separately below. Extended resource-pressure
-soak, identified-package independent address probes and physical trust/power-loss
-recovery remain separate gates. Earlier hotspot/serial evidence cannot close them.
+soak, broader candidate/roaming failures and physical trust/power-loss recovery
+remain separate gates. Earlier hotspot/serial evidence cannot close them.
 
 ### Signed build package
 
@@ -594,7 +596,7 @@ Package `20261007-022059`, task `trusted-server-nvs-diagnostic-008`, was built f
 `38d79bb3fb5f9a704d52d841a0c0ebab54b11d80`. It only adds diagnostic logs to the
 production Settings writer: namespace/key, failed SDK result, string byte count,
 size-read result and NVS entry statistics. It does not log values or change the
-storage/identity policy and is not a repair or a successful hardware gate.
+storage/identity policy. The build itself is not a repair or hardware evidence.
 
 ESP-IDF 6.0.2 and signed preserved-Recovery packaging passed. Main is 7,094,080 bytes,
 SHA-256 `05865dc206b40474d4c380bc7d4f3e1acc7c4f31653596024caa80f889964618`;
@@ -640,6 +642,93 @@ unchanged. The production flavor disables Home population and fault injection.
 The 29 trust-service cases and six actual-SDK NVS cases passed Debug and
 ASan/UBSan/leak checks. Authority v3 keeps one shared pin while retaining strict
 v1/v2 reads and complete-record replacement. The package is a repair for the
-reproduced storage-capacity weakness; it still needs its own USB/NVS, route,
-AP-recovery and resource hardware evidence. Once v3 is written, recovery requires
+reproduced storage-capacity weakness. Its subsequent bounded USB/port/resource
+hardware gate, AP recovery and same-port two-address selection are recorded below.
+Broader roaming and negative variants remain open. Once v3 is written, recovery requires
 a v3-capable package with NVS preserved.
+
+### Ninth hardware attempt: bounded gate passed
+
+The 009 collector completed with exit code 0 after preserved-NVS flashing. Both
+trusted USB refreshes returned `not_needed`. The original device ID, bound state
+and token version 4 remained, and every round produced a new MQTTS connection,
+current shadow and at least two fresh telemetry reports. HTTPS/MQTTS migrated
+9443/8883 → 9444/8884 → original ports, including the existing controlled device
+restart isolation, then completed a 60-second stable observation window.
+
+Wake remained healthy and the collector detected no allocation failure or recent
+thing-model schema warning. Minimum free stacks were main 2640, serial 1808,
+MQTT worker 2812 and SDK MQTT 3132 bytes. These are bounded observations on the
+identified image, not a universal allocation margin or an eight-hour soak.
+
+Evidence is Rodak's `.codex-temp/trusted-network-ninth-hardware.log` and
+`.codex-temp/trusted-network-hardware-serial-1791311628082.log`. This run validates
+the compact authority's normal USB/refresh/restart path. It does not identify
+007's unlogged NVS failure or establish flash-error/power-cut recovery. The separate
+AP-loss, WSS and same-port two-address results follow as separate runs.
+
+### Ninth-package known-hotspot outage recovery
+
+The 009 AP-recovery collector completed with exit code 0 after WinRT stopped the
+laptop hotspot for 45 seconds and started it again. The device scheduled and made
+six recovery attempts using the 1/2/4/8/16/30-second capped backoff. It obtained a
+new address, `192.168.137.60` → `192.168.137.139`, then restored MQTTS and two fresh
+telemetry reports with the same device ID, token version 4 and bound state.
+The collector recorded `rebootCount=0`, `fault=false` and
+`serialProvisioningUsed=false`.
+
+Evidence is Rodak's `.codex-temp/trusted-wifi-recovery-ninth.log` and
+`.codex-temp/wifi-recovery-serial-1791311934626.log`. This proves one known AP's
+temporary disappearance/reappearance with saved credentials, including a changed
+device DHCP address. It does not establish unknown-SSID selection, AP isolation,
+all DHCP failures, server-address migration or long-duration recovery behavior.
+
+### Ninth-package WSS silence and resource boundary
+
+The 009 WSS collector completed with exit code 0 after two real WSS sessions using
+synthetic silence. Each reached ready/input and an explicit stop; MQTT remained
+connected. After both sessions the collector observed healthy wake monitoring,
+two fresh telemetry reports and `fault=false`.
+
+The device reported an internal-heap historical minimum of **863 bytes**. One
+interaction-start sample had 2727 free internal bytes with a 2176-byte largest
+block. Minimum free assistant I/O stack was 25776 bytes and wake supervisor stack
+was 1848 bytes. These are separate stack/heap measures: a large free task stack does
+not make the small shared-heap margin sufficient. The absence of an observed fault
+in these silent sessions does not establish safety under full audio, simultaneous TLS
+work, arbitrary allocation pressure or prolonged use.
+
+Evidence is Rodak's `.codex-temp/trusted-wss-ninth.log` and
+`.codex-temp/trusted-wss-serial-1791312060232.log`. This proves the bounded WSS
+protocol path and cleanup/coexistence observed by the collector. It does not prove
+microphone recognition, audible TTS, six real turns, AEC/barge-in, complete OTA or
+Appearance transfer coexistence, or eight-hour soak. The low heap watermark stays
+part of the open resource-pressure gate in issue #28.
+
+### Ninth-package same-port two-address recovery
+
+The 009 multi-address collector completed with exit code 0. Normal HTTPS/MQTTS
+port migration to 9444/8884 forced discovery, whose same-SRV-port candidate order
+was `192.168.137.254` followed by the genuine `192.168.137.1`. The first address
+was unreachable and failed after approximately six seconds with
+`credential_rejection=0`. The second completed pinned TLS, token authentication
+and secure-descriptor validation before its numeric route was promoted.
+
+After the existing controlled restart, the device logged the selected numeric
+MQTTS route on port 8884 and established MQTT with two fresh telemetry reports.
+It then logged the same numeric WSS route and reached a real session-ready/input
+path using synthetic silence. The original device ID, bound state and token
+version 4 were retained throughout.
+
+The collector withdrew the injected address and restored ports 9443/8883. The
+device authenticated that return migration and recovered the original service
+configuration, two fresh telemetry reports and idle voice before
+`MULTIA_GATE_PASSED`. Evidence is Rodak's `.codex-temp/trusted-multia-ninth.log`
+and `.codex-temp/trusted-multia-serial-1791312183343.log`.
+
+This establishes independent attempts for two addresses sharing one hostname and
+SRV port, followed by persistent route reuse across restart by MQTTS and WSS. The
+genuine server stayed at the same address; it is not a new-server-IP or
+single-interface roaming test. The failed candidate was unreachable, not a
+wrong-certificate listener. IPv6, credential/expiry/replay variants, full audio and
+OTA/Appearance transfers still require their own evidence.

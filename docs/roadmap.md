@@ -27,11 +27,22 @@ firmware build does not change an existing hardware gate.
   see the [Rodak verification record](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
   This does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
   or extended soak.
-  Independent numeric-address probing, authority persistence, transport reuse and
-  continued WiFi retry are now host-verified; their identified-package hardware gate
-  remains open. Package 007 failed its first USB NVS write gate; the diagnostic 008
+  Package 009 also passed a same-SRV-port two-address gate: an unreachable first
+  candidate failed, the genuine second candidate authenticated, and numeric MQTTS
+  and WSS routes remained usable after a controlled restart. This was triggered
+  by normal port migration, not a new server IP or single-interface roam.
+  Package 007 failed its first USB NVS
+  write gate; the diagnostic 008
   passed the bounded USB/port/telemetry gate without reproducing that error.
   Compact authority v3 shares one trust object and retains v1/v2 read compatibility.
+  Its 009 package passed two USB refreshes, bidirectional port recovery and a
+  60-second stability window with the original binding/token and no allocation error.
+  A separate 45-second Windows hotspot outage recovered WiFi/MQTTS and two fresh
+  telemetry reports without USB provisioning or a device restart. Unknown SSIDs,
+  AP isolation and extended resource/soak acceptance remain open.
+  Two 009 synthetic-silence WSS sessions passed with MQTT coexistence and wake
+  recovery, but internal heap reached a reported historical minimum of 863 bytes.
+  This does not establish sufficient headroom for real audio/concurrent load.
   Version-1-only 006 and version-2-only 007/008 cannot read newer records; recovery
   must preserve NVS using a package supporting the stored version. Damaged-trust recovery and
   physical power-cut acceptance are still open;
@@ -45,9 +56,9 @@ firmware build does not change an existing hardware gate.
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
   see [appearance verification](appearance-verification.md). The last bounded strict COM3 pass is
-  development-signed `20261007-022059`, verified for trusted serial refresh, MQTTS,
+  development-signed `20261007-023218`, verified for trusted serial refresh, MQTTS,
   telemetry and bidirectional port recovery with retained binding; see
-  [diagnostic package evidence](trusted-server-discovery.md#eighth-hardware-attempt-bounded-gate-passed).
+  [compact-authority hardware evidence](trusted-server-discovery.md#ninth-hardware-attempt-bounded-gate-passed).
 - Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
   A closed codec accepts configuration without opening hardware; the next open applies it and
   fails with cleanup if the initial API call fails. Voice MCP now exposes absolute/up/down tools
@@ -103,9 +114,9 @@ firmware build does not change an existing hardware gate.
 
 | Area | Remaining work | Evidence / owner document |
 | --- | --- | --- |
-| Trusted server recovery | Identified-package hardware acceptance for compact authority writes, same-port numeric-address failover, route reuse after restart and continued AP-loss recovery; non-scoped IPv6 and WSS numeric Host compatibility; scoped IPv6 is unsupported. Broader negative cases, explicit recovery for a damaged/missing trust record and power interruption between the pin latch and authority commit remain open. Recovery uses controlled restarts and packages supporting the stored authority version with preserved NVS. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
+| Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak) |
+| Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery. 009's bounded silent-WSS pass reported internal-heap historical minimum 863 bytes; full audio/TLS concurrency, peak allocation pressure and extended soak remain open | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak), [WSS evidence](trusted-server-discovery.md#ninth-package-wss-silence-and-resource-boundary) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

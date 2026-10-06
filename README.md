@@ -14,13 +14,17 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   a stable `.local` server name. Bounded DNS-SD address/port candidates are authenticated before
   endpoint promotion, preserving an existing device binding. Numeric routes now persist
   and are reused by every trusted transport; compact authority v3 shares the server
-  trust and keeps v1/v2 read compatibility. Host tests cover same-port
-  address failover. WiFi recovery keeps retrying after AP loss. The new paths still
-  require identified-firmware hardware acceptance. Package `20261007-010516`
-  passed trusted USB refresh, MQTTS/telemetry and both port migrations on COM3 with
+  trust and keeps v1/v2 read compatibility. Compact-v3 package `20261007-023218`
+  passed same-port failover from an unreachable address to the genuine address,
+  retained its numeric MQTTS/WSS route after restart, and passed two trusted USB
+  refreshes, MQTTS/shadow/telemetry and both port migrations on COM3 with
   wake listening and no crypto allocation errors; port recovery includes a controlled
-  device restart. A separate HTTPS wrong-certificate test was rejected before any HTTP
-  request. Its dated evidence predates independent numeric-address probing. Further
+  device restart. A separate 45-second hotspot outage recovered WiFi/MQTTS and
+  fresh telemetry without USB provisioning or a reboot. Two synthetic-silence WSS
+  sessions also passed with MQTT and wake recovery, but reported an internal-heap
+  historical minimum of 863 bytes; full audio/concurrency and soak remain open.
+  New-server-address roaming and broader negative cases remain open. An earlier 006 HTTPS
+  wrong-certificate test was rejected before any HTTP request. Further
   hardware evidence, WSS Host compatibility, and the remaining damaged-trust and
   power-cut gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md).
@@ -93,7 +97,11 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   its first USB NVS write gate. Diagnostic package `20261007-022059` passed the
   bounded USB/port/telemetry gate without reproducing the error; it is not a storage
   repair. Compact-v3 package `20261007-023218` was built from `2af9ce5` with a
-  7,095,392-byte main image and still needs its own hardware acceptance.
+  7,095,392-byte main image. Its two USB refreshes, bidirectional port recovery and
+  60-second stability window passed, followed by a 45-second hotspot-outage recovery
+  without provisioning or reboot, then two WSS silence sessions. Low internal-heap
+  headroom remains open despite the separate two-address failure/success and
+  post-restart numeric-route gate passing.
   The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build

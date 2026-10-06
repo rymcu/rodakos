@@ -7,18 +7,25 @@ tests does not close physical power-loss or full heap-exhaustion gates.
 
 ## Current evidence
 
-Evidence review updated on 2026-10-06. The earlier source baseline `c64cf06` / `f7e8c91`
+Evidence review updated on 2026-10-07. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
 recorded appearance-gate package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
 (about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-builds recorded below. The latest device refresh is development-signed package `20261006-225642`,
+builds recorded below. The dated 2026-10-06 device refresh used development-signed package `20261006-225642`,
 main image 7,015,312 bytes, validated on COM3 for serial proof auto-binding and same-URL binding
 preservation. Its hash, boot log and two provisioning rounds are recorded in
 [serial provisioning evidence](serial-provisioning.md#2026-10-06-hotspot-and-binding-proof-gate).
-It does not close production-key, power-cut or soak gates. The preceding software-only slice is
+Later trusted-network packages and COM3 observations are recorded separately in
+[trusted server discovery](trusted-server-discovery.md#validation), including 007's failed NVS
+gate, 008's diagnostic run and compact-authority 009 hardware observations. The paired Rodak workflow and
+evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/docs/serial-provisioning.md)
+and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
+These newer development-signed network runs do not replace the appearance baseline above or
+close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
+The preceding software-only slice is
 [Recorder/Camera save validation](#2026-10-06-media-save-validation).
 
 The MQTT-volume slice recorded 266 app-model tests in Debug and ASan/UBSan, including eighteen MQTT volume
