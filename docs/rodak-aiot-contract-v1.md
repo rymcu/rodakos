@@ -195,11 +195,12 @@ With the codec closed, setting volume accepts configuration without opening it;
 the next playback open applies that configuration. If the initial volume API call
 fails, the open attempt is closed and its format state is cleared for retry.
 
-This is an API error boundary, not full hardware verification. The current managed
-`esp_codec_dev_set_out_vol` caches the requested volume and returns success without
-propagating every codec/software-volume driver failure. Software success or a
-reported volume therefore does not establish I2C register application or audible
-speaker output.
+This is an API error boundary, not full hardware verification. RodakOS builds a
+source-verified overlay for esp_codec_dev 1.5.7 so `esp_codec_dev_set_out_vol`
+propagates the selected codec/software-volume driver's error and commits its cache
+only on success. The original managed source remains unchanged; see
+[dependency maintenance](dependency-maintenance.md). Software success or a reported
+volume still does not establish I2C register application or audible speaker output.
 
 The firmware does not consume root `version`/`shadowVersion` as a volume applied
 revision and reports no volume `effectId`, desired revision or per-effect result.

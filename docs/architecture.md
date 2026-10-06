@@ -86,9 +86,12 @@ eight pages, including boundary clamping and active/previous/next order; this ta
 
 The same target now compiles production `AudioOutputService`, `AudioService`, and
 `AudioCodecOutput` with fake lower-level board/codec APIs. It verifies volume API error propagation,
-configuration-cache retention and initial-open cleanup/retry. The managed codec library itself is
-outside that host fixture; see [local audio validation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation)
-for the current results and hardware limits.
+configuration-cache retention and initial-open cleanup/retry. `tests/codec_volume/` separately
+compiles the real dependency source with the project's volume correction and real software-volume
+implementation, injecting failures at the lower-level driver callbacks. See
+[dependency maintenance](dependency-maintenance.md) for source identity and build integration,
+and [local audio validation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation)
+for the service fixture's results and hardware limits.
 
 `tests/home_ui/` complements the model suite by compiling the production `HomeApp`, Home
 model/store, Registry, `PhoneUi`, layout, theme, components, `BootAnimation`, appearance metadata
@@ -161,8 +164,10 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   for the next open. Failure of the initial codec volume API call closes that open attempt and
   clears its format state so a later request can retry. This preserves on-demand hardware ownership.
 - MQTT desired-volume application checks the setter result and reports the retained configuration
-  on failure. The current managed `esp_codec_dev_set_out_vol` implementation can hide lower-level
-  codec/software-volume errors, so API success does not establish hardware or acoustic success.
+  on failure. A source-verified build overlay for esp_codec_dev 1.5.7 propagates the selected
+  codec/software-volume driver's exact error and only commits the dependency cache on success.
+  It preserves software priority and no-codec software output. Other dependency API error paths
+  remain outside this focused correction; success does not establish hardware or acoustic success.
   Ordinary shadow reports contain no volume effect ID or applied desired version; see the
   [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive

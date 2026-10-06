@@ -324,8 +324,11 @@ opening audio hardware; application is deferred until the next playback open. If
 reports a failed write while open, the shared output and playback/UI caches retain their prior
 values. Failure of the initial volume call also fails and cleans up the open attempt for retry.
 
-The managed codec setter currently masks some lower-level driver errors, so a successful return
-does not prove an I2C write or audible output. Check codec/I2C logs and playback on hardware before
+The pinned codec setter is corrected through the project's checked build overlay to propagate
+driver errors and preserve its cache on failure. If configuration reports `Codec volume overlay
+refused`, resolve the source/version mismatch using [dependency maintenance](docs/dependency-maintenance.md);
+do not bypass the check or edit the managed source. A successful return still does not prove an
+I2C write or audible output. Check codec/I2C logs and playback on hardware before
 claiming that result. An ordinary MQTT shadow report has no volume effect ID or applied desired
 revision and cannot acknowledge a specific Agent Runtime effect. See the
 [shadow contract](docs/rodak-aiot-contract-v1.md#volume-configuration-and-evidence).

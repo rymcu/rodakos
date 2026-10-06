@@ -30,6 +30,9 @@ idf.py --version
 The project manifest pins the resolved direct component versions and the observed Board Manager
 button/camera drift points. Keep `dependencies.lock` under review as the authoritative complete
 resolved graph; dependency upgrades must be explicit rather than a side effect of board generation.
+The root CMake build also generates the pinned codec volume correction automatically after
+resolution. It validates source provenance and refuses unreviewed dependency drift; do not patch
+`managed_components/` manually. See [dependency maintenance](dependency-maintenance.md).
 
 ## First Build Or Board Regeneration
 

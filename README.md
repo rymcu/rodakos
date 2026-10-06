@@ -4,8 +4,8 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (reviewed baseline: `d935cf6` / `2ed1e8c`, plus the audio-volume
-failure correction). Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
+Last refreshed: 2026-10-06 (reviewed baseline: `f7dd117`, plus the checked codec-volume
+dependency correction). Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -41,6 +41,8 @@ failure correction). Current work and dated evidence are separated in the [roadm
 - Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
   Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
 - Audio volume setters retain the previous configuration when the codec API reports failure.
+  A checked build overlay for esp_codec_dev 1.5.7 now propagates hardware/software driver errors
+  and commits the dependency's cache only on success; managed source files stay unchanged.
   A closed codec accepts configuration without opening hardware. Reported volume is not proof of
   physical speaker output or a correlated device effect receipt; see the
   [shadow contract](docs/rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
@@ -62,6 +64,10 @@ profile is required.
 and camera dependencies that otherwise drift when generated configuration is recreated.
 `dependencies.lock` remains the authoritative complete resolved graph and must be reviewed with any
 intentional dependency upgrade.
+
+The root CMake build automatically validates and generates the codec volume correction after
+dependency resolution. See [dependency maintenance](docs/dependency-maintenance.md) for its
+source provenance, drift rejection, host tests and upgrade procedure.
 
 ```powershell
 # Activate ESP-IDF (prefer the installed 6.0.2 baseline)
@@ -201,6 +207,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Dependency maintenance](docs/dependency-maintenance.md)
 - [Appearance customization](docs/appearance-customization.md)
 - [Appearance verification](docs/appearance-verification.md)
 - [Roadmap](docs/roadmap.md)

@@ -4,7 +4,7 @@ set -euo pipefail
 rodak_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 rodak_checks="${1:-${XDG_CACHE_HOME:-$HOME/.cache}/rodakos-release}"
 mkdir -p "$rodak_checks"
-for rodak_suite in app_model home_ui ota_security; do
+for rodak_suite in app_model home_ui ota_security codec_volume; do
     rodak_target="$rodak_checks/asan-$rodak_suite"
     cmake -S "$rodak_root/tests/$rodak_suite" -B "$rodak_target" -G Ninja \
         -DCMAKE_BUILD_TYPE=Debug \
@@ -15,3 +15,4 @@ for rodak_suite in app_model home_ui ota_security; do
     ASAN_OPTIONS=detect_leaks=1 ctest --test-dir "$rodak_target" --output-on-failure
 done
 python3 -m unittest discover -s "$rodak_root/tests/ota_security" -p 'test_*.py'
+python3 -m unittest discover -s "$rodak_root/tests/codec_volume" -p 'test_*.py'

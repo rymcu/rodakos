@@ -17,7 +17,9 @@ useful as the signed-OTA host baseline. Neither package identifies the newer, un
 audio-volume build recorded below.
 
 The app-model suite now passes 230 tests in both Debug and ASan/UBSan, including nine audio-volume
-regressions. The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
+regressions. The subsequent dependency correction also passes 14 real-codec tests in both modes
+and 13 generator validation tests; see the [codec overlay evidence](#2026-10-06-codec-dependency-correction).
+The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
 5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
 with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
 Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
@@ -35,6 +37,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | One-shot reset                              | Production injection code preserves its consumed marker across simulated reset, skips reset on commit failure                            | Host tests pass                               |
 | Home resource failure                       | Real LVGL Home refuses failed neighbor population, preserves current page, disables unavailable direction, retries successfully          | Host test passes                              |
 | Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: retained caches, failed first-open cleanup, retry and deferred configuration | Nine host regressions pass; hardware unverified |
+| Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -67,17 +70,55 @@ partition. That is expected for the main target in this layout: use `build_ota_b
 validate the main and separate Recovery artifacts against their proper slots. Root
 `idf.py flash` / `app-flash` remain unsupported for this layout.
 
-The corrected cache behavior applies when the codec API reports failure. In
+At this earlier service-correction baseline, the cache behavior applied when the codec API
+reported failure. In the unmodified upstream
 `managed_components/espressif__esp_codec_dev/esp_codec_dev.c`, the managed
 `esp_codec_dev_set_out_vol` implementation updates its own cached volume and returns success
 without propagating the return values from either `codec->set_vol` or `sw_vol->set_vol`;
-it was not changed here. A durable fix needs a reviewed upstream version or reproducible
-dependency patch, rather than an untracked edit to the resolved managed component.
+it was not changed in that slice. The subsequent checked build overlay is described in
+[dependency maintenance](dependency-maintenance.md); it corrects this setter without changing
+the resolved managed source in place.
 With the codec closed, an accepted setter is configuration for the next open, not a hardware write.
 These tests and the build therefore establish neither physical I2C/speaker behavior nor a
 correlated wire effect receipt. MQTT checks the service result and reports the retained value on
 failure, but ordinary shadow reports carry no volume effect ID or applied desired revision.
 See the [shadow contract](rodak-aiot-contract-v1.md#volume-configuration-and-evidence).
+
+## 2026-10-06 codec dependency correction
+
+Source baseline: `f7dd117` plus the checked build overlay. The project still resolves
+esp_codec_dev 1.5.7 and leaves its managed source unchanged. The setter correction is applied
+only to a generated build copy; [dependency maintenance](dependency-maintenance.md) records the
+source provenance, automatic build hook and update/removal procedure.
+
+- Real upstream source reproduces six failures in the 14-test codec suite. The generated source
+  passes all 14 in Debug and ASan/UBSan with leak detection, including exact positive/negative
+  driver errors, cache retention, software priority without fallback, retry and automatic
+  software PCM processing with no hardware codec.
+- All 13 generator tests pass: fresh output, identical repeat without touching modification time,
+  output regeneration, source/version/lock/package drift rejection and LF/CRLF equivalence.
+- The existing three-layer service/adapter suite was rerun in Debug and ASan/UBSan: 230/230 pass.
+- ESP-IDF 6.0.2 passes both the existing build and a new build directory after the codec package
+  was backed up and resolved again by the component manager. Both compile-command databases
+  contain exactly one codec implementation source, their own generated overlay. Their
+  `sdkconfig.h` files match. Removing the generated C file and rebuilding also regenerates it
+  automatically and succeeds.
+
+| Build directory | Main image bytes | SHA-256 |
+| --- | --- | --- |
+| `build/` | 6,897,776 | `04544c0b9f270639b08712d4e9683a09dc77e7603c0edc2407478f31995095cc` |
+| `build/codec-overlay-cold/` | 6,896,896 | `18fc55fb78b4c1277c3e863d2d2a70d3d35e66c8f4e3cd07781575e6c405cb34` |
+
+Both fit `ota_0` (13,959,168 bytes); their remaining space is 7,061,392 and 7,062,272 bytes
+respectively. These are separate local build artifacts, not a claim of identical firmware
+binaries or a new signed device package. Build logs are
+`build/logs/codec-overlay-hot.log`, `codec-overlay-cold.log` and `codec-overlay-regenerate.log`
+in that same logs directory. The managed `esp_codec_dev.c` remains at normalized SHA-256
+`b7a17e2ad412f4c08e0e9324aea0f217a49305510fd80e7ef3420fb31d7fd2ce`.
+
+No device was flashed and no NVS was changed. The main-image/factory-Recovery size warning has
+the same meaning as in the earlier build above. Other upstream API failure paths, actual I2C or
+speaker behavior and correlated device effect receipts remain outside these host/build results.
 
 ## Build and package
 
