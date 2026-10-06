@@ -206,7 +206,12 @@ Checks:
 - `esp_board_manager_init()` must run before display handle lookup.
 - `lvgl_port_init()` and `lvgl_port_add_disp()` must run before `PhoneSystem::Start()`.
 - Backlight should be initialized and restored after LVGL display setup.
-- LVGL buffer should be at least `lcd_width * 40`.
+- LVGL uses two internal RGB565 DMA buffers of `lcd_width * 24` pixels each. On
+  this 320-pixel board that is 30720 bytes total, saving 20480 bytes compared with
+  the previous 40-row buffers for wake audio and authenticated MQTT. Keep the
+  row-count/byte-budget startup log when investigating memory pressure; increasing
+  the buffers consumes internal DMA memory, while smaller buffers split redraws
+  into more flush operations.
 - Display config currently uses RGB565 byte swapping through `.flags.swap_bytes = true`.
 
 Expected order in `main.cc`:
@@ -381,6 +386,18 @@ If it does not appear on the host:
 - Use the board's MSC startup button path only if that hardware input is configured.
 
 ## MQTT Keeps Retrying While Voice Works
+
+For a device provisioned with server trust, first check the pinned stable `.local` name and
+HTTPS/MQTTS listeners in Rodak. Firmware must advertise `server_trust:1` in its provisioning READY
+line before the desktop sends a certificate. DNS-SD `_rodak._tcp` results are candidate routes;
+a matching server ID in TXT does not bypass TLS. Failed TLS/authentication preserves the existing
+binding and does not justify unbinding or replacing its secret. See
+[trusted server discovery](docs/trusted-server-discovery.md) for diagnosis and evidence boundaries.
+
+An unreadable or missing authority after the pin latch is set fails closed. Normal network
+retries cannot repair that record, and explicit physical recovery remains open; do not erase NVS
+or accept a new key as an automatic workaround. Independent A/AAAA candidate retries and actual
+cross-network/power-cut acceptance also remain open. The outage evidence below predates pinning.
 
 As of 2026-09-28, TCP transport failures are counted independently from authentication rejection. After three consecutive TCP failures, the MQTT worker may refresh bootstrap configuration, with at least 60 seconds between TCP recovery attempts. Successful MQTT connection clears the failure count. Authentication rejection retains priority over TCP recovery.
 

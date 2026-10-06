@@ -3,6 +3,12 @@
 #include "phone_os/device_cloud_config.h"
 
 namespace mqtt_host {
+struct BrokerTlsSnapshot {
+    std::string uri;
+    std::string certificate;
+    std::string common_name;
+};
+BrokerTlsSnapshot BrokerTls();
 struct Publication {
     std::string topic;
     std::string payload;

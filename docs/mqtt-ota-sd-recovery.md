@@ -161,7 +161,7 @@ exercise state-machine resumption but do not prove filesystem or flash behavior 
 
 ## MQTT Worker Resources
 
-MQTT reserves one 6 KiB internal-SRAM worker before local wake monitoring starts.
+MQTT reserves one 8 KiB internal-SRAM worker before local wake monitoring starts.
 Bootstrap, credential refresh, connected initialization and message processing reuse this
 worker; telemetry timers only schedule work. NVS access requires an internal stack.
 Incoming messages use an eight-entry queue with explicit overflow diagnostics, while
@@ -175,12 +175,21 @@ the largest free internal block was only 5 KiB, despite saved WiFi connecting su
 Worker reservation failures and stack high-water marks are now logged. This does not
 establish memory headroom for OTA's separate download/report tasks or active AEC.
 
+Trusted TLS measurements used 5244 bytes of the former 6144-byte worker stack,
+leaving only 900 bytes. The 8 KiB worker restores margin while remaining in internal
+SRAM for NVS. It is separate from ESP-MQTT's 6 KiB MQTTS task, whose own minimum
+stack is logged from SDK callbacks. Two 24-row RGB565 display DMA buffers save
+20 KiB compared with the original 40-row configuration on this 320-pixel board.
+
 The main firmware disables `ESP_WIFI_IRAM_OPT` and `ESP_WIFI_RX_IRAM_OPT` to return
 shared SRAM to runtime allocations. Static WiFi TX buffers remain at 8, while RX
 and the receive BA window remain sized for the PSRAM configuration. This is a
 throughput/memory tradeoff; it is not a protocol compatibility setting.
 
-Keep internal heap and worker stack diagnostics in the serial `MQTT health` line. Battery and
+Keep internal heap, DMA free/largest block and worker stack diagnostics in the serial
+`MQTT health` line. Mbed TLS allocating its I/O buffers in PSRAM does not remove
+the hardware SHA/AES drivers' internal DMA allocations; crypto allocation failures
+invalidate stability acceptance even when some telemetry arrives. Battery and
 charging are declared read-only properties in the `rymcu-bigsmart` thing model; adding any other
 undeclared telemetry fields causes Rodak validation warnings.
 

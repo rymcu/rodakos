@@ -27,10 +27,16 @@ contains the first 32 hex characters in groups of four. The device persists the 
 public key and origin in `appearance` NVS. This is public-key pinning, not a numeric PIN. A new
 key or origin requires another physical confirmation. Identity revocation forgets publisher trust.
 
-Rodak's default service uses HTTP on a trusted LAN. Signatures authenticate resources but do not
+Rodak's legacy service uses HTTP on a trusted LAN. Signatures authenticate resources but do not
 encrypt Bearer tokens, download tickets or contents. There is no private-IP enforcement; public
-HTTP is not an accepted production transport. HTTPS can use the firmware certificate bundle and
-Rodak trusted-proxy configuration, but Rodak itself has no TLS listener.
+HTTP is not an accepted production transport. The optional
+[trusted server transport](trusted-server-discovery.md) now provides a direct Rodak HTTPS listener
+and a USB-installed certificate/name pin. In this mode every Appearance API/artifact request uses
+the pinned HTTPS origin, without a public-CA or plaintext fallback.
+
+The first HTTP-to-HTTPS transition changes the publisher origin and still needs physical
+confirmation. Ordinary IP changes preserve the stable logical hostname; changing the HTTPS port
+changes the origin again. Server discovery never updates `appearance` trust on the owner's behalf.
 
 Every request requires device authentication. Tickets bind device, deployment and `tokenVersion`,
 expire after ten minutes, and reject superseded deployments. The firmware constructs fixed paths

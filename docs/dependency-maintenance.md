@@ -4,30 +4,59 @@
 Keep ESP-IDF 6.0.2 and the existing SDK versions unless a dependency change is explicitly reviewed.
 The component manager owns `managed_components/`; local edits there are not a durable repair.
 
-## Codec volume overlay
+## LAN discovery
+
+`espressif/mdns` is pinned to 1.14.0 (registry component hash
+`b5b30022c46302eab89c1d2e3b6fb5918a627563a7462f0ee284b22b9a934967`). Its only added
+dependency is the existing ESP-IDF baseline (`>=5.0`, resolved to 6.0.2). The reviewed
+lock change adds this component and the manifest hash; it does not upgrade other
+components. DNS-SD responses are bounded routing hints, authenticated by the existing
+USB-installed TLS pin before use. See [trusted server discovery](trusted-server-discovery.md).
+
+## Codec volume and I2S failure overlay
 
 RodakOS keeps `espressif/esp_codec_dev` at 1.5.7. That upstream release's
 `esp_codec_dev_set_out_vol` discards both hardware and software `set_vol` return values and commits
-its cached volume before either call. The project owns a replacement for this one function under
+its cached volume before either call. The project owns checked replacements under
 `patches/esp_codec_dev/1.5.7/`, retaining the upstream Apache-2.0 source attribution.
 
 The replacement preserves software-volume priority, automatic software volume with no hardware
 codec, volume curves and the existing readiness checks. It returns the selected driver's exact
 error code, including negative codes, and commits the cached volume only on `ESP_CODEC_DEV_OK`.
 Failure of a selected software handler does not fall back to hardware. Unsupported paths retain
-the previous cache. This patch does not change mute, gain, format/open or close error handling.
+the previous cache. Standalone mute and gain setters retain their upstream behavior.
+
+The same overlay now propagates `esp_codec_dev_open` data-format, data-enable, codec-format,
+codec-enable and software-volume-open failures. It commits the opened flags only after these
+steps succeed, cleans up resources already enabled by the attempt, and preserves the first
+failure. This does not establish transactional recovery from every hardware cleanup failure;
+initial mute/gain application and the standalone close API remain separate boundaries.
+
+The `20261007-004058` device run exposed an I2S failure path: the paired TX standard-slot
+reconfiguration ran out of DMA memory, but codec `set_fs` still enabled TX. ESP-IDF 6.0.2 had
+already freed its DMA descriptors while retaining the requested buffer size, so a same-format
+retry could also skip allocation and enable a missing DMA chain. The overlay checks the paired
+reconfiguration result and preserves the first error in duplex setup. A driver format failure
+atomically latches the entire physical I2S port, disables its known channels, and rejects future
+format changes, enable, read and write until a **system restart**. Closing or recreating just the
+codec/data interface does not clear this latch. This is controlled failure, not automatic channel
+reconstruction or a claim that audio remains available under arbitrary memory pressure.
+
+Port bounds use the pinned IDF 6.0.2 HAL's `I2S_LL_GET(INST_NUM)`; the removed `SOC_I2S_NUM`
+macro must not be restored in host fakes. No ESP-IDF or managed component file is edited in place.
 
 After the root CMake `project()` has resolved dependencies, `cmake/codec_volume_patch.cmake` runs
 `tools/prepare_codec_volume_patch.py`. The generator checks all of these before producing output:
 
 - The project's exact 1.5.7 pin and the lock's version, registry source and component hash.
 - The resolved `.component_hash` and component manifest, including the upstream repository commit.
-- The SHA-256 of the complete original `esp_codec_dev.c`; line endings are normalized to LF.
+- The SHA-256 of complete original `esp_codec_dev.c` and `platform/audio_codec_data_i2s.c`;
+  line endings are normalized to LF. Both are validated before either generated file is written.
 
 Reviewed provenance and hashes are in `patches/esp_codec_dev/1.5.7/provenance.json`.
 The original managed files remain untouched. The generated source lives at
-`<build>/rodak_patches/esp_codec_dev/esp_codec_dev.c`, and CMake replaces exactly one source entry
-on the resolved codec component target. Other codec sources, headers and compile settings remain
+`<build>/rodak_patches/esp_codec_dev/esp_codec_dev.c` and `platform/audio_codec_data_i2s.c`, and
+CMake replaces exactly those two entries on the resolved codec component target. Other codec sources, headers and compile settings remain
 those of the resolved component. Fresh dependency resolution and existing dependency builds use
 the same hook; no manual pre-build patch command is required.
 
@@ -81,9 +110,18 @@ MQTT or ESP-IDF, review event-loop semantics again, and rerun these checks plus 
 ## Codec validation
 
 Resolve the pinned dependencies through the normal [firmware build](firmware-download.md) first.
-The dedicated host target compiles the generated full upstream `esp_codec_dev.c`, real
-`audio_codec_sw_vol.c` and `esp_codec_dev_if.c`, using upstream headers. It fakes only hardware/data
-callbacks and ESP error/log facilities. The no-codec case exercises real software PCM gain.
+The dedicated host target compiles the generated full `esp_codec_dev.c` and
+`platform/audio_codec_data_i2s.c`, real `audio_codec_sw_vol.c` and `esp_codec_dev_if.c`, using
+upstream codec headers. I2S/RTOS facilities and hardware callbacks are host fakes. The no-codec
+case exercises real software PCM gain. The I2S fixture models DMA loss and a misleadingly
+successful same-format retry; it verifies paired/duplex failure propagation, blocked re-enable,
+read/write rejection and the latch surviving interface recreation.
+
+The current 19 cases pass in Debug and ASan/UBSan with leak detection; 15 Python checks validate
+source drift rejection and generation. Running the same cases on the untouched upstream source
+produces 11 expected failures, including both I2S failure cases. Host allocation injection does
+not prove real DMA recovery or acoustic behavior. Firmware build, identified-device startup,
+Wake/MQTT coexistence and hardware fault acceptance remain separate evidence.
 
 ```powershell
 wsl -d Debian -- bash -lc '

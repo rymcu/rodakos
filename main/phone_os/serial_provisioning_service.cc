@@ -12,6 +12,7 @@
 #include <driver/usb_serial_jtag.h>
 #include <driver/usb_serial_jtag_vfs.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <freertos/task.h>
 #include <stdio.h>
@@ -21,6 +22,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <memory>
+#include <new>
 #include <utility>
 
 namespace rodakos {
@@ -29,13 +32,17 @@ constexpr const char* TAG = "SerialProvisioning";
 constexpr const char* kTransactionNamespace = "serial_prov";
 constexpr const char* kTransactionPendingKey = "pending";
 constexpr const char* kFramePrefix = kSerialProvisioningFramePrefix;
-constexpr const char* kReadyLine = "\nRODAK_PROVISION_READY {\"version\":1}\n";
+constexpr const char* kReadyLine = "\nRODAK_PROVISION_READY {\"version\":1,\"server_trust\":1}\n";
 constexpr size_t kMaxFrameBytes = kSerialProvisioningMaxFrameBytes;
 constexpr size_t kMaxSsidBytes = 32;
 // WPA-PSK passwords are limited to 63 octets; reserving the NUL byte avoids
 // silently truncating a value in wifi_config_t.
 constexpr size_t kMaxPasswordBytes = 63;
 constexpr size_t kMaxBootstrapUrlBytes = kSerialProvisioningMaxBootstrapUrlBytes;
+// USB trust validation includes NVS decoding and the SDK's nested X.509/PSA
+// public-key import. The old 4 KiB budget overflowed on repeated provisioning.
+// The 8 KiB COM3 probe used 4216 bytes; retain 1928 bytes of measured margin.
+constexpr uint32_t kProvisioningTaskStackBytes = 6144;
 constexpr TickType_t kPollIntervalTicks = pdMS_TO_TICKS(20);
 constexpr int64_t kReadyIntervalUs = 5000000;
 constexpr size_t kMaxDrainBytesPerPoll = 512;
@@ -132,10 +139,15 @@ bool SerialProvisioningService::RecoverPendingTransaction(
              "Interrupted provisioning transaction detected; clearing WiFi and cloud cache");
     WiFiConfig wifi_config;
     const bool wifi_cleared = wifi_config.ClearCredentials();
-    const bool cloud_reset =
-        cloud_config.SaveProvisioningUrl(
+    auto recovery_config = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (recovery_config == nullptr) return false;
+    cloud_config.Load(*recovery_config);
+    // A USB-installed pin must survive interruption. Clearing WiFi prevents
+    // mixed onboarding data from connecting; recovery must never downgrade TLS.
+    const bool cloud_reset = !recovery_config->server_trust_error &&
+        (!recovery_config->server_trust.empty() || cloud_config.SaveProvisioningUrl(
             DeviceCloudConfigService::DefaultProvisioningUrl(),
-            ProvisioningUrlSaveMode::kForceRefresh) == ProvisioningUrlSaveResult::kSaved;
+            ProvisioningUrlSaveMode::kForceRefresh) == ProvisioningUrlSaveResult::kSaved);
     const bool marker_cleared = wifi_cleared && cloud_reset && SetPendingTransaction(false);
     if (!marker_cleared) {
         ESP_LOGE(TAG, "Unable to finish interrupted provisioning recovery; retrying next boot");
@@ -163,7 +175,7 @@ bool SerialProvisioningService::Start() {
 
     cloud_refresh_pending_.store(false);
     running_.store(true);
-    if (xTaskCreatePinnedToCore(TaskEntry, "serial_prov", 4096, this, 2, &task_,
+    if (xTaskCreatePinnedToCore(TaskEntry, "serial_prov", kProvisioningTaskStackBytes, this, 2, &task_,
                                 usb_serial_driver_core_) != pdPASS) {
         running_.store(false);
         cloud_refresh_pending_.store(false);
@@ -310,6 +322,14 @@ void SerialProvisioningService::Run() {
                 } else if (result == SerialProvisioningFrameResult::kLineReady &&
                            !line.empty()) {
                     HandleLine(line);
+                    if (line.rfind(kFramePrefix, 0) == 0) {
+                        ESP_LOGI(TAG, "Provisioning health: stack_min_free=%u internal_free=%u internal_largest=%u dma_free=%u dma_largest=%u",
+                                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+                                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+                                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+                    }
                 }
             }
         }
@@ -445,6 +465,13 @@ bool SerialProvisioningService::ParseRequest(const std::string& json,
             request.binding_nonce = binding_nonce->valuestring;
         }
     }
+    request.server_trust = {};
+    const auto* server_trust = cJSON_GetObjectItemCaseSensitive(root, "server_trust");
+    if (valid && error.empty() && server_trust != nullptr &&
+        (!ParseServerTrust(server_trust, request.server_trust, error) ||
+         !IsServerTrustBootstrap(request.server_trust, request.bootstrap_url))) {
+        error = "invalid_server_trust";
+    }
     cJSON_Delete(root);
     return valid && error.empty();
 }
@@ -474,7 +501,8 @@ bool SerialProvisioningService::ApplyRequest(const Request& request, std::string
     }
     const ProvisioningUrlSaveResult cloud_save_result =
         cloud_config_.SaveSerialProvisioning(request.bootstrap_url, request.binding_nonce,
-                                             binding_proof);
+                                             binding_proof, request.server_trust.empty()
+                                                 ? nullptr : &request.server_trust);
     if (cloud_save_result != ProvisioningUrlSaveResult::kSaved) {
         bool wifi_restored = false;
         if (had_previous_wifi) {

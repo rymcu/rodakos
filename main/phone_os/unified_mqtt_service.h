@@ -171,6 +171,9 @@ private:
     DisplayControlCallback display_control_callback_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
+    // ESP-MQTT borrows certificate/name pointers across reconnects.
+    ServerTrust mqtt_tls_trust_;
+    uint32_t mqtt_sdk_stack_min_free_ = UINT32_MAX;
     esp_mqtt_client_handle_t client_ = nullptr;
     esp_event_handler_instance_t ip_event_instance_ = nullptr;
     TimerHandle_t telemetry_timer_ = nullptr;
@@ -179,6 +182,7 @@ private:
     StaticSemaphore_t publish_ack_semaphore_storage_ = {};
     SemaphoreHandle_t publish_ack_semaphore_ = nullptr;
     std::mutex reliable_publish_mutex_;
+    std::recursive_mutex lifecycle_mutex_;
     std::mutex client_api_mutex_;
     // Only command/worker callers enter this lock. SDK and peer callbacks
     // revoke leases under mqtt_mutex_ without waiting for resource teardown.

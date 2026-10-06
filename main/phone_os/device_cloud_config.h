@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/cloud_credential_freshness.h"
+#include "phone_os/server_trust.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,11 @@ inline constexpr int kRodakAiotProtocolVersion = 1;
 
 struct DeviceCloudConfig {
     std::string provisioning_url;
+    ServerTrust server_trust;
+    bool server_trust_error = false;
+    bool server_trust_pending = false;
+    bool server_requires_bound_identity = false;
+    std::string server_authority_record;
     // Autonomous Rodak AIoT identity. These values are the source of truth for
     // MQTT/HTTP authentication and the canonical realtime voice stream.
     std::string aiot_device_secret;
@@ -107,7 +113,8 @@ public:
         const std::string& url,
         ProvisioningUrlSaveMode mode = ProvisioningUrlSaveMode::kPreserveCredentials);
     ProvisioningUrlSaveResult SaveSerialProvisioning(
-        const std::string& url, const std::string& binding_nonce, std::string& binding_proof);
+        const std::string& url, const std::string& binding_nonce, std::string& binding_proof,
+        const ServerTrust* server_trust = nullptr);
     // 返回 AIoT 配对与云端主题使用的稳定设备标识。
     std::string GetDeviceKey();
     std::string GetClientId();
@@ -120,6 +127,7 @@ private:
     bool RefreshAiot(DeviceCloudConfig& config,
                      const std::function<bool()>& can_continue = {},
                      int64_t deadline_ms = 0, bool allow_pairing = true);
+    bool RefreshWithDiscovery(DeviceCloudConfig& config);
     void SetError(const std::string& message);
 
     mutable std::recursive_mutex config_mutex_;

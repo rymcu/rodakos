@@ -82,8 +82,10 @@ credentials is rejected without partially updating the live configuration.
 
 An already bound device with no pending request may refresh an expired access
 token through `POST /auth/token` using `protocol`, `productKey`, `deviceKey`,
-and its persisted credential secret. A rejected refresh clears the cached
-token and MQTT configuration and returns to the owner-binding path. Routine
+and its persisted credential secret. In legacy mode a rejected refresh clears the cached
+token and MQTT configuration and returns to the owner-binding path. With an installed
+server pin, rejection retains the existing identity and reports failure without
+automatic pairing. Routine
 token refresh does not silently create a new binding.
 
 Some Rodak server deployments retain `/devices/register` and
@@ -102,9 +104,18 @@ snapshot. Passwords, access tokens, request tokens, and device secrets never
 appear in ordinary logs, serial replies, or shadow payloads.
 
 Changing the serial provisioning URL clears cached AIoT, MQTT, and realtime
-voice state before the next bootstrap. Serial provisioning supplies WiFi and
-the bootstrap URL only; it never supplies MQTT or voice credentials. See
+voice state before the next bootstrap in legacy mode. Trusted USB provisioning stages
+the endpoint and certificate as a candidate; only authenticated completion promotes it.
+Serial provisioning supplies WiFi, the bootstrap URL and an optional explicit server
+trust anchor; it never supplies MQTT or voice credentials. See
 [Serial provisioning](serial-provisioning.md).
+
+The optional [trusted server transport](trusted-server-discovery.md) uses USB-installed
+TLS trust, stable `.local` names and bounded DNS-SD candidate discovery. In pin mode,
+`unifiedMqtt.transport` is `mqtts`, broker host equals the pinned `tls_name`,
+`http_base_url` uses the current HTTPS origin, and voice uses WSS on that origin.
+The same certificate and fixed expected TLS name cover every device credential
+destination, including OTA and Appearance; public-CA fallback and redirects are disabled.
 
 Unbind is server-confirmed. After `binding/unbind` succeeds, RodakOS clears the
 access token, pairing request, MQTT values, and realtime voice descriptor. WiFi

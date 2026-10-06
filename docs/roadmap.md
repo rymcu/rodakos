@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. This serial provisioning / binding-proof slice starts from `b8d8f8a`.
+The current trusted server transport slice starts from `7101282`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
 
@@ -14,6 +14,19 @@ firmware build does not change an existing hardware gate.
 
 ## Current baseline
 
+- USB-installed server identity, pinned HTTPS/MQTTS/WSS, bounded DNS-SD candidate
+  verification and atomic endpoint promotion are implemented and host-verified.
+  No automatic re-pairing or plaintext fallback is permitted after pin installation.
+  Package `20261007-010516` passed two trusted USB refreshes and both SRV port
+  migrations on COM3 with the existing binding/token, wake listening and no crypto
+  allocation errors. Port recovery still includes a controlled device restart.
+  A separate same-name/different-key HTTPS listener was rejected before any HTTP
+  request, followed by recovery to the genuine server. Actual network/address
+  changes, WSS, broader negative cases and extended soak remain separate gates.
+  Independent address-candidate probing, damaged-trust recovery and physical power-cut
+  acceptance are still open;
+  see [trusted server discovery](trusted-server-discovery.md).
+
 - ESP32-S3 BigSmart: 16 MiB flash, 8 MiB PSRAM, ESP-IDF 6.0.2, LVGL 9.3,
   `esp_lvgl_port` 2.8, local Board Manager definitions and pinned component resolution.
 - Static native app registry/host/navigation; Shell-owned Lock Screen and Control Center;
@@ -22,8 +35,9 @@ firmware build does not change an existing hardware gate.
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
   see [appearance verification](appearance-verification.md). The latest COM3 firmware package is
-  development-signed `20261006-225642`, verified for serial provisioning and same-URL binding
-  preservation; see [serial evidence](serial-provisioning.md#2026-10-06-hotspot-and-binding-proof-gate).
+  development-signed `20261007-010516`, verified for trusted serial refresh, MQTTS,
+  telemetry and bidirectional port recovery with retained binding; see
+  [trusted serial evidence](serial-provisioning.md#2026-10-07-trusted-network-gate).
 - Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
   A closed codec accepts configuration without opening hardware; the next open applies it and
   fails with cleanup if the initial API call fails. Voice MCP now exposes absolute/up/down tools
@@ -79,6 +93,7 @@ firmware build does not change an existing hardware gate.
 
 | Area | Remaining work | Evidence / owner document |
 | --- | --- | --- |
+| Trusted server recovery | Actual cross-network/address change and WSS; negative cases beyond the verified HTTPS wrong-certificate rejection; independently try multiple A/AAAA candidates; explicit recovery for a damaged/missing trust record; power interruption between the pin latch and authority commit. Port recovery is verified with a controlled restart, not seamless migration. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
 | Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
@@ -97,9 +112,6 @@ power-loss, acoustic, or resource-exhaustion evidence.
 
 ## Deferred design decisions
 
-- Pin server identity/public key and verify LAN discovery candidates before automatic endpoint
-  migration. Same-URL serial refresh now preserves registration; stable laptop hotspot networking
-  is hardware-verified. mDNS/DNS-SD migration and Appearance origin trust remain separate work.
 - Keep free drag deferred until physical paging and touch are proven together.
 - Extend host LVGL coverage into PhoneSystem policy when hardware dependencies can be isolated.
 - Refine service-backed status, app capability visibility in Settings/System Info, and consistent

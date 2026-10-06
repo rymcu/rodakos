@@ -11,9 +11,11 @@ option(RODAKOS_CODEC_VOLUME_USE_UPSTREAM "Run regressions against the unpatched 
 
 if(RODAKOS_CODEC_VOLUME_USE_UPSTREAM)
     set(RODAKOS_CODEC_SOURCE "${RODAKOS_CODEC_COMPONENT_DIR}/esp_codec_dev.c")
+    set(RODAKOS_I2S_SOURCE "${RODAKOS_CODEC_COMPONENT_DIR}/platform/audio_codec_data_i2s.c")
 else()
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(RODAKOS_CODEC_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/esp_codec_dev.c")
+    set(RODAKOS_I2S_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/platform/audio_codec_data_i2s.c")
     execute_process(
         COMMAND "${Python3_EXECUTABLE}" "${RODAKOS_ROOT}/tools/prepare_codec_volume_patch.py"
             --component-dir "${RODAKOS_CODEC_COMPONENT_DIR}"
@@ -31,9 +33,13 @@ else()
         "${RODAKOS_ROOT}/tools/prepare_codec_volume_patch.py"
         "${RODAKOS_ROOT}/patches/esp_codec_dev/1.5.7/provenance.json"
         "${RODAKOS_ROOT}/patches/esp_codec_dev/1.5.7/set_out_vol.c"
+        "${RODAKOS_ROOT}/patches/esp_codec_dev/1.5.7/open.c"
+        "${RODAKOS_ROOT}/patches/esp_codec_dev/1.5.7/set_fs.c"
+        "${RODAKOS_ROOT}/patches/esp_codec_dev/1.5.7/i2s_format_fault.c"
         "${RODAKOS_ROOT}/dependencies.lock"
         "${RODAKOS_ROOT}/main/idf_component.yml"
         "${RODAKOS_CODEC_COMPONENT_DIR}/esp_codec_dev.c"
+        "${RODAKOS_CODEC_COMPONENT_DIR}/platform/audio_codec_data_i2s.c"
         "${RODAKOS_CODEC_COMPONENT_DIR}/idf_component.yml"
         "${RODAKOS_CODEC_COMPONENT_DIR}/.component_hash"
     )
@@ -42,7 +48,9 @@ endif()
 add_executable(rodakos_codec_volume_tests
     ../app_model/test_main.cc
     codec_volume_test.cc
+    codec_i2s_failure_test.cc
     "${RODAKOS_CODEC_SOURCE}"
+    "${RODAKOS_I2S_SOURCE}"
     "${RODAKOS_CODEC_COMPONENT_DIR}/audio_codec_sw_vol.c"
     "${RODAKOS_CODEC_COMPONENT_DIR}/esp_codec_dev_if.c"
 )

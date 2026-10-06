@@ -13,9 +13,19 @@ struct FakeCodec : audio_codec_if_t {
     int volume_result = ESP_CODEC_DEV_OK;
     int volume_calls = 0;
     float last_db = 0;
+    int format_result = ESP_CODEC_DEV_OK;
+    int enable_result = ESP_CODEC_DEV_OK;
+    bool enabled = false;
 
     FakeCodec() : audio_codec_if_t{} {
         is_open = [](const audio_codec_if_t* h) { return From(h).ready; };
+        set_fs = [](const audio_codec_if_t* h, esp_codec_dev_sample_info_t*) { return From(h).format_result; };
+        enable = [](const audio_codec_if_t* h, bool enabled) {
+            auto& fake = From(h);
+            if (enabled && fake.enable_result != ESP_CODEC_DEV_OK) return fake.enable_result;
+            fake.enabled = enabled;
+            return ESP_CODEC_DEV_OK;
+        };
         set_vol = [](const audio_codec_if_t* h, float db) {
             auto& fake = From(h);
             ++fake.volume_calls;
@@ -33,9 +43,26 @@ struct FakeCodec : audio_codec_if_t {
 struct FakeData : audio_codec_data_if_t {
     bool ready = true;
     std::vector<int16_t> samples;
+    int format_result = ESP_CODEC_DEV_OK;
+    int enable_result = ESP_CODEC_DEV_OK;
+    int format_calls = 0;
+    int enable_calls = 0;
+    bool enabled = false;
 
     FakeData() : audio_codec_data_if_t{} {
         is_open = [](const audio_codec_data_if_t* h) { return From(h).ready; };
+        set_fmt = [](const audio_codec_data_if_t* h, esp_codec_dev_type_t, esp_codec_dev_sample_info_t*) {
+            auto& fake = From(h);
+            ++fake.format_calls;
+            return fake.format_result;
+        };
+        enable = [](const audio_codec_data_if_t* h, esp_codec_dev_type_t, bool enabled) {
+            auto& fake = From(h);
+            ++fake.enable_calls;
+            if (enabled && fake.enable_result != ESP_CODEC_DEV_OK) return fake.enable_result;
+            fake.enabled = enabled;
+            return ESP_CODEC_DEV_OK;
+        };
         read = [](const audio_codec_data_if_t*, uint8_t*, int) { return ESP_CODEC_DEV_OK; };
         write = [](const audio_codec_data_if_t* h, uint8_t* bytes, int size) {
             auto& fake = From(h);
@@ -55,10 +82,11 @@ struct FakeSoftwareVolume : audio_codec_vol_if_t {
     int volume_calls = 0;
     int closes = 0;
     float last_db = 0;
+    int open_result = ESP_CODEC_DEV_OK;
 
     FakeSoftwareVolume() : audio_codec_vol_if_t{} {
-        open = [](const audio_codec_vol_if_t*, esp_codec_dev_sample_info_t*, int) {
-            return ESP_CODEC_DEV_OK;
+        open = [](const audio_codec_vol_if_t* h, esp_codec_dev_sample_info_t*, int) {
+            return From(h).open_result;
         };
         set_vol = [](const audio_codec_vol_if_t* h, float db) {
             auto& fake = From(h);
@@ -122,6 +150,54 @@ struct CodecFixture {
 };
 
 }  // namespace
+
+RODAK_TEST("Codec open returns format and enable errors without committing an opened state") {
+    CodecFixture fixture;
+    esp_codec_dev_sample_info_t format{};
+    format.sample_rate = 16000; format.channel = 1; format.bits_per_sample = 16;
+    fixture.data.format_result = ESP_ERR_NO_MEM;
+    RODAK_CHECK_EQ(esp_codec_dev_open(fixture.device, &format), ESP_ERR_NO_MEM);
+    RODAK_CHECK_EQ(fixture.data.enable_calls, 0);
+    RODAK_CHECK(!fixture.codec.enabled);
+    fixture.data.format_result = ESP_CODEC_DEV_OK;
+    fixture.data.enable_result = -801;
+    RODAK_CHECK_EQ(esp_codec_dev_open(fixture.device, &format), -801);
+    RODAK_CHECK(!fixture.data.enabled && !fixture.codec.enabled);
+    fixture.data.enable_result = ESP_CODEC_DEV_OK;
+    fixture.Open();
+    RODAK_CHECK_EQ(fixture.data.format_calls, 3);
+    RODAK_CHECK(fixture.data.enabled && fixture.codec.enabled);
+}
+
+RODAK_TEST("Codec open rolls back data enable on codec format and enable failures") {
+    CodecFixture fixture;
+    esp_codec_dev_sample_info_t format{};
+    format.sample_rate = 16000; format.channel = 1; format.bits_per_sample = 16;
+    fixture.codec.format_result = -802;
+    RODAK_CHECK_EQ(esp_codec_dev_open(fixture.device, &format), -802);
+    RODAK_CHECK(!fixture.data.enabled && !fixture.codec.enabled);
+    fixture.codec.format_result = ESP_CODEC_DEV_OK;
+    fixture.codec.enable_result = -803;
+    RODAK_CHECK_EQ(esp_codec_dev_open(fixture.device, &format), -803);
+    RODAK_CHECK(!fixture.data.enabled && !fixture.codec.enabled);
+    fixture.codec.enable_result = ESP_CODEC_DEV_OK;
+    fixture.Open();
+    RODAK_CHECK_EQ(fixture.data.format_calls, 3);
+}
+
+RODAK_TEST("Codec open rolls back software volume failure and permits a clean retry") {
+    CodecFixture fixture;
+    fixture.UseSoftwareVolume();
+    fixture.software.open_result = -804;
+    esp_codec_dev_sample_info_t format{};
+    format.sample_rate = 16000; format.channel = 1; format.bits_per_sample = 16;
+    RODAK_CHECK_EQ(esp_codec_dev_open(fixture.device, &format), -804);
+    RODAK_CHECK(!fixture.data.enabled && !fixture.codec.enabled);
+    RODAK_CHECK_EQ(fixture.software.closes, 1);
+    fixture.software.open_result = ESP_CODEC_DEV_OK;
+    fixture.Open();
+    RODAK_CHECK_EQ(fixture.data.format_calls, 2);
+}
 
 RODAK_TEST("Codec hardware success commits volume and uses the public volume curve") {
     CodecFixture fixture;

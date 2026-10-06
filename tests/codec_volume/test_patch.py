@@ -22,7 +22,8 @@ class CodecPatchTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.component = self.root / "managed" / "codec"
         self.component.mkdir(parents=True)
-        for name in ("esp_codec_dev.c", "idf_component.yml", ".component_hash"):
+        for name in ("esp_codec_dev.c", "platform/audio_codec_data_i2s.c", "idf_component.yml", ".component_hash"):
+            (self.component / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / "managed_components" / "espressif__esp_codec_dev" / name,
                             self.component / name)
         self.lock = self.root / "dependencies.lock"
@@ -68,6 +69,21 @@ class CodecPatchTests(unittest.TestCase):
     def test_source_drift_fails_before_writing(self):
         self.replace(self.component / "esp_codec_dev.c", "(50)", "(51)")
         self.assert_refused()
+
+    def test_i2s_source_drift_rejects_both_outputs(self):
+        self.replace(self.component / "platform/audio_codec_data_i2s.c", "(1000)", "(1001)")
+        self.assert_refused()
+        self.assertFalse((self.output.parent / "platform/audio_codec_data_i2s.c").exists())
+
+    def test_i2s_copy_is_reproducible_and_recreated(self):
+        self.generate()
+        i2s_output = self.output.parent / "platform/audio_codec_data_i2s.c"
+        original = i2s_output.read_bytes()
+        self.assertIn(b"i2s_format_faults", original)
+        self.assertIn(b"_i2s_latch_format_fault(i2s_data)", original)
+        i2s_output.unlink()
+        self.assertTrue(self.generate())
+        self.assertEqual(i2s_output.read_bytes(), original)
 
     def test_source_drift_rejects_existing_output_without_overwriting_it(self):
         self.generate()

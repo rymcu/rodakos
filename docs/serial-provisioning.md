@@ -15,6 +15,9 @@ network configuration supplied by a provisioning request contains only:
 - WiFi SSID and password to the existing `wifi` NVS namespace.
 - Device Cloud bootstrap URL to the existing `device_cloud` NVS namespace
   (`prov_url` key).
+- Optional USB-installed `server_trust` certificate/name/identity. Trusted endpoints
+  use the atomic authority record instead of replacing `prov_url`; see
+  [trusted server discovery](trusted-server-discovery.md).
 
 A request carrying a binding nonce may also initialize the device-owned random
 secret in `device_cloud` if no identity exists. It never accepts that secret from
@@ -24,7 +27,9 @@ MQTT credentials, realtime voice descriptors, broker settings, and topic names a
 sent over serial. RodakOS obtains those values from the configured canonical AIoT bootstrap
 endpoint after WiFi connects.
 
-The existing Settings pages remain supported as a manual fallback.
+The existing Settings pages remain supported for legacy configuration and pairing status.
+After server trust is installed, an unverified manual URL edit cannot replace that authority;
+use the trusted USB flow or authenticated discovery.
 
 ### NVS namespace ownership
 
@@ -35,17 +40,26 @@ The service label is **Device Cloud**, but the persisted NVS namespace is
 | -------------- | ---------------------------------- | --------------------------- |
 | `wifi`         | `ssid`, `password`                 | Serial provisioning request |
 | `device_cloud` | `prov_url`                         | Serial provisioning request |
+| `device_cloud` | `server_pinned`, `server_auth`      | Explicit USB trust and authenticated promotion |
 | `device_cloud` | AIoT identity and pairing state    | Device-owned binding flow   |
 | `realtime_voice` | Canonical endpoint and audio limits | AIoT bootstrap/token response |
 | `unified_mqtt` | Broker, credential, and topic keys | Bootstrap response          |
 
-Changing `device_cloud/prov_url` clears cached `realtime_voice` and `unified_mqtt`
-values before the next bootstrap. When the canonical URL is unchanged, the
+For legacy configurations without a server pin, changing `device_cloud/prov_url`
+clears cached `realtime_voice` and `unified_mqtt` values before the next bootstrap.
+When the canonical URL is unchanged, the
 provisioning refresh preserves the registered/activated device identity and only
 refreshes transport credentials. A different origin remains an explicit migration
 boundary that requires the operator to explicitly select a trusted bootstrap URL.
 After that change, the existing device secret is used to request pairing at the new
-origin; this flow does not discover or authorize another origin automatically.
+origin; this legacy flow does not discover or authorize another origin automatically.
+With a USB-installed pin, only the same trusted authority may be discovered: HTTPS,
+MQTTS and WSS use its certificate and fixed name. An already bound device uses its
+existing secret over TLS before promoting the candidate; rejection does not re-pair.
+Stable-name resolution handles ordinary address changes, while bounded DNS-SD queries
+can find changed HTTPS ports. Individual A/AAAA candidates are not yet probed independently.
+Cross-network hardware, explicit damaged-trust recovery and physical power-cut acceptance
+remain open in [trusted server discovery](trusted-server-discovery.md#validation).
 MQTT and voice credentials are never accepted as serial request fields.
 
 The firmware does not expose textual commands such as `cloud bootstrap set` or
@@ -66,10 +80,12 @@ The device replies with one JSON result per line. Because ESP-IDF log output and
 the provisioning stream share USB Serial/JTAG, the host must also recognize a
 marker that is adjacent to a log prefix in the same USB packet/line:
 
-When the service is running it emits `RODAK_PROVISION_READY {"version":1}`
+When the service is running it emits `RODAK_PROVISION_READY {"version":1,"server_trust":1}`
 immediately and approximately every five seconds. The sender must wait for this
 marker (a plain `RODAK_PROVISION_READY` is also accepted) before sending a
-request. The service uses the existing USB Serial/JTAG console VFS and does not
+legacy request. A request carrying `server_trust` requires the explicit numeric
+capability `server_trust:1`; a desktop must not send that request to older firmware
+which could ignore an unknown JSON field. The service uses the existing USB Serial/JTAG console VFS and does not
 install a second UART or USB driver.
 Do not start an ESP-IDF REPL or another reader on the same console while a
 provisioning session is active; both readers would consume the same RX stream.
@@ -154,8 +170,9 @@ physically local diagnostic/control path and does not grant new app privileges.
 
 1. Validate the complete request before changing NVS.
 2. Save WiFi credentials and bootstrap URL as one provisioning transaction.
-3. Clear cached realtime voice descriptor and MQTT credentials for every accepted provisioning
-   request, including a repeat request for the same bootstrap URL.
+3. Invalidate cached realtime voice and MQTT capabilities for every accepted request,
+   including a repeat request for the same bootstrap URL. Legacy mode clears caches;
+   trusted mode stages a candidate and suppresses caches until authenticated promotion.
 4. Return success only after NVS commit succeeds.
 5. Start or restart WiFi connection using the saved credentials.
 6. Once connected, wait until the success result has drained to USB, then call
@@ -174,8 +191,9 @@ only MQTT connection events update the logical connected state while HTTP refres
 pending.
 
 Partial requests must not erase an existing working configuration. A failed
-bootstrap refresh may retain the previous cloud credentials, but an accepted
-provisioning request always clears them before the next bootstrap attempt.
+bootstrap refresh may retain the previous cloud credentials. An accepted legacy
+request clears them; a trusted request keeps the prior identity and active authority
+but prevents its caches from being used while the candidate awaits authentication.
 
 ### Interrupted transaction recovery
 
@@ -185,6 +203,9 @@ bootstrap URL, and cloud credential invalidation have all committed. If power is
 lost while the marker is set, the next boot does not try to combine old and new
 fields: it clears the saved WiFi credentials, restores the default bootstrap URL,
 invalidates cached realtime voice descriptor and MQTT credentials, and then clears the marker.
+An installed server pin changes this cleanup: WiFi is cleared, but the authority and
+its candidate remain intact instead of restoring a plaintext default. An unreadable
+trust record keeps recovery pending and cloud transports disabled.
 If any recovery write fails, the marker remains set so the same conservative
 cleanup is retried on the next boot.
 
@@ -317,7 +338,8 @@ provisioning flow.
 - A malformed or oversized frame leaves existing NVS unchanged.
 - A reset during NVS mutation is detected on the next boot and cannot bring up a
   mixed WiFi/cloud configuration.
-- Every accepted provisioning request, including a repeated URL, clears stale cloud credentials.
+- Every accepted provisioning request refreshes stale network/transport state. A proven
+  existing binding is preserved; rejected authentication must not silently re-pair.
 - Serial output contains no password or token.
 - Rodak reports the device result and subsequently observes the device's
   bootstrap request and MQTT connection.
@@ -367,12 +389,36 @@ desktop instance was restored and the device reconnected. Desktop evidence is
 `D:/workspace/rodak/docs/serial-provisioning-verification.md`.
 
 The existing appearance revision reported `fallback/package_unavailable`; no appearance package
-was redeployed or publisher trust granted. This gate does not cover LAN discovery/server-key
+was redeployed or publisher trust granted. This dated gate predates the subsequently implemented
+[trusted server transport and DNS-SD path](trusted-server-discovery.md); it does not cover server-key
 migration, power cuts, rejected pairing, credential rotation, production signing or acoustic tests.
 
 Host validation: 19 protocol/proof tests in Debug and ASan/UBSan with leak detection, and 278
 app-model tests. The real USB/NVS/HTTP/MQTT path is supported by the two hardware rounds above;
 the host tests alone do not establish it.
+
+### 2026-10-07 trusted-network gate
+
+Development-signed package `20261007-010516`, task `trusted-server-tls-headroom-006`,
+passed the strict COM3 gate on the same device and hotspot. Two trusted USB refreshes
+returned `not_needed`, preserving the device ID and token version 4. Both produced
+new MQTTS connections, current shadow and repeated telemetry. HTTPS/MQTTS ports
+9443/8883 → 9444/8884 → 9443/8883 recovered through authenticated discovery and
+controlled device restarts without another USB configuration or pairing.
+
+The complete run retained wake `listening=1`, healthy Home/OTA startup, and at least
+1024 bytes of observed free stack for main, serial provisioning, MQTT worker, MQTT
+SDK and wake supervisor. The gate rejected panic, task-allocation and crypto-allocation
+errors; none occurred. Serial minimum free stack was 1904 bytes out of 6144.
+See [package identity and full measurements](trusted-server-discovery.md#sixth-hardware-attempt-bounded-strict-gate-passed).
+
+This five-minute run covers retained-binding serial refresh and same-LAN port
+recovery. It does not cover an actual WiFi/subnet/address change, WSS interaction,
+long soak, independent A/AAAA probes, physical damaged-trust recovery or power cuts.
+A separate HTTPS wrong-certificate gate rejected a same-name/different-key server
+before any HTTP request, then recovered the genuine server with the original
+binding/token and fresh telemetry. See [negative evidence](trusted-server-discovery.md#https-wrong-certificate-hardware-rejection);
+replay, expiry and other protocol negative cases are not implied by that result.
 
 ### Full regression requirements
 

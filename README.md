@@ -4,12 +4,21 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (media-save consistency work starts from `b29d8375`; current source and
-validation identity are recorded in the linked roadmap).
+Current trusted-server work starts from `7101282`; source, build and hardware
+validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
+- Optional USB-installed server trust now enables pinned HTTPS, MQTTS and WSS with
+  a stable `.local` server name. Bounded DNS-SD port candidates are authenticated before
+  endpoint promotion, preserving an existing device binding. Package `20261007-010516`
+  passed trusted USB refresh, MQTTS/telemetry and both port migrations on COM3 with
+  wake listening and no crypto allocation errors; port recovery includes a controlled
+  device restart. A separate HTTPS wrong-certificate test was rejected before any HTTP
+  request. Actual network changes, WSS, independent address probing,
+  damaged-trust recovery and power-cut acceptance remain open. See
+  [trusted server discovery](docs/trusted-server-discovery.md).
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
@@ -33,8 +42,8 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   pixels, animation lifetime/touch restoration, Home wallpaper and unified theme colors. The current
   WSL suite reports 43 tests and 0 failures in Debug and ASan/UBSan with leak detection. Its built-in
   logo font is a host fake; this does not establish EDIX or wireless hardware acceptance.
-- The latest protected COM3 refresh reached Home with the production app set and completed the local
-  OTA confirmation. The same 2026-10-01/02 evidence verifies six WebRTC display sessions (320x240,
+- The dated 2026-10-01/02 protected COM3 refresh reached Home with the production app set and completed
+  the local OTA confirmation. That evidence verifies six WebRTC display sessions (320x240,
   four rounds, 283 JPEG samples), camera/display mutual exclusion, remote text/control cleanup, and
   appearance revision 14. This proves the integrated paths on COM3; three-page Home turnover,
   physical page gestures, and true LVGL out-of-memory recovery remain open.
@@ -70,9 +79,12 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   results, and Camera delivers completion through a revocable shared result and UI timer.
   Real SD, power-loss and hardware audio/camera gates remain open. See
   [media save boundaries](docs/media-save.md).
-- Last recorded signed device package `20261001-234748`: 6,897,584-byte main image (about 6.58 MiB).
-  It identifies the earlier COM3 appearance run, not subsequent local builds. The main application
-  slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
+- The `20261006-225642` COM3 package records legacy serial provisioning and same-URL
+  binding preservation; its 7,015,312-byte main image predates TLS pinning. The trusted
+  transport package `20261007-010516` has a 7,081,040-byte main image; its bounded
+  hardware evidence and remaining gates are recorded in
+  [trusted server discovery](docs/trusted-server-discovery.md#validation).
+  The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
 
@@ -86,7 +98,7 @@ and camera dependencies that otherwise drift when generated configuration is rec
 `dependencies.lock` remains the authoritative complete resolved graph and must be reviewed with any
 intentional dependency upgrade.
 
-The root CMake build automatically validates and generates the codec volume correction after
+The root CMake build automatically validates and generates the codec volume/open and I2S failure corrections after
 dependency resolution. See [dependency maintenance](docs/dependency-maintenance.md) for its
 source provenance, drift rejection, host tests and upgrade procedure.
 The same build also applies the checked MQTT custom-event queue correction; it requires the
@@ -253,6 +265,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
 - [Rodak identity and wake word](docs/voice-identity-wake-word.md)
 - [Serial provisioning](docs/serial-provisioning.md)
+- [Trusted server and LAN discovery](docs/trusted-server-discovery.md)
 - [OpenOS comparison and design decisions](docs/openos-comparison.md)
 - [Home layout and folder design](docs/home-layout-design.md)
 - [Historical plans](docs/archive/README.md)

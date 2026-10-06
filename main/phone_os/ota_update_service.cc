@@ -1,6 +1,7 @@
 #include "phone_os/ota_update_service.h"
 
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/server_trust_transport.h"
 #include "rodak_sha256.h"
 #include "rodak_ota_signature.h"
 #include "rodak_release_fault.h"
@@ -8,7 +9,6 @@
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
-#include <esp_crt_bundle.h>
 #include <esp_err.h>
 #include <esp_http_client.h>
 #include <esp_image_format.h>
@@ -126,8 +126,8 @@ bool ReadJsonResponse(esp_http_client_handle_t client, std::string& response) {
     return true;
 }
 
-bool PerformJsonRequest(const std::string& url, esp_http_client_method_t method,
-                        const std::string& token, const std::string& body,
+bool PerformJsonRequest(const DeviceCloudConfig& cloud, const std::string& url,
+                        esp_http_client_method_t method, const std::string& body,
                         std::string& response, int* response_status = nullptr) {
     if (response_status != nullptr) {
         *response_status = 0;
@@ -138,15 +138,17 @@ bool PerformJsonRequest(const std::string& url, esp_http_client_method_t method,
     config.timeout_ms = kHttpTimeoutMs;
     config.buffer_size = 2048;
     config.buffer_size_tx = 2048;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
     config.user_agent = "RodakOS/ota-v2";
+    if (!ConfigureServerTrustHttp(cloud, url, config)) {
+        return false;
+    }
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
         return false;
     }
 
-    const std::string authorization = "Bearer " + token;
+    const std::string authorization = "Bearer " + cloud.mqtt_password;
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_err_t err = esp_http_client_open(client, body.size());
@@ -319,12 +321,11 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
     const esp_app_desc_t* app_desc = esp_app_get_description();
     const std::string running_version = app_desc != nullptr ? app_desc->version : "";
-    const std::string base_url = TrimTrailingSlash(config.mqtt_http_base_url);
     ESP_LOGI(TAG, "Checking OTA task %s before requesting a download ticket",
              task_no.c_str());
 
     UpgradeCheck check;
-    if (!RequestUpgradeCheck(base_url, config.mqtt_password, check)) {
+    if (!RequestUpgradeCheck(config, check)) {
         ESP_LOGE(TAG, "OTA check request failed for task %s", task_no.c_str());
         FailStaging(task_no, "CHECK_FAILED", "无法完成 OTA 升级检查");
         return;
@@ -361,14 +362,14 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
     PublishProgress(task_no, 0, "prepare", "正在申请下载凭证");
     std::string ticket_id;
-    if (!RequestTicket(base_url, config.mqtt_password, task_no, ticket_id)) {
+    if (!RequestTicket(config, task_no, ticket_id)) {
         FailStaging(task_no, "TICKET_FAILED", "无法获取 OTA 下载凭证");
         return;
     }
     ESP_LOGI(TAG, "OTA download ticket accepted: task=%s", task_no.c_str());
 
     Manifest manifest;
-    if (!RequestManifest(base_url, config.mqtt_password, task_no, ticket_id, manifest)) {
+    if (!RequestManifest(config, task_no, ticket_id, manifest)) {
         FailStaging(task_no, "MANIFEST_FAILED", "无法获取 OTA manifest");
         return;
     }
@@ -423,7 +424,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "BACKUP_FAILED", "无法备份当前固件到 SD 卡");
         return;
     }
-    if (!DownloadToSd(manifest, config.mqtt_password, base_url)) {
+    if (!DownloadToSd(manifest, config)) {
         FailStaging(task_no, "DOWNLOAD_FAILED", "固件下载、SHA-256 或签名暂存失败");
         return;
     }
@@ -507,12 +508,13 @@ bool OtaUpdateService::CompleteStagedHandoff() {
     return true;
 }
 
-bool OtaUpdateService::RequestUpgradeCheck(const std::string& base_url,
-                                           const std::string& token,
+bool OtaUpdateService::RequestUpgradeCheck(const DeviceCloudConfig& cloud,
                                            UpgradeCheck& check) {
+    if (!config_service_.IsVoiceConfigCurrent(cloud)) return false;
+    const std::string base_url = TrimTrailingSlash(cloud.mqtt_http_base_url);
     std::string response;
-    if (!PerformJsonRequest(base_url + "/api/v1/ota/check", HTTP_METHOD_GET,
-                            token, {}, response)) {
+    if (!PerformJsonRequest(cloud, base_url + "/api/v1/ota/check", HTTP_METHOD_GET,
+                            {}, response) || !config_service_.IsVoiceConfigCurrent(cloud)) {
         return false;
     }
     cJSON* root = nullptr;
@@ -530,16 +532,18 @@ bool OtaUpdateService::RequestUpgradeCheck(const std::string& base_url,
     return true;
 }
 
-bool OtaUpdateService::RequestTicket(const std::string& base_url, const std::string& token,
+bool OtaUpdateService::RequestTicket(const DeviceCloudConfig& cloud,
                                      const std::string& task_no, std::string& ticket_id) {
+    if (!config_service_.IsVoiceConfigCurrent(cloud)) return false;
+    const std::string base_url = TrimTrailingSlash(cloud.mqtt_http_base_url);
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "taskNo", task_no.c_str());
     const std::string body_text = EncodeJson(body);
     cJSON_Delete(body);
 
     std::string response;
-    if (!PerformJsonRequest(base_url + "/api/v1/ota/download-ticket", HTTP_METHOD_POST,
-                            token, body_text, response)) {
+    if (!PerformJsonRequest(cloud, base_url + "/api/v1/ota/download-ticket", HTTP_METHOD_POST,
+                            body_text, response) || !config_service_.IsVoiceConfigCurrent(cloud)) {
         return false;
     }
     cJSON* root = nullptr;
@@ -552,13 +556,16 @@ bool OtaUpdateService::RequestTicket(const std::string& base_url, const std::str
     return !ticket_id.empty();
 }
 
-bool OtaUpdateService::RequestManifest(const std::string& base_url, const std::string& token,
+bool OtaUpdateService::RequestManifest(const DeviceCloudConfig& cloud,
                                        const std::string& task_no,
                                        const std::string& ticket_id, Manifest& manifest) {
+    if (!config_service_.IsVoiceConfigCurrent(cloud)) return false;
+    const std::string base_url = TrimTrailingSlash(cloud.mqtt_http_base_url);
     const std::string url = base_url + "/api/v1/ota/manifest/" + UrlEncode(task_no) +
                             "?ticketId=" + UrlEncode(ticket_id);
     std::string response;
-    if (!PerformJsonRequest(url, HTTP_METHOD_GET, token, {}, response)) {
+    if (!PerformJsonRequest(cloud, url, HTTP_METHOD_GET, {}, response) ||
+        !config_service_.IsVoiceConfigCurrent(cloud)) {
         return false;
     }
     cJSON* root = nullptr;
@@ -587,9 +594,17 @@ bool OtaUpdateService::RequestManifest(const std::string& base_url, const std::s
     return true;
 }
 
-bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string& token,
-                                    const std::string& http_base_url) {
-    if (!IsHttpUrl(manifest.url)) {
+bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudConfig& cloud) {
+    if (!IsHttpUrl(manifest.url) || !config_service_.IsVoiceConfigCurrent(cloud)) {
+        return false;
+    }
+    esp_http_client_config_t config = {};
+    config.url = manifest.url.c_str();
+    config.method = HTTP_METHOD_GET;
+    config.timeout_ms = kHttpTimeoutMs;
+    config.buffer_size = 4096;
+    config.user_agent = "RodakOS/ota-v2";
+    if (!ConfigureServerTrustHttp(cloud, manifest.url, config)) {
         return false;
     }
     if (file_service_->Exists(kOtaPendingPartPath)) {
@@ -608,25 +623,19 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
         return false;
     }
 
-    esp_http_client_config_t config = {};
-    config.url = manifest.url.c_str();
-    config.method = HTTP_METHOD_GET;
-    config.timeout_ms = kHttpTimeoutMs;
-    config.buffer_size = 4096;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    config.user_agent = "RodakOS/ota-v2";
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
         std::fclose(output);
         return false;
     }
     std::string authorization;
-    if (HasSameOrigin(manifest.url, http_base_url)) {
-        authorization = "Bearer " + token;
+    if (HasSameOrigin(manifest.url, cloud.mqtt_http_base_url)) {
+        authorization = "Bearer " + cloud.mqtt_password;
         esp_http_client_set_header(client, "Authorization", authorization.c_str());
     }
 
-    esp_err_t err = esp_http_client_open(client, 0);
+    esp_err_t err = config_service_.IsVoiceConfigCurrent(cloud)
+                        ? esp_http_client_open(client, 0) : ESP_FAIL;
     const int64_t content_length = err == ESP_OK ? esp_http_client_fetch_headers(client) : -1;
     const int status = esp_http_client_get_status_code(client);
     bool ok = err == ESP_OK && status >= 200 && status < 300 &&
@@ -645,6 +654,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     uint64_t total = 0;
     int last_progress = -1;
     while (ok && total < manifest.file_size) {
+        if (!config_service_.IsVoiceConfigCurrent(cloud)) { ok = false; break; }
         const int read = esp_http_client_read(client, reinterpret_cast<char*>(buffer.get()),
                                               static_cast<int>(std::min<uint64_t>(
                                                   kIoBufferSize, manifest.file_size - total)));
@@ -664,7 +674,8 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const std::string&
     }
 
     std::array<unsigned char, 32> digest = {};
-    ok = ok && total == manifest.file_size && sha.Finish(digest);
+    ok = ok && config_service_.IsVoiceConfigCurrent(cloud) &&
+         total == manifest.file_size && sha.Finish(digest);
     if (ok) {
         ok = std::fflush(output) == 0;
     }
@@ -1150,7 +1161,8 @@ OtaUpdateService::ReportResultOutcome OtaUpdateService::ReportResultHttp(
     int response_status = 0;
     const std::string url = TrimTrailingSlash(config.mqtt_http_base_url) +
                             "/api/v1/ota/tasks/" + UrlEncode(record.task_no) + "/result";
-    if (!PerformJsonRequest(url, HTTP_METHOD_POST, config.mqtt_password, body_text, response,
+    if (!config_service_.IsVoiceConfigCurrent(config) ||
+        !PerformJsonRequest(config, url, HTTP_METHOD_POST, body_text, response,
                             &response_status)) {
         if (response_status == 401 || response_status == 403) {
             DeviceCloudConfig refreshed;

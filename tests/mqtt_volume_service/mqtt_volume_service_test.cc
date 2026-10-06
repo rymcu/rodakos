@@ -2,6 +2,49 @@
 
 using namespace mqtt_host;
 
+RODAK_TEST("MQTT uses pinned TLS and retains certificate storage after setup returns") {
+    Fixture f;
+    auto config = Config();
+    config.server_trust.server_id = std::string(64, 'a');
+    config.server_trust.tls_name = "rodak-aaaaaaaaaaaaaaaa.local";
+    config.server_trust.ca_pem = std::string(800, 'C');
+    config.mqtt_broker_address = config.server_trust.tls_name;
+    config.mqtt_broker_port = 8883;
+    SetConfig(config);
+    f.Start();
+    const auto tls = BrokerTls();
+    RODAK_CHECK_EQ(tls.uri, "mqtts://rodak-aaaaaaaaaaaaaaaa.local:8883");
+    RODAK_CHECK_EQ(tls.certificate, config.server_trust.ca_pem);
+    RODAK_CHECK_EQ(tls.common_name, config.server_trust.tls_name);
+}
+
+RODAK_TEST("MQTT supports repeated unconfigured starts and stops") {
+    Fixture f;
+    auto config = Config();
+    config.has_mqtt_config = false;
+    SetConfig(config);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        RODAK_CHECK(f.service.Start());
+        RODAK_CHECK(f.service.Start());
+        f.service.Stop();
+        RODAK_CHECK(CurrentClient() == nullptr);
+    }
+}
+
+RODAK_TEST("MQTT serializes concurrent starts and stops") {
+    Fixture f;
+    auto config = Config();
+    config.has_mqtt_config = false;
+    SetConfig(config);
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        std::thread start([&]() { (void)f.service.Start(); });
+        std::thread stop([&]() { f.service.Stop(); });
+        start.join(); stop.join();
+        f.service.Stop();
+        RODAK_CHECK(CurrentClient() == nullptr);
+    }
+}
+
 RODAK_TEST("MQTT service assembles fragments and emits a separate correlated receipt on the SDK task") {
     Fixture f;
     f.Start();

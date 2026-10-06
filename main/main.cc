@@ -51,6 +51,7 @@
 #include <esp_err.h>
 #include <esp_lcd_touch.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <inttypes.h>
@@ -68,6 +69,9 @@
 
 namespace {
 constexpr const char* TAG = "RodakOS";
+// Two RGB565 DMA buffers cost four internal bytes per pixel row. Keep the
+// persistent display budget below the wake-audio and authenticated MQTT needs.
+constexpr uint32_t kDisplayDrawBufferRows = 24;
 using DisplayControlReply = rodakos::UnifiedMqttService::DisplayControlReply;
 
 struct TouchInputBridge {
@@ -443,7 +447,7 @@ extern "C" void app_main(void) {
         .io_handle = lcd_handles->io_handle,
         .panel_handle = lcd_handles->panel_handle,
         .control_handle = nullptr,
-        .buffer_size = static_cast<uint32_t>(lcd_cfg->lcd_width) * 40,
+        .buffer_size = static_cast<uint32_t>(lcd_cfg->lcd_width) * kDisplayDrawBufferRows,
         .double_buffer = true,
         .trans_size = 0,
         .hres = lcd_cfg->lcd_width,
@@ -465,6 +469,9 @@ extern "C" void app_main(void) {
             .direct_mode = false,
         },
     };
+    ESP_LOGI(TAG, "Display DMA draw buffers: rows=%u buffers=2 bytes=%u",
+             static_cast<unsigned>(kDisplayDrawBufferRows),
+             static_cast<unsigned>(disp_cfg.buffer_size * sizeof(uint16_t) * 2));
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
     if (disp == nullptr) {
         ESP_LOGE(TAG, "Failed to add LVGL display");
@@ -752,6 +759,7 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "RodakOS started successfully");
 
     uint32_t appearance_retry_ticks = 0;
+    uint32_t main_health_ticks = 0;
     while (true) {
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
@@ -765,6 +773,15 @@ extern "C" void app_main(void) {
         if (++appearance_retry_ticks >= 5) {
             appearance_retry_ticks = 0;
             if (unified_mqtt_service.IsConnected()) appearance_service.OnNetworkReady();
+        }
+        if (++main_health_ticks >= 30) {
+            main_health_ticks = 0;
+            ESP_LOGI(TAG, "Main health: stack_min_free=%u internal_free=%u internal_largest=%u dma_free=%u dma_largest=%u",
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+                     static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                     static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+                     static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                     static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

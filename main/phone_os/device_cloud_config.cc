@@ -4,6 +4,7 @@
 #include "phone_os/realtime_voice_contract.h"
 #include "phone_os/serial_provisioning_protocol.h"
 #include "phone_os/serial_provisioning_binding.h"
+#include "phone_os/server_trust_transport.h"
 
 #include "settings.h"
 
@@ -44,6 +45,9 @@ constexpr const char* kRealtimeVoiceNamespace = "realtime_voice";
 constexpr const char* kMqttNamespace = "unified_mqtt";
 constexpr const char* kBoardNamespace = "board";
 constexpr const char* kProvisioningUrlKey = "prov_url";
+constexpr const char* kServerAuthorityKey = "server_auth";
+constexpr const char* kServerPinnedKey = "server_pinned";
+constexpr const char* kCachedAuthorityKey = "server_key";
 constexpr char kRealtimeVoiceEndpointKey[] = "endpoint";
 constexpr char kRealtimeVoiceProtocolVersionKey[] = "protocol_ver";
 constexpr char kRealtimeVoiceDownlinkSampleRateKey[] = "downlink_hz";
@@ -232,7 +236,7 @@ bool IsForbiddenLegacyProvisioningHost(const std::string& url) {
             host.ends_with(".tenclass.net"));
 }
 
-bool PerformHttpRequest(const std::string& url,
+bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
                        esp_http_client_method_t method,
                        const std::string& body,
                        const std::string& bearer_token,
@@ -256,8 +260,11 @@ bool PerformHttpRequest(const std::string& url,
     http_config.timeout_ms = kProvisioningTimeoutMs;
     http_config.buffer_size = 1024;
     http_config.buffer_size_tx = 1024;
-    http_config.crt_bundle_attach = esp_crt_bundle_attach;
     http_config.user_agent = "RodakOS/aiot";
+    if (!ConfigureServerTrustHttp(cloud, url, http_config)) {
+        error = "AIoT destination does not match the installed server trust";
+        return false;
+    }
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == nullptr) {
@@ -561,6 +568,8 @@ bool PersistRealtimeVoiceConfig(const DeviceCloudConfig& config) {
 bool PersistMqttConfig(const DeviceCloudConfig& config) {
     Settings settings(kMqttNamespace, true);
     const bool written =
+        settings.SetString(kCachedAuthorityKey,
+                          ServerAuthorityKey({config.provisioning_url, config.server_trust})) &&
         settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version) &&
         settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address) &&
         settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port) &&
@@ -659,6 +668,62 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
         config.provisioning_url = kDefaultProvisioningUrl;
     }
 
+    config.server_trust = {};
+    config.server_trust_error = false;
+    config.server_trust_pending = false;
+    config.server_requires_bound_identity = false;
+    config.server_authority_record.clear();
+    const auto authority_status = cloud_settings.ReadString(
+        kServerAuthorityKey, config.server_authority_record, kServerAuthorityMaxRecordBytes);
+    bool pin_required = false;
+    const auto pin_status = cloud_settings.ReadBool(kServerPinnedKey, pin_required);
+    if (pin_status != SettingsBoolReadStatus::kOk &&
+        pin_status != SettingsBoolReadStatus::kNotFound) config.server_trust_error = true;
+    if (pin_required && authority_status == SettingsStringReadStatus::kNotFound) {
+        config.server_trust_error = true;
+    }
+    if (authority_status != SettingsStringReadStatus::kNotFound) {
+        ServerAuthority authority;
+        std::string error;
+        config.server_trust_error = config.server_trust_error ||
+            authority_status != SettingsStringReadStatus::kOk ||
+            !DecodeServerAuthority(config.server_authority_record, authority, error);
+        if (!config.server_trust_error) {
+            config.server_trust_pending = !authority.pending.trust.empty();
+            const auto& endpoint = config.server_trust_pending ? authority.pending : authority.active;
+            config.server_trust = endpoint.trust;
+            config.provisioning_url = endpoint.bootstrap_url;
+            config.server_requires_bound_identity = endpoint.requires_bound_identity;
+            const auto secret_status = cloud_settings.ReadString(
+                kAiotSecretKey, config.aiot_device_secret, 512);
+            const auto registered_status = cloud_settings.ReadBool(kAiotRegisteredKey,
+                                                                   config.aiot_registered);
+            const auto activated_status = cloud_settings.ReadBool(kAiotActivatedKey,
+                                                                  config.aiot_activated);
+            const auto readable_string = secret_status == SettingsStringReadStatus::kOk ||
+                (!endpoint.requires_bound_identity && secret_status == SettingsStringReadStatus::kNotFound);
+            const auto readable_bool = [&](SettingsBoolReadStatus status) {
+                return status == SettingsBoolReadStatus::kOk ||
+                    (!endpoint.requires_bound_identity && status == SettingsBoolReadStatus::kNotFound);
+            };
+            config.server_trust_error = !readable_string || !readable_bool(registered_status) ||
+                !readable_bool(activated_status) ||
+                (endpoint.requires_bound_identity && (config.aiot_device_secret.empty() ||
+                 !config.aiot_registered || !config.aiot_activated));
+            const auto read_transaction_flag = [&](const char* key, bool& value) {
+                const auto status = cloud_settings.ReadBool(key, value);
+                if (status != SettingsBoolReadStatus::kOk &&
+                    !(authority.active.trust.empty() &&
+                      status == SettingsBoolReadStatus::kNotFound)) {
+                    config.server_trust_error = true;
+                }
+            };
+            read_transaction_flag(kAiotPendingKey, config.aiot_pending);
+            read_transaction_flag(kUnbindPendingKey, config.unbind_pending);
+            read_transaction_flag(kUnbindAckKey, config.unbind_server_acknowledged);
+        }
+    }
+
     Settings realtime_voice_settings(kRealtimeVoiceNamespace, false);
     config.realtime_voice_url =
         realtime_voice_settings.GetString(kRealtimeVoiceEndpointKey, "");
@@ -732,6 +797,22 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
         // A partially committed pairing or unbind transaction must fail
         // closed across every cloud transport.
     }
+    if (!config.server_trust.empty()) {
+        std::string cached_authority;
+        const auto cache_status = mqtt_settings.ReadString(kCachedAuthorityKey, cached_authority, 512);
+        const bool matching_cache = cache_status == SettingsStringReadStatus::kOk &&
+            cached_authority == ServerAuthorityKey({config.provisioning_url, config.server_trust});
+        if (!matching_cache || config.server_trust_pending ||
+            config.mqtt_broker_address != config.server_trust.tls_name ||
+            ServerTrustUrlOrigin(config.mqtt_http_base_url) !=
+                ServerTrustUrlOrigin(config.provisioning_url)) config.has_mqtt_config = false;
+        if (!config.realtime_voice_url.empty() &&
+            !IsServerTrustVoiceDestination(config.server_trust, config.provisioning_url,
+                                            config.realtime_voice_url)) {
+            config.realtime_voice_url.clear();
+        }
+    }
+    if (config.server_trust_error) config.has_mqtt_config = false;
     config.has_aiot_config = HasCompleteAiotConfig(config);
     config.has_realtime_voice_config = config.has_aiot_config &&
                                        !config.realtime_voice_url.empty();
@@ -745,6 +826,10 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                           const std::function<bool()>& can_continue,
                                           int64_t deadline_ms, bool allow_pairing) {
     const int64_t refresh_started_ms = esp_timer_get_time() / 1000;
+    if (config.server_trust_error) {
+        SetError("Server trust record is unreadable; refusing cloud access");
+        return false;
+    }
     uint32_t config_generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
@@ -759,7 +844,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
 
     std::string error;
     HttpResponse bootstrap_response;
-    if (!PerformHttpRequest(bootstrap_url, HTTP_METHOD_GET, {}, {},
+    if (!PerformHttpRequest(config, bootstrap_url, HTTP_METHOD_GET, {}, {},
                             kMaxAiotResponseBytes, bootstrap_response, error,
                             can_continue, deadline_ms)) {
         SetError(error);
@@ -851,7 +936,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     // token with its persisted secret. Requiring another short-code challenge
     // for routine MQTT recovery would make token expiry strand bound devices.
     if (config.aiot_registered && config.aiot_activated &&
-        !config.aiot_device_secret.empty() && !config.has_pairing_request) {
+        !config.aiot_device_secret.empty() &&
+        (!config.has_pairing_request || config.server_requires_bound_identity)) {
         cJSON* token_body = cJSON_CreateObject();
         cJSON_AddStringToObject(token_body, "protocol", kRodakAiotProtocol);
         cJSON_AddStringToObject(token_body, "productKey", kRodakBigSmartProductKey);
@@ -862,7 +948,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         cJSON_Delete(token_body);
 
         HttpResponse token_response;
-        if (!PerformHttpRequest(origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
+        if (!PerformHttpRequest(config, origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
                                 kMaxAiotResponseBytes, token_response, error,
                                 can_continue, deadline_ms)) {
             SetError(error);
@@ -873,7 +959,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (token_response.status_code == 401 || token_response.status_code == 403 ||
             token_response.status_code == 404 || business_code == 401 ||
             business_code == 403 || business_code == 404) {
-            if (!allow_pairing) {
+            if (!allow_pairing || !config.server_trust.empty()) {
                 SetError("Rodak rejected device credentials; reconnect from Settings");
                 cJSON_Delete(bootstrap_root);
                 return false;
@@ -938,7 +1024,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         cJSON_Delete(request_body);
         const std::string pairing_url = origin + kAiotBindingRequestPath;
         HttpResponse response;
-        if (!PerformHttpRequest(pairing_url, HTTP_METHOD_POST, request_json, {},
+        if (!PerformHttpRequest(config, pairing_url, HTTP_METHOD_POST, request_json, {},
                                 kMaxAiotResponseBytes, response, error)) {
             SetError(error);
             cJSON_Delete(bootstrap_root);
@@ -967,7 +1053,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         const std::string status_url = origin + kAiotBindingStatusPrefix +
                                        config.pairing_request_id + "/status";
         HttpResponse response;
-        if (!PerformHttpRequest(status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
+        if (!PerformHttpRequest(config, status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
                                 kMaxAiotResponseBytes, response, error)) {
             SetError(error);
             cJSON_Delete(bootstrap_root);
@@ -1071,22 +1157,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (config.aiot_device_secret.empty()) {
         config.aiot_device_secret = GenerateDeviceSecret();
     }
-    // Keep the confirmed candidate unusable until its token and MQTT settings
-    // have committed together. A reset during this phase retries from NVS.
-    config.aiot_pending = true;
-    // Preserve the same secret across a reset so a retried status exchange can
-    // still prove the identity represented by the confirmed request.
-    bool secret_persisted = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        secret_persisted = PersistAiotIdentity(config);
-    }
-    if (!secret_persisted) {
-        SetError("Failed to persist AIoT device secret");
-        cJSON_Delete(token_root);
-        cJSON_Delete(bootstrap_root);
-        return false;
-    }
+    // Candidate parsing is read-only; the guarded persistence transaction
+    // below marks credentials pending before writing any cache.
     // Never let a cached token win over the candidate returned by this exchange.
     config.aiot_access_token.clear();
     config.aiot_registered = false;
@@ -1119,6 +1191,20 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         mqtt_info = bootstrap_data;
     }
     cJSON* mqtt_object = const_cast<cJSON*>(mqtt_info);
+    // A secure token descriptor must carry its own transport rather than
+    // inheriting an old bootstrap default or a previously cached host.
+    if (!config.server_trust.empty()) {
+        mqtt_host.clear();
+        mqtt_port = 0;
+        const auto* transport = cJSON_GetObjectItemCaseSensitive(mqtt_object, "transport");
+        if (!cJSON_IsString(transport) || transport->valuestring == nullptr ||
+            std::strcmp(transport->valuestring, "mqtts") != 0) {
+            SetError("Pinned server did not provide an MQTT TLS descriptor");
+            cJSON_Delete(token_root);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
+    }
     AddStringAlias(mqtt_object, "brokerAddress", mqtt_host);
     AddStringAlias(mqtt_object, "broker_address", mqtt_host);
     AddStringAlias(mqtt_object, "host", mqtt_host);
@@ -1211,6 +1297,14 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             cJSON_Delete(bootstrap_root);
             return false;
         }
+        if (!config.server_trust.empty() &&
+            !IsServerTrustVoiceDestination(config.server_trust, config.provisioning_url,
+                                            voice_descriptor.endpoint)) {
+            SetError("Realtime voice endpoint does not match the pinned server");
+            cJSON_Delete(token_root);
+            cJSON_Delete(bootstrap_root);
+            return false;
+        }
         config.realtime_voice_url = voice_descriptor.endpoint;
         config.realtime_voice_protocol_version = voice_descriptor.protocol_version;
         config.realtime_voice_downlink_sample_rate_hz =
@@ -1256,6 +1350,13 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     }
     if (mqtt_http_base_url.empty()) {
         mqtt_http_base_url = origin;
+    }
+    if (!config.server_trust.empty() &&
+        (mqtt_host != config.server_trust.tls_name || mqtt_port <= 0 || mqtt_port > 65535 ||
+         ServerTrustUrlOrigin(mqtt_http_base_url) != origin)) {
+        SetError("MQTT descriptor does not match the pinned server");
+        cJSON_Delete(bootstrap_root);
+        return false;
     }
     config.mqtt_protocol_version = mqtt_protocol > 0 ? mqtt_protocol : 2;
     config.mqtt_broker_address = mqtt_host;
@@ -1310,18 +1411,42 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             } else {
                 Load(*previous_config);
 
+                std::string promoted_authority;
+                bool authority_ready = true;
+                if (!config.server_trust.empty()) {
+                    ServerAuthority authority;
+                    authority.active = {config.provisioning_url, config.server_trust, true};
+                    authority_ready = EncodeServerAuthority(authority, promoted_authority);
+                }
+
                 // Mark the candidate incomplete until both namespaces have
                 // committed and the pending marker is cleared below. A reset
                 // between these writes is therefore rejected by Load().
                 config.aiot_pending = true;
-                const bool aiot_saved = PersistAiotIdentity(config);
+                const bool aiot_saved = authority_ready && PersistAiotIdentity(config);
                 const bool mqtt_saved = aiot_saved && PersistMqttConfig(config);
                 bool realtime_voice_saved = false;
                 if (aiot_saved && mqtt_saved) {
                     config.aiot_pending = false;
                     realtime_voice_saved = PersistRealtimeVoiceConfig(config);
                     if (realtime_voice_saved) {
-                        credentials_persisted = PersistAiotIdentity(config);
+                        bool authority_saved = true;
+                        if (!config.server_trust.empty()) {
+                            Settings authority_settings(kCloudNamespace, true);
+                            authority_saved = authority_settings.SetString(
+                                kServerAuthorityKey, promoted_authority) && authority_settings.Commit();
+                            if (!authority_saved) (void)authority_settings.Commit();
+                        }
+                        credentials_persisted = authority_saved && PersistAiotIdentity(config);
+                        if (credentials_persisted && !config.server_trust.empty()) {
+                            if (config.server_authority_record != promoted_authority) {
+                                ++config_generation_;
+                            }
+                            config.server_authority_record = promoted_authority;
+                            config.server_trust_pending = false;
+                            config.server_requires_bound_identity = true;
+                            config.cloud_generation = config_generation_;
+                        }
                         config.has_aiot_config = HasCompleteAiotConfig(config);
                         if (credentials_persisted) {
                             fresh_access_token_ = config.aiot_access_token;
@@ -1334,11 +1459,19 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 }
 
                 if (!credentials_persisted) {
+                    bool authority_restored = true;
+                    if (!previous_config->server_authority_record.empty()) {
+                        Settings authority_settings(kCloudNamespace, true);
+                        authority_restored = authority_settings.SetString(
+                            kServerAuthorityKey, previous_config->server_authority_record) &&
+                            authority_settings.Commit();
+                        if (!authority_restored) (void)authority_settings.Commit();
+                    }
                     const bool realtime_voice_restored =
                         PersistRealtimeVoiceConfig(*previous_config);
                     const bool aiot_restored = PersistAiotIdentity(*previous_config);
                     const bool mqtt_restored = PersistMqttConfig(*previous_config);
-                    rollback_ok = realtime_voice_restored && aiot_restored && mqtt_restored;
+                    rollback_ok = authority_restored && realtime_voice_restored && aiot_restored && mqtt_restored;
                     if (!rollback_ok) {
                         ESP_LOGE(TAG, "Failed to restore cloud credentials after AIoT transaction failure");
                     }
@@ -1381,7 +1514,32 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     // Canonical Rodak AIoT is the only onboarding path. A missing realtime
     // voice descriptor is a capability gap, not a reason to discard MQTT
     // credentials; the next token refresh can fill it in.
-    return RefreshAiot(config) && config.has_aiot_config;
+    return RefreshWithDiscovery(config) && config.has_aiot_config;
+}
+
+bool DeviceCloudConfigService::RefreshWithDiscovery(DeviceCloudConfig& config) {
+    if (RefreshAiot(config)) return true;
+    Load(config);
+    if (config.server_trust.empty() || config.server_trust_error) return false;
+    // A pending enrollment must keep its request on the USB-selected endpoint;
+    // discovery never moves an unconfirmed pairing to a different authority.
+    if (!config.aiot_registered || !config.aiot_activated) return false;
+    const auto original_url = config.provisioning_url;
+    const auto candidates = DiscoverServerTrustBootstrapUrls(config.server_trust);
+    for (const auto& url : candidates) {
+        if (url == original_url) continue;
+        auto candidate = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+        if (candidate == nullptr) break;
+        Load(*candidate);
+        candidate->provisioning_url = url;
+        if (RefreshAiot(*candidate, {}, esp_timer_get_time() / 1000 + 6000, false)) {
+            config = std::move(*candidate);
+            ESP_LOGI(TAG, "Authenticated LAN endpoint migration completed");
+            return true;
+        }
+    }
+    Load(config);
+    return false;
 }
 
 bool DeviceCloudConfigService::PrepareVoiceConfig(
@@ -1402,13 +1560,14 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
     {
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
         Load(config);
-        if (!config.aiot_registered || !config.aiot_activated ||
+        if (config.server_trust_error || config.server_trust_pending ||
+            !config.aiot_registered || !config.aiot_activated ||
             config.aiot_device_secret.empty() || config.aiot_pending ||
             config.has_pairing_request || config.unbind_pending) {
             SetError("Connect this device to Rodak in Settings first");
             return false;
         }
-        if (config.aiot_access_token == fresh_access_token_ &&
+        if (config.has_aiot_config && config.aiot_access_token == fresh_access_token_ &&
             !credential_freshness_.NeedsRefresh(esp_timer_get_time() / 1000)) {
             return true;
         }
@@ -1446,7 +1605,8 @@ bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& con
 }
 
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
-    const std::string& url, const std::string& binding_nonce, std::string& binding_proof) {
+    const std::string& url, const std::string& binding_nonce, std::string& binding_proof,
+    const ServerTrust* server_trust) {
     binding_proof.clear();
     std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::try_to_lock);
     if (!refresh_lock.owns_lock()) {
@@ -1463,9 +1623,75 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
         SetError("Configure a valid Rodak AIoT bootstrap URL");
         return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
+    auto previous = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (previous == nullptr) {
+        SetError("Not enough memory to snapshot USB provisioning");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    Load(*previous);
+    if (previous->server_trust_error) {
+        SetError("Server trust record cannot be read; provisioning was not changed");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    Settings identity(kCloudNamespace, false);
+    const auto registered_status = identity.ReadBool(kAiotRegisteredKey, previous->aiot_registered);
+    const auto activated_status = identity.ReadBool(kAiotActivatedKey, previous->aiot_activated);
+    const auto readable = [](SettingsBoolReadStatus status) {
+        return status == SettingsBoolReadStatus::kOk || status == SettingsBoolReadStatus::kNotFound;
+    };
+    if (!readable(registered_status) || !readable(activated_status) ||
+        ((previous->aiot_registered || previous->aiot_activated) &&
+         (previous->aiot_device_secret.empty() || !previous->aiot_registered ||
+          !previous->aiot_activated))) {
+        SetError("Existing device identity is unreadable; refusing to replace it");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
     std::string proof;
     if (!binding_nonce.empty() && !CreateProvisioningBindingProof(binding_nonce, proof)) {
         return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    const ServerTrust* requested_trust = server_trust;
+    if (requested_trust == nullptr && !previous->server_trust.empty()) {
+        requested_trust = &previous->server_trust;
+    }
+    if (requested_trust != nullptr) {
+        std::string error;
+        if (!ValidateServerTrust(*requested_trust, error) ||
+            !IsServerTrustBootstrap(*requested_trust, normalized) ||
+            (!previous->server_trust.empty() &&
+             !SameServerTrust(previous->server_trust, *requested_trust))) {
+            SetError("USB server trust does not match the installed authority");
+            return ProvisioningUrlSaveResult::kFailedRolledBack;
+        }
+        ServerAuthority authority;
+        if (!previous->server_authority_record.empty() &&
+            !DecodeServerAuthority(previous->server_authority_record, authority, error)) {
+            SetError("Server authority record cannot be decoded");
+            return ProvisioningUrlSaveResult::kFailedRolledBack;
+        }
+        authority.pending = {normalized, *requested_trust,
+            previous->aiot_registered && previous->aiot_activated};
+        std::string candidate;
+        if (!EncodeServerAuthority(authority, candidate)) {
+            SetError("Server authority candidate cannot be encoded");
+            return ProvisioningUrlSaveResult::kFailedRolledBack;
+        }
+        Settings settings(kCloudNamespace, true);
+        // The latch is deliberately committed first: interruption cannot make
+        // a missing/corrupt authority silently fall back to legacy plaintext.
+        if (!settings.SetBool(kServerPinnedKey, true) || !settings.Commit() ||
+            !settings.SetString(kServerAuthorityKey, candidate) || !settings.Commit()) {
+            (void)settings.Commit();
+            ++config_generation_;
+            SetError("Server authority persistence is uncertain; cloud access blocked");
+            return ProvisioningUrlSaveResult::kStateUncertain;
+        }
+        ++config_generation_;
+        fresh_access_token_.clear();
+        credential_freshness_.ObserveRefresh(false, 0, 0);
+        binding_proof = std::move(proof);
+        last_error_.clear();
+        return ProvisioningUrlSaveResult::kSaved;
     }
     const auto result = SaveProvisioningUrl(normalized, ProvisioningUrlSaveMode::kForceRefresh);
     if (result == ProvisioningUrlSaveResult::kSaved) {
@@ -1493,6 +1719,16 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
         return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
     Load(*previous_config);
+    if (previous_config->server_trust_error || !previous_config->server_trust.empty()) {
+        if (!previous_config->server_trust_error &&
+            provisioning_url == previous_config->provisioning_url &&
+            mode == ProvisioningUrlSaveMode::kPreserveCredentials) {
+            last_error_.clear();
+            return ProvisioningUrlSaveResult::kUnchanged;
+        }
+        SetError("Pinned server endpoints can only be changed through authenticated discovery or USB");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
     Settings identity_settings(kCloudNamespace, false);
     const auto identity_status = identity_settings.ReadString(
         kAiotSecretKey, previous_config->aiot_device_secret, 512);
@@ -1589,7 +1825,7 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
     if (initial_action == DeviceUnbindRecoveryAction::kRequestServer) {
         HttpResponse response;
         std::string error;
-        const bool request_ok = PerformHttpRequest(origin + kAiotUnbindPath, HTTP_METHOD_POST,
+        const bool request_ok = PerformHttpRequest(config, origin + kAiotUnbindPath, HTTP_METHOD_POST,
                                                    "{}", config.aiot_access_token,
                                                    kMaxAiotResponseBytes, response, error);
         if (!request_ok) {
@@ -1636,6 +1872,8 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
 
     DeviceCloudConfig empty;
     empty.provisioning_url = config.provisioning_url;
+    empty.server_trust = config.server_trust;
+    empty.server_authority_record = config.server_authority_record;
     empty.realtime_voice_protocol_version = 1;
     ResetMqttConfig(empty);
     ResetAiotCredentials(empty);
@@ -1650,10 +1888,23 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
     const bool realtime_voice_cleared = mqtt_cleared && PersistRealtimeVoiceConfig(empty);
     bool cleanup_committed = false;
     if (realtime_voice_cleared) {
+        bool authority_saved = true;
+        if (!config.server_trust.empty()) {
+            ServerAuthority authority;
+            authority.active = {config.provisioning_url, config.server_trust, false};
+            std::string record;
+            authority_saved = EncodeServerAuthority(authority, record);
+            if (authority_saved) {
+                Settings settings(kCloudNamespace, true);
+                authority_saved = settings.SetString(kServerAuthorityKey, record) && settings.Commit();
+                if (!authority_saved) (void)settings.Commit();
+            }
+            if (authority_saved) empty.server_authority_record = record;
+        }
         empty.aiot_pending = false;
         empty.unbind_pending = false;
         empty.unbind_server_acknowledged = false;
-        cleanup_committed = PersistAiotIdentity(empty);
+        cleanup_committed = authority_saved && PersistAiotIdentity(empty);
     }
     if (!cleanup_committed) {
         SetError("设备解绑后清理本地凭据失败");

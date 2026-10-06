@@ -133,6 +133,7 @@ void esp_restart();
 constexpr unsigned MALLOC_CAP_INTERNAL = 1;
 constexpr unsigned MALLOC_CAP_SPIRAM = 2;
 constexpr unsigned MALLOC_CAP_8BIT = 4;
+constexpr unsigned MALLOC_CAP_DMA = 8;
 inline unsigned heap_caps_get_free_size(unsigned) { return 1024 * 1024; }
 inline unsigned heap_caps_get_minimum_free_size(unsigned) { return 1024 * 1024; }
 inline unsigned heap_caps_get_largest_free_block(unsigned) { return 1024 * 1024; }
@@ -162,7 +163,14 @@ struct esp_mqtt_event_t {
 };
 using esp_mqtt_event_handle_t = esp_mqtt_event_t*;
 struct esp_mqtt_client_config_t {
-    struct { struct { const char* uri = nullptr; } address; } broker;
+    struct {
+        struct { const char* uri = nullptr; } address;
+        struct {
+            const char* certificate = nullptr;
+            size_t certificate_len = 0;
+            const char* common_name = nullptr;
+        } verification;
+    } broker;
     struct {
         const char* client_id = nullptr;
         const char* username = nullptr;

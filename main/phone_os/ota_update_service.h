@@ -13,6 +13,7 @@
 namespace rodakos {
 
 class DeviceCloudConfigService;
+struct DeviceCloudConfig;
 class FileService;
 
 class OtaUpdateService {
@@ -71,15 +72,13 @@ private:
     bool CompleteStagedHandoff();
     bool ReportPendingResult();
     bool ClearCompletedRecord(OtaUpdateRecord& record);
-    bool RequestUpgradeCheck(const std::string& base_url, const std::string& token,
-                             UpgradeCheck& check);
-    bool RequestTicket(const std::string& base_url, const std::string& token,
+    bool RequestUpgradeCheck(const DeviceCloudConfig& cloud, UpgradeCheck& check);
+    bool RequestTicket(const DeviceCloudConfig& cloud,
                        const std::string& task_no, std::string& ticket_id);
-    bool RequestManifest(const std::string& base_url, const std::string& token,
+    bool RequestManifest(const DeviceCloudConfig& cloud,
                          const std::string& task_no, const std::string& ticket_id,
                          Manifest& manifest);
-    bool DownloadToSd(const Manifest& manifest, const std::string& token,
-                      const std::string& http_base_url);
+    bool DownloadToSd(const Manifest& manifest, const DeviceCloudConfig& cloud);
     bool BackupRunningImage(OtaUpdateRecord& record);
     bool PromotePendingImage(OtaUpdateRecord& record);
     bool VerifySdImage(const char* relative_path, uint64_t expected_size,

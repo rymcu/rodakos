@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include "phone_os/server_trust.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -51,6 +52,7 @@ private:
         std::string password;
         std::string bootstrap_url;
         std::string binding_nonce;
+        ServerTrust server_trust;
     };
 
     static void TaskEntry(void* arg);

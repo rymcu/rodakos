@@ -1,6 +1,7 @@
 #include "phone_os/appearance_service.h"
 
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/server_trust_transport.h"
 #include "rodakos_adapters/file_service.h"
 #include "rodak_appearance_crypto.h"
 #include "rodak_appearance_policy.h"
@@ -8,7 +9,6 @@
 #include "settings.h"
 
 #include "rodak_appearance_json.h"
-#include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
@@ -23,6 +23,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <new>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -89,14 +90,16 @@ std::string UrlEncode(const std::string& text) {
     }
     return out;
 }
-bool HttpJson(const std::string& url, const std::string& token, const std::string& body, std::string& response, int* status = nullptr) {
+bool HttpJson(const DeviceCloudConfig& cloud, const std::string& url,
+              const std::string& body, std::string& response, int* status = nullptr) {
     esp_http_client_config_t config = {};
     config.url = url.c_str(); config.method = body.empty() ? HTTP_METHOD_GET : HTTP_METHOD_POST;
     config.timeout_ms = 10000; config.buffer_size = 1024; config.buffer_size_tx = 1024;
-    config.disable_auto_redirect = true; config.crt_bundle_attach = esp_crt_bundle_attach; config.user_agent = "RodakOS/appearance-v1";
+    config.user_agent = "RodakOS/appearance-v1";
+    if (!ConfigureServerTrustHttp(cloud, url, config)) return false;
     auto client = esp_http_client_init(&config);
     if (client == nullptr) return false;
-    const std::string authorization = "Bearer " + token;
+    const std::string authorization = "Bearer " + cloud.aiot_access_token;
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
     bool ok = esp_http_client_open(client, static_cast<int>(body.size())) == ESP_OK;
@@ -122,10 +125,11 @@ bool FreshJson(DeviceCloudConfigService& cloud, DeviceCloudConfig& config,
     if (final_status != nullptr) *final_status = 0;
     const std::string origin = Origin(config.mqtt_http_base_url), device_key = config.mqtt_device_key;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
-        if (can_continue && !can_continue()) return false;
+        if (!cloud.IsVoiceConfigCurrent(config) || (can_continue && !can_continue())) return false;
         int status = 0;
-        const bool ok = HttpJson(origin + path, config.aiot_access_token, body, response, &status);
+        const bool ok = HttpJson(config, origin + path, body, response, &status);
         if (final_status != nullptr) *final_status = status;
+        if (!cloud.IsVoiceConfigCurrent(config) || (can_continue && !can_continue())) return false;
         if (ok) return true;
         if (!ShouldRetryAppearanceAuthentication(status, attempt)) return false;
         cloud.InvalidateAccessTokenFreshness(config.aiot_access_token);
@@ -489,9 +493,16 @@ void AppearanceService::DeferDownload(const std::string& error) {
     NotifyState();
 }
 void AppearanceService::OnNetworkReady() {
-    DeviceCloudConfig config; cloud_.Load(config);
+    // This entry is also called by app_main. Keep its full cloud snapshot off
+    // that stack before the NVS authority invokes the nested X.509 parser.
+    auto config = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (config == nullptr) {
+        ESP_LOGW(TAG, "Cannot allocate network-ready cloud snapshot; retrying later");
+        return;
+    }
+    cloud_.Load(*config);
     { std::lock_guard<std::mutex> lock(mutex_);
-      device_key_ = config.mqtt_device_key;
+      device_key_ = config->mqtt_device_key;
       if (publisher_.key_id.empty()) publisher_requested_.store(true);
     }
     ScheduleWorker();
@@ -744,11 +755,15 @@ bool AppearanceService::DownloadDesired(const std::string& desired) {
             }
             const std::string url = origin + "/api/v1/aiot/appearance/artifacts/" + suffix;
             esp_http_client_config_t http = {}; http.url = url.c_str(); http.method = HTTP_METHOD_GET; http.timeout_ms = 10000;
-            http.buffer_size = 1024; http.disable_auto_redirect = true; http.crt_bundle_attach = esp_crt_bundle_attach; http.user_agent = "RodakOS/appearance-v1";
+            http.buffer_size = 1024; http.user_agent = "RodakOS/appearance-v1";
             RangeHeaders headers; http.event_handler = RangeHeaderEvent; http.user_data = &headers;
             esp_http_client_handle_t client = nullptr;
             for (unsigned attempt = 0; valid && total < next.size && attempt < 2; ++attempt) {
                 headers = {};
+                if (!cloud_.IsVoiceConfigCurrent(config) ||
+                    !ConfigureServerTrustHttp(config, url, http)) {
+                    valid = false; error = "server_trust_unavailable"; break;
+                }
                 client = esp_http_client_init(&http);
                 const std::string authorization = "Bearer " + config.aiot_access_token;
                 if (client != nullptr) esp_http_client_set_header(client, "Authorization", authorization.c_str());
@@ -779,6 +794,7 @@ bool AppearanceService::DownloadDesired(const std::string& desired) {
             }
             int last_report = 0;
             while (valid && total < next.size) {
+                if (!cloud_.IsVoiceConfigCurrent(config)) { valid = false; error = "superseded"; break; }
                 const int read = esp_http_client_read(client, reinterpret_cast<char*>(buffer.get()), static_cast<int>(std::min<size_t>(4096, next.size - total)));
                 valid = read > 0 && std::fwrite(buffer.get(), 1, static_cast<size_t>(read), output) == static_cast<size_t>(read) && hash.Update(buffer.get(), static_cast<size_t>(read));
                 if (!valid) error = read <= 0 ? "download_interrupted" : "sd_write_failed";

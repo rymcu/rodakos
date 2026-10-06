@@ -54,6 +54,11 @@ Important pieces:
 - `PhoneNavigation`: app launch, return-home, theme, lock, Control Center, and Shell-preference routing.
 - `PhoneShell`: owns Lock Screen and Control Center on `lv_layer_top()` without replacing or destroying the current app.
 - `PhoneServices`: dependency container for hardware and system services.
+- `DeviceCloudConfigService`: binding, credential refresh, and optional USB-installed TLS
+  authority. A single active/pending record guards trusted endpoint promotion; bounded
+  DNS-SD results only suggest routes for TLS verification. HTTPS, MQTT, voice, OTA and
+  Appearance share the installed server trust. See
+  [trusted server discovery](trusted-server-discovery.md) for the remaining address and recovery gates.
 - `AppearanceService`: publisher pinning, signed SD resources, bounded boot loading, revision trials
   and local theme overrides. It is independent of firmware OTA and exposed through `PhoneServices`.
 
@@ -209,6 +214,9 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - UnifiedMqttService consumes Rodak bootstrap credentials, reports device state, and routes OTA
   notifications. OtaUpdateService stages and verifies the main image on SD; the separate factory
   Recovery project is the only runtime allowed to rewrite `ota_0`.
+  With USB server trust, MQTT uses MQTTS with the fixed expected server name, and OTA Bearer
+  requests remain on the pinned HTTPS origin. The separate Appearance publisher signature/origin
+  approval is never granted or rewritten by network discovery.
 - Ordinary command ACKs and camera/display sidebands retain the original MQTT generation, epoch
   and ACK topic. Their bounded queue drains in the SDK user-event callback with direct QoS 0
   publish, without storing an outbox item. Epoch changes discard queued results and late callbacks;

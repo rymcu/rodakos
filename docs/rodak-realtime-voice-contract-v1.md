@@ -54,6 +54,10 @@ present, all of the following fields are required unless marked optional:
 
 The parser requires the schema, protocol, version, WebSocket transport,
 `device-token` auth mode, endpoint, audio objects, limits, and the three arrays.
+An installed [server trust pin](trusted-server-discovery.md) further requires WSS on
+the current pinned HTTPS origin and the fixed expected TLS name before transmitting
+the device Bearer token. This runtime restriction is stronger than the legacy parser's
+scheme compatibility described below.
 The endpoint must be `ws://` or `wss://` with an authority and path; query,
 fragment, userinfo, and legacy XiaoZhi/WebSocket paths are rejected.
 

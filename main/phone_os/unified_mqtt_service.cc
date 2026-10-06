@@ -159,7 +159,8 @@ std::string BuildClientId(const std::string& device_key) {
 
 esp_mqtt_client_config_t BuildMqttClientConfig(const DeviceCloudConfig& config,
                                                 const std::string& broker_uri,
-                                                const std::string& client_id) {
+                                                const std::string& client_id,
+                                                const ServerTrust& tls_trust) {
     esp_mqtt_client_config_t mqtt_config = {};
     mqtt_config.broker.address.uri = broker_uri.c_str();
     mqtt_config.credentials.client_id = client_id.c_str();
@@ -168,15 +169,23 @@ esp_mqtt_client_config_t BuildMqttClientConfig(const DeviceCloudConfig& config,
     mqtt_config.session.keepalive = config.mqtt_keepalive;
     mqtt_config.network.reconnect_timeout_ms = 2000;
     mqtt_config.network.timeout_ms = 10 * 1000;
+    if (!tls_trust.empty()) {
+        mqtt_config.broker.verification.certificate = tls_trust.ca_pem.c_str();
+        mqtt_config.broker.verification.certificate_len = tls_trust.ca_pem.size() + 1;
+        mqtt_config.broker.verification.common_name = tls_trust.tls_name.c_str();
+    }
     // The default 6 KiB stack can fail alongside the local wake model. Plain
     // MQTT has stayed within 4 KiB while leaving headroom for bootstrap work.
-    mqtt_config.task.stack_size = 4096;
+    mqtt_config.task.stack_size = tls_trust.empty() ? 4096 : 6144;
     return mqtt_config;
 }
 
 bool HasSameMqttSessionIdentity(const DeviceCloudConfig& current,
                                 const DeviceCloudConfig& refreshed) {
-    return current.mqtt_protocol_version == refreshed.mqtt_protocol_version &&
+    return current.server_trust.server_id == refreshed.server_trust.server_id &&
+           current.server_trust.ca_pem == refreshed.server_trust.ca_pem &&
+           current.server_trust.tls_name == refreshed.server_trust.tls_name &&
+           current.mqtt_protocol_version == refreshed.mqtt_protocol_version &&
            current.mqtt_broker_address == refreshed.mqtt_broker_address &&
            current.mqtt_broker_port == refreshed.mqtt_broker_port &&
            current.mqtt_username == refreshed.mqtt_username &&
@@ -394,6 +403,7 @@ UnifiedMqttService::~UnifiedMqttService() {
 }
 
 bool UnifiedMqttService::Start() {
+    std::lock_guard<std::recursive_mutex> lifecycle_lock(lifecycle_mutex_);
     bool expected = false;
     if (!started_.compare_exchange_strong(expected, true)) {
         return true;
@@ -401,19 +411,19 @@ bool UnifiedMqttService::Start() {
     message_queue_ = xQueueCreate(8, sizeof(PendingMessage*));
     worker_running_.store(true);
     if (message_queue_ == nullptr ||
-        xTaskCreate(WorkerTask, "mqtt_worker", 6144, this, 4, &worker_) != pdPASS) {
+        xTaskCreate(WorkerTask, "mqtt_worker", 8192, this, 4, &worker_) != pdPASS) {
         worker_running_.store(false);
         started_.store(false);
         if (message_queue_ != nullptr) {
             vQueueDelete(message_queue_);
             message_queue_ = nullptr;
         }
-        ESP_LOGE(TAG, "Cannot reserve MQTT worker (stack=6144 internal_free=%u largest=%u)",
+        ESP_LOGE(TAG, "Cannot reserve MQTT worker (stack=8192 internal_free=%u largest=%u)",
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
         return false;
     }
-    ESP_LOGI(TAG, "Reserved internal MQTT worker: stack=6144 queue=8");
+    ESP_LOGI(TAG, "Reserved internal MQTT worker: stack=8192 queue=8");
     force_refresh_.store(true);
     BindOtaProgressPublisher();
 
@@ -433,6 +443,7 @@ bool UnifiedMqttService::Start() {
 }
 
 void UnifiedMqttService::Stop() {
+    std::lock_guard<std::recursive_mutex> lifecycle_lock(lifecycle_mutex_);
     TimerHandle_t telemetry_timer = nullptr;
     esp_mqtt_client_handle_t client = nullptr;
     bool wake_publisher = false;
@@ -628,18 +639,23 @@ void UnifiedMqttService::Connect() {
             next_config = std::move(*refreshed);
         }
     }
-    if (!next_config.has_mqtt_config) {
+    if (!next_config.has_mqtt_config || next_config.server_trust_error ||
+        next_config.server_trust_pending ||
+        (!next_config.server_trust.empty() &&
+         next_config.mqtt_broker_address != next_config.server_trust.tls_name)) {
         const std::string config_error = config_service_.last_error();
         ESP_LOGW(TAG, "Unified MQTT credentials are unavailable: %s",
                  config_error.c_str());
         return;
     }
 
-    std::string next_broker_uri = "mqtt://" + next_config.mqtt_broker_address + ":" +
+    std::string next_broker_uri = (next_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
+                                  next_config.mqtt_broker_address + ":" +
                                   std::to_string(next_config.mqtt_broker_port);
     std::string next_client_id = BuildClientId(next_config.mqtt_device_key);
+    mqtt_tls_trust_ = next_config.server_trust;
     esp_mqtt_client_config_t mqtt_config =
-        BuildMqttClientConfig(next_config, next_broker_uri, next_client_id);
+        BuildMqttClientConfig(next_config, next_broker_uri, next_client_id, mqtt_tls_trust_);
 
     std::lock_guard<std::mutex> api_lock(client_api_mutex_);
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_config);
@@ -678,7 +694,10 @@ void UnifiedMqttService::Connect() {
         }
     }
     if (attached) {
-        err = esp_mqtt_client_start(client);
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (started_.load() && client_ == client && client_generation_ == generation) {
+            err = esp_mqtt_client_start(client);
+        }
     }
     bool destroy_client = !attached;
     if (attached && err != ESP_OK) {
@@ -862,11 +881,12 @@ void UnifiedMqttService::RefreshCredentials() {
         FinishCredentialRefresh();
         return;
     }
-    std::string broker_uri = "mqtt://" + refreshed_config.mqtt_broker_address + ":" +
+    std::string broker_uri = (refreshed_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
+                             refreshed_config.mqtt_broker_address + ":" +
                              std::to_string(refreshed_config.mqtt_broker_port);
     std::string client_id = BuildClientId(refreshed_config.mqtt_device_key);
     esp_mqtt_client_config_t mqtt_config =
-        BuildMqttClientConfig(refreshed_config, broker_uri, client_id);
+        BuildMqttClientConfig(refreshed_config, broker_uri, client_id, mqtt_tls_trust_);
 
     esp_mqtt_client_handle_t client = nullptr;
     bool client_connected = false;
@@ -1196,6 +1216,8 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
     bool wake_publisher = false;
     bool schedule_message = false;
     bool drain_command_publications = false;
+    bool report_sdk_stack = false;
+    uint32_t sdk_stack_free = 0;
     const esp_mqtt_client_handle_t event_client = event->client;
     uint32_t event_generation = 0;
     uint64_t event_epoch = 0;
@@ -1205,6 +1227,11 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!started_.load() || event->client != client_) {
             return;
+        }
+        sdk_stack_free = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+        if (sdk_stack_free < mqtt_sdk_stack_min_free_) {
+            mqtt_sdk_stack_min_free_ = sdk_stack_free;
+            report_sdk_stack = true;
         }
         if (event->event_id == MQTT_EVENT_CONNECTED) {
             AdvanceConnectionEpochLocked();
@@ -1303,6 +1330,9 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 message_assembly_ = {};
             }
         }
+    }
+    if (report_sdk_stack) {
+        ESP_LOGI(TAG, "MQTT SDK stack minimum free=%u bytes", static_cast<unsigned>(sdk_stack_free));
     }
     if (wake_publisher && publish_ack_semaphore_ != nullptr) {
         xSemaphoreGive(publish_ack_semaphore_);
@@ -1903,14 +1933,16 @@ void UnifiedMqttService::PublishTelemetry() {
     cJSON_Delete(root);
     const bool telemetry_queued = Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_telemetry), payload);
     ESP_LOGI(TAG, "MQTT health: connected=%d internal_free=%u internal_largest=%u stack_min_free=%u "
-                 "psram_free=%u psram_largest=%u telemetry_queued=%d",
+                 "psram_free=%u psram_largest=%u telemetry_queued=%d dma_free=%u dma_largest=%u",
              connected_.load(),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
-             telemetry_queued);
+             telemetry_queued,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
 }
 
 void UnifiedMqttService::PublishChangedVoiceIdentity() {

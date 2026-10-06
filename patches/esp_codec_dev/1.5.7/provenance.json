@@ -8,5 +8,6 @@
   "repository_path": "components/esp_codec_dev",
   "manifest_sha256_lf": "cea4891c9847dbf9b8902e6f2d7393796d304ce9923276f5dd04223da3be5e14",
   "source_sha256_lf": "b7a17e2ad412f4c08e0e9324aea0f217a49305510fd80e7ef3420fb31d7fd2ce",
+  "i2s_source_sha256_lf": "1acaaff042418f4c7e2becbf42306f0daec99916c7fd9e259b41ec259e60cf79",
   "license": "Apache-2.0"
 }

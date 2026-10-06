@@ -71,7 +71,7 @@ reply is playing.
 AFE capture/fetch work and the cleanup path use PSRAM where the ESP-SR and
 WebSocket components permit it. Provisioning and wake notification keep their
 internal stacks because they access NVS. The MQTT worker reserves a separate
-6 KiB internal stack; its resource notes are in
+8 KiB internal stack; its resource notes are in
 [MQTT worker resources](mqtt-ota-sd-recovery.md#mqtt-worker-resources).
 
 The wake-to-cloud recorder retains the newest 80 frames, about 4.8 seconds at

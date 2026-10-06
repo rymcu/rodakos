@@ -312,7 +312,22 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     ws_config.pingpong_timeout_sec = 30;
     ws_config.task_name = "rodak_voice";
     ws_config.task_stack = 6144;
-    ws_config.crt_bundle_attach = esp_crt_bundle_attach;
+    if (config_.server_trust_error || config_.server_trust_pending ||
+        (!config_.server_trust.empty() &&
+         !IsServerTrustVoiceDestination(config_.server_trust, config_.provisioning_url,
+                                         config_.realtime_voice_url))) {
+        SetFailure(VoiceTransportFailureKind::kConfiguration,
+                   "server_trust_mismatch", "Realtime voice destination is not trusted", false,
+                   generation);
+        return false;
+    }
+    if (config_.server_trust.empty()) {
+        ws_config.crt_bundle_attach = esp_crt_bundle_attach;
+    } else {
+        ws_config.cert_pem = config_.server_trust.ca_pem.c_str();
+        ws_config.cert_len = config_.server_trust.ca_pem.size() + 1;
+        ws_config.cert_common_name = config_.server_trust.tls_name.c_str();
+    }
 
     esp_websocket_client_handle_t client = esp_websocket_client_init(&ws_config);
     if (client == nullptr) {

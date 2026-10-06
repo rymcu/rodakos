@@ -35,6 +35,8 @@ dependencies:
   # ESP-IDF 6 moved MQTT and cJSON to managed components.
   espressif/mqtt: "1.0.0"
   espressif/cjson: "1.7.19~2"
+  # Candidate discovery only; every service is authenticated with the USB TLS pin.
+  espressif/mdns: "1.14.0"
 
   # Board Manager regenerates its conditional dependency set, so broad transitive ranges can
   # silently change the button/camera baseline when the generated component is recreated.

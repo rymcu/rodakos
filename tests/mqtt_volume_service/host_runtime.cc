@@ -33,6 +33,9 @@ std::vector<mqtt_host::Publication> publications;
 std::vector<mqtt_host::Publication> wire_publications;
 std::vector<mqtt_host::Publication> direct_publish_attempts;
 rodakos::DeviceCloudConfig stored_config;
+std::string tls_uri;
+const char* tls_certificate = nullptr;
+const char* tls_common_name = nullptr;
 std::atomic<HostMqttClient*> current_client{nullptr};
 std::atomic<bool> hold_user_events{false};
 std::atomic<unsigned> restart_count{0};
@@ -192,8 +195,11 @@ int xQueueReceive(QueueHandle_t queue, void* output, TickType_t wait) {
 }
 void esp_restart() { ++restart_count; }
 
-esp_mqtt_client_handle_t esp_mqtt_client_init(const esp_mqtt_client_config_t*) {
+esp_mqtt_client_handle_t esp_mqtt_client_init(const esp_mqtt_client_config_t* config) {
     std::lock_guard<std::mutex> lock(state_mutex);
+    tls_uri = config->broker.address.uri;
+    tls_certificate = config->broker.verification.certificate;
+    tls_common_name = config->broker.verification.common_name;
     auto client = std::make_unique<HostMqttClient>();
     client->id = static_cast<unsigned>(clients.size() + 1);
     HostMqttClient* pointer = client.get();
@@ -350,6 +356,7 @@ void Reset() {
     wire_publications.clear();
     direct_publish_attempts.clear();
     stored_config = {};
+    tls_uri.clear(); tls_certificate = nullptr; tls_common_name = nullptr;
     stored_config.mqtt_protocol_version = 2;
     stored_config.mqtt_broker_address = "host-broker";
     stored_config.mqtt_broker_port = 1883;
@@ -391,6 +398,11 @@ void SetConfig(const rodakos::DeviceCloudConfig& config) {
 rodakos::DeviceCloudConfig Config() {
     std::lock_guard<std::mutex> lock(state_mutex);
     return stored_config;
+}
+BrokerTlsSnapshot BrokerTls() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return {tls_uri, tls_certificate == nullptr ? "" : tls_certificate,
+                    tls_common_name == nullptr ? "" : tls_common_name};
 }
 HostMqttClient* CurrentClient() { return current_client; }
 void Deliver(esp_mqtt_event_t event) {
