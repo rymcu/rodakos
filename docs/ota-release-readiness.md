@@ -46,6 +46,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Audio volume API failures                   | Production output/playback services and codec adapter with fake board/codec APIs: atomic relative changes, shared configuration, retained failure caches, failed first-open cleanup and deferred configuration | Sixteen host regressions pass; hardware unverified |
 | Voice volume MCP / lifecycle                 | Production envelope parser, dispatcher and real service queue/I/O task: startup initialize, Stop, stale generations, reconnect, bounded deduplication, receipt roundtrips | Nine dispatcher, two adapter and ten service host regressions pass; hardware unverified |
 | MQTT volume effects / lifecycle              | Production helper and actual UnifiedMqttService: correlation, ordering, authority ledger, real connection epoch, SDK callback/queue, Stop, refresh, unbind and scoped receipt publishing | Eighteen helper and fourteen service host regressions pass; hardware unverified |
+| RGB light patches / lifecycle               | Real LightService, board adapter, MQTT callback/worker and receipts: atomic merge/commit, driver failures, 64-result eviction, authority versions and cancellation | Thirteen native driver and seventeen MQTT light regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
@@ -205,6 +206,40 @@ cross-repository broker fixture are distinct; neither exercises a board's real M
 codec/I2C or acoustic output. Receipts remain volatile software evidence with
 `physicalVerified: false`. No serial, flash or NVS operation was performed. The main image's
 factory-Recovery size warning retains the earlier documented meaning.
+
+## 2026-10-06 MQTT light effect validation
+
+Source baseline: `4a72e8c` plus the [RGB light integration](mqtt-light-effects.md). Local UI and
+MQTT now use the same atomic light patch, which commits configuration/revision only after the
+production LED adapter succeeds. Mid-pixel/refresh failure retains accepted software state and
+marks hardware application unverified; no hardware rollback is claimed.
+
+- App-model: **266/266**, Debug and ASan/UBSan with leak detection; existing volume contracts pass.
+- Real LightService/board adapter: **13/13**, Debug and ASan/UBSan with leak detection, including
+  native setters, scaling/ranges, missing handles, clear/pixel/refresh failures and serialization.
+- Real MQTT service: **31/31** (14 existing volume + 17 light), Debug and ASan/UBSan with leak
+  detection. This compiles actual LightService/board adapter instead of the previous light fake.
+  The added cases cover 70 successive writes, eviction and cross-light retargeting, maximum legal
+  IDs/safe-integer versions, cached failure, old desired fields, duplicate root/metadata routing,
+  ordinary reports, fragmented epochs, Stop, credential rotation/rebinding and explicit unbind.
+- The light receipt scratch buffer is a bounded service member, avoiding an additional large
+  frame on the 6 KiB MQTT worker stack. This is a software bound, not measured device stack margin.
+- ESP-IDF **6.0.2** `idf.py build` succeeds after the duplicate-metadata guard. The final log is
+  `build/logs/mqtt-light-effects-build.log`; `sdkconfig` and `dependencies.lock` content are unchanged.
+
+| Artifact | Result |
+| --- | --- |
+| Local main image | `build/rodakos.bin`, 6,941,088 bytes |
+| SHA-256 | `6112618b30c39e9497ce43192cd7def5f7f7f80252980fbd27b32f4b6d351321` |
+| Main slot | Fits `ota_0` (13,959,168 bytes); 7,018,080 bytes remain |
+| Host light CLI SHA-256 | `63f69301ddd0f66c386e3be74fcd6143180554ddd052ba589c60aac8ad85b34a` |
+| Device / signed-package status | Not flashed or signed; existing recorded device-package evidence is unchanged |
+
+`rodakos_mqtt_light_fixture` exposes production receipts and the latest raw production shadow
+report for the separate Rodak broker conformance run. Its LED/Board Manager/network SDKs remain
+host fakes. RGB output, RMT timing, persistence, resource pressure and real task/transport timing
+remain hardware gates. No serial, flash or NVS operation was performed. The main-image versus
+factory-Recovery size warning retains its previously documented meaning.
 
 ## Build and package
 

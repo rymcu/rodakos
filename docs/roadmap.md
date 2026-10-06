@@ -1,7 +1,7 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. Reviewed source baseline: `56eb7bf` (voice-volume MCP and adapter validation),
-plus MQTT volume effect receipts and actual service lifecycle validation described below.
+Updated: 2026-10-06. Reviewed source baseline: `4a72e8c` (voice/MQTT volume effects),
+plus atomic RGB light patches and actual driver/MQTT service validation described below.
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -36,6 +36,10 @@ firmware build does not change an existing hardware gate.
 - Release-soak collection requires increasing device uptime and both queued and successful
   app-launch completion evidence. Its 17 Python regression tests pass; the eight-hour device
   gate remains open. See [OTA release readiness](ota-release-readiness.md).
+- Native RGB light patches now share atomic local/MQTT application, failure-retained configuration,
+  discovered identity and correlated software receipts. Recent-64 retention with an authority-wide
+  version watermark supports continuous updates without repeating evicted effects. This does not
+  add a backlight MCP capability; see [MQTT light effects](mqtt-light-effects.md).
 
 ## Remaining acceptance and implementation work
 
@@ -48,6 +52,7 @@ firmware build does not change an existing hardware gate.
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
 | Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
+| RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 
 Already recorded COM3 voice, provisioning, WebRTC, and appearance gates remain accepted within

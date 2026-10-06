@@ -43,6 +43,17 @@ constexpr int kBackgroundTaskPollMs = 50;
 constexpr int kReliablePublishTimeoutMs = 10 * 1000;
 constexpr int kReliablePublishRetryMs = 50;
 
+bool HasUniqueJsonKeys(const cJSON* object) {
+    if (!cJSON_IsObject(object)) return false;
+    size_t count = 0;
+    for (const cJSON* item = object->child; item != nullptr; item = item->next)
+        if (++count > 256 || item->string == nullptr) return false;
+    for (const cJSON* item = object->child; item != nullptr; item = item->next)
+        for (const cJSON* next = item->next; next != nullptr; next = next->next)
+            if (std::strcmp(item->string, next->string) == 0) return false;
+    return true;
+}
+
 std::string EncodeJson(cJSON* root) {
     char* text = cJSON_PrintUnformatted(root);
     if (text == nullptr) {
@@ -142,7 +153,7 @@ bool IsPingCommand(const std::string& payload) {
     return is_ping;
 }
 
-bool HasSameVolumeAuthority(const DeviceCloudConfig& current,
+bool HasSameEffectAuthority(const DeviceCloudConfig& current,
                             const DeviceCloudConfig& next) {
     // 密码正常轮换不改变同一 boot 的去重域；重新绑定、authority 或路由变化必须隔离。
     return HasSameMqttSessionIdentity(current, next) &&
@@ -284,6 +295,7 @@ UnifiedMqttService::UnifiedMqttService(DeviceCloudConfigService& config_service,
       ota_update_(ota_update),
       audio_output_(audio_output),
       volume_effect_(audio_output),
+      light_effect_(light_service),
       battery_provider_(battery_provider),
       light_service_(light_service) {
     publish_ack_semaphore_ = xSemaphoreCreateBinaryStatic(&publish_ack_semaphore_storage_);
@@ -352,7 +364,7 @@ void UnifiedMqttService::Stop() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!started_.exchange(false)) return;
         connected_.store(false);
-        volume_authority_active_ = false;
+        effect_authority_active_ = false;
         AdvanceConnectionEpochLocked();
         telemetry_timer = telemetry_timer_;
         telemetry_timer_ = nullptr;
@@ -415,9 +427,9 @@ void UnifiedMqttService::RequestCredentialRefresh() {
     ESP_LOGI(TAG, "Provisioning changed cloud configuration; restarting device");
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
-        volume_authority_active_ = false;
+        effect_authority_active_ = false;
         AdvanceConnectionEpochLocked();
-        volume_effect_.ResetAuthority();
+        ResetEffectAuthorityLocked();
     }
     std::fflush(stdout);
     // Give the shared USB console a scheduling window to deliver the marker
@@ -568,9 +580,9 @@ void UnifiedMqttService::Connect() {
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (started_.load() && client_ == nullptr) {
-            if (!HasSameVolumeAuthority(config_, next_config)) volume_effect_.ResetAuthority();
+            if (!HasSameEffectAuthority(config_, next_config)) ResetEffectAuthorityLocked();
             config_ = std::move(next_config);
-            volume_authority_active_ = !config_.unbind_pending;
+            effect_authority_active_ = !config_.unbind_pending;
             broker_uri_ = std::move(next_broker_uri);
             client_id_ = std::move(next_client_id);
             client_ = client;
@@ -719,10 +731,10 @@ void UnifiedMqttService::RefreshCredentials() {
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
             if (refreshed->unbind_pending || !refreshed->has_mqtt_config ||
-                !HasSameVolumeAuthority(config_, *refreshed)) {
-                volume_authority_active_ = false;
+                !HasSameEffectAuthority(config_, *refreshed)) {
+                effect_authority_active_ = false;
                 AdvanceConnectionEpochLocked();
-                volume_effect_.ResetAuthority();
+                ResetEffectAuthorityLocked();
             }
         }
         if (refreshed->unbind_pending) {
@@ -757,9 +769,9 @@ void UnifiedMqttService::RefreshCredentials() {
     if (!refreshed_config.has_mqtt_config || refreshed_config.unbind_pending) {
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
-            volume_authority_active_ = false;
+            effect_authority_active_ = false;
             AdvanceConnectionEpochLocked();
-            volume_effect_.ResetAuthority();
+            ResetEffectAuthorityLocked();
         }
         ESP_LOGW(TAG, "MQTT recovery cancelled: persisted configuration is unavailable");
         FinishCredentialRefresh();
@@ -782,11 +794,11 @@ void UnifiedMqttService::RefreshCredentials() {
     MqttCredentialRefreshAction action = MqttCredentialRefreshAction::kKeepCurrentClient;
     const bool same_session_identity =
         client != nullptr && HasSameMqttSessionIdentity(active_config, refreshed_config);
-    if (!HasSameVolumeAuthority(active_config, refreshed_config)) {
+    if (!HasSameEffectAuthority(active_config, refreshed_config)) {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
-        volume_authority_active_ = false;
+        effect_authority_active_ = false;
         AdvanceConnectionEpochLocked();
-        volume_effect_.ResetAuthority();
+        ResetEffectAuthorityLocked();
     }
     if (client == nullptr) {
         MqttCredentialRefreshState state;
@@ -844,10 +856,10 @@ void UnifiedMqttService::RefreshCredentials() {
                     {
                         std::lock_guard<std::mutex> lock(mqtt_mutex_);
                         if (client_ == client) {
-                            if (!HasSameVolumeAuthority(config_, refreshed_config))
-                                volume_effect_.ResetAuthority();
+                            if (!HasSameEffectAuthority(config_, refreshed_config))
+                                ResetEffectAuthorityLocked();
                             config_ = std::move(refreshed_config);
-                            volume_authority_active_ = !config_.unbind_pending;
+                            effect_authority_active_ = !config_.unbind_pending;
                             broker_uri_ = std::move(broker_uri);
                             client_id_ = std::move(client_id);
                         }
@@ -879,7 +891,7 @@ void UnifiedMqttService::RefreshCredentials() {
     if (action == MqttCredentialRefreshAction::kRestart && started_.load()) {
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
-            volume_authority_active_ = false;
+            effect_authority_active_ = false;
             AdvanceConnectionEpochLocked();
         }
         credential_restart_pending_ = true;
@@ -908,26 +920,31 @@ bool UnifiedMqttService::IsCurrentClientGeneration(uint32_t generation,
 void UnifiedMqttService::AdvanceConnectionEpochLocked() {
     if (++connection_epoch_ == 0) ++connection_epoch_;
     message_assembly_ = {};
-    volume_receipts_.clear();
+    effect_receipts_.clear();
 }
 
-void UnifiedMqttService::QueueVolumeReceipt(const std::string& payload,
+void UnifiedMqttService::ResetEffectAuthorityLocked() {
+    volume_effect_.ResetAuthority();
+    light_effect_.ResetAuthority();
+}
+
+void UnifiedMqttService::QueueEffectReceipt(const std::string& payload,
                                             uint32_t generation, uint64_t connection_epoch) {
     // dispatch_custom_event 只以零超时投递 SDK event queue，不获取 SDK API 锁。
     // client_api_mutex_ 保证指针在投递期间不会被 Stop/destroy 或凭据替换。
     std::lock_guard<std::mutex> api_lock(client_api_mutex_);
     std::lock_guard<std::mutex> lock(mqtt_mutex_);
-    if (!started_.load() || !connected_.load() || !volume_authority_active_ || client_ == nullptr ||
+    if (!started_.load() || !connected_.load() || !effect_authority_active_ || client_ == nullptr ||
         client_generation_ != generation || connection_epoch_ != connection_epoch ||
-        volume_receipts_.size() >= 8) return;
-    volume_receipts_.push_back({generation, connection_epoch,
+        effect_receipts_.size() >= 8) return;
+    effect_receipts_.push_back({generation, connection_epoch,
         "devices/" + config_.mqtt_device_key + "/effects/receipt", payload});
     esp_mqtt_event_t event = {};
     event.event_id = MQTT_USER_EVENT;
     event.client = client_;
     if (esp_mqtt_dispatch_custom_event(client_, &event) != ESP_OK) {
-        volume_receipts_.pop_back();
-        ESP_LOGW(TAG, "Volume receipt event queue is unavailable; outcome remains cached");
+        effect_receipts_.pop_back();
+        ESP_LOGW(TAG, "Device effect receipt event queue is unavailable; outcome remains cached");
     }
 }
 
@@ -972,15 +989,15 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
             AdvanceConnectionEpochLocked();
         } else if (event->event_id == MQTT_USER_EVENT) {
             // ESP-MQTT 在持 SDK 递归 API 锁时运行此回调；同线程 enqueue 不反转锁序。
-            while (!volume_receipts_.empty()) {
-                PendingVolumeReceipt receipt = std::move(volume_receipts_.front());
-                volume_receipts_.pop_front();
-                if (connected_.load() && volume_authority_active_ &&
+            while (!effect_receipts_.empty()) {
+                PendingEffectReceipt receipt = std::move(effect_receipts_.front());
+                effect_receipts_.pop_front();
+                if (connected_.load() && effect_authority_active_ &&
                     receipt.client_generation == client_generation_ &&
                     receipt.connection_epoch == connection_epoch_) {
                     if (esp_mqtt_client_enqueue(client_, receipt.topic.c_str(),
                             receipt.payload.data(), receipt.payload.size(), 0, 0, true) < 0)
-                        ESP_LOGW(TAG, "Volume receipt could not enter the current MQTT outbox");
+                        ESP_LOGW(TAG, "Device effect receipt could not enter the current MQTT outbox");
                 }
             }
         } else if (event->event_id == MQTT_EVENT_ERROR && event->error_handle != nullptr &&
@@ -1187,18 +1204,43 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
 void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload,
                                            uint32_t generation, uint64_t connection_epoch) {
     if (payload.size() > 256 * 1024 || !IsBoundedRealtimeVoiceControlJson(payload, 16)) return;
+    cJSON* root = cJSON_ParseWithLengthOpts(payload.c_str(), payload.size() + 1, nullptr, true);
+    if (!HasUniqueJsonKeys(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+    const cJSON* meta = cJSON_GetObjectItemCaseSensitive(root, "_meta");
+    if (meta != nullptr && !HasUniqueJsonKeys(meta)) {
+        cJSON_Delete(root);
+        return;
+    }
+    const cJSON* correlation = cJSON_GetObjectItemCaseSensitive(meta, "rodak/deviceEffect");
+    const cJSON* schema = cJSON_GetObjectItemCaseSensitive(correlation, "schema");
+    const bool correlated = correlation != nullptr || (meta != nullptr && !cJSON_IsObject(meta));
     std::string receipt;
     bool volume_handled = false;
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
-        if (!started_.load() || !connected_.load() || !volume_authority_active_ || client_ == nullptr ||
-            client_generation_ != generation || connection_epoch_ != connection_epoch) return;
-        // 与 Stop/断线/凭据切换共享锁，不能在 scope 检查后释放锁再写 codec。
-        receipt = volume_effect_.Handle(payload, config_.mqtt_device_key, volume_handled);
+        if (!started_.load() || !connected_.load() || !effect_authority_active_ || client_ == nullptr ||
+            client_generation_ != generation || connection_epoch_ != connection_epoch) {
+            cJSON_Delete(root);
+            return;
+        }
+        // A correlated frame grants only its named effect; old desired fields cannot
+        // fall through into another domain, even when the metadata is malformed.
+        if (!correlated) {
+            volume_effect_.Handle(payload, config_.mqtt_device_key, volume_handled);
+            light_effect_.Handle(payload, config_.mqtt_device_key);
+        } else if (cJSON_IsString(schema) && schema->valuestring != nullptr) {
+            if (std::strcmp(schema->valuestring, "rodak.mqtt-volume-effect.v1") == 0)
+                receipt = volume_effect_.Handle(payload, config_.mqtt_device_key, volume_handled);
+            else if (std::strcmp(schema->valuestring, "rodak.mqtt-light-effect.v1") == 0)
+                receipt = light_effect_.Handle(payload, config_.mqtt_device_key);
+        }
     }
-    if (!receipt.empty()) QueueVolumeReceipt(receipt, generation, connection_epoch);
-    cJSON* root = cJSON_Parse(payload.c_str());
-    if (!cJSON_IsObject(root)) {
+    if (!receipt.empty()) QueueEffectReceipt(receipt, generation, connection_epoch);
+    if (correlated) {
+        PublishShadowReport();
         cJSON_Delete(root);
         return;
     }
@@ -1223,32 +1265,6 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload,
     cJSON* light = cJSON_IsObject(desired)
                        ? cJSON_GetObjectItemCaseSensitive(desired, "light")
                        : nullptr;
-    if (cJSON_IsObject(light) && light_service_ != nullptr) {
-        LightState current;
-        if (light_service_->GetLight(0, current)) {
-            bool enabled = current.enabled;
-            uint8_t brightness = current.brightness_percent;
-            RgbColor color = current.color;
-            const cJSON* enabled_json = cJSON_GetObjectItemCaseSensitive(light, "enabled");
-            const cJSON* brightness_json = cJSON_GetObjectItemCaseSensitive(light, "brightness");
-            const cJSON* color_json = cJSON_GetObjectItemCaseSensitive(light, "color");
-            if (cJSON_IsBool(enabled_json)) enabled = cJSON_IsTrue(enabled_json);
-            if (cJSON_IsNumber(brightness_json)) {
-                brightness = static_cast<uint8_t>(std::clamp(brightness_json->valueint, 0, 100));
-            }
-            if (cJSON_IsObject(color_json)) {
-                const cJSON* red = cJSON_GetObjectItemCaseSensitive(color_json, "r");
-                const cJSON* green = cJSON_GetObjectItemCaseSensitive(color_json, "g");
-                const cJSON* blue = cJSON_GetObjectItemCaseSensitive(color_json, "b");
-                if (cJSON_IsNumber(red)) color.red = static_cast<uint8_t>(std::clamp(red->valueint, 0, 255));
-                if (cJSON_IsNumber(green)) color.green = static_cast<uint8_t>(std::clamp(green->valueint, 0, 255));
-                if (cJSON_IsNumber(blue)) color.blue = static_cast<uint8_t>(std::clamp(blue->valueint, 0, 255));
-            }
-            if (!light_service_->SetState(0, enabled, brightness, color)) {
-                ESP_LOGW(TAG, "Failed to apply desired light state");
-            }
-        }
-    }
     cJSON* voice_identity = cJSON_IsObject(desired)
                                 ? cJSON_GetObjectItemCaseSensitive(desired, "voice_identity")
                                 : nullptr;
@@ -1769,6 +1785,11 @@ void UnifiedMqttService::PublishShadowReport() {
         if (light_service_->GetLight(0, light)) {
             cJSON* light_json = cJSON_CreateObject();
             cJSON_AddStringToObject(light_json, "id", light.id.c_str());
+            cJSON_AddBoolToObject(light_json, "available", light.available);
+            cJSON_AddNumberToObject(light_json, "last_error", light.last_error);
+            cJSON_AddNumberToObject(light_json, "configurationRevision", light.configuration_revision);
+            cJSON_AddStringToObject(light_json, "application",
+                light.application == LightApplication::kDriverApplied ? "driver-applied" : "unverified");
             cJSON_AddBoolToObject(light_json, "enabled", light.enabled);
             cJSON_AddNumberToObject(light_json, "brightness", light.brightness_percent);
             cJSON* color = cJSON_CreateObject();

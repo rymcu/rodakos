@@ -220,6 +220,26 @@ output-local configuration revision; that contract does not upgrade MQTT shadow 
 `voice_identity` has its own revision/status semantics below and must not be generalized
 into a volume receipt.
 
+### Light configuration and evidence
+
+Desired `light` patches target discovered Board Manager RGB lights. Legacy messages without ID
+select the first light; correlated `light.patch` requires a reported, real light ID and strict
+nonempty enabled/brightness/color fields. `LightService` merges and applies under one lock and
+commits accepted configuration/revision only on driver success. Failure retains prior values and
+reports `available=false`, numeric `last_error`, and `application: unverified`; it cannot guarantee
+physical rollback after a partial LED driver write.
+
+`rodak.mqtt-light-effect.v1` publication metadata and `rodakos.mqtt-light-result.v1` results use the
+same desired and independent effects/receipt topics as volume. The metadata schema selects only
+one domain, so old fields in the desired shadow cannot cause unrelated mutations. Light receipts
+include complete previous/current configuration and actual ID. Ordinary reports remain snapshots
+and never complete an effect by value comparison. The 64-result cache permits continued writes;
+version-bound IDs and an authority-wide monotonic watermark prevent re-execution after eviction.
+See [MQTT light effects](mqtt-light-effects.md) for the full wire and cancellation contract.
+
+This is the native RGB light capability, not LCD backlight or a brightness MCP tool. Voice identity,
+local music playback, streaming and OTA retain their distinct execution and verification contracts.
+
 ### Voice identity
 
 The shared `voice_identity` desired/reported object is:

@@ -5,6 +5,7 @@
 #include "phone_os/light_service.h"
 #include "phone_os/mqtt_credential_refresh_policy.h"
 #include "phone_os/mqtt_volume_effect.h"
+#include "phone_os/mqtt_light_effect.h"
 
 #include <array>
 #include <atomic>
@@ -103,7 +104,8 @@ private:
     bool HasClient() const;
     bool IsCurrentClientGeneration(uint32_t generation, uint64_t connection_epoch = 0) const;
     void AdvanceConnectionEpochLocked();
-    void QueueVolumeReceipt(const std::string& payload, uint32_t generation,
+    void ResetEffectAuthorityLocked();
+    void QueueEffectReceipt(const std::string& payload, uint32_t generation,
                             uint64_t connection_epoch);
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
     void HandleMqttEvent(esp_mqtt_event_handle_t event);
@@ -122,6 +124,7 @@ private:
     OtaUpdateService& ota_update_;
     AudioOutputService* audio_output_ = nullptr;
     MqttVolumeEffect volume_effect_;
+    MqttLightEffect light_effect_;
     BatteryStateProvider* battery_provider_ = nullptr;
     LightService* light_service_ = nullptr;
     VoiceWakeService* voice_wake_ = nullptr;
@@ -148,14 +151,14 @@ private:
     mutable std::mutex mqtt_mutex_;
     uint32_t client_generation_ = 0;
     uint64_t connection_epoch_ = 0;
-    bool volume_authority_active_ = false;
-    struct PendingVolumeReceipt {
+    bool effect_authority_active_ = false;
+    struct PendingEffectReceipt {
         uint32_t client_generation = 0;
         uint64_t connection_epoch = 0;
         std::string topic;
         std::string payload;
     };
-    std::deque<PendingVolumeReceipt> volume_receipts_;
+    std::deque<PendingEffectReceipt> effect_receipts_;
     uint64_t published_event_sequence_ = 0;
     std::array<PublishedEvent, 4> recent_published_events_ = {};
     size_t next_published_event_index_ = 0;

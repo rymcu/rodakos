@@ -226,6 +226,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Voice assistant integration](docs/voice-assistant.md)
 - [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
 - [MQTT volume effects and software receipts](docs/mqtt-volume-effects.md)
+- [MQTT light patches and software receipts](docs/mqtt-light-effects.md)
 - [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
 - [Rodak identity and wake word](docs/voice-identity-wake-word.md)
 - [Serial provisioning](docs/serial-provisioning.md)

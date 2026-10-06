@@ -1,13 +1,16 @@
 # MQTT volume service host target
 
 This target compiles production `UnifiedMqttService`, `MqttVolumeEffect`, the atomic output service
-and codec adapter. It executes the actual registered ESP-MQTT callback, fragment assembly,
+and codec adapter, plus `MqttLightEffect`, real `LightService` and `board_device_adapter`.
+It executes the actual registered ESP-MQTT callback, fragment assembly,
 eight-item queue, worker, desired parser and receipt publishing path. Other device services and
 ESP-MQTT/network/codec facilities are faked; the service and business result are not copied.
 
 The fake MQTT SDK invokes callbacks under its recursive API lock and posts custom events
 asynchronously. This reproduces the lock-order boundary used by the production SDK. Fixtures can
 hold a dequeued message, a codec operation or an SDK user event to exercise cancellation.
+The light fixture also holds real driver refresh or fails exact pixel/refresh calls. Light business
+state is no longer faked; other device services remain fakes.
 
 ```powershell
 wsl -d Debian -- bash -lc '
@@ -56,3 +59,22 @@ not manufacture business receipts. `--fail-write` takes effect after a successfu
 open, so the initial open's volume write remains visible in `codecWrites`. EOF stops the service
 and joins its workers. Build/source/binary identity should be recorded by the cross-repository
 runner; host results do not establish device firmware or acoustic acceptance.
+
+## Light fixture
+
+The same build produces `rodakos_mqtt_light_fixture`, with the same stdin/receipt-only stdout
+contract. It exposes actual Board Manager fixture IDs `board_rgb` (LEDs 0–2) and `accent` (LED 3).
+Flags include `--device-key=...`, `--fail-light-refresh`, `--fail-light-pixel=2` (absolute pixel-call
+number), and `--light=missing`. The original volume CLI/flags remain available.
+
+Stderr markers use `fixture: mqtt-light`, `processed`, `volume`, `codecWrites`, `lightWrites`
+(refresh attempts), `lightPixelWrites`, and the real first light's accepted configuration,
+revision and availability. `shadowReport` contains the exact latest production shadow/report
+body as a JSON string, including the initial connection report; callers must not construct a
+report from diagnostic counters. No business result or report is manufactured by the fixture.
+
+The service target currently runs 31 tests: the original 14 volume cases and 17 light cases.
+Light cases include 70 continuous updates, old-frame and cross-light replay after eviction,
+partial patches, driver failure retention, metadata routing, reports, Stop, reconnect, fragmented
+epochs, ordinary token refresh and replacement bindings. Native driver tests also live in
+[`tests/light_service`](../light_service/README.md). See the [wire contract](../../docs/mqtt-light-effects.md).

@@ -181,6 +181,13 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   worker queue; the scope check and `ApplyVolume` share the MQTT service lock with cancellation.
   Receipt enqueue runs in the SDK custom-event callback to preserve SDK/service lock order.
   See [MQTT volume effects](mqtt-volume-effects.md) for the contract and host service tests.
+- `LightService` shares one atomic patch path between Smart UI setters and MQTT. A driver error
+  retains accepted configuration/revision, updates availability/error, and leaves hardware
+  application unverified. Correlated MQTT light patches carry actual discovered IDs, reuse the
+  authenticated epoch/SDK receipt boundary, and keep 64 recent outcomes plus a monotonic
+  authority version watermark. Only requested fields execute. `tests/light_service` and the
+  extended real MQTT service target compile production light/board adapter code with SDK fakes;
+  see [MQTT light effects](mqtt-light-effects.md). LCD backlight remains a separate local service.
 - Voice wake monitoring uses local MultiNet without a cloud connection. A wake match takes exclusive
   audio focus and opens one Rodak WebSocket session. Every non-terminal reply drains TTS and starts
   the next input turn on that same session; a user saying “再见” results in `session.end`, while 30 seconds of follow-up silence, errors, or a

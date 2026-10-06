@@ -4,6 +4,7 @@
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "test_framework.h"
+#include "host_driver.h"
 #include <esp_codec_dev.h>
 #include <cJSON.h>
 #include <memory>
@@ -22,7 +23,7 @@ inline std::string Request(const std::string& id = "effect-1", int volume = 30, 
         id + "\",\"shadowVersion\":" + std::to_string(version) +
         ",\"operation\":\"volume.set\",\"requested\":{\"volume\":" + std::to_string(volume) + "}}}}";
 }
-struct ResetGuard { ResetGuard() { Reset(); fake_codec::Reset(); } };
+struct ResetGuard { ResetGuard() { Reset(); fake_codec::Reset(); fake_light::Reset(); } };
 struct Fixture {
     ~Fixture() {
         PauseDequeue(false);
@@ -31,6 +32,7 @@ struct Fixture {
         JoinWorkers();
     }
     void Start() {
+        lights.Init();
         RODAK_CHECK(service.Start());
         RODAK_CHECK(WaitUntil([&]() { return service.IsConnected(); }));
         RODAK_CHECK(WaitUntil([]() { return !Publications().empty(); }));
@@ -68,6 +70,7 @@ struct Fixture {
     rodakos::AudioOutputService output;
     rodakos::DeviceCloudConfigService config_service;
     rodakos::OtaUpdateService ota;
-    rodakos::UnifiedMqttService service{config_service, ota, &output};
+    rodakos::LightService lights;
+    rodakos::UnifiedMqttService service{config_service, ota, &output, nullptr, &lights};
 };
 }

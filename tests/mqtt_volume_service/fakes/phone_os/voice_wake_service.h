@@ -11,7 +11,8 @@ struct VoiceWakeState {
 };
 class VoiceWakeService {
 public:
+    unsigned identity_calls = 0;
     VoiceWakeState GetState() { return {}; }
-    bool ApplyVoiceIdentity(const VoiceIdentityConfig&, std::string&) { return false; }
+    bool ApplyVoiceIdentity(const VoiceIdentityConfig&, std::string&) { ++identity_calls; return false; }
 };
 }
