@@ -266,6 +266,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 
 - [Architecture](docs/architecture.md)
 - [Dependency maintenance](docs/dependency-maintenance.md)
+- [PR checks and merge discipline](docs/merge-policy.md)
 - [Appearance customization](docs/appearance-customization.md)
 - [Appearance verification](docs/appearance-verification.md)
 - [Roadmap](docs/roadmap.md)

@@ -141,4 +141,5 @@ bootloader、分区表、otadata、Recovery 与公钥逐字节一致。
 Recovery 为 338,592 字节。同一候选的主机测试见
 [Actions 37514192380](https://github.com/rymcu/rodakos/actions/runs/37514192380)。
 这些包使用本次 CI 的临时开发信任根；未刷设备，不替代已安装 Recovery 的兼容性、
-生产密钥、实际掉电或长期实机验收。#26 的 PR 可见性与 required checks/保护规则仍开放。
+生产密钥、实际掉电或长期实机验收。#26 的实际 PR 检查证据须单独记录；目前 `main`
+未启用 required checks/保护规则，按 [合并纪律](merge-policy.md) 人工核验三个检查。
