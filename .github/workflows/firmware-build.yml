@@ -51,6 +51,7 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           python -m pip install idf-component-manager==3.0.3 PyYAML==6.0.2
+          python -m unittest discover -s .github/workflows/scripts -p 'test_firmware_ci.py'
           python .github/workflows/scripts/firmware_ci.py build \
             2>&1 | tee firmware-ci-results/build.log
 

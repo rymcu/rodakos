@@ -58,6 +58,11 @@ jobs:
             components/esp_event
             components/tcp_transport
             components/esp_common/include
+            components/nvs_flash/src
+            components/nvs_flash/include
+            components/nvs_flash/private_include
+            components/esp_rom/linux
+            components/esp_rom/include
 
       - name: Initialize container workspace paths
         run: |

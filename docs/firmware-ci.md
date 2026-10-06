@@ -13,7 +13,9 @@ commit 为 `7101770dc6db2667b3c477cc31365dd1acd6db4e`、版本为 6.0.2，并根
 锁；IDF 或编译器不匹配会失败，不静默接受镜像变化。工具和候选 SHA 保存为证据。
 
 Component Manager 固定 3.0.3，Board Manager 所需 PyYAML 固定 6.0.2。完整 Registry 依赖按锁定版本下载并逐个核验实际目录
-哈希，构建后的依赖图必须与原 lock 一致。跨平台生成 manifest 的 `manifest_hash`
+哈希，仅接受 Registry 根地址 `https://components.espressif.com` 及带单个尾斜杠的写法；
+其他 scheme、端口、userinfo、路径、query、fragment 或镜像地址仍被拒绝，不改写 lock。
+构建后的依赖图必须与原 lock 一致。跨平台生成 manifest 的 `manifest_hash`
 允许重新计算，依赖、来源、版本、component hash、direct dependencies 和 target 不允许
 漂移；最终 lock 会随 artifact 保存。缓存仅包含下载源和 ccache，不缓存生成代码、
 sdkconfig、CMake build tree、固件或签名密钥。
@@ -84,3 +86,18 @@ overlay 实际编译来源检查通过，没有重新构建或修改这些产物
 临时副本上的 flavor 不一致以及 Recovery 区段篡改（即使更新 merged 总哈希）均被拒绝。
 这验证了校验逻辑，没有验证新的 Linux 冷构建或新包生成；后者必须由首次 Actions run
 确认。本地 Docker Registry 元数据查询遇到 TLS EOF，未下载镜像或安装额外构建运行时。
+
+## 2026-10-07 首轮 Actions 失败与修复
+
+候选 `38d79bb` 的 [Actions 37510590510](https://github.com/rymcu/rodakos/actions/runs/37510590510)
+已通过实际 IDF commit、版本及推荐 Xtensa GCC 核验，但冷组件准备在 `espressif/dl_fft`
+处失败：原校验只接受 Registry 地址带尾斜杠的形式，而锁文件同时包含两种合法根地址。
+该轮尚未完成固件构建或生成开发包。
+
+修复仅允许上述两个精确字符串，组件来源、版本及目录哈希检查保持不变。工作流在构建
+前运行离线回归，检查实际 lock 中每个 service 条目及恶意/不规范 URL 负例。修复后的
+云端冷构建和开发包仍须以新 Actions run 结果为准。
+
+本地 3 个回归测试通过，包含实际 lock 的全部 27 个 service 组件以及 21 个非法 URL/
+来源负例；生产 helper 对已存在组件执行只读目录哈希校验全部通过，lock 字节未变。
+两个工作流重新通过 actionlint；此次没有运行本机固件构建或重新下载组件。

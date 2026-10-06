@@ -21,7 +21,8 @@
 - 按锁文件哈希缓存组件下载源；命中缓存后仍做哈希校验。测试构建目录、生成补丁及签名
   fixture 每次重新生成，不从缓存恢复。
 - ESP-IDF 仅获取 `v6.0.2` 的源提交 `7101770dc6db2667b3c477cc31365dd1acd6db4e`，
-  用于 MQTT event overlay 的来源核验。主机 job 不安装 Xtensa 编译器，不执行固件构建。
+  用于传输 overlay 的来源核验与真实 NVS Storage 测试。主机 job 不安装 Xtensa 编译器，
+  不执行固件构建。
 - Actions 使用已核对的完整 commit SHA，工作流 token 只有 `contents: read`，checkout
   不保留凭据；PR 检查不使用 `pull_request_target`。
 - 容器内通过运行时 `pwd -P` 确定真实 workspace，再写入 `GITHUB_ENV` 供后续步骤使用。
@@ -48,6 +49,12 @@ MQTT 另校验已审核的 IDF `esp_event.c`。源码不匹配时配置直接失
 `esp_common/include`，供 `websocket_redirect_patch` 使用。本文验证的 `0ef848f` 基线
 release runner 未包含该 suite；带有受控 WebSocket 修补及测试入口的后续提交会自动
 运行它。下面的基线验证统计不包含该 suite。
+
+`server_trust_nvs_storage` 使用同一 IDF 提交的 `nvs_flash` 源码及官方 Linux CRC，
+配合生产 authority 编码器和合成内存分区验证字符串容量、GC 与旧记录保留。checkout
+包含 NVS 源码、公共/私有头文件和 `esp_rom` Linux/include 目录；runner 通过
+`RODAKOS_IDF_PATH` 指定来源。测试不读取设备 NVS 备份，不包含真实设备凭据；RAM
+分区结果也不等于物理闪存掉电验收。下面的历史统计不包含此新增 suite。
 
 独立 `windows-2025` job 用 PowerShell 7 parser 检查全部 Git 跟踪的 `.ps1` 文件语法，
 只解析、不执行脚本。该检查不验证 Windows 驱动、Board Manager 生成或刷写行为。
@@ -106,11 +113,16 @@ actionlint、YAML/Bash 静态检查及隔离目录的路径/信任配置验证�
 numeric route、WiFi 恢复或 WebSocket redirect 实现；这些改动需要在新提交上重新运行
 CI。artifact 内容和 PR 检查展示仍应随发布验收检查。
 
+后续候选 `38d79bb` 的 [Actions 37510590660](https://github.com/rymcu/rodakos/actions/runs/37510590660)
+也已通过 Linux host 与 PowerShell 两个 job，覆盖该提交中的 numeric route、WiFi 恢复
+与 WebSocket redirect。该历史 run 不包含随后新增的 authority v3 与真实 NVS Storage
+suite；新增入口仍需新提交上的 CI 结果。
+
 ## #26 仍开放的门禁
 
-此变更没有建立主应用/Recovery 的 ESP-IDF 构建 job。后续仍需固定推荐 Xtensa GCC、
-冷启动生成 Board Manager、验证完整组件依赖图、镜像容量/语音模型符号、普通 flavor
-禁用故障注入，以及 development OTA 包的一致性。主机依赖校验只覆盖前述六个组件。
+主应用/Recovery 的独立 ESP-IDF job 已建立，具体输入校验、开发包边界及首轮 Registry
+地址修复见 [固件 CI](firmware-ci.md)；完整冷构建和开发包仍待成功的 Actions 证据。
+本页主机依赖校验只覆盖前述六个组件。
 
 PR 检查展示、artifact 验收及仓库套餐允许的 required checks/保护规则仍需确认。
 主机测试成功不会关闭 [发布验收](ota-release-readiness.md) 中的真实掉电、设备资源耗尽、

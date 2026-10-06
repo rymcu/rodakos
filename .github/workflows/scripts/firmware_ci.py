@@ -14,6 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
 IDF_COMMIT = "7101770dc6db2667b3c477cc31365dd1acd6db4e"
+REVIEWED_REGISTRY_URLS = ("https://components.espressif.com", "https://components.espressif.com/")
 LAYOUT = {"app": (0x2A0000, 0xD50000), "recovery": (0x20000, 0x280000), "otadata": (0xF000, 0x2000)}
 HOME_MARKER = b"RODAKOS_HOME_HARDWARE_TEST_POPULATION_ACTIVE"
 FAULT_MARKER = b"RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE"
@@ -63,6 +64,11 @@ def environment(idf):
             "sourceCommit": run("git", "rev-parse", "HEAD", capture=True)}
 
 
+def validate_registry_source(name, source):
+    require(isinstance(source, dict) and source.get("registry_url") in REVIEWED_REGISTRY_URLS,
+            f"Unreviewed component Registry: {name}")
+
+
 def locked_components(original_lock, *, download=True):
     from idf_component_tools.hash_tools.validate import validate_hash_eq_hashdir
     from idf_component_tools.manifest import SolvedComponent
@@ -70,8 +76,7 @@ def locked_components(original_lock, *, download=True):
     for name, entry in original_lock["dependencies"].items():
         if entry["source"]["type"] != "service":
             continue
-        require(entry["source"]["registry_url"] == "https://components.espressif.com/",
-                f"Unreviewed component Registry: {name}")
+        validate_registry_source(name, entry["source"])
         component = SolvedComponent(name=name, **entry)
         fetcher = ComponentFetcher(component, ROOT / "managed_components")
         downloaded = fetcher.download() if download else fetcher.component_path
