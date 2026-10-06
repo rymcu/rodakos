@@ -66,6 +66,7 @@ set(SOURCES
     "phone_os/wake_on_lan_service.cc"
     "phone_os/device_cloud_config.cc"
     "phone_os/server_trust.cc"
+    "phone_os/server_trust_route.cc"
     "phone_os/server_trust_transport.cc"
     "phone_os/server_trust_discovery.cc"
     "phone_os/device_pairing_protocol.cc"

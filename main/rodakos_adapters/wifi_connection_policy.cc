@@ -27,3 +27,7 @@ bool ShouldRetryWiFiConnection(int retry_count,
     return connection_active && has_callback && retry_count >= 0 &&
            max_retries > 0 && retry_count < max_retries;
 }
+
+uint32_t WiFiRecoveryBackoffMs(uint32_t retry_count) {
+    return retry_count >= 5 ? 30000 : (1000u << retry_count);
+}

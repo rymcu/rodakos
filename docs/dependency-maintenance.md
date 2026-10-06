@@ -107,6 +107,22 @@ Linux-visible `RODAKOS_IDF_PATH` (or `IDF_PATH`) when invoking that script in WS
 unavailable source tree instead of skipping the new gate. Retain the source pin when upgrading
 MQTT or ESP-IDF, review event-loop semantics again, and rerun these checks plus a firmware build.
 
+## WebSocket redirects
+
+The checked `esp_websocket_client` 1.8.0 overlay rejects every 3xx handshake before
+the SDK can replace its URI and reconnect with the original authorization header.
+It also checks the underlying HTTP status when the transport reports success.
+Disabling automatic reconnect alone does not disable the upstream redirect branch.
+This correction is required by the pinned logical-origin and numeric-route contract.
+
+The generator validates the resolved package, full upstream source/header metadata
+and ESP-IDF 6.0.2 transport identity, then replaces exactly one target source with a
+generated build copy. Managed sources stay unchanged. The production task/abort/stop
+host harness includes three unpatched negative controls; generator drift tests and
+sanitizers run through `tools/run_release_host_checks.sh`. See the
+[overlay contract and commands](../patches/esp_websocket_client/1.8.0/README.md).
+Real TLS handshakes and device reconnect behavior remain hardware gates.
+
 ## Codec validation
 
 Resolve the pinned dependencies through the normal [firmware build](firmware-download.md) first.

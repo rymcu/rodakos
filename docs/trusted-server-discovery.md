@@ -42,9 +42,12 @@ newly pinned TLS channel; rejected authentication never starts a replacement pai
 ## Persistence and recovery
 
 `device_cloud/server_auth` is one bounded, versioned JSON record with `active` and
-`pending` endpoints. Each endpoint contains the canonical URL, trust object, and
-`requires_bound_identity`. The existing secret and registration flags remain in their
-existing keys. USB installs a candidate without overwriting the last active endpoint.
+`pending` endpoints. Each endpoint contains the canonical URL, trust object,
+`requires_bound_identity`, and the authenticated numeric `connect_address` route.
+An empty route uses normal resolution. Readers accept version 1 records; successful
+writes use version 2. The USB trust frame remains version 1. The existing secret and
+registration flags remain in their existing keys. USB installs a candidate without
+overwriting the last active endpoint.
 Cached MQTT and voice capabilities are disabled while a USB candidate is pending.
 
 For an existing binding, a successful TLS `/auth/token` response and a complete,
@@ -52,10 +55,16 @@ valid secure transport descriptor are required before promotion. Fresh devices m
 complete the existing owner-confirmed pairing flow on the pinned candidate. The
 guarded credential transaction writes its pending barrier, MQTT/voice caches, the
 new authority record, and finally the completed identity. MQTT caches carry a
-server-ID/URL key; mismatched or partially committed caches cannot become usable.
+server-ID/URL/route key; mismatched or partially committed caches cannot become usable.
 Authentication failures and exhausted discovery attempts retain the last authority.
 Persistence failures restore the previous record and caches where possible and
 report uncertainty when rollback cannot be established.
+
+Once version 2 is written, package `20261007-010516` (006) and earlier version-1-only
+readers fail closed on this record. They are not a supported network-recovery
+rollback. Keep NVS and the immutable Recovery; repair and rebuild from a source
+that reads version 2, then use the normal preserved-NVS refresh workflow. Erasing
+NVS to force compatibility discards the binding and is not part of this migration.
 
 `device_cloud/server_pinned` is committed before the first authority record. Once
 set, a missing, malformed, oversized, or unreadable authority fails closed instead
@@ -68,28 +77,34 @@ over that pin. An unreadable trust record leaves recovery pending. Hardware powe
 and storage-fault recovery are separate acceptance gates.
 
 The live cloud generation changes when USB stages an authority or authenticated
-discovery changes its endpoint. Existing voice, OTA, and Appearance snapshots must
-pass the current-generation check before further requests. Network discovery never
+discovery changes its endpoint or route. Existing voice, OTA, and Appearance snapshots
+must pass the current-generation check before further requests. Network discovery never
 changes the pin. Explicit server-confirmed unbinding clears device credentials while
 retaining the trusted server, allowing a new owner-confirmed pairing there.
 
 ## Discovery and transport
 
-Normal IP changes use the existing lwIP `.local` resolver with the stable hostname.
-If the stored HTTPS endpoint fails, bound devices query `_rodak._tcp` through the
-pinned `espressif/mdns` 1.14.0 component. The query has a 1500 ms timeout and at most
+Before a route has been authenticated, connections use the lwIP `.local` resolver
+with the stable hostname. If the stored HTTPS endpoint or route fails, bound devices
+query `_rodak._tcp` through the pinned `espressif/mdns` 1.14.0 component.
+The query has a 1500 ms timeout and at most
 eight results. Only records with the expected hostname, exactly one `v=1`, and exactly
-one matching full `id` become candidate ports. At most three unique endpoints are
-tried, each with a six-second shared bootstrap/token deadline. The TXT/SRV records
-remain unauthenticated hints. A successful pinned TLS exchange is required before
-a discovered port becomes persistent. Unconfirmed pairing is not moved by discovery.
+one matching full `id` contribute address/port candidates. Up to eight addresses
+per result are inspected; at most six distinct address/port combinations are tried,
+each with a six-second shared bootstrap/token deadline. This bounds candidate HTTP
+attempts to 36 seconds, in addition to the initial attempt and discovery query.
+IPv4 and non-scoped IPv6 addresses are supported. Unspecified, loopback, multicast,
+IPv4-mapped IPv6 and link-local/scoped IPv6 routes are rejected. Scoped IPv6 needs a
+separate interface-lifetime contract and remains open.
 
-The current implementation takes candidate SRV ports and resolves the stable hostname
-through lwIP; it does not try every individual A/AAAA address from `mdns_result_t`.
-Several port candidates are tested independently, but a forged cached address for
-the same hostname/port can still prevent reaching the genuine address. TLS rejects
-that connection and retains the old record. Independent address-candidate probing
-remains open in RodakOS issue #33; the host spoofing test uses distinct ports.
+Each candidate uses its numeric address directly while retaining the installed
+certificate and stable TLS name/SNI. Several addresses for the same hostname and
+port are tested independently. TXT/SRV/A/AAAA records remain unauthenticated hints:
+bootstrap success alone does not authorize promotion. Token authentication and a
+complete secure descriptor must also succeed on the same route before persistence.
+A TLS-valid credential rejection stops discovery without starting replacement
+pairing. USB provisioning and refresh are serialized, and generation checks reject
+stale requests and commits. Unconfirmed pairing is not moved by discovery.
 
 | Channel | Pinned transport requirements |
 | --- | --- |
@@ -103,6 +118,28 @@ The default secure ports are HTTPS/WSS 9443 and MQTTS 8883. Ports come from the
 authenticated descriptor after discovery. In pin mode, the public CA bundle and
 global CA store are disabled, and common-name checks are never skipped. Certificate
 and TLS-name storage outlives each asynchronous client and its reconnects.
+
+The authenticated route is reused by bootstrap/token, MQTTS, WSS, OTA and Appearance,
+including client recreation and reboot. Stored capability URLs and origin checks
+remain logical URLs; only the connection URI contains the numeric address. HTTP
+requests replace their single `Host` header with the logical hostname and port.
+The current ESP WebSocket transport generates its wire `Host` from the numeric
+connection URI. Fixed TLS SNI/name and the pin still authenticate Rodak, but this
+does not support arbitrary virtual-host routing; its non-scoped IPv6 wire Host is
+also a compatibility boundary. No second `Host` header is appended. This boundary
+is accepted only for the private Rodak service and is not general WSS authority
+compatibility. The checked WebSocket overlay rejects redirects before another
+handshake; it must ship with numeric routing.
+
+MQTT route changes count as session-identity changes even if credentials are
+unchanged. They retain the existing controlled restart isolation. This is bounded
+recovery, not seamless live migration. Separately, once the current explicit WiFi
+Connect generation has obtained an IP, the adapter keeps retrying after AP loss
+with a capped backoff and a 20-second connection deadline. Credentials that have
+never connected in this generation still use the finite initial-attempt policy.
+Explicit disconnect, new configuration and shutdown cancel the previous retry
+generation. The timer daemon only posts retry events; driver calls remain
+serialized by the API mutex. Late STA/IP events must match the current AP/netif state.
 
 This firmware's `CONFIG_MBEDTLS_HAVE_TIME_DATE` remains disabled. It authenticates
 the pinned key and expected TLS name; it does not claim certificate-expiry validation
@@ -118,14 +155,26 @@ The network migration never rewrites or grants publisher trust.
 ## Validation
 
 `tests/server_trust` compiles the production trust codec, HTTP TLS configuration,
-DNS-SD filtering and `DeviceCloudConfigService`. Its 19 Debug and ASan/UBSan tests
+DNS-SD filtering and `DeviceCloudConfigService`. Its 26 Debug and ASan/UBSan tests
 with leak detection cover public-key digest mismatch, URL confusion, downgrade,
 TLS-open failure before secret writes, successful existing-binding promotion,
 credential rejection without pairing, malicious MQTT descriptors, spoofed discovery
 followed by a valid candidate, candidate exhaustion, reboot/repeat USB refresh,
-authority/identity and transaction-barrier read faults, write failure, and missing-record downgrade rejection.
+authority/identity and transaction-barrier read faults, write failure, missing-record
+downgrade rejection, same-port address failover, route persistence/reboot, v1/v2
+records, fixed Host/SNI with numeric dialing, bounded address filtering and USB
+refresh serialization. The MQTT targets additionally verify numeric route client
+recreation and route-change restart isolation; voice-identity integration remains
+green with the route source linked. The production WiFi adapter has 22 Debug and
+ASan/UBSan/leak host cases covering retry/cancellation/deadline and stale events.
 HTTP, mDNS and NVS are injected host boundaries; this suite does not implement a
 real TLS handshake or prove physical flash power-loss behavior.
+
+The numeric-route, redirect and continued WiFi-recovery changes are host-verified;
+their identified package still needs independent-address and AP-loss hardware
+acceptance. The dated 006 evidence below predates these changes. Additional 006
+cross-network, MQTTS-negative and WSS observations are tracked in Rodak's
+[network verification record](https://github.com/rymcu/rodak/blob/main/docs/trusted-network-verification.md).
 
 ```powershell
 wsl -d Debian -- cmake -S /mnt/d/workspace/rodakos/tests/server_trust `

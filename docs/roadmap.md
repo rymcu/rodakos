@@ -21,10 +21,17 @@ firmware build does not change an existing hardware gate.
   migrations on COM3 with the existing binding/token, wake listening and no crypto
   allocation errors. Port recovery still includes a controlled device restart.
   A separate same-name/different-key HTTPS listener was rejected before any HTTP
-  request, followed by recovery to the genuine server. Actual network/address
-  changes, WSS, broader negative cases and extended soak remain separate gates.
-  Independent address-candidate probing, damaged-trust recovery and physical power-cut
-  acceptance are still open;
+  request, followed by recovery to the genuine server. Additional 006 evidence
+  covers a real 137/88 subnet round trip selected through USB WiFi configuration,
+  retained binding/token, and two WSS silent connect/stop sessions on the 88 subnet;
+  see the [Rodak verification record](https://github.com/rymcu/rodak/blob/main/docs/trusted-network-verification.md).
+  This does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
+  or extended soak.
+  Independent numeric-address probing, authority v2 persistence, transport reuse and
+  continued WiFi retry are now host-verified; their identified-package hardware gate
+  remains open. Version-1-only package 006 cannot read a written v2 authority; recovery
+  must preserve NVS using a v2-capable repair package. Damaged-trust recovery and
+  physical power-cut acceptance are still open;
   see [trusted server discovery](trusted-server-discovery.md).
 
 - ESP32-S3 BigSmart: 16 MiB flash, 8 MiB PSRAM, ESP-IDF 6.0.2, LVGL 9.3,
@@ -93,7 +100,7 @@ firmware build does not change an existing hardware gate.
 
 | Area | Remaining work | Evidence / owner document |
 | --- | --- | --- |
-| Trusted server recovery | Actual cross-network/address change and WSS; negative cases beyond the verified HTTPS wrong-certificate rejection; independently try multiple A/AAAA candidates; explicit recovery for a damaged/missing trust record; power interruption between the pin latch and authority commit. Port recovery is verified with a controlled restart, not seamless migration. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
+| Trusted server recovery | Identified-package hardware acceptance for same-port numeric-address failover, route reuse after restart and continued AP-loss recovery; non-scoped IPv6 and WSS numeric Host compatibility; scoped IPv6 is unsupported. Broader negative cases, explicit recovery for a damaged/missing trust record and power interruption between the pin latch and authority commit remain open. Recovery uses controlled restarts and v2-capable packages with preserved NVS. Preserve Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
 | Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |

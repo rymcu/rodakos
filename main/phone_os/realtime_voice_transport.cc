@@ -303,7 +303,18 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
     headers_ += "Client-Id: " + client_id_header_ + "\r\n";
 
     esp_websocket_client_config_t ws_config = {};
-    ws_config.uri = config_.realtime_voice_url.c_str();
+    connect_uri_ = ServerTrustConnectUrl(config_.server_trust, config_.realtime_voice_url,
+                                        config_.server_connect_address);
+    if (connect_uri_.empty()) {
+        SetFailure(VoiceTransportFailureKind::kConfiguration, "server_route_invalid",
+                   "Realtime voice route is unavailable", false, generation);
+        return false;
+    }
+    ws_config.uri = connect_uri_.c_str();
+    if (!config_.server_connect_address.empty()) {
+        ESP_LOGI(TAG, "WSS verified route: address=%s tls_name=%s",
+                 config_.server_connect_address.c_str(), config_.server_trust.tls_name.c_str());
+    }
     ws_config.headers = headers_.c_str();
     ws_config.disable_auto_reconnect = true;
     ws_config.buffer_size = 4096;

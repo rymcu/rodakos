@@ -24,6 +24,12 @@ struct ServerEndpoint {
     std::string bootstrap_url;
     ServerTrust trust;
     bool requires_bound_identity = false;
+    std::string connect_address;
+};
+
+struct ServerRouteCandidate {
+    std::string bootstrap_url;
+    std::string connect_address;
 };
 
 // A candidate is never an active credential destination. Only a complete
@@ -48,9 +54,13 @@ bool IsServerTrustVoiceDestination(const ServerTrust& trust,
                                    const std::string& bootstrap_url,
                                    const std::string& url);
 std::string ServerAuthorityKey(const ServerEndpoint& endpoint);
+// Numeric unicast routing only. A route never supplies a TLS name or authority.
+std::string NormalizeServerRouteAddress(const std::string& address);
+std::string ServerTrustConnectUrl(const ServerTrust& trust, const std::string& logical_url,
+                                 const std::string& connect_address);
 
-// DNS-SD is only a bounded, unauthenticated source of candidate ports. The
+// DNS-SD is only a bounded, unauthenticated source of candidate addresses/ports. The
 // caller must authenticate every returned endpoint with the existing TLS pin.
-std::vector<std::string> DiscoverServerTrustBootstrapUrls(const ServerTrust& trust);
+std::vector<ServerRouteCandidate> DiscoverServerTrustRoutes(const ServerTrust& trust);
 
 }  // namespace rodakos

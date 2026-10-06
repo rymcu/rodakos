@@ -50,14 +50,25 @@ cJSON* EncodeTrust(const ServerTrust& trust) {
     return object;
 }
 
-bool DecodeEndpoint(const cJSON* object, ServerEndpoint& endpoint, std::string& error) {
+bool DecodeEndpoint(const cJSON* object, ServerEndpoint& endpoint, bool has_route, std::string& error) {
     if (cJSON_IsNull(object)) {
         endpoint = {};
         return true;
     }
     const auto* bound = cJSON_GetObjectItemCaseSensitive(object, "requires_bound_identity");
     endpoint.requires_bound_identity = cJSON_IsTrue(bound);
-    return HasUniqueFields(object, {"bootstrap_url", "trust", "requires_bound_identity"}) &&
+    endpoint.connect_address.clear();
+    if (has_route) {
+        const auto* route = cJSON_GetObjectItemCaseSensitive(object, "connect_address");
+        if (!cJSON_IsString(route) || route->valuestring == nullptr) return false;
+        endpoint.connect_address = route->valuestring;
+        if (!endpoint.connect_address.empty() &&
+            NormalizeServerRouteAddress(endpoint.connect_address) != endpoint.connect_address) return false;
+    }
+    const bool unique = has_route
+        ? HasUniqueFields(object, {"bootstrap_url", "trust", "requires_bound_identity", "connect_address"})
+        : HasUniqueFields(object, {"bootstrap_url", "trust", "requires_bound_identity"});
+    return unique &&
            cJSON_IsBool(bound) &&
            ReadString(object, "bootstrap_url", endpoint.bootstrap_url, 256) &&
            ParseServerTrust(cJSON_GetObjectItemCaseSensitive(object, "trust"),
@@ -71,6 +82,7 @@ cJSON* EncodeEndpoint(const ServerEndpoint& endpoint) {
     if (object == nullptr) return nullptr;
     cJSON_AddStringToObject(object, "bootstrap_url", endpoint.bootstrap_url.c_str());
     cJSON_AddBoolToObject(object, "requires_bound_identity", endpoint.requires_bound_identity);
+    cJSON_AddStringToObject(object, "connect_address", endpoint.connect_address.c_str());
     cJSON_AddItemToObject(object, "trust", EncodeTrust(endpoint.trust));
     return object;
 }
@@ -154,9 +166,11 @@ bool DecodeServerAuthority(const std::string& encoded, ServerAuthority& authorit
     ServerAuthority parsed;
     const auto* version = cJSON_GetObjectItemCaseSensitive(root, "version");
     const bool valid = HasUniqueFields(root, {"version", "active", "pending"}) &&
-        cJSON_IsNumber(version) && version->valuedouble == 1.0 &&
-        DecodeEndpoint(cJSON_GetObjectItemCaseSensitive(root, "active"), parsed.active, error) &&
-        DecodeEndpoint(cJSON_GetObjectItemCaseSensitive(root, "pending"), parsed.pending, error) &&
+        cJSON_IsNumber(version) && (version->valuedouble == 1.0 || version->valuedouble == 2.0) &&
+        DecodeEndpoint(cJSON_GetObjectItemCaseSensitive(root, "active"), parsed.active,
+                       version->valuedouble == 2.0, error) &&
+        DecodeEndpoint(cJSON_GetObjectItemCaseSensitive(root, "pending"), parsed.pending,
+                       version->valuedouble == 2.0, error) &&
         (!parsed.active.trust.empty() || !parsed.pending.trust.empty()) &&
         (parsed.active.trust.empty() || parsed.pending.trust.empty() ||
          SameServerTrust(parsed.active.trust, parsed.pending.trust));
@@ -173,7 +187,7 @@ bool DecodeServerAuthority(const std::string& encoded, ServerAuthority& authorit
 bool EncodeServerAuthority(const ServerAuthority& authority, std::string& encoded) {
     auto* root = cJSON_CreateObject();
     if (root == nullptr) return false;
-    cJSON_AddNumberToObject(root, "version", 1);
+    cJSON_AddNumberToObject(root, "version", 2);
     cJSON_AddItemToObject(root, "active", EncodeEndpoint(authority.active));
     cJSON_AddItemToObject(root, "pending", EncodeEndpoint(authority.pending));
     char* json = cJSON_PrintUnformatted(root);
@@ -224,7 +238,10 @@ bool IsServerTrustVoiceDestination(const ServerTrust& trust,
 }
 
 std::string ServerAuthorityKey(const ServerEndpoint& endpoint) {
-    return endpoint.trust.empty() ? "" : endpoint.trust.server_id + "|" + endpoint.bootstrap_url;
+    if (endpoint.trust.empty()) return {};
+    const auto logical_key = endpoint.trust.server_id + "|" + endpoint.bootstrap_url;
+    return endpoint.connect_address.empty() ? logical_key : logical_key + "|" + endpoint.connect_address;
 }
+
 
 }  // namespace rodakos

@@ -18,3 +18,6 @@ bool ShouldRetryWiFiConnection(int retry_count,
                                int max_retries,
                                bool connection_active,
                                bool has_callback);
+
+// Only a configuration that has acquired an IP uses persistent recovery.
+uint32_t WiFiRecoveryBackoffMs(uint32_t retry_count);

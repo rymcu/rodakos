@@ -81,7 +81,7 @@ ASan/UBSan 与泄漏检查。工作流通过 actionlint 1.7.7、YAML/Bash 语法
 11 个受 Git 跟踪的 PowerShell 脚本通过 PowerShell 7.6.5 parser。
 
 manager 3.0.3 已在隔离冷缓存中下载并验证六组件，临时 cJSON 源码篡改被目录哈希检查
-拒绝。本地验证没有执行 GitHub runner 容器；首次 Actions 的环境与 artifact 仍需验收。
+拒绝。本地验证没有执行 GitHub runner 容器；后续 Actions 结果单独记录如下。
 从 Windows 导出本地快照时使用 `git -c core.autocrlf=false archive`，避免全局换行设置
 把要求 LF 的证书 fixture 转成 CRLF。
 
@@ -96,7 +96,15 @@ manager 3.0.3 已在隔离冷缓存中下载并验证六组件，临时 cJSON �
 修复在两个 checkout 后，从容器运行目录生成 IDF/结果路径并通过 `GITHUB_ENV`
 传递；仅对这两个仓库设置精确 `safe.directory`，上传改用相对路径。此修复重新通过
 actionlint、YAML/Bash 静态检查及隔离目录的路径/信任配置验证；不重复已经通过的主机
-回归。Linux Actions 成功运行和 artifact 验收仍需下一轮结果。
+回归。修复后的 Actions 结果见下一节。
+
+### 2026-10-07 修复后 Actions 通过
+
+候选 `ed63790ec628724711e93db260521292992b2e31` 的
+[Actions 37507174582](https://github.com/rymcu/rodakos/actions/runs/37507174582)
+已成功完成 Linux host 和 PowerShell 两个 job。此记录只验证该提交：不包含后续的
+numeric route、WiFi 恢复或 WebSocket redirect 实现；这些改动需要在新提交上重新运行
+CI。artifact 内容和 PR 检查展示仍应随发布验收检查。
 
 ## #26 仍开放的门禁
 
@@ -104,6 +112,6 @@ actionlint、YAML/Bash 静态检查及隔离目录的路径/信任配置验证�
 冷启动生成 Board Manager、验证完整组件依赖图、镜像容量/语音模型符号、普通 flavor
 禁用故障注入，以及 development OTA 包的一致性。主机依赖校验只覆盖前述六个组件。
 
-首次 Linux Actions 成功运行及 PR 检查展示、仓库套餐允许的 required checks/保护规则仍需确认。
+PR 检查展示、artifact 验收及仓库套餐允许的 required checks/保护规则仍需确认。
 主机测试成功不会关闭 [发布验收](ota-release-readiness.md) 中的真实掉电、设备资源耗尽、
 声学、跨网络和长期运行门禁。

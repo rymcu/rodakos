@@ -96,9 +96,14 @@ bool HttpJson(const DeviceCloudConfig& cloud, const std::string& url,
     config.url = url.c_str(); config.method = body.empty() ? HTTP_METHOD_GET : HTTP_METHOD_POST;
     config.timeout_ms = 10000; config.buffer_size = 1024; config.buffer_size_tx = 1024;
     config.user_agent = "RodakOS/appearance-v1";
-    if (!ConfigureServerTrustHttp(cloud, url, config)) return false;
+    std::string connect_url;
+    if (!ConfigureServerTrustHttp(cloud, url, config, &connect_url)) return false;
     auto client = esp_http_client_init(&config);
     if (client == nullptr) return false;
+    if (!ConfigureServerTrustHttpHost(cloud, url, client)) {
+        esp_http_client_cleanup(client);
+        return false;
+    }
     const std::string authorization = "Bearer " + cloud.aiot_access_token;
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -758,13 +763,17 @@ bool AppearanceService::DownloadDesired(const std::string& desired) {
             http.buffer_size = 1024; http.user_agent = "RodakOS/appearance-v1";
             RangeHeaders headers; http.event_handler = RangeHeaderEvent; http.user_data = &headers;
             esp_http_client_handle_t client = nullptr;
+            std::string connect_url;
             for (unsigned attempt = 0; valid && total < next.size && attempt < 2; ++attempt) {
                 headers = {};
                 if (!cloud_.IsVoiceConfigCurrent(config) ||
-                    !ConfigureServerTrustHttp(config, url, http)) {
+                    !ConfigureServerTrustHttp(config, url, http, &connect_url)) {
                     valid = false; error = "server_trust_unavailable"; break;
                 }
                 client = esp_http_client_init(&http);
+                if (client != nullptr && !ConfigureServerTrustHttpHost(config, url, client)) {
+                    esp_http_client_cleanup(client); client = nullptr;
+                }
                 const std::string authorization = "Bearer " + config.aiot_access_token;
                 if (client != nullptr) esp_http_client_set_header(client, "Authorization", authorization.c_str());
                 const std::string range = "bytes=" + std::to_string(prefix_size) + "-";

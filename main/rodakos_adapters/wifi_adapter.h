@@ -20,7 +20,7 @@ struct WiFiScanResult {
  */
 enum class WiFiStatus {
     kDisconnected,    // 未连接
-    kConnecting,      // 连接中
+    kConnecting,      // 首次连接或已验证配置的后台恢复中
     kConnected,       // 已连接
     kFailed,          // 连接失败
 };
@@ -56,7 +56,7 @@ public:
      * 连接到 WiFi
      * @param ssid WiFi 名称
      * @param password 密码（如果没有密码传空字符串）
-     * @param callback 连接结果回调
+     * @param callback 连接结果回调；已成功的同一配置自动恢复 IP 后会再次通知 kConnected
      * @return true 连接启动成功，false 失败
      */
     virtual bool Connect(const std::string& ssid,

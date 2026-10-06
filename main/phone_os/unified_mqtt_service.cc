@@ -183,6 +183,7 @@ esp_mqtt_client_config_t BuildMqttClientConfig(const DeviceCloudConfig& config,
 bool HasSameMqttSessionIdentity(const DeviceCloudConfig& current,
                                 const DeviceCloudConfig& refreshed) {
     return current.server_trust.server_id == refreshed.server_trust.server_id &&
+           current.server_connect_address == refreshed.server_connect_address &&
            current.server_trust.ca_pem == refreshed.server_trust.ca_pem &&
            current.server_trust.tls_name == refreshed.server_trust.tls_name &&
            current.mqtt_protocol_version == refreshed.mqtt_protocol_version &&
@@ -649,9 +650,17 @@ void UnifiedMqttService::Connect() {
         return;
     }
 
-    std::string next_broker_uri = (next_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
+    const std::string logical_broker_uri = (next_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
                                   next_config.mqtt_broker_address + ":" +
                                   std::to_string(next_config.mqtt_broker_port);
+    std::string next_broker_uri = ServerTrustConnectUrl(next_config.server_trust, logical_broker_uri,
+                                                     next_config.server_connect_address);
+    if (next_broker_uri.empty()) return;
+    if (!next_config.server_connect_address.empty()) {
+        ESP_LOGI(TAG, "MQTTS verified route: address=%s port=%d tls_name=%s",
+                 next_config.server_connect_address.c_str(), next_config.mqtt_broker_port,
+                 next_config.server_trust.tls_name.c_str());
+    }
     std::string next_client_id = BuildClientId(next_config.mqtt_device_key);
     mqtt_tls_trust_ = next_config.server_trust;
     esp_mqtt_client_config_t mqtt_config =
@@ -881,9 +890,12 @@ void UnifiedMqttService::RefreshCredentials() {
         FinishCredentialRefresh();
         return;
     }
-    std::string broker_uri = (refreshed_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
+    const std::string logical_broker_uri = (refreshed_config.server_trust.empty() ? "mqtt://" : "mqtts://") +
                              refreshed_config.mqtt_broker_address + ":" +
                              std::to_string(refreshed_config.mqtt_broker_port);
+    std::string broker_uri = ServerTrustConnectUrl(refreshed_config.server_trust, logical_broker_uri,
+                                                 refreshed_config.server_connect_address);
+    if (broker_uri.empty()) { FinishCredentialRefresh(); return; }
     std::string client_id = BuildClientId(refreshed_config.mqtt_device_key);
     esp_mqtt_client_config_t mqtt_config =
         BuildMqttClientConfig(refreshed_config, broker_uri, client_id, mqtt_tls_trust_);

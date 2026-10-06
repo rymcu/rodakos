@@ -97,6 +97,7 @@ private:
     DeviceCloudConfig config_;
     bool config_prepared_ = false;
     std::string headers_;
+    std::string connect_uri_;
     std::string authorization_header_;
     std::string protocol_version_header_;
     std::string device_id_header_;

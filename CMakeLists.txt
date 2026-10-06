@@ -7,3 +7,4 @@ project(rodakos)
 
 include(cmake/codec_volume_patch.cmake)
 include(cmake/mqtt_event_patch.cmake)
+include(cmake/websocket_redirect_patch.cmake)

@@ -11,6 +11,7 @@ add_library(mqtt_volume_host STATIC
     ../light_service/host_driver.cc
     "${APP_MODEL}/third_party/cjson/cJSON.c"
     "${MAIN}/phone_os/unified_mqtt_service.cc"
+    "${MAIN}/phone_os/server_trust_route.cc"
     "${MAIN}/phone_os/mqtt_command_ledger.cc"
     "${MAIN}/phone_os/mqtt_volume_effect.cc"
     "${MAIN}/phone_os/mqtt_light_effect.cc"

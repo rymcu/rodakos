@@ -7,6 +7,9 @@ namespace rodakos {
 
 // The cloud snapshot must outlive the HTTP client: ESP-TLS borrows its strings.
 bool ConfigureServerTrustHttp(const DeviceCloudConfig& cloud, const std::string& url,
-                               esp_http_client_config_t& http);
+                               esp_http_client_config_t& http,
+                               std::string* connect_url = nullptr);
+bool ConfigureServerTrustHttpHost(const DeviceCloudConfig& cloud, const std::string& logical_url,
+                                 esp_http_client_handle_t client);
 
 }  // namespace rodakos

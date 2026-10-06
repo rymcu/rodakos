@@ -81,8 +81,8 @@ RODAK_TEST("HTTP helper clears stale borrowed TLS pointers even for legacy snaps
 
 RODAK_TEST("Authority record roundtrips active and candidate without admitting a changed pin") {
     rodakos::ServerAuthority authority;
-    authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true};
-    authority.pending = {trust_test::BootstrapUrl(9555), trust_test::TestTrust(), true};
+    authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, {}};
+    authority.pending = {trust_test::BootstrapUrl(9555), trust_test::TestTrust(), true, {}};
     std::string encoded;
     RODAK_CHECK(rodakos::EncodeServerAuthority(authority, encoded));
     rodakos::ServerAuthority decoded;
@@ -184,7 +184,7 @@ RODAK_TEST("DNS-SD candidates are bounded and a valid server survives an imperso
     const auto trust = trust_test::TestTrust();
     trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9444},
                                {trust.tls_name, trust.server_id, "1", 9555}};
-    trust_test::RespondBound(9555);
+    trust_test::RespondBoundAt("192.168.137.1", 9555);
     DeviceCloudConfig migrated;
     RODAK_CHECK(service.Refresh(migrated));
     RODAK_CHECK_EQ(migrated.provisioning_url, trust_test::BootstrapUrl(9555));
@@ -205,9 +205,10 @@ RODAK_TEST("DNS-SD ignores unrelated records and never trusts a TXT identity wit
     for (uint16_t port = 1000; port < 1010; ++port) {
         trust_test::discoveries.push_back({trust.tls_name, trust.server_id, "1", port});
     }
-    const auto urls = rodakos::DiscoverServerTrustBootstrapUrls(trust);
-    RODAK_CHECK_EQ(urls.size(), 3U);
-    RODAK_CHECK_EQ(urls.front(), trust_test::BootstrapUrl(1000));
+    const auto routes = rodakos::DiscoverServerTrustRoutes(trust);
+    RODAK_CHECK_EQ(routes.size(), 5U);
+    RODAK_CHECK_EQ(routes.front().bootstrap_url, trust_test::BootstrapUrl(1000));
+    RODAK_CHECK_EQ(routes.front().connect_address, "192.168.137.1");
 }
 
 RODAK_TEST("NVS pin latch rejects missing authority and corrupted identity without plaintext fallback") {
@@ -281,8 +282,8 @@ RODAK_TEST("All failed discovered endpoints leave the last authenticated record 
     trust_test::replies.clear();
     const auto trust = trust_test::TestTrust();
     trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9555}};
-    trust_test::RespondBound(9555);
-    trust_test::replies["https://" + trust.tls_name +
+    trust_test::RespondBoundAt("192.168.137.1", 9555);
+    trust_test::replies["https://192.168.137.1"
         ":9555/api/v1/aiot/devices/auth/token"] = {403, R"({"code":403})"};
     DeviceCloudConfig config;
     RODAK_CHECK_FALSE(service.Refresh(config));
@@ -338,4 +339,193 @@ RODAK_TEST("Unreadable or missing transaction barriers cannot enable a pinned ca
             RODAK_CHECK(trust_test::requests.empty());
         }
     }
+}
+
+RODAK_TEST("Numeric dial routes retain the logical origin and fixed TLS name") {
+    DeviceCloudConfig cloud;
+    cloud.server_trust = trust_test::TestTrust();
+    cloud.provisioning_url = trust_test::BootstrapUrl();
+    cloud.server_connect_address = "192.168.137.9";
+    const auto logical = rodakos::ServerTrustUrlOrigin(cloud.provisioning_url) + "/artifact?ticket=opaque";
+    esp_http_client_config_t http = {};
+    std::string dial;
+    RODAK_CHECK(rodakos::ConfigureServerTrustHttp(cloud, logical, http, &dial));
+    RODAK_CHECK_EQ(dial, "https://192.168.137.9:9443/artifact?ticket=opaque");
+    RODAK_CHECK_EQ(std::string(http.common_name), cloud.server_trust.tls_name);
+    RODAK_CHECK_EQ(std::string(http.cert_pem), cloud.server_trust.ca_pem);
+    RODAK_CHECK(http.disable_auto_redirect);
+    RODAK_CHECK_FALSE(rodakos::ConfigureServerTrustHttp(cloud, dial, http, &dial));
+    RODAK_CHECK_EQ(rodakos::ServerTrustConnectUrl(cloud.server_trust,
+        "wss://" + cloud.server_trust.tls_name + ":9443/voice", cloud.server_connect_address),
+        "wss://192.168.137.9:9443/voice");
+    RODAK_CHECK_EQ(rodakos::ServerTrustConnectUrl(cloud.server_trust,
+        "mqtts://" + cloud.server_trust.tls_name + ":8883", "2001:db8::5"),
+        "mqtts://[2001:db8::5]:8883");
+    for (const auto& bad : {"evil.local", "127.0.0.1", "0.0.0.0", "224.0.0.1",
+                            "fe80::1", "fe80::1%3", "::1", "::ffff:127.0.0.1"}) {
+        RODAK_CHECK(rodakos::NormalizeServerRouteAddress(bad).empty());
+        RODAK_CHECK(rodakos::ServerTrustConnectUrl(cloud.server_trust, logical, bad).empty());
+    }
+    RODAK_CHECK(rodakos::ServerTrustConnectUrl(cloud.server_trust,
+        "https://" + cloud.server_trust.tls_name + ".evil.local/token", cloud.server_connect_address).empty());
+}
+
+RODAK_TEST("Authority v1 remains readable while v2 persists only numeric routing hints") {
+    rodakos::ServerAuthority authority;
+    authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};
+    std::string encoded;
+    RODAK_CHECK(rodakos::EncodeServerAuthority(authority, encoded));
+    rodakos::ServerAuthority decoded;
+    std::string error;
+    RODAK_CHECK(rodakos::DecodeServerAuthority(encoded, decoded, error));
+    RODAK_CHECK_EQ(decoded.active.connect_address, "192.168.137.9");
+    cJSON* legacy = cJSON_Parse(encoded.c_str());
+    cJSON_SetNumberValue(cJSON_GetObjectItemCaseSensitive(legacy, "version"), 1);
+    cJSON_DeleteItemFromObjectCaseSensitive(cJSON_GetObjectItemCaseSensitive(legacy, "active"), "connect_address");
+    char* json = cJSON_PrintUnformatted(legacy);
+    RODAK_CHECK(rodakos::DecodeServerAuthority(json, decoded, error));
+    RODAK_CHECK(decoded.active.connect_address.empty());
+    cJSON_free(json); cJSON_Delete(legacy);
+    authority.active.connect_address = "attacker.local";
+    RODAK_CHECK_FALSE(rodakos::EncodeServerAuthority(authority, encoded));
+}
+
+RODAK_TEST("Same port A candidates skip failed TLS and persist the second route across reboot") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service;
+    Activate(service);
+    DeviceCloudConfig old; service.Load(old);
+    trust_test::requests.clear(); trust_test::replies.clear();
+    const auto trust = trust_test::TestTrust();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+                               {"192.168.137.8", "192.168.137.9"}}};
+    trust_test::RespondBoundAt("192.168.137.9");
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.Refresh(config));
+    RODAK_CHECK_EQ(config.provisioning_url, old.provisioning_url);
+    RODAK_CHECK_EQ(config.server_connect_address, "192.168.137.9");
+    RODAK_CHECK(config.cloud_generation > old.cloud_generation);
+    RODAK_CHECK_FALSE(service.IsVoiceConfigCurrent(old));
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/device_secret"], "existing-device-secret");
+    for (const auto& request : trust_test::requests) {
+        RODAK_CHECK_EQ(request.host_header, trust.tls_name + ":9443");
+        RODAK_CHECK_EQ(request.common_name, trust.tls_name);
+        if (request.url.find("192.168.137.8") != std::string::npos) {
+            RODAK_CHECK_FALSE(request.tls_verified); RODAK_CHECK(request.body.empty());
+        }
+        if (!request.body.empty()) {
+            RODAK_CHECK(request.tls_verified);
+            RODAK_CHECK(request.url.find("192.168.137.9") != std::string::npos);
+        }
+    }
+    DeviceCloudConfigService rebooted;
+    RODAK_CHECK(rebooted.Load(config));
+    RODAK_CHECK_EQ(config.server_connect_address, "192.168.137.9");
+    RODAK_CHECK_EQ(config.mqtt_broker_address, trust.tls_name);
+    trust_test::requests.clear(); trust_test::discoveries.clear();
+    RODAK_CHECK(rebooted.Refresh(config));
+    RODAK_CHECK_EQ(trust_test::requests.size(), 2U);
+    RODAK_CHECK(trust_test::requests.front().url.find("192.168.137.9") != std::string::npos);
+    trust_test::strings["unified_mqtt/server_key"] = rodakos::ServerAuthorityKey({config.provisioning_url, trust, true, {}});
+    RODAK_CHECK_FALSE(rebooted.Load(config));
+    RODAK_CHECK_FALSE(config.has_mqtt_config);
+}
+
+RODAK_TEST("A successful bootstrap cannot authorize a token connection with failed TLS") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    trust_test::requests.clear(); trust_test::replies.clear();
+    const auto trust = trust_test::TestTrust();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+                               {"192.168.137.8", "192.168.137.9"}}};
+    trust_test::RespondBoundAt("192.168.137.8");
+    trust_test::RespondBoundAt("192.168.137.9");
+    trust_test::replies["https://192.168.137.8:9443/api/v1/aiot/devices/auth/token"].tls_ok = false;
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.Refresh(config));
+    RODAK_CHECK_EQ(config.server_connect_address, "192.168.137.9");
+    for (const auto& request : trust_test::requests) {
+        if (request.url.find("192.168.137.8") != std::string::npos) RODAK_CHECK(request.body.empty());
+    }
+}
+
+RODAK_TEST("Authenticated credential rejection stops address search without re-pairing") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    const auto before = trust_test::strings;
+    trust_test::requests.clear(); trust_test::replies.clear();
+    const auto trust = trust_test::TestTrust();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+                               {"192.168.137.8", "192.168.137.9"}}};
+    trust_test::RespondBoundAt("192.168.137.8");
+    trust_test::RespondBoundAt("192.168.137.9");
+    trust_test::replies["https://192.168.137.8:9443/api/v1/aiot/devices/auth/token"] = {401, R"({"code":401})"};
+    DeviceCloudConfig config;
+    RODAK_CHECK_FALSE(service.Refresh(config));
+    RODAK_CHECK_EQ(trust_test::strings, before);
+    for (const auto& request : trust_test::requests) {
+        RODAK_CHECK(request.url.find("192.168.137.9") == std::string::npos);
+        RODAK_CHECK(request.url.find("binding/request") == std::string::npos);
+    }
+}
+
+RODAK_TEST("USB cannot supersede in-flight route verification and later invalidates its snapshot") {
+    for (bool during_connect : {false, true}) {
+        trust_test::Reset(); trust_test::SeedBoundLegacy();
+        DeviceCloudConfigService service; Activate(service);
+        trust_test::requests.clear(); trust_test::replies.clear();
+        const auto trust = trust_test::TestTrust();
+        trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443, {"192.168.137.9"}}};
+        trust_test::RespondBoundAt("192.168.137.9");
+        bool superseded = false;
+        const auto supersede = [&]() {
+            if (superseded) return;
+            superseded = true;
+            std::string proof;
+            RODAK_CHECK_EQ(service.SaveSerialProvisioning(trust_test::BootstrapUrl(9555), "", proof, &trust),
+                          ProvisioningUrlSaveResult::kFailedRolledBack);
+        };
+        if (during_connect) {
+            trust_test::on_http_open = [&](const auto& url) {
+                if (url.find("192.168.137.9") != std::string::npos) supersede();
+            };
+        } else trust_test::on_discovery = supersede;
+        DeviceCloudConfig config;
+        RODAK_CHECK(service.Refresh(config));
+        RODAK_CHECK(superseded);
+        RODAK_CHECK_EQ(config.provisioning_url, trust_test::BootstrapUrl());
+        RODAK_CHECK_EQ(config.server_connect_address, "192.168.137.9");
+        const auto verified = config;
+        std::string proof;
+        RODAK_CHECK_EQ(service.SaveSerialProvisioning(trust_test::BootstrapUrl(9555), "", proof, &trust),
+                      ProvisioningUrlSaveResult::kSaved);
+        RODAK_CHECK_FALSE(service.IsVoiceConfigCurrent(verified));
+        service.Load(config);
+        RODAK_CHECK_EQ(config.provisioning_url, trust_test::BootstrapUrl(9555));
+        RODAK_CHECK(config.server_trust_pending);
+        RODAK_CHECK(config.server_connect_address.empty());
+    }
+}
+
+RODAK_TEST("Discovery deduplicates address-port pairs and bounds invalid or scoped records") {
+    trust_test::Reset();
+    const auto trust = trust_test::TestTrust();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+        {"127.0.0.1", "224.0.0.1", "fe80::1", "192.168.137.8", "192.168.137.8", "2001:db8::5"}},
+        {trust.tls_name, trust.server_id, "1", 9443, {"192.168.137.8", "192.168.137.9"}},
+        {trust.tls_name, trust.server_id, "1", 9555, {"192.168.137.8"}}};
+    const auto routes = rodakos::DiscoverServerTrustRoutes(trust);
+    RODAK_CHECK_EQ(routes.size(), 4U);
+    RODAK_CHECK_EQ(routes[0].connect_address, "192.168.137.8");
+    RODAK_CHECK_EQ(routes[1].connect_address, "2001:db8::5");
+    RODAK_CHECK_EQ(routes[3].bootstrap_url, trust_test::BootstrapUrl(9555));
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+        {"192.168.137.1", "192.168.137.2", "192.168.137.3", "192.168.137.4",
+         "192.168.137.5", "192.168.137.6", "192.168.137.7", "192.168.137.8"}}};
+    const auto bounded = rodakos::DiscoverServerTrustRoutes(trust);
+    RODAK_CHECK_EQ(bounded.size(), 6U);
+    RODAK_CHECK_EQ(bounded.back().connect_address, "192.168.137.6");
+    trust_test::discoveries.front().addresses.assign(8, "127.0.0.1");
+    trust_test::discoveries.front().addresses.push_back("192.168.137.9");
+    RODAK_CHECK(rodakos::DiscoverServerTrustRoutes(trust).empty());
 }

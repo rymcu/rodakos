@@ -139,7 +139,8 @@ bool PerformJsonRequest(const DeviceCloudConfig& cloud, const std::string& url,
     config.buffer_size = 2048;
     config.buffer_size_tx = 2048;
     config.user_agent = "RodakOS/ota-v2";
-    if (!ConfigureServerTrustHttp(cloud, url, config)) {
+    std::string connect_url;
+    if (!ConfigureServerTrustHttp(cloud, url, config, &connect_url)) {
         return false;
     }
 
@@ -148,6 +149,10 @@ bool PerformJsonRequest(const DeviceCloudConfig& cloud, const std::string& url,
         return false;
     }
 
+    if (!ConfigureServerTrustHttpHost(cloud, url, client)) {
+        esp_http_client_cleanup(client);
+        return false;
+    }
     const std::string authorization = "Bearer " + cloud.mqtt_password;
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -604,7 +609,8 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
     config.timeout_ms = kHttpTimeoutMs;
     config.buffer_size = 4096;
     config.user_agent = "RodakOS/ota-v2";
-    if (!ConfigureServerTrustHttp(cloud, manifest.url, config)) {
+    std::string connect_url;
+    if (!ConfigureServerTrustHttp(cloud, manifest.url, config, &connect_url)) {
         return false;
     }
     if (file_service_->Exists(kOtaPendingPartPath)) {
@@ -625,6 +631,11 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
+        std::fclose(output);
+        return false;
+    }
+    if (!ConfigureServerTrustHttpHost(cloud, manifest.url, client)) {
+        esp_http_client_cleanup(client);
         std::fclose(output);
         return false;
     }

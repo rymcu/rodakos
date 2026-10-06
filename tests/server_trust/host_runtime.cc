@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <arpa/inet.h>
 
 namespace trust_test {
 std::map<std::string, std::string> strings;
@@ -18,10 +19,13 @@ std::vector<Discovery> discoveries;
 std::string read_error_key;
 std::string write_error_key;
 unsigned discovery_calls = 0;
+std::function<void(const std::string&)> on_http_open;
+std::function<void()> on_discovery;
 
 void Reset() {
     strings.clear(); booleans.clear(); integers.clear(); replies.clear(); requests.clear();
     discoveries.clear(); read_error_key.clear(); write_error_key.clear(); discovery_calls = 0;
+    on_http_open = {}; on_discovery = {};
 }
 
 rodakos::ServerTrust TestTrust() {
@@ -58,6 +62,18 @@ void RespondBound(int port, const std::string& transport) {
         R"({"code":200,"data":{"accessToken":"new-token","expiresIn":3600,"unifiedMqtt":{)"
         "\"transport\":\"" + transport + "\",\"broker_address\":\"" + TestTrust().tls_name +
         "\",\"broker_port\":8883,\"http_base_url\":\"" + origin + "\"}}}"};
+}
+void RespondBoundAt(const std::string& address, int port, const std::string& transport) {
+    const auto previous = replies;
+    RespondBound(port, transport);
+    const auto logical_origin = "https://" + TestTrust().tls_name + ":" + std::to_string(port);
+    std::map<std::string, Reply> routed;
+    for (const auto& path : {"/api/v1/aiot/devices/bootstrap", "/api/v1/aiot/devices/auth/token"}) {
+        const auto logical = logical_origin + path;
+        routed[rodakos::ServerTrustConnectUrl(TestTrust(), logical, address)] = replies[logical];
+    }
+    replies = previous;
+    for (const auto& [url, reply] : routed) replies[url] = reply;
 }
 }  // namespace trust_test
 
@@ -133,8 +149,16 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t* co
         ? trust_test::Reply{0, "", false} : found->second};
 }
 int esp_http_client_set_timeout_ms(esp_http_client_handle_t, int) { return 0; }
-int esp_http_client_set_header(esp_http_client_handle_t, const char*, const char*) { return 0; }
-int esp_http_client_open(esp_http_client_handle_t client, int) { return client->reply.tls_ok ? 0 : -1; }
+int esp_http_client_set_header(esp_http_client_handle_t client, const char* key, const char* value) {
+    if (std::string(key) == "Host") trust_test::requests[client->request_index].host_header = value;
+    return 0;
+}
+int esp_http_client_open(esp_http_client_handle_t client, int) {
+    const auto url = trust_test::requests[client->request_index].url;
+    if (trust_test::on_http_open) trust_test::on_http_open(url);
+    trust_test::requests[client->request_index].tls_verified = client->reply.tls_ok;
+    return client->reply.tls_ok ? 0 : -1;
+}
 int esp_http_client_write(esp_http_client_handle_t client, const char* body, int size) {
     trust_test::requests[client->request_index].body.append(body, size); return size;
 }
@@ -154,6 +178,7 @@ int esp_http_client_cleanup(esp_http_client_handle_t client) { delete client; re
 int mdns_init() { return 0; }
 int mdns_query_ptr(const char*, const char*, uint32_t, size_t maximum, mdns_result_t** result) {
     ++trust_test::discovery_calls;
+    if (trust_test::on_discovery) trust_test::on_discovery();
     mdns_result_t** next = result;
     for (size_t i = 0; i < std::min(maximum, trust_test::discoveries.size()); ++i) {
         const auto& item = trust_test::discoveries[i];
@@ -164,6 +189,16 @@ int mdns_query_ptr(const char*, const char*, uint32_t, size_t maximum, mdns_resu
         (*next)->txt = new mdns_txt_item_t[2];
         (*next)->txt[0] = {strdup("id"), strdup(item.server_id.c_str())};
         (*next)->txt[1] = {strdup("v"), strdup(item.version.c_str())};
+        auto** address_tail = &(*next)->addr;
+        for (const auto& address : item.addresses) {
+            auto* ip = new mdns_ip_addr_t;
+            if (inet_pton(AF_INET, address.c_str(), &ip->addr.u_addr.ip4.addr) == 1) {
+                ip->addr.type = ESP_IPADDR_TYPE_V4;
+            } else if (inet_pton(AF_INET6, address.c_str(), ip->addr.u_addr.ip6.addr) == 1) {
+                ip->addr.type = ESP_IPADDR_TYPE_V6;
+            } else { delete ip; continue; }
+            *address_tail = ip; address_tail = &ip->next;
+        }
         next = &(*next)->next;
     }
     return 0;
@@ -174,6 +209,9 @@ void mdns_query_results_free(mdns_result_t* item) {
         free(item->hostname);
         for (size_t i = 0; i < item->txt_count; ++i) {
             free(const_cast<char*>(item->txt[i].key)); free(const_cast<char*>(item->txt[i].value));
+        }
+        while (item->addr != nullptr) {
+            auto* address = item->addr; item->addr = address->next; delete address;
         }
         delete[] item->txt; delete item; item = next;
     }

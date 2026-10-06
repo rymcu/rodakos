@@ -9,6 +9,7 @@ add_executable(server_trust_tests
     host_runtime.cc
     ../app_model/third_party/cjson/cJSON.c
     ../../main/phone_os/server_trust.cc
+    ../../main/phone_os/server_trust_route.cc
     ../../main/phone_os/server_trust_transport.cc
     ../../main/phone_os/server_trust_discovery.cc
     ../../main/phone_os/device_cloud_config.cc

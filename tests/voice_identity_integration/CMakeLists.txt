@@ -13,6 +13,7 @@ add_library(voice_identity_integration_host STATIC
     "${ROOT}/tests/light_service/host_driver.cc"
     "${ROOT}/managed_components/espressif__cjson/cJSON/cJSON.c"
     "${MAIN}/phone_os/unified_mqtt_service.cc"
+    "${MAIN}/phone_os/server_trust_route.cc"
     "${MAIN}/phone_os/voice_wake_service.cc"
     "${MAIN}/phone_os/voice_wake_settings.cc"
     "${MAIN}/phone_os/voice_identity.cc"

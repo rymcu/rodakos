@@ -6,8 +6,10 @@
 #include <esp_netif.h>
 #include <esp_wifi.h>
 #include <esp_wifi_default.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/timers.h>
 #include <nvs_flash.h>
 
 #include <algorithm>
@@ -22,6 +24,7 @@
 #include <vector>
 
 static const char* TAG = "WiFiAdapter";
+ESP_EVENT_DEFINE_BASE(RODAK_WIFI_RECOVERY_EVENT);
 
 namespace {
 
@@ -30,6 +33,34 @@ namespace {
 thread_local bool g_in_wifi_event_handler = false;
 
 constexpr uint32_t kConnectDisconnectTimeoutMs = 2000;
+constexpr int64_t kRecoveryAttemptTimeoutUs = 20000000;
+constexpr int64_t kRecoveryStopPollUs = 1000000;
+
+struct TimerDrain {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool done = false;
+};
+
+void DrainTimerCallback(void* argument, uint32_t) {
+    auto* drain = static_cast<TimerDrain*>(argument);
+    std::lock_guard<std::mutex> lock(drain->mutex);
+    drain->done = true;
+    drain->condition.notify_all();
+}
+
+void DeleteRecoveryTimer(TimerHandle_t timer) {
+    if (timer == nullptr) return;
+    // Delete and barrier share the daemon FIFO. It must release every callback
+    // that could still reference this adapter before its storage is destroyed.
+    while (xTimerDelete(timer, portMAX_DELAY) != pdPASS) vTaskDelay(1);
+    TimerDrain drain;
+    while (xTimerPendFunctionCall(DrainTimerCallback, &drain, 0, portMAX_DELAY) != pdPASS) {
+        vTaskDelay(1);
+    }
+    std::unique_lock<std::mutex> lock(drain.mutex);
+    drain.condition.wait(lock, [&drain]() { return drain.done; });
+}
 
 bool EventSSIDMatchesOrUnknown(const std::string& target_ssid,
                                const uint8_t* event_ssid,
@@ -49,6 +80,11 @@ bool IsExplicitlyDisconnected(esp_err_t error) {
     // Do not treat an unknown/control-block error as proof that an in-flight
     // station operation has stopped.
     return error == ESP_ERR_WIFI_NOT_CONNECT;
+}
+
+bool APMatchesSSID(const wifi_ap_record_t& ap, const uint8_t* ssid, size_t length) {
+    return length <= 32 && memcmp(ap.ssid, ssid, length) == 0 &&
+           (length == 32 || ap.ssid[length] == 0);
 }
 
 }  // namespace
@@ -93,6 +129,8 @@ private:
     void* sta_netif_ = nullptr;
     esp_event_handler_instance_t wifi_event_instance_ = nullptr;
     esp_event_handler_instance_t ip_event_instance_ = nullptr;
+    esp_event_handler_instance_t recovery_event_instance_ = nullptr;
+    TimerHandle_t recovery_timer_ = nullptr;
 
     WiFiStatus status_ = WiFiStatus::kDisconnected;
     uint32_t connection_generation_ = 0;
@@ -105,6 +143,11 @@ private:
     std::function<void(WiFiStatus)> connect_callback_;
     int retry_count_ = 0;
     static constexpr int kMaxRetries = 3;
+    enum class RecoveryPhase { kIdle, kBackoff, kConnecting, kStopping };
+    bool connection_established_ = false;
+    RecoveryPhase recovery_phase_ = RecoveryPhase::kIdle;
+    uint32_t recovery_retry_count_ = 0;
+    int64_t recovery_due_us_ = 0;
 
     bool disconnect_pending_ = false;
     bool disconnect_command_pending_ = false;
@@ -135,14 +178,131 @@ private:
     void VerifyDisconnect(uint32_t generation, uint32_t event_serial);
     void ProcessScanDone(const wifi_event_sta_scan_done_t* event,
                          uint32_t expected_generation = 0);
+    static void RecoveryTimerCallback(TimerHandle_t timer);
+    void HandleRecoveryTick(uint32_t generation);
+    bool HandleRecoveryDisconnect(const wifi_event_sta_disconnected_t& event);
+    void ScheduleRecoveryLocked();
+    void CancelRecoveryLocked();
 };
 
 uint32_t ESP32WiFiAdapter::NextConnectionGenerationLocked() {
+    CancelRecoveryLocked();
     ++connection_generation_;
     if (connection_generation_ == 0) {
         ++connection_generation_;
     }
     return connection_generation_;
+}
+
+void ESP32WiFiAdapter::CancelRecoveryLocked() {
+    connection_established_ = false;
+    recovery_phase_ = RecoveryPhase::kIdle;
+    recovery_retry_count_ = 0;
+    recovery_due_us_ = 0;
+}
+
+void ESP32WiFiAdapter::ScheduleRecoveryLocked() {
+    const uint32_t delay = WiFiRecoveryBackoffMs(recovery_retry_count_);
+    if (recovery_retry_count_ < 5) ++recovery_retry_count_;
+    recovery_due_us_ = esp_timer_get_time() + static_cast<int64_t>(delay) * 1000;
+    recovery_phase_ = RecoveryPhase::kBackoff;
+    status_ = WiFiStatus::kConnecting;
+    sta_connected_generation_ = 0;
+    connected_ssid_.clear();
+    ip_address_.clear();
+    connect_callback_notified_ = false;
+    ESP_LOGI(TAG, "WiFi recovery scheduled in %u ms", static_cast<unsigned>(delay));
+}
+
+void ESP32WiFiAdapter::RecoveryTimerCallback(TimerHandle_t timer) {
+    auto* self = static_cast<ESP32WiFiAdapter*>(pvTimerGetTimerID(timer));
+    uint32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(self->state_mutex_);
+        if (!self->initialized_ || !self->connection_established_ ||
+            self->disconnect_pending_ || self->recovery_phase_ == RecoveryPhase::kIdle ||
+            esp_timer_get_time() < self->recovery_due_us_) return;
+        generation = self->connection_generation_;
+    }
+    // Never run driver APIs or block the shared timer daemon. A full event
+    // queue is retried on the next tick, with the same generation/deadline.
+    (void)esp_event_post(RODAK_WIFI_RECOVERY_EVENT, 0, &generation, sizeof(generation), 0);
+}
+
+void ESP32WiFiAdapter::HandleRecoveryTick(uint32_t generation) {
+    std::lock_guard<std::mutex> api_lock(api_mutex_);
+    RecoveryPhase phase;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!initialized_ || disconnect_pending_ || connection_generation_ != generation ||
+            !connection_established_ || recovery_phase_ == RecoveryPhase::kIdle ||
+            esp_timer_get_time() < recovery_due_us_) return;
+        phase = recovery_phase_;
+        if (phase == RecoveryPhase::kBackoff) {
+            recovery_phase_ = RecoveryPhase::kConnecting;
+            recovery_due_us_ = esp_timer_get_time() + kRecoveryAttemptTimeoutUs;
+            connect_command_pending_ = true;
+        } else {
+            // A timed-out association/DHCP attempt cannot overlap a new one.
+            recovery_phase_ = RecoveryPhase::kStopping;
+            recovery_due_us_ = esp_timer_get_time() + kRecoveryStopPollUs;
+            sta_connected_generation_ = 0;
+            connected_ssid_.clear();
+            ip_address_.clear();
+        }
+    }
+    if (phase == RecoveryPhase::kBackoff) {
+        ESP_LOGI(TAG, "Recovering WiFi connection");
+        const esp_err_t error = esp_wifi_connect();
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (initialized_ && connection_generation_ == generation && !disconnect_pending_) {
+            connect_command_pending_ = false;
+            if (error != ESP_OK) ScheduleRecoveryLocked();
+        }
+    } else {
+        if (phase == RecoveryPhase::kConnecting) {
+            ESP_LOGW(TAG, "WiFi recovery attempt timed out; waiting for disconnect");
+        }
+        const esp_err_t error = esp_wifi_disconnect();
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (initialized_ && connection_generation_ == generation && !disconnect_pending_ &&
+            recovery_phase_ == RecoveryPhase::kStopping && IsExplicitlyDisconnected(error)) {
+            ScheduleRecoveryLocked();
+        }
+    }
+}
+
+bool ESP32WiFiAdapter::HandleRecoveryDisconnect(const wifi_event_sta_disconnected_t& event) {
+    std::lock_guard<std::mutex> api_lock(api_mutex_);
+    uint32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!initialized_ || disconnect_pending_ || !connection_established_) return false;
+        if (connect_command_pending_ || recovery_phase_ == RecoveryPhase::kBackoff ||
+            !EventSSIDMatchesOrUnknown(target_ssid_, event.ssid, event.ssid_len)) return true;
+        generation = connection_generation_;
+    }
+    wifi_ap_record_t current_ap = {};
+    const esp_err_t error = esp_wifi_sta_get_ap_info(&current_ap);
+    // A delayed DISCONNECTED for the same SSID cannot tear down a live link.
+    if (error == ESP_OK) return true;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (initialized_ && !disconnect_pending_ && connection_generation_ == generation &&
+        connection_established_ && recovery_phase_ != RecoveryPhase::kBackoff) {
+        if (IsExplicitlyDisconnected(error)) {
+            ScheduleRecoveryLocked();
+        } else {
+            // Unknown driver state is not proof of a closed attempt. Keep the
+            // cancellation barrier armed and retry it without overlapping STA work.
+            recovery_phase_ = RecoveryPhase::kStopping;
+            recovery_due_us_ = esp_timer_get_time() + kRecoveryStopPollUs;
+            status_ = WiFiStatus::kConnecting;
+            sta_connected_generation_ = 0;
+            connected_ssid_.clear();
+            ip_address_.clear();
+        }
+    }
+    return true;
 }
 
 uint32_t ESP32WiFiAdapter::NextScanGenerationLocked() {
@@ -298,11 +458,40 @@ bool ESP32WiFiAdapter::Init() {
         return false;
     }
 
+    esp_event_handler_instance_t recovery_instance = nullptr;
+    TimerHandle_t recovery_timer = nullptr;
+    ret = esp_event_handler_instance_register(
+        RODAK_WIFI_RECOVERY_EVENT, ESP_EVENT_ANY_ID, &ESP32WiFiAdapter::WiFiEventHandler,
+        this, &recovery_instance);
+    if (ret == ESP_OK) {
+        recovery_timer = xTimerCreate("wifi_recovery", pdMS_TO_TICKS(1000), pdTRUE,
+                                      this, &ESP32WiFiAdapter::RecoveryTimerCallback);
+        if (recovery_timer == nullptr) ret = ESP_ERR_NO_MEM;
+        else if (xTimerStart(recovery_timer, portMAX_DELAY) != pdPASS) ret = ESP_FAIL;
+    }
+    if (ret != ESP_OK) {
+        DeleteRecoveryTimer(recovery_timer);
+        if (recovery_instance != nullptr) {
+            (void)esp_event_handler_instance_unregister(
+                RODAK_WIFI_RECOVERY_EVENT, ESP_EVENT_ANY_ID, recovery_instance);
+        }
+        (void)esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_instance);
+        (void)esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_instance);
+        std::lock_guard<std::mutex> api_lock(api_mutex_);
+        (void)esp_wifi_stop();
+        (void)esp_wifi_deinit();
+        esp_netif_destroy_default_wifi(sta_netif);
+        return false;
+    }
+
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         sta_netif_ = sta_netif;
         wifi_event_instance_ = wifi_instance;
         ip_event_instance_ = ip_instance;
+        recovery_event_instance_ = recovery_instance;
+        recovery_timer_ = recovery_timer;
+        CancelRecoveryLocked();
         wifi_driver_initialized_ = true;
         wifi_driver_started_ = true;
         initialized_ = true;
@@ -342,6 +531,8 @@ void ESP32WiFiAdapter::Deinit() {
 
     esp_event_handler_instance_t wifi_instance = nullptr;
     esp_event_handler_instance_t ip_instance = nullptr;
+    esp_event_handler_instance_t recovery_instance = nullptr;
+    TimerHandle_t recovery_timer = nullptr;
     void* sta_netif = nullptr;
     bool driver_initialized = false;
     bool driver_started = false;
@@ -377,6 +568,10 @@ void ESP32WiFiAdapter::Deinit() {
         ip_instance = ip_event_instance_;
         wifi_event_instance_ = nullptr;
         ip_event_instance_ = nullptr;
+        recovery_instance = recovery_event_instance_;
+        recovery_event_instance_ = nullptr;
+        recovery_timer = recovery_timer_;
+        recovery_timer_ = nullptr;
         sta_netif = sta_netif_;
         sta_netif_ = nullptr;
         driver_initialized = wifi_driver_initialized_;
@@ -387,6 +582,12 @@ void ESP32WiFiAdapter::Deinit() {
     }
 
     api_lock.unlock();
+
+    DeleteRecoveryTimer(recovery_timer);
+    if (recovery_instance != nullptr) {
+        (void)esp_event_handler_instance_unregister(
+            RODAK_WIFI_RECOVERY_EVENT, ESP_EVENT_ANY_ID, recovery_instance);
+    }
 
     if (ip_instance != nullptr) {
         const esp_err_t err = esp_event_handler_instance_unregister(
@@ -969,7 +1170,9 @@ void ESP32WiFiAdapter::WiFiEventHandler(void* arg, esp_event_base_t event_base,
 
 void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                                        int32_t event_id, void* event_data) {
-    if (event_base == WIFI_EVENT) {
+    if (event_base == RODAK_WIFI_RECOVERY_EVENT) {
+        if (event_data != nullptr) HandleRecoveryTick(*static_cast<uint32_t*>(event_data));
+    } else if (event_base == WIFI_EVENT) {
         switch (event_id) {
             case WIFI_EVENT_STA_START:
                 ESP_LOGI(TAG, "WiFi STA started");
@@ -980,11 +1183,23 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                 if (event == nullptr || event->ssid_len > sizeof(event->ssid)) {
                     break;
                 }
+                // IDF events carry no generation. Check the live station under
+                // the driver owner lock before assigning one to a delayed event.
+                std::lock_guard<std::mutex> api_lock(api_mutex_);
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex_);
+                    if (!initialized_ || disconnect_pending_) break;
+                }
+                wifi_ap_record_t current_ap = {};
+                if (esp_wifi_sta_get_ap_info(&current_ap) != ESP_OK ||
+                    !APMatchesSSID(current_ap, event->ssid, event->ssid_len)) break;
                 std::string connected_ssid;
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     if (initialized_ && !disconnect_pending_ &&
                         !connect_command_pending_ && status_ == WiFiStatus::kConnecting &&
+                        recovery_phase_ != RecoveryPhase::kBackoff &&
+                        recovery_phase_ != RecoveryPhase::kStopping &&
                         WiFiEventMatchesTargetSSID(
                             target_ssid_, event->ssid, event->ssid_len)) {
                         sta_connected_generation_ = connection_generation_;
@@ -1004,6 +1219,7 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                 if (event == nullptr || event->ssid_len > sizeof(event->ssid)) {
                     break;
                 }
+                if (HandleRecoveryDisconnect(*event)) break;
 
                 bool verify_disconnect = false;
                 uint32_t verify_generation = 0;
@@ -1131,10 +1347,26 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
         std::function<void(WiFiStatus)> callback;
         {
+            std::lock_guard<std::mutex> api_lock(api_mutex_);
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                if (!initialized_ || disconnect_pending_ || event->esp_netif != sta_netif_) return;
+            }
+            wifi_ap_record_t current_ap = {};
+            esp_netif_ip_info_t current_ip = {};
+            if (event->esp_netif == nullptr ||
+                esp_wifi_sta_get_ap_info(&current_ap) != ESP_OK ||
+                esp_netif_get_ip_info(event->esp_netif, &current_ip) != ESP_OK ||
+                current_ip.ip.addr == 0 || current_ip.ip.addr != event->ip_info.ip.addr) return;
             std::lock_guard<std::mutex> lock(state_mutex_);
             const bool active_status = status_ == WiFiStatus::kConnecting ||
                                        status_ == WiFiStatus::kConnected;
             if (!initialized_ || disconnect_pending_ || !active_status ||
+                recovery_phase_ == RecoveryPhase::kBackoff ||
+                recovery_phase_ == RecoveryPhase::kStopping ||
+                (event->esp_netif != nullptr && event->esp_netif != sta_netif_) ||
+                !APMatchesSSID(current_ap, reinterpret_cast<const uint8_t*>(target_ssid_.data()),
+                               target_ssid_.size()) ||
                 !ShouldAcceptWiFiGotIP(
                     connection_generation_, sta_connected_generation_, true)) {
                 return;
@@ -1142,6 +1374,10 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
             ip_address_ = ip_str;
             status_ = WiFiStatus::kConnected;
             retry_count_ = 0;
+            connection_established_ = true;
+            recovery_phase_ = RecoveryPhase::kIdle;
+            recovery_retry_count_ = 0;
+            recovery_due_us_ = 0;
             if (connect_callback_ != nullptr && !connect_callback_notified_) {
                 connect_callback_notified_ = true;
                 callback = connect_callback_;
@@ -1153,12 +1389,31 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
             callback(WiFiStatus::kConnected);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        auto* event = static_cast<ip_event_got_ip_t*>(event_data);
+        if (event == nullptr || event->esp_netif == nullptr) return;
+        std::lock_guard<std::mutex> api_lock(api_mutex_);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!initialized_ || disconnect_pending_ || event->esp_netif != sta_netif_ ||
+                sta_connected_generation_ != connection_generation_ ||
+                status_ != WiFiStatus::kConnected) return;
+        }
+        // LOST_IP is queued and carries no generation. A later DHCP renewal
+        // or another netif's event must not arm a watchdog against a live link.
+        esp_netif_ip_info_t current_ip = {};
+        if (esp_netif_get_ip_info(event->esp_netif, &current_ip) != ESP_OK ||
+            current_ip.ip.addr != 0) return;
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (initialized_ && !disconnect_pending_ &&
+            event->esp_netif == sta_netif_ &&
             sta_connected_generation_ == connection_generation_ &&
             status_ == WiFiStatus::kConnected) {
             ip_address_.clear();
             status_ = WiFiStatus::kConnecting;
+            // DHCP loss can occur without a DISCONNECTED event. Allow renewal,
+            // then use the same bounded stop barrier if it never arrives.
+            recovery_phase_ = RecoveryPhase::kConnecting;
+            recovery_due_us_ = esp_timer_get_time() + kRecoveryAttemptTimeoutUs;
         }
     }
 }

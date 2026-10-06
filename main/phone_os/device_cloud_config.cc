@@ -261,7 +261,8 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
     http_config.buffer_size = 1024;
     http_config.buffer_size_tx = 1024;
     http_config.user_agent = "RodakOS/aiot";
-    if (!ConfigureServerTrustHttp(cloud, url, http_config)) {
+    std::string connect_url;
+    if (!ConfigureServerTrustHttp(cloud, url, http_config, &connect_url)) {
         error = "AIoT destination does not match the installed server trust";
         return false;
     }
@@ -269,6 +270,11 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == nullptr) {
         error = "Failed to create AIoT HTTP client";
+        return false;
+    }
+    if (!ConfigureServerTrustHttpHost(cloud, url, client)) {
+        esp_http_client_cleanup(client);
+        error = "Cannot configure AIoT logical HTTP host";
         return false;
     }
     const auto cancelled = [&]() {
@@ -569,7 +575,8 @@ bool PersistMqttConfig(const DeviceCloudConfig& config) {
     Settings settings(kMqttNamespace, true);
     const bool written =
         settings.SetString(kCachedAuthorityKey,
-                          ServerAuthorityKey({config.provisioning_url, config.server_trust})) &&
+                          ServerAuthorityKey({config.provisioning_url, config.server_trust,
+                                              false, config.server_connect_address})) &&
         settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version) &&
         settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address) &&
         settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port) &&
@@ -669,6 +676,7 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     }
 
     config.server_trust = {};
+    config.server_connect_address.clear();
     config.server_trust_error = false;
     config.server_trust_pending = false;
     config.server_requires_bound_identity = false;
@@ -692,6 +700,7 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
             config.server_trust_pending = !authority.pending.trust.empty();
             const auto& endpoint = config.server_trust_pending ? authority.pending : authority.active;
             config.server_trust = endpoint.trust;
+            config.server_connect_address = endpoint.connect_address;
             config.provisioning_url = endpoint.bootstrap_url;
             config.server_requires_bound_identity = endpoint.requires_bound_identity;
             const auto secret_status = cloud_settings.ReadString(
@@ -801,7 +810,8 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
         std::string cached_authority;
         const auto cache_status = mqtt_settings.ReadString(kCachedAuthorityKey, cached_authority, 512);
         const bool matching_cache = cache_status == SettingsStringReadStatus::kOk &&
-            cached_authority == ServerAuthorityKey({config.provisioning_url, config.server_trust});
+            cached_authority == ServerAuthorityKey({config.provisioning_url, config.server_trust,
+                                                    false, config.server_connect_address});
         if (!matching_cache || config.server_trust_pending ||
             config.mqtt_broker_address != config.server_trust.tls_name ||
             ServerTrustUrlOrigin(config.mqtt_http_base_url) !=
@@ -824,7 +834,9 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
 
 bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                           const std::function<bool()>& can_continue,
-                                          int64_t deadline_ms, bool allow_pairing) {
+                                          int64_t deadline_ms, bool allow_pairing,
+                                          bool* credentials_rejected) {
+    if (credentials_rejected != nullptr) *credentials_rejected = false;
     const int64_t refresh_started_ms = esp_timer_get_time() / 1000;
     if (config.server_trust_error) {
         SetError("Server trust record is unreadable; refusing cloud access");
@@ -833,8 +845,17 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     uint32_t config_generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        config_generation = config_generation_;
+        config_generation = config.cloud_generation;
+        if (config_generation != config_generation_) {
+            last_error_ = "AIoT refresh snapshot was superseded before connection";
+            return false;
+        }
     }
+    const auto request_allowed = [&]() {
+        if (can_continue && !can_continue()) return false;
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        return config_generation == config_generation_;
+    };
     const std::string bootstrap_url = ResolveAiotBootstrapUrl(config.provisioning_url);
     const std::string origin = UrlOrigin(bootstrap_url);
     if (origin.empty()) {
@@ -846,7 +867,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     HttpResponse bootstrap_response;
     if (!PerformHttpRequest(config, bootstrap_url, HTTP_METHOD_GET, {}, {},
                             kMaxAiotResponseBytes, bootstrap_response, error,
-                            can_continue, deadline_ms)) {
+                            request_allowed, deadline_ms)) {
         SetError(error);
         return false;
     }
@@ -950,7 +971,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         HttpResponse token_response;
         if (!PerformHttpRequest(config, origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
                                 kMaxAiotResponseBytes, token_response, error,
-                                can_continue, deadline_ms)) {
+                                request_allowed, deadline_ms)) {
             SetError(error);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -959,6 +980,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (token_response.status_code == 401 || token_response.status_code == 403 ||
             token_response.status_code == 404 || business_code == 401 ||
             business_code == 403 || business_code == 404) {
+            if (credentials_rejected != nullptr) *credentials_rejected = true;
             if (!allow_pairing || !config.server_trust.empty()) {
                 SetError("Rodak rejected device credentials; reconnect from Settings");
                 cJSON_Delete(bootstrap_root);
@@ -1025,7 +1047,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         const std::string pairing_url = origin + kAiotBindingRequestPath;
         HttpResponse response;
         if (!PerformHttpRequest(config, pairing_url, HTTP_METHOD_POST, request_json, {},
-                                kMaxAiotResponseBytes, response, error)) {
+                                kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
             SetError(error);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1054,7 +1076,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                        config.pairing_request_id + "/status";
         HttpResponse response;
         if (!PerformHttpRequest(config, status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
-                                kMaxAiotResponseBytes, response, error)) {
+                                kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
             SetError(error);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1415,7 +1437,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 bool authority_ready = true;
                 if (!config.server_trust.empty()) {
                     ServerAuthority authority;
-                    authority.active = {config.provisioning_url, config.server_trust, true};
+                    authority.active = {config.provisioning_url, config.server_trust, true,
+                                        config.server_connect_address};
                     authority_ready = EncodeServerAuthority(authority, promoted_authority);
                 }
 
@@ -1518,25 +1541,40 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
 }
 
 bool DeviceCloudConfigService::RefreshWithDiscovery(DeviceCloudConfig& config) {
-    if (RefreshAiot(config)) return true;
+    const auto initial_generation = config.cloud_generation;
+    bool credentials_rejected = false;
+    if (RefreshAiot(config, {}, 0, true, &credentials_rejected)) return true;
+    if (credentials_rejected) { Load(config); return false; }
     Load(config);
+    if (config.cloud_generation != initial_generation) return false;
     if (config.server_trust.empty() || config.server_trust_error) return false;
     // A pending enrollment must keep its request on the USB-selected endpoint;
     // discovery never moves an unconfirmed pairing to a different authority.
     if (!config.aiot_registered || !config.aiot_activated) return false;
     const auto original_url = config.provisioning_url;
-    const auto candidates = DiscoverServerTrustBootstrapUrls(config.server_trust);
-    for (const auto& url : candidates) {
-        if (url == original_url) continue;
+    const auto original_address = config.server_connect_address;
+    const auto generation = config.cloud_generation;
+    const auto candidates = DiscoverServerTrustRoutes(config.server_trust);
+    for (const auto& route : candidates) {
+        if (route.bootstrap_url == original_url && route.connect_address == original_address) continue;
         auto candidate = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
         if (candidate == nullptr) break;
         Load(*candidate);
-        candidate->provisioning_url = url;
-        if (RefreshAiot(*candidate, {}, esp_timer_get_time() / 1000 + 6000, false)) {
+        if (candidate->cloud_generation != generation || candidate->server_trust_error) break;
+        candidate->provisioning_url = route.bootstrap_url;
+        candidate->server_connect_address = route.connect_address;
+        ESP_LOGI(TAG, "Verifying candidate TLS route: address=%s endpoint=%s",
+                 route.connect_address.c_str(), route.bootstrap_url.c_str());
+        if (RefreshAiot(*candidate, {}, esp_timer_get_time() / 1000 + 6000, false,
+                        &credentials_rejected)) {
             config = std::move(*candidate);
-            ESP_LOGI(TAG, "Authenticated LAN endpoint migration completed");
+            ESP_LOGI(TAG, "Authenticated LAN endpoint migration completed: address=%s endpoint=%s",
+                     config.server_connect_address.c_str(), config.provisioning_url.c_str());
             return true;
         }
+        ESP_LOGW(TAG, "Candidate route rejected: address=%s credential_rejection=%d",
+                 route.connect_address.c_str(), credentials_rejected);
+        if (credentials_rejected) break;
     }
     Load(config);
     return false;
@@ -1670,7 +1708,7 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
             return ProvisioningUrlSaveResult::kFailedRolledBack;
         }
         authority.pending = {normalized, *requested_trust,
-            previous->aiot_registered && previous->aiot_activated};
+            previous->aiot_registered && previous->aiot_activated, {}};
         std::string candidate;
         if (!EncodeServerAuthority(authority, candidate)) {
             SetError("Server authority candidate cannot be encoded");
@@ -1873,6 +1911,7 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
     DeviceCloudConfig empty;
     empty.provisioning_url = config.provisioning_url;
     empty.server_trust = config.server_trust;
+    empty.server_connect_address = config.server_connect_address;
     empty.server_authority_record = config.server_authority_record;
     empty.realtime_voice_protocol_version = 1;
     ResetMqttConfig(empty);
@@ -1891,7 +1930,8 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
         bool authority_saved = true;
         if (!config.server_trust.empty()) {
             ServerAuthority authority;
-            authority.active = {config.provisioning_url, config.server_trust, false};
+            authority.active = {config.provisioning_url, config.server_trust, false,
+                                config.server_connect_address};
             std::string record;
             authority_saved = EncodeServerAuthority(authority, record);
             if (authority_saved) {

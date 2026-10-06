@@ -1,0 +1,23 @@
+{
+  "component": "espressif/esp_websocket_client",
+  "version": "1.8.0",
+  "registry_url": "https://components.espressif.com/",
+  "component_hash": "dc00233af846f3a744ada283a300e0d586040aadc3ee67361645ecdce4523672",
+  "repository": "git://github.com/espressif/esp-protocols.git",
+  "repository_commit": "70bf122fc8bc74622dcf7e15233b5b2af9088df5",
+  "repository_path": "components/esp_websocket_client",
+  "source_hashes_lf": {
+    "esp_websocket_client.c": "18041ec37d3456bc1ecb3275a78c3ae64679f57f049b5b05af169ef6b1857c77",
+    "include/esp_websocket_client.h": "382fdce725ff80c15172e2850dcb41702a655857bed76fff7ac4e9c811311cfa",
+    "idf_component.yml": "2304c43d6c508feee04e7653dc07934f9e4b3a1dface06945a8ec2bdfa3f3410",
+    "CMakeLists.txt": "2d26aec8d9f48972e451b7d74c4f2295cd8acd8494e4a33219af6325daf81399",
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "idf_version": "6.0.2",
+  "idf_source_hashes_lf": {
+    "components/tcp_transport/transport_ws.c": "dbe8de842a538bb671229ae6e5ad476b54bd4fe846903c1f508e21d6ab593a03",
+    "components/tcp_transport/include/esp_transport_ws.h": "223d09886816ecb60a52195875b878082f92ae48f49b41de3054490e658e560f",
+    "components/esp_common/include/esp_idf_version.h": "d240bb67f8ed6491cf90ec1bd90888efd65cf7c21c1eb22fe9414543af9a8e73"
+  },
+  "license": "Apache-2.0"
+}

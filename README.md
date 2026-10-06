@@ -11,13 +11,17 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
 - Optional USB-installed server trust now enables pinned HTTPS, MQTTS and WSS with
-  a stable `.local` server name. Bounded DNS-SD port candidates are authenticated before
-  endpoint promotion, preserving an existing device binding. Package `20261007-010516`
+  a stable `.local` server name. Bounded DNS-SD address/port candidates are authenticated before
+  endpoint promotion, preserving an existing device binding. Numeric routes now persist
+  in authority v2 and are reused by every trusted transport; host tests cover same-port
+  address failover. WiFi recovery keeps retrying after AP loss. The new paths still
+  require identified-firmware hardware acceptance. Package `20261007-010516`
   passed trusted USB refresh, MQTTS/telemetry and both port migrations on COM3 with
   wake listening and no crypto allocation errors; port recovery includes a controlled
   device restart. A separate HTTPS wrong-certificate test was rejected before any HTTP
-  request. Actual network changes, WSS, independent address probing,
-  damaged-trust recovery and power-cut acceptance remain open. See
+  request. Its dated evidence predates independent numeric-address probing. Further
+  hardware evidence, WSS Host compatibility, and the remaining damaged-trust and
+  power-cut gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md).
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.

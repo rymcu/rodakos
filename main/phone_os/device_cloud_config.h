@@ -22,6 +22,7 @@ inline constexpr int kRodakAiotProtocolVersion = 1;
 struct DeviceCloudConfig {
     std::string provisioning_url;
     ServerTrust server_trust;
+    std::string server_connect_address;
     bool server_trust_error = false;
     bool server_trust_pending = false;
     bool server_requires_bound_identity = false;
@@ -126,7 +127,8 @@ private:
     bool CreateProvisioningBindingProof(const std::string& nonce, std::string& proof);
     bool RefreshAiot(DeviceCloudConfig& config,
                      const std::function<bool()>& can_continue = {},
-                     int64_t deadline_ms = 0, bool allow_pairing = true);
+                     int64_t deadline_ms = 0, bool allow_pairing = true,
+                     bool* credentials_rejected = nullptr);
     bool RefreshWithDiscovery(DeviceCloudConfig& config);
     void SetError(const std::string& message);
 

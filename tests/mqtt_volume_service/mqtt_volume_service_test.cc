@@ -31,6 +31,50 @@ RODAK_TEST("MQTT supports repeated unconfigured starts and stops") {
     }
 }
 
+RODAK_TEST("MQTTS client recreation reuses its verified numeric route with the logical TLS name") {
+    for (const auto& route : {"192.168.137.9", "2001:db8::5"}) {
+        Fixture f;
+        auto config = Config();
+        config.server_trust.server_id = std::string(64, 'a');
+        config.server_trust.tls_name = "rodak-aaaaaaaaaaaaaaaa.local";
+        config.server_trust.ca_pem = std::string(800, 'C');
+        config.server_connect_address = route;
+        config.mqtt_broker_address = config.server_trust.tls_name;
+        config.mqtt_broker_port = 8883;
+        SetConfig(config);
+        for (int iteration = 0; iteration < 2; ++iteration) {
+            f.Start();
+            const auto tls = BrokerTls();
+            const auto host = std::string(route).find(':') == std::string::npos
+                ? std::string(route) : "[" + std::string(route) + "]";
+            RODAK_CHECK_EQ(tls.uri, "mqtts://" + host + ":8883");
+            RODAK_CHECK_EQ(tls.common_name, config.server_trust.tls_name);
+            RODAK_CHECK_EQ(tls.certificate, config.server_trust.ca_pem);
+            f.service.Stop();
+        }
+    }
+}
+
+RODAK_TEST("A changed verified route isolates the MQTT session even with unchanged credentials") {
+    Fixture f;
+    auto config = Config();
+    config.server_trust.server_id = std::string(64, 'a');
+    config.server_trust.tls_name = "rodak-aaaaaaaaaaaaaaaa.local";
+    config.server_trust.ca_pem = std::string(800, 'C');
+    config.server_connect_address = "192.168.137.8";
+    config.mqtt_broker_address = config.server_trust.tls_name;
+    config.mqtt_broker_port = 8883;
+    SetConfig(config);
+    f.Start();
+    Disconnect();
+    config.server_connect_address = "192.168.137.9";
+    SetConfig(config);
+    RejectCredentials();
+    RODAK_CHECK(WaitUntil([]() { return Restarts() > 0; }));
+    RODAK_CHECK_EQ(CredentialRevision(), 0U);
+    RODAK_CHECK_EQ(BrokerTls().uri, "mqtts://192.168.137.8:8883");
+}
+
 RODAK_TEST("MQTT serializes concurrent starts and stops") {
     Fixture f;
     auto config = Config();
