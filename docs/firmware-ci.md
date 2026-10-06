@@ -20,6 +20,12 @@ Component Manager 固定 3.0.3，Board Manager 所需 PyYAML 固定 6.0.2。完�
 漂移；最终 lock 会随 artifact 保存。缓存仅包含下载源和 ccache，不缓存生成代码、
 sdkconfig、CMake build tree、固件或签名密钥。
 
+为防止冷启动生成 manifest 触发重新求解时升级传递依赖，CI 从原 lock 的全部 service
+条目生成精确版本约束，通过 Component Manager 3.0.3 的 `IDF_COMPONENT_CONSTRAINT_FILES`
+传入每次 IDF 操作。约束不会添加、删除或放宽依赖；reconfigure 后和完整构建后都执行
+原有完整依赖图比较，仅允许 `manifest_hash` 变化。无论比较是否成功，都先保存原/新
+lock；失败时输出逐项 diff，不能把版本、路径或来源变化当作平台差异忽略。
+
 ## 现有流程的 Linux 编排
 
 [CI 脚本](../.github/workflows/scripts/firmware_ci.py) 对应现有入口：
@@ -61,7 +67,7 @@ artifact 路径只包含公开证据、ELF/map、生成 board 文件和两个 de
 runner 临时目录；包校验额外拒绝带 private-key PEM 的文件。公共 `ota-public.pem`
 随包保留，便于独立验证。CI 不接受生产密钥，不访问串口、不自动发布或刷写。
 
-结果保留 14 天：`identity.json`、`result.json`、工具/构建日志、最终 lock、sdkconfig、
+结果保留 14 天：`identity.json`、`result.json`、工具/构建日志、原/新 lock、版本约束、sdkconfig、
 CMake/project/flash 元数据、ELF 符号表、生成 board 配置和两个开发签名包。
 失败时先查看 `build.log`；尚未生成的后续证据不会被假称已通过。
 
@@ -101,3 +107,15 @@ overlay 实际编译来源检查通过，没有重新构建或修改这些产物
 本地 3 个回归测试通过，包含实际 lock 的全部 27 个 service 组件以及 21 个非法 URL/
 来源负例；生产 helper 对已存在组件执行只读目录哈希校验全部通过，lock 字节未变。
 两个工作流重新通过 actionlint；此次没有运行本机固件构建或重新下载组件。
+
+## 2026-10-07 第二轮依赖漂移与修复
+
+候选 `f72cb79` 的 [Actions 37512599635](https://github.com/rymcu/rodakos/actions/runs/37512599635)
+通过 Registry 输入检查并完成主应用和 Recovery 编译，但在依赖图门禁失败。日志确认
+重新求解把 `espressif/usb` 从锁定的 `1.5.0` 升级为 `1.6.0`；这是实际版本漂移，不能
+忽略。该轮没有通过最终固件校验，也没有生成经过验证的开发包。
+
+修复加入上述 27 个精确版本约束及编译前门禁，保留所有原有来源、版本、哈希与图比较。
+6 个离线回归测试通过：官方 3.0.3 solver 在这组约束下仅保留 USB 1.5.0；版本、哈希、
+Registry、本地路径、组件删除、依赖边、直接依赖和 target 的 8 类变化仍被拒绝，原/新
+lock 与 diff 在失败时保留。新的云端完整构建仍需后续 Actions 成功证据。

@@ -1,6 +1,7 @@
 """Linux CI orchestration for the existing Board Manager and signed OTA contracts."""
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -67,6 +68,32 @@ def environment(idf):
 def validate_registry_source(name, source):
     require(isinstance(source, dict) and source.get("registry_url") in REVIEWED_REGISTRY_URLS,
             f"Unreviewed component Registry: {name}")
+
+
+def locked_component_constraints(original_lock):
+    constraints = []
+    for name, entry in sorted(original_lock["dependencies"].items()):
+        if entry["source"]["type"] == "service":
+            validate_registry_source(name, entry["source"])
+            constraints.append(f"{name}=={entry['version']}")
+    require(constraints, "No locked Registry versions to constrain")
+    return "\n".join(constraints) + "\n"
+
+
+def verify_dependency_graph(original_lock, current_lock, output):
+    # Preserve diagnostics before rejecting drift, including failed cold resolutions.
+    write_json(output / "source-lock.json", original_lock)
+    write_json(output / "resolved-lock.json", current_lock)
+    original = {k: v for k, v in original_lock.items() if k != "manifest_hash"}
+    current = {k: v for k, v in current_lock.items() if k != "manifest_hash"}
+    if original != current:
+        difference = "\n".join(difflib.unified_diff(
+            json.dumps(original, sort_keys=True, indent=2).splitlines(),
+            json.dumps(current, sort_keys=True, indent=2).splitlines(),
+            fromfile="source-lock", tofile="resolved-lock", lineterm="")) + "\n"
+        (output / "dependency-diff.txt").write_text(difference, encoding="utf-8")
+        print(difference, flush=True)
+        raise RuntimeError("Dependency graph drifted; see dependency-diff.txt")
 
 
 def locked_components(original_lock, *, download=True):
@@ -297,6 +324,10 @@ def build():
     identity["pythonPackages"] = run(sys.executable, "-m", "pip", "freeze", capture=True)
     write_json(output / "identity.json", identity)
     original_lock = YAML(typ="safe").load((ROOT / "dependencies.lock").read_text())
+    constraints = output / "component-constraints.txt"
+    constraints.write_text(locked_component_constraints(original_lock), encoding="utf-8")
+    os.environ["IDF_COMPONENT_CONSTRAINT_FILES"] = str(constraints)
+    os.environ.pop("IDF_COMPONENT_CONSTRAINTS", None)
     locked_components(original_lock)
     # Board Manager owns regeneration; saved tracked configs are evidence, never build inputs.
     for path, name in ((ROOT / "sdkconfig", "source-main-sdkconfig.txt"),
@@ -321,14 +352,14 @@ def build():
             normalize_board_paths(ROOT)
         flags = [f"-DRODAK_OTA_PUBLIC_KEY={public}", "-DRODAK_OTA_FAULT_INJECTION_PHASE="]
         run("idf.py", *flags, "-DRODAKOS_HOME_HARDWARE_TEST_POPULATION=OFF", "-DRODAKOS_RELEASE_TESTS=OFF", "reconfigure")
+        verify_dependency_graph(original_lock,
+            YAML(typ="safe").load((ROOT / "dependencies.lock").read_text()), output)
         run("idf.py", "build")
         # Do not inject the main application's board extension into minimal Recovery.
         del os.environ["IDF_EXTRA_ACTIONS_PATH"]
         run("idf.py", "-C", "recovery", *flags, "build")
         current_lock = YAML(typ="safe").load((ROOT / "dependencies.lock").read_text())
-        require({k: v for k, v in current_lock.items() if k != "manifest_hash"} ==
-                {k: v for k, v in original_lock.items() if k != "manifest_hash"}, "Dependency graph drifted")
-        write_json(output / "resolved-lock.json", current_lock)
+        verify_dependency_graph(original_lock, current_lock, output)
         locked_components(current_lock, download=False)
         version = inspect_builds(idf, output)
         baseline, _ = package(output, keys, version, "baseline")
