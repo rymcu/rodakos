@@ -207,10 +207,30 @@ Camera/display callbacks reuse the start command's `/ack` topic. Their nested
 `result.cameraStream` / `result.displayStream` messages carry `event: signal/state`, session ID,
 peer state or SDP/candidate data. Rodak treats these as sideband messages: forwarding valid video
 signaling does not settle the command, and later callbacks do not replace the first command result.
+For `closed`, `disconnected` and `failed`, Rodak uses the topic's command number to find a persisted
+start request, then matches its session ID, the live session's device and stream kind. Closed stops
+that preview; disconnected/failed fail it. New previews use new session IDs, so old-session events
+cannot terminate them. The desktop session does not separately bind a unique starting command number.
 
-The firmware has no command-number deduplication ledger. Repeated requests re-enter the handler;
-for example, a repeated start can become busy and a repeated stop can become not-found. The MQTT
-worker rejects stale generation/epoch messages before handler entry. ACKs and asynchronous
+The firmware keeps a volatile window of the latest 64 admitted command numbers within the same
+authority. Identical raw payload bytes (SHA-256) replay the original final ACK without re-entering
+the handler; changed bytes return `command_conflict`, including JSON whitespace changes. An
+in-flight duplicate neither executes nor emits an additional result; the original request completes.
+Completed records are immutable. Reconnects,
+ordinary token refresh and Stop/Start on the same service object retain the window; authority
+replacement clears it, and old completion tickets cannot enter the new authority.
+
+Command numbers are limited to 128 bytes and input payloads to 256 KiB. Cached reply bodies share
+a 64 KiB budget; if a body cannot be retained, its recent completed ID stays as a tombstone and
+replay returns `command_result_unavailable` without execution. This error does not prove that the
+original command was never applied. New admissions evict the oldest completed record by first
+admission order at capacity; cache hits do not refresh that order, and in-flight records are not
+evicted. Evicted commands and device reboots have no deduplication
+guarantee. A cached start success is historical evidence and does not reopen a stopped stream.
+Other ledger rejection codes are `command_limits_exceeded`, `command_hash_failed` and
+`command_capacity_exceeded`.
+
+The MQTT worker rejects stale generation/epoch messages before handler entry. ACKs and asynchronous
 camera/display signal/state callbacks capture that original generation, epoch and ACK topic.
 A bounded result queue rejects stale callbacks and is cleared on epoch changes. The SDK user-event
 callback rechecks the scope and sends through direct QoS 0 publish with retain disabled, outside the
@@ -222,15 +242,34 @@ topic. Overflow or unavailable SDK events drop results with a warning. An admitt
 complete on its original SDK connection; success is not a Broker acknowledgement. These limits
 do not prove that an unacknowledged command was never executed.
 
-Side-effect admission, stream-instance leases, disconnect cleanup, same-name session reuse and
-delayed screen inputs still need separate lifecycle fencing. Desktop terminal freezing and
-scoped publication are not device-side exactly-once execution. Ordinary telemetry/shadow Publish
+Stream leases bind generation, epoch, a non-reused instance nonce and session ID. Start/Stop/remote
+signaling share an operation mutex. Epoch changes revoke immediately and schedule worker cleanup
+outside the MQTT mutex; SDK and peer callbacks never wait for that operation mutex. Service Stop
+revokes admission before waiting for active operations. A Start that finishes after revocation
+stops its own instance; old callbacks cannot clear a replacement with the same session string.
+`command_scope_expired` reports failed admission; exhausted nonces reject with
+`stream_instance_capacity_exceeded`. An action admitted before revocation may finish and is then
+cleaned up; neither this boundary nor the cache physically rolls back an already admitted action.
+
+Signal publication requires the current active lease. Same-epoch terminal events may survive
+cleanup only while their instance nonce is still the latest for that resource; replacement drops
+old terminal events. Data-channel close/disconnect map to the existing `closed` / `disconnected`
+wire states.
+
+Remote input retains explicit enable/disable, sequence checks and rate limits. Text, shortcuts,
+pointers and deferred navigation carry a stream lease and a separate enable grant, checked at
+the final LVGL action. Disable/re-enable cannot revive an old grant; stale cleanup cannot release
+a new owner's pointer. Controller destruction invalidates deferred navigation. Delayed control
+ACKs also retain an opaque peer-instance token, checked at the actual sender under the peer API
+lock, so sequence reuse alone cannot authorize a reply on the replacement peer.
+
+Ordinary telemetry/shadow Publish
 and effect receipt publishing retain their own SDK outbox behavior; server-side effect receipt
 matching to the original authenticated connection remains necessary.
 
 The independent [command host fixture](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
 uses the production registered MQTT callback, fragments, queue, worker, handler and captured
-publications. Its host cases and Rodak's 19 cross-repository cases cover real ping shapes,
+publications. Its host cases and Rodak's 21 cross-repository cases cover real ping shapes,
 unsupported/malformed commands, unavailable camera/display services, terminal replay behavior
 and device identity isolation. Host cases also model queued-versus-wire outbox stages, held SDK
 events, reconnects, late stream callbacks and synchronous disconnect during direct publication.
@@ -360,6 +399,8 @@ rollback, and journal schema remain firmware facts documented in
   hardware gate suites in the Rodak repository.
 - Ordinary commands: independent `tests/mqtt_volume_service/mqtt_command_service_test.cc`
   and the command CLI, plus Rodak `tests/main-integration/command-ack-gateway.test.ts`.
-  The initial 5 host cases passed in Debug and ASan/UBSan with leak detection; 19 cross-repository
-  cases passed in a directed software run. Use the separate frozen-input runner output for
-  release evidence. No firmware build, flash, NVS write or hardware run was performed for this slice.
+  The service host target now includes 55 command cases plus 31 effect cases; its Debug and
+  ASan/UBSan/leak runs pass. Input-controller validation uses production code and real host LVGL
+  in `tests/remote_input`. Use the separate frozen-input runner and current
+  [build evidence](ota-release-readiness.md) for exact source identity and scope. No serial, flash,
+  device NVS or physical hardware run was performed for this slice.

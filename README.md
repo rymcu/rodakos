@@ -4,13 +4,13 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (command publication work starts from `0d0f2bd`; current source and
+Last refreshed: 2026-10-06 (stream lifecycle and command-cache work starts from `9940bea`; current source and
 validation identity are recorded in the linked roadmap).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Connection-race cleanup remains tracked in the roadmap.
+- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
@@ -53,7 +53,9 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   only. See [MQTT volume effects](docs/mqtt-volume-effects.md).
 - Ordinary command ACKs and video signal/state results are bound to their original MQTT connection
   and sent without a replayable SDK outbox item. Stale queued results and late callbacks are dropped.
-  Command-number deduplication and stream lifecycle fencing remain open; see the
+  Stream-instance cleanup, final remote-input grants and delayed ACK ownership now use revocable
+  identities. A latest-64 command cache replays original results without repeating retained
+  requests; eviction and device restart have no deduplication guarantee. See the
   [command result boundary](docs/rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
   queued and successful completion evidence for app exercises. These host checks do not close the
@@ -184,6 +186,8 @@ tests/
 ├── app_model/             # Host-side models, lifecycle, policy and audio-volume service tests
 ├── voice_volume_service/  # Real voice service startup/queue/stop/reconnect with host dependencies
 ├── mqtt_volume_service/   # Real MQTT callback/fragment/worker/epoch and receipt publishing
+├── remote_input/          # Production input grants and final operations against real host LVGL
+├── display_control_ack_service/ # Complete production display ACK sender with fake peers
 └── home_ui/               # Production HomeApp exercised against host LVGL 9.3
 ```
 

@@ -202,8 +202,12 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Ordinary command ACKs and camera/display sidebands retain the original MQTT generation, epoch
   and ACK topic. Their bounded queue drains in the SDK user-event callback with direct QoS 0
   publish, without storing an outbox item. Epoch changes discard queued results and late callbacks;
-  stream-instance cleanup and side-effect admission remain separate lifecycle work. See the
-  [command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
+  a separate operation mutex serializes stream Start/Stop/signaling, while connection changes
+  revoke instance leases and defer peer cleanup outside MQTT callbacks. A latest-64 authority
+  cache replays immutable command results. `RemoteInputController` owns bounded input queues and
+  stream/control grants checked at final LVGL execution; `DisplayControlAckTracker` binds replies
+  to an opaque peer instance. Admitted actions may finish; eviction/reboot are outside the replay
+  guarantee. See the [command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
 - Shell preferences use the short-lived `shell` NVS namespace. Settings exposes explicit commit results so a failed save cannot be reported as successful.
 - ButtonBindingService encodes Lock and Control Center as stable actions; persisted `btnbind` values override compiled defaults.
 - WakeOnLanService creates a UDP socket only for a user-requested wake, requires active WiFi, and

@@ -13,6 +13,7 @@
 #include <freertos/task.h>
 
 #include "esp_peer.h"
+#include "phone_os/display_control_ack_tracker.h"
 
 namespace rodakos {
 
@@ -79,8 +80,9 @@ private:
     void EmitState(esp_peer_state_t state);
     void EmitMessage(esp_peer_msg_t* message);
     void HandleControlData(esp_peer_data_frame_t* frame);
-    bool SendControlAck(uint32_t sequence, bool accepted, const char* reason = nullptr);
-    void QueueControlAck(uint32_t sequence, bool accepted, const char* reason);
+    bool SendControlAck(const DisplayControlAckTracker::Ack& ack);
+    void QueueControlAck(const DisplayControlAckTracker::InstancePtr& instance,
+                         uint32_t sequence, bool accepted, const char* reason);
     void FlushControlAcks();
 
     DisplayService* display_service_ = nullptr;
@@ -110,17 +112,12 @@ private:
     uint16_t video_stream_id_ = 0;
     uint16_t control_stream_id_ = 0;
     bool control_channel_open_ = false;
-    uint32_t last_control_sequence_ = 0;
     int64_t last_move_at_us_ = 0;
     std::vector<uint8_t> pending_jpeg_;
     uint32_t pending_jpeg_sequence_ = 0;
     int64_t pending_jpeg_timestamp_us_ = 0;
-    struct PendingControlAck {
-        uint32_t sequence = 0;
-        bool accepted = false;
-        std::string reason;
-    };
-    std::deque<PendingControlAck> pending_control_acks_;
+    std::shared_ptr<DisplayControlAckTracker> control_acks_ =
+        std::make_shared<DisplayControlAckTracker>();
 
     // JPEG DataChannel 只在设备侧运行，使用原子计数避免为诊断日志扩大
     // peer_api_mutex_ / service mutex_ 的临界区。日志本身每 5 秒最多一条。

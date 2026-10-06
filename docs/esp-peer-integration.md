@@ -44,6 +44,22 @@ CONFIG_MBEDTLS_X509_CREATE_C=y
 
 信令编码注意：Mbed TLS Base64 编码目标容量必须为 `4 * ceil(n / 3) + 1`，最后一字节供终止符使用；容量只分配编码长度会使所有非空 SDP/ICE 返回 `BUFFER_TOO_SMALL`。MQTT 解码后的 SDP 送入 `esp_peer_send_msg` 前也必须补终止符，`message.size` 保持文本长度。
 
+## 2026-10-06 软件生命周期补充
+
+流实例绑定 MQTT generation/epoch 和不复用 nonce；Start/Stop/远程信令串行化，断线先撤销，
+再在 worker 中停止旧 peer。旧同名 session 回调不能清除替换实例；已经进入 SDK 的单次操作
+允许完成，随后收尾，不代表物理撤回。
+
+屏幕输入由生产 `RemoteInputController` 管理，文本/按键/指针/延迟导航在最终 LVGL 入口
+复查 stream lease 和独立 enable grant；旧 cleanup 不释放新 owner 的指针，析构使遗留回调
+失效。`DisplayControlAckTracker` 用实际 peer 实例标识隔离旧 reply、旧已取出批次和新实例
+复用的序号，最终 sender 还在 peer API 锁内复查。显式控制授权、只读默认和限速保持。
+
+`tests/remote_input` 的 15 项真实 LVGL/生产 helper 测试，以及完整编译生产显示服务的
+`tests/display_control_ack_service` 的 13 项 ACK 编码/发送测试均通过 Debug 和 sanitizer。
+后者仅用 peer API fake 捕获真实参数和字节，不证明 SCTP/WebRTC 出线。结合真实 MQTT 服务
+的生命周期测试，软件可验证实例隔离；下方旧 COM3 证据不自动覆盖本轮改动。
+
 ## 2026-10-01 验证
 
 - ESP-IDF 6.0.2 构建通过；`tests/home_ui` 使用真实 LVGL，34 tests / 0 failures。

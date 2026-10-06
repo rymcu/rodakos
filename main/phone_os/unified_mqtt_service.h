@@ -6,6 +6,8 @@
 #include "phone_os/mqtt_credential_refresh_policy.h"
 #include "phone_os/mqtt_volume_effect.h"
 #include "phone_os/mqtt_light_effect.h"
+#include "phone_os/mqtt_command_ledger.h"
+#include "phone_os/stream_lease.h"
 
 #include <array>
 #include <atomic>
@@ -37,7 +39,8 @@ class AppearanceService;
 class UnifiedMqttService {
 public:
     using DisplayControlReply = std::function<void(bool accepted, const char* reason)>;
-    using DisplayControlCallback = std::function<void(const std::string& payload, DisplayControlReply reply)>;
+    using DisplayControlCallback = std::function<void(const StreamLeasePtr& lease,
+        const std::string& payload, DisplayControlReply reply)>;
     UnifiedMqttService(DeviceCloudConfigService& config_service,
                        OtaUpdateService& ota_update,
                        AudioOutputService* audio_output,
@@ -92,6 +95,9 @@ private:
     struct PendingCommandPublication {
         CommandPublishContext context;
         std::string payload;
+        StreamLeasePtr stream_lease;
+        bool terminal_stream_event = false;
+        bool display_stream = false;
     };
 
     static void NetworkEventHandler(void* arg, esp_event_base_t event_base,
@@ -120,8 +126,17 @@ private:
     void QueueEffectReceipt(const std::string& payload, uint32_t generation,
                             uint64_t connection_epoch);
     bool QueueCommandPublication(const CommandPublishContext& context,
-                                 const std::string& payload);
+                                 const std::string& payload,
+                                 const StreamLeasePtr& stream_lease = {},
+                                 bool terminal_stream_event = false,
+                                 bool display_stream = false);
     void DrainCommandPublications(esp_mqtt_client_handle_t event_client);
+    bool IsCommandContextCurrentLocked(const CommandPublishContext& context) const;
+    bool IsStreamPublicationCurrentLocked(const StreamLeasePtr& lease,
+                                         bool terminal, bool display) const;
+    void RevokeStreamLease(const StreamLeasePtr& lease);
+    void CleanupRevokedStreams();
+    void CleanupRevokedStreamsLocked();
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
     void HandleMqttEvent(esp_mqtt_event_handle_t event);
     void HandleMessage(const std::string& topic, const std::string& payload,
@@ -141,6 +156,7 @@ private:
     AudioOutputService* audio_output_ = nullptr;
     MqttVolumeEffect volume_effect_;
     MqttLightEffect light_effect_;
+    MqttCommandLedger command_ledger_;
     BatteryStateProvider* battery_provider_ = nullptr;
     LightService* light_service_ = nullptr;
     VoiceWakeService* voice_wake_ = nullptr;
@@ -161,9 +177,15 @@ private:
     SemaphoreHandle_t publish_ack_semaphore_ = nullptr;
     std::mutex reliable_publish_mutex_;
     std::mutex client_api_mutex_;
-    std::mutex camera_mutex_;
-    std::string camera_session_id_;
-    std::string display_session_id_;
+    // Only command/worker callers enter this lock. SDK and peer callbacks
+    // revoke leases under mqtt_mutex_ without waiting for resource teardown.
+    std::mutex stream_operation_mutex_;
+    StreamLeasePtr camera_lease_;
+    StreamLeasePtr display_lease_;
+    uint64_t next_stream_instance_nonce_ = 0;
+    uint64_t camera_latest_nonce_ = 0;
+    uint64_t display_latest_nonce_ = 0;
+    bool stream_cleanup_pending_ = false;
     mutable std::mutex mqtt_mutex_;
     uint32_t client_generation_ = 0;
     uint64_t connection_epoch_ = 0;

@@ -14,7 +14,7 @@ recorded signed package is `build/packages/ota/20261001-234748`; its main image 
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-audio-volume build recorded below.
+builds recorded below. The latest slice is [stream lifecycle validation](#2026-10-06-stream-lifecycle-validation).
 
 The app-model suite now passes 266 tests in Debug and ASan/UBSan, including eighteen MQTT volume
 effect cases. Fourteen new tests instantiate the actual MQTT service and exercise callbacks,
@@ -48,6 +48,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | MQTT volume effects / lifecycle              | Production helper and actual UnifiedMqttService: correlation, ordering, authority ledger, real connection epoch, SDK callback/queue, Stop, refresh, unbind and scoped receipt publishing | Eighteen helper and fourteen service host regressions pass; hardware unverified |
 | RGB light patches / lifecycle               | Real LightService, board adapter, MQTT callback/worker and receipts: atomic merge/commit, driver failures, 64-result eviction, authority versions and cancellation | Thirteen native driver and seventeen MQTT light regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
+| Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -275,6 +276,50 @@ firmware identity in `.codex-temp/command-epoch-firmware.json`, and the final bu
 This does not add command-number deduplication, cancel admitted side effects, establish stream
 leases/cleanup, fence delayed screen input or fix voice identity persistence/expiry. No serial
 port, flash or device NVS was accessed; release, acoustic, power-cut and long-duration gates stay open.
+
+## 2026-10-06 stream lifecycle validation
+
+This unflashed slice starts from RodakOS `9940bea` and Rodak `06f6b479`, plus the frozen
+stream-instance, remote-input, ACK-ownership and command-cache changes. Stream admission is
+revoked before cleanup; already admitted single operations may finish. The volatile latest-64
+command cache replays immutable results and rejects byte-level payload conflicts. Reclaimed
+response bodies leave tombstones; eviction and reboot have no deduplication guarantee. Replaying
+an old successful start does not reopen a cleaned stream.
+
+- Production MQTT service: 31 effect and 55 command cases pass in Debug and ASan/UBSan with
+  leak detection. Tests use real SHA-256 through PSA/libmbedcrypto.
+- Remote input: 15 cases compile the production controller and helpers with real managed LVGL
+  and cJSON. Display ACK: 13 cases compile the complete production display service and inspect
+  actual encoded bytes and target peers. Both targets pass Debug and ASan/UBSan with leak checks;
+  network peers, RTOS and capture hardware remain host fakes.
+- Desktop terminal sidebands look up a persisted start request by command number and match its
+  session ID, device and stream kind. Valid closed/disconnected/failed events end that preview
+  without changing the first command ACK. New previews have new session IDs; old-session or
+  misclaimed events cannot terminate them. Sessions do not separately bind a unique start command.
+- Rodak full coverage passes: 484 files / 3,589 tests, with 3 files / 23 tests skipped. All four
+  C++ conformance fixtures are enabled. Main-process type checking, 43 targeted service tests
+  and the standard Electron build also pass.
+- ESP-IDF 6.0.2 build passes: main image **6,963,840 bytes**, within the 13,959,168-byte `ota_0`
+  slot; SHA-256 `6e2f363cd360d4dc45af10b36ef8cdc27c4953d733669ef0c5e786dd8e7bb76f`.
+  It retains the existing test public key and disables Home hardware-test population.
+
+- Formal command gate: 21/21 cross-repository cases, 55 host command cases, 15 LVGL input cases,
+  13 complete display ACK cases, 7 SDK event scenarios and 8 generator checks pass; no cross-repo
+  case is skipped. The original MQTT effect gate also passes 8/8 cases. Inputs and all five command
+  gate binaries are identical before/after execution. Evidence is in Rodak
+  `.codex-temp/stream-lifecycle-conformance.json`, its `.vitest.json` report and
+  `.codex-temp/stream-lifecycle-effect-conformance.json`.
+
+The command gate's RodakOS input source SHA-256 is
+`84c0b71a3387d697de34ce41296e6a97915737d741a881115b8e865d01558e9e`.
+Rodak stores all 37 changed source/test hashes in `.codex-temp/stream-lifecycle-source-snapshot.json`,
+the four coverage fixture hashes in `stream-lifecycle-coverage-fixtures.json`, and firmware identity
+in `stream-lifecycle-firmware.json`. Build and test logs share that filename prefix. Only documentation
+and commits follow this software freeze; older dated tests above remain evidence for their own baselines.
+
+No device, serial, NVS, flashing or packaging operation was performed. These software checks do
+not replace wireless reconnect/resource-contention, physical screen/input, acoustic, power-cut or
+eight-hour signed-OTA acceptance.
 
 ## Build and package
 

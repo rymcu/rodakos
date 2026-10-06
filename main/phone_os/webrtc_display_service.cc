@@ -65,12 +65,11 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
     video_stream_id_ = 0;
     control_stream_id_ = 0;
     control_channel_open_ = false;
-    last_control_sequence_ = 0;
     last_move_at_us_ = 0;
     pending_jpeg_.clear();
     pending_jpeg_sequence_ = 0;
     pending_jpeg_timestamp_us_ = 0;
-    pending_control_acks_.clear();
+    control_acks_->Begin();
     peer_task_ready_ = false;
     stats_frames_received_.store(0, std::memory_order_relaxed);
     stats_frames_sent_.store(0, std::memory_order_relaxed);
@@ -93,6 +92,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         signaling_callback_ = {};
         state_callback_ = {};
         control_callback_ = {};
+        control_acks_->Close();
         return false;
     }
 
@@ -126,6 +126,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         signaling_callback_ = {};
         state_callback_ = {};
         control_callback_ = {};
+        control_acks_->Close();
         peer_ = nullptr;
         return false;
     }
@@ -141,6 +142,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         signaling_callback_ = {};
         state_callback_ = {};
         control_callback_ = {};
+        control_acks_->Close();
         peer_ = nullptr;
         return false;
     }
@@ -156,6 +158,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         signaling_callback_ = {};
         state_callback_ = {};
         control_callback_ = {};
+        control_acks_->Close();
         return false;
     }
 
@@ -180,6 +183,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         signaling_callback_ = {};
         state_callback_ = {};
         control_callback_ = {};
+        control_acks_->Close();
         return false;
     }
     peer_task_ = created_peer_task;
@@ -209,6 +213,7 @@ void WebRtcDisplayService::Stop() {
             terminal_state_ = ESP_PEER_STATE_CLOSED;
             stop_requested_ = true;
         }
+        control_acks_->Close();
         task = peer_task_;
     }
 
@@ -238,6 +243,7 @@ void WebRtcDisplayService::RequestStop(esp_peer_state_t state) {
         stop_requested_ = true;
     }
     channel_open_ = false;
+    control_acks_->Close();
 }
 
 void WebRtcDisplayService::FinishStop() {
@@ -261,7 +267,7 @@ void WebRtcDisplayService::FinishStop() {
             pending_jpeg_.clear();
             pending_jpeg_sequence_ = 0;
             pending_jpeg_timestamp_us_ = 0;
-            pending_control_acks_.clear();
+            control_acks_->Close();
             signaling_callback_ = {};
             callback = std::move(state_callback_);
             state_callback_ = {};
@@ -398,10 +404,12 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
         return;
     }
     ControlCallback callback;
+    DisplayControlAckTracker::InstancePtr instance;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (stop_requested_ || frame->stream_id != control_stream_id_) return;
         callback = control_callback_;
+        instance = control_acks_->Current();
     }
     if (!callback) return;
     const std::string payload(reinterpret_cast<const char*>(frame->data),
@@ -409,7 +417,7 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
     cJSON* root = cJSON_ParseWithLength(payload.data(), payload.size());
     if (!cJSON_IsObject(root)) {
         cJSON_Delete(root);
-        QueueControlAck(0, false, "invalid_json");
+        QueueControlAck(instance, 0, false, "invalid_json");
         return;
     }
     const cJSON* seq = cJSON_GetObjectItemCaseSensitive(root, "seq");
@@ -417,15 +425,10 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
                                 seq->valuedouble <= 4294967295.0 &&
                                 seq->valuedouble == static_cast<double>(static_cast<uint32_t>(seq->valuedouble));
     const uint32_t sequence = valid_sequence ? static_cast<uint32_t>(seq->valuedouble) : 0;
-    bool sequence_ok = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
-        sequence_ok = valid_sequence && sequence > last_control_sequence_;
-        if (sequence_ok) last_control_sequence_ = sequence;
-    }
+    const bool sequence_ok = valid_sequence && control_acks_->AdmitSequence(instance, sequence);
     if (!sequence_ok) {
         cJSON_Delete(root);
-        QueueControlAck(sequence, false, "invalid_or_replayed_sequence");
+        QueueControlAck(instance, sequence, false, "invalid_or_replayed_sequence");
         return;
     }
     const cJSON* kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
@@ -441,47 +444,45 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
                                y->valuedouble == static_cast<double>(y->valueint);
         if (!coords_ok) {
             cJSON_Delete(root);
-            QueueControlAck(sequence, false, "coordinates_out_of_range");
+            QueueControlAck(instance, sequence, false, "coordinates_out_of_range");
             return;
         }
         if (cJSON_IsString(action) && std::strcmp(action->valuestring, "move") == 0) {
             const int64_t now = esp_timer_get_time();
             std::lock_guard<std::recursive_mutex> lock(mutex_);
+            if (!control_acks_->IsCurrent(instance)) { cJSON_Delete(root); return; }
             if (last_move_at_us_ != 0 && now - last_move_at_us_ < 20000) {
                 cJSON_Delete(root);
-                QueueControlAck(sequence, false, "pointer_rate_limited");
+                QueueControlAck(instance, sequence, false, "pointer_rate_limited");
                 return;
             }
             last_move_at_us_ = now;
         }
     }
     cJSON_Delete(root);
-    callback(payload, [this, sequence, kind_name](bool accepted, const char* reason) {
-        const char* fallback = accepted ? nullptr :
-            (kind_name == "text" ? "text_target_unavailable" : "control_disabled_or_invalid");
-        QueueControlAck(sequence, accepted, reason != nullptr ? reason : fallback);
-    });
+    callback(payload, control_acks_->MakeReply(instance, sequence, kind_name));
 }
 
-bool WebRtcDisplayService::SendControlAck(uint32_t sequence, bool accepted, const char* reason) {
+bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& ack) {
     std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
     esp_peer_handle_t peer = nullptr;
     uint16_t stream_id = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
-        if (stop_requested_ || peer_ == nullptr || !control_channel_open_) return false;
+        if (stop_requested_ || peer_ == nullptr || !control_channel_open_ ||
+            !control_acks_->IsCurrent(ack.instance)) return false;
         peer = peer_;
         stream_id = control_stream_id_;
     }
-    cJSON* ack = cJSON_CreateObject();
-    cJSON_AddNumberToObject(ack, "version", 1);
-    cJSON_AddNumberToObject(ack, "seq", sequence);
-    cJSON_AddBoolToObject(ack, "accepted", accepted);
-    if (reason != nullptr) cJSON_AddStringToObject(ack, "reason", reason);
-    char* encoded = cJSON_PrintUnformatted(ack);
+    cJSON* response_json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(response_json, "version", 1);
+    cJSON_AddNumberToObject(response_json, "seq", ack.sequence);
+    cJSON_AddBoolToObject(response_json, "accepted", ack.accepted);
+    if (!ack.reason.empty()) cJSON_AddStringToObject(response_json, "reason", ack.reason.c_str());
+    char* encoded = cJSON_PrintUnformatted(response_json);
     const std::string payload = encoded != nullptr ? encoded : "{}";
     if (encoded != nullptr) cJSON_free(encoded);
-    cJSON_Delete(ack);
+    cJSON_Delete(response_json);
     esp_peer_data_frame_t response{};
     response.type = ESP_PEER_DATA_CHANNEL_DATA;
     response.stream_id = stream_id;
@@ -593,21 +594,13 @@ void WebRtcDisplayService::PeerTask() {
     FinishStop();
 }
 
-void WebRtcDisplayService::QueueControlAck(uint32_t sequence, bool accepted, const char* reason) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (pending_control_acks_.size() >= 32) pending_control_acks_.pop_front();
-    pending_control_acks_.push_back(PendingControlAck{sequence, accepted, reason != nullptr ? reason : ""});
+void WebRtcDisplayService::QueueControlAck(const DisplayControlAckTracker::InstancePtr& instance,
+                                          uint32_t sequence, bool accepted, const char* reason) {
+    control_acks_->Queue(instance, sequence, accepted, reason);
 }
 
 void WebRtcDisplayService::FlushControlAcks() {
-    std::deque<PendingControlAck> pending;
-    {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
-        pending.swap(pending_control_acks_);
-    }
-    for (const auto& ack : pending) {
-        SendControlAck(ack.sequence, ack.accepted, ack.reason.empty() ? nullptr : ack.reason.c_str());
-    }
+    for (const auto& ack : control_acks_->Take()) SendControlAck(ack);
 }
 
 void WebRtcDisplayService::HandleJpeg(std::vector<uint8_t>&& jpeg, uint32_t sequence,

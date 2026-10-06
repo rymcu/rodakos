@@ -3,6 +3,7 @@
 #include "phone_os/audio_output_service.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
+#include "phone_os/webrtc_camera_service.h"
 #include "test_framework.h"
 #include "host_driver.h"
 #include <esp_codec_dev.h>
@@ -23,7 +24,7 @@ inline std::string Request(const std::string& id = "effect-1", int volume = 30, 
         id + "\",\"shadowVersion\":" + std::to_string(version) +
         ",\"operation\":\"volume.set\",\"requested\":{\"volume\":" + std::to_string(volume) + "}}}}";
 }
-struct ResetGuard { ResetGuard() { Reset(); fake_codec::Reset(); fake_light::Reset(); } };
+struct ResetGuard { ResetGuard() { Reset(); fake_codec::Reset(); fake_light::Reset(); fake_stream::Reset(); } };
 struct Fixture {
     ~Fixture() {
         PauseDequeue(false);

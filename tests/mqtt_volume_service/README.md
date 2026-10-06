@@ -85,7 +85,7 @@ epochs, ordinary token refresh and replacement bindings. Native driver tests als
 ## Independent command fixture and tests
 
 The same library also provides `rodakos_mqtt_command_fixture` and the separate CTest target
-`rodakos_mqtt_command_service` (24 cases). These exercise the production command handler, not
+`rodakos_mqtt_command_service` (55 cases). These exercise the production command handler, not
 the volume/light effect protocol. Build targets are `rodakos_mqtt_command_fixture` and
 `rodakos_mqtt_command_service_tests`.
 
@@ -107,22 +107,31 @@ and display services are not injected, so their commands return production `_str
 errors. The fixture accepts its own command topics and reserves `host-barrier` for synchronization.
 
 The independent command cases cover four ping shapes, malformed/unsupported requests, all six
-camera/display unavailable paths, reprocessing repeated command numbers, and rejecting an old
+camera/display unavailable paths, replaying cached command results and rejecting raw-payload conflicts, and rejecting an old
 queued command after a same-client reconnect. Additional cases inject successful fake streams,
 hold result notifications, reconnect or replace credentials, replay saved callbacks, reject event
 posting and synchronously disconnect during direct publication. A negative control shows that
 stored QoS 0 outbox entries can cross a reconnect; command output must use direct publication.
 Rodak's independent runner is
-`scripts/run-rodakos-command-conformance.mjs`, with 19 real Broker/handler/ACK tests. It records
+`scripts/run-rodakos-command-conformance.mjs`, with 21 real Broker/handler/ACK tests. It records
 separate source and binary evidence; command counts are not part of the existing 31 effect tests.
 
-Ordinary commands have no command-number deduplication ledger. The worker checks generation/epoch
+Ordinary commands use the production latest-64 authority cache. The worker checks generation/epoch
 before entering the handler. ACK/sideband output is bound to the original generation, epoch and
 topic through a bounded queue, SDK event-loop validation and direct QoS 0 publish. One shared wake
 notification allows synchronous stream callbacks and their final ACK to use the single custom
 event slot. Epoch changes clear result payloads; held or late callbacks cannot republish on a new
 connection. An already admitted direct send may finish on its original connection.
 
-The fake streams demonstrate publication behavior only. Side-effect admission, stream-instance
-leases, resource cleanup and delayed screen inputs remain open. These tests do not establish
-exactly-once execution, real WebRTC success, firmware acceptance or physical hardware results.
+Lifecycle cases verify revocation before/during/after Start, Stop joining a callback on another
+thread, terminal state feedback, same-name session replacement, camera/display exclusion and
+control lease ownership. The ledger uses the existing production SHA-256 wrapper linked to real
+PSA/libmbedcrypto; known-vector and embedded-NUL cases verify the hashing boundary. Other cases
+cover immutable outcomes, authority reset tickets, in-flight protection, latest-64 eviction,
+reply-budget tombstones, and repeated Start/Stop/signal executing once while retained.
+
+Stream hardware remains fake. Real LVGL input/controller tests live in
+[`tests/remote_input`](../remote_input/README.md); the complete production WebRTC display sender
+and actual encoded ACK tests live in [`tests/display_control_ack_service`](../display_control_ack_service/README.md).
+These tests do not establish persistent or unbounded exactly-once execution, wireless WebRTC
+success, physical rollback or hardware acceptance.

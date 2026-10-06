@@ -1,8 +1,8 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. This command-publication slice starts from `0d0f2bd` and changes the
-production MQTT service. Earlier command-result tests used unchanged `15ffa5c` firmware source;
-the new source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
+Updated: 2026-10-06. This stream-lifecycle and command-cache slice starts from `9940bea`.
+Original-connection result publication and the SDK event-queue correction remain the baseline;
+current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -51,10 +51,13 @@ firmware build does not change an existing hardware gate.
   Firmware ACKs and camera/display signal/state now retain the original client generation, epoch
   and topic, then use a bounded SDK-event queue and direct QoS 0 publish without an outbox entry.
   Epoch changes discard old results; the host SDK model separates enqueue from wire publication.
-  Command deduplication and stream-instance lifecycle remain open. See the
+  Stream operations now use revocable instance leases and serialized cleanup; remote input checks
+  its stream and enable grant at final LVGL execution, and delayed ACKs retain the peer instance.
+  A volatile latest-64 command cache replays final ACKs and rejects raw-payload conflicts. Eviction
+  and device restart remain outside its deduplication guarantee. See the
   [command contract](rodak-aiot-contract-v1.md#command-results-and-replay-boundary),
   [host target](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
-  and [dated software evidence](ota-release-readiness.md#2026-10-06-command-publication-validation).
+  and [dated software evidence](ota-release-readiness.md#2026-10-06-stream-lifecycle-validation).
 
 ## Remaining acceptance and implementation work
 
@@ -69,7 +72,7 @@ firmware build does not change an existing hardware gate.
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
 | Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
-| Ordinary commands | Command-number deduplication, side-effect admission, stream-instance leases/cleanup and delayed screen-input fencing; scoped ACK/sideband publication does not supply these guarantees or physical verification | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary) |
+| Ordinary commands | Hardware validation of stream revocation/cleanup, sustained reconnect and resource contention, remote input and ACK timing; recent-cache software tests do not establish persistence, unbounded deduplication or physical rollback | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 
 Already recorded COM3 voice, provisioning, WebRTC, and appearance gates remain accepted within

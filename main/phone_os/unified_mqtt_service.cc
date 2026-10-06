@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -222,10 +223,12 @@ const char* PeerStateName(esp_peer_state_t state) {
         case ESP_PEER_STATE_DATA_CHANNEL_CONNECTED:
             return "data-channel-connected";
         case ESP_PEER_STATE_DISCONNECTED:
+        case ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED:
             return "disconnected";
         case ESP_PEER_STATE_CONNECT_FAILED:
             return "failed";
         case ESP_PEER_STATE_CLOSED:
+        case ESP_PEER_STATE_DATA_CHANNEL_CLOSED:
             return "closed";
         default:
             return "unknown";
@@ -356,11 +359,6 @@ bool UnifiedMqttService::Start() {
 }
 
 void UnifiedMqttService::Stop() {
-    // A WebRTC stream owns camera/display tasks independently from the MQTT
-    // client. Tear both peers down before stopping MQTT so a reconnect or
-    // shutdown cannot leave a stale capture task holding the device resource.
-    StopWebRtcDisplayStream();
-    StopWebRtcCameraStream();
     TimerHandle_t telemetry_timer = nullptr;
     esp_mqtt_client_handle_t client = nullptr;
     bool wake_publisher = false;
@@ -379,6 +377,9 @@ void UnifiedMqttService::Stop() {
         wake_publisher = reliable_publish_.message_id >= 0;
         reliable_publish_ = {};
     }
+    // Revoke command and input admission before waiting for a Start/Stop that
+    // may already own the resource operation lock.
+    CleanupRevokedStreams();
     if (wake_publisher && publish_ack_semaphore_ != nullptr) {
         xSemaphoreGive(publish_ack_semaphore_);
     }
@@ -473,6 +474,7 @@ void UnifiedMqttService::WorkerTask(void* arg) {
 
 void UnifiedMqttService::WorkerLoop() {
     while (started_.load()) {
+        CleanupRevokedStreams();
         MaybeScheduleTransportRecovery();
         if (reset_scheduled_.load() && !ShouldDeferCredentialRefresh()) {
             RefreshCredentials();
@@ -930,11 +932,75 @@ void UnifiedMqttService::AdvanceConnectionEpochLocked() {
     effect_receipts_.clear();
     command_publications_.clear();
     command_publication_bytes_ = 0;
+    if (camera_lease_ != nullptr) camera_lease_->Revoke();
+    if (display_lease_ != nullptr) display_lease_->Revoke();
+    stream_cleanup_pending_ = camera_lease_ != nullptr || display_lease_ != nullptr;
 }
 
 void UnifiedMqttService::ResetEffectAuthorityLocked() {
     volume_effect_.ResetAuthority();
     light_effect_.ResetAuthority();
+    command_ledger_.ResetAuthority();
+}
+
+bool UnifiedMqttService::IsCommandContextCurrentLocked(
+    const CommandPublishContext& context) const {
+    return started_.load() && connected_.load() && client_ != nullptr &&
+           client_generation_ == context.client_generation &&
+           connection_epoch_ == context.connection_epoch;
+}
+
+bool UnifiedMqttService::IsStreamPublicationCurrentLocked(
+    const StreamLeasePtr& lease, bool terminal, bool display) const {
+    if (lease == nullptr) return true;
+    if (!started_.load() || !connected_.load() || !effect_authority_active_ ||
+        client_ == nullptr || lease->client_generation != client_generation_ ||
+        lease->connection_epoch != connection_epoch_) return false;
+    if (terminal) {
+        return lease->instance_nonce == (display ? display_latest_nonce_ : camera_latest_nonce_);
+    }
+    return lease->IsActive() && lease == (display ? display_lease_ : camera_lease_);
+}
+
+void UnifiedMqttService::RevokeStreamLease(const StreamLeasePtr& lease) {
+    if (lease == nullptr) return;
+    lease->Revoke();
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    if (lease == camera_lease_ || lease == display_lease_) stream_cleanup_pending_ = true;
+}
+
+void UnifiedMqttService::CleanupRevokedStreams() {
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!stream_cleanup_pending_) return;
+    }
+    std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+    CleanupRevokedStreamsLocked();
+}
+
+void UnifiedMqttService::CleanupRevokedStreamsLocked() {
+    // The operation lock keeps an old instance's Stop from reaching a newly
+    // started peer. Never hold mqtt_mutex_ while Stop joins peer callbacks.
+    for (const bool display : {false, true}) {
+        StreamLeasePtr lease;
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            const auto& current = display ? display_lease_ : camera_lease_;
+            if (current != nullptr && !current->IsActive()) lease = current;
+        }
+        if (lease == nullptr) continue;
+        if (display) {
+            if (web_rtc_display_service_ != nullptr) web_rtc_display_service_->Stop();
+        } else if (web_rtc_camera_service_ != nullptr) {
+            web_rtc_camera_service_->Stop();
+        }
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        auto& current = display ? display_lease_ : camera_lease_;
+        if (current == lease) current.reset();
+    }
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    stream_cleanup_pending_ = (camera_lease_ != nullptr && !camera_lease_->IsActive()) ||
+                              (display_lease_ != nullptr && !display_lease_->IsActive());
 }
 
 bool UnifiedMqttService::SchedulePublicationEventLocked() {
@@ -968,7 +1034,10 @@ void UnifiedMqttService::QueueEffectReceipt(const std::string& payload,
 }
 
 bool UnifiedMqttService::QueueCommandPublication(const CommandPublishContext& context,
-                                                const std::string& payload) {
+                                                const std::string& payload,
+                                                const StreamLeasePtr& stream_lease,
+                                                bool terminal_stream_event,
+                                                bool display_stream) {
     if (context.ack_topic.empty() || context.ack_topic.size() > kMaxCommandPublicationTopicBytes ||
         payload.size() > kMaxCommandPublicationPayloadBytes) {
         ESP_LOGW(TAG, "Dropping command output: topic or payload exceeds the publication limit");
@@ -978,9 +1047,8 @@ bool UnifiedMqttService::QueueCommandPublication(const CommandPublishContext& co
     // mqtt_mutex_ would invert the SDK callback's existing lock order.
     std::lock_guard<std::mutex> api_lock(client_api_mutex_);
     std::lock_guard<std::mutex> lock(mqtt_mutex_);
-    if (!started_.load() || !connected_.load() || client_ == nullptr ||
-        client_generation_ != context.client_generation ||
-        connection_epoch_ != context.connection_epoch) {
+    if (!IsCommandContextCurrentLocked(context) ||
+        !IsStreamPublicationCurrentLocked(stream_lease, terminal_stream_event, display_stream)) {
         ESP_LOGW(TAG, "Dropping command output: original MQTT connection is no longer current");
         return false;
     }
@@ -989,7 +1057,8 @@ bool UnifiedMqttService::QueueCommandPublication(const CommandPublishContext& co
         ESP_LOGW(TAG, "Dropping command output: publication queue is full");
         return false;
     }
-    command_publications_.push_back({context, payload});
+    command_publications_.push_back(
+        {context, payload, stream_lease, terminal_stream_event, display_stream});
     command_publication_bytes_ += payload.size();
     if (!SchedulePublicationEventLocked()) {
         command_publication_bytes_ -= command_publications_.back().payload.size();
@@ -1014,7 +1083,9 @@ void UnifiedMqttService::DrainCommandPublications(esp_mqtt_client_handle_t event
             command_publications_.pop_front();
             command_publication_bytes_ -= publication.payload.size();
             if (publication.context.client_generation != client_generation_ ||
-                publication.context.connection_epoch != connection_epoch_) continue;
+                publication.context.connection_epoch != connection_epoch_ ||
+                !IsStreamPublicationCurrentLocked(publication.stream_lease,
+                    publication.terminal_stream_event, publication.display_stream)) continue;
         }
         // This admission may finish on the original client after Stop revokes
         // service state. QoS0 direct publish cannot leave an outbox item for a
@@ -1428,19 +1499,35 @@ void UnifiedMqttService::HandlePcStatus(const std::string& payload) {
 }
 
 void UnifiedMqttService::StopWebRtcCameraStream() {
-    if (web_rtc_camera_service_ != nullptr) {
-        web_rtc_camera_service_->Stop();
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (camera_lease_ != nullptr) {
+            camera_lease_->Revoke();
+            stream_cleanup_pending_ = true;
+        }
     }
-    std::lock_guard<std::mutex> lock(camera_mutex_);
-    camera_session_id_.clear();
+    std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (camera_lease_ != nullptr) camera_lease_->Revoke();
+    }
+    CleanupRevokedStreamsLocked();
 }
 
 void UnifiedMqttService::StopWebRtcDisplayStream() {
-    if (web_rtc_display_service_ != nullptr) {
-        web_rtc_display_service_->Stop();
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (display_lease_ != nullptr) {
+            display_lease_->Revoke();
+            stream_cleanup_pending_ = true;
+        }
     }
-    std::lock_guard<std::mutex> lock(camera_mutex_);
-    display_session_id_.clear();
+    std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (display_lease_ != nullptr) display_lease_->Revoke();
+    }
+    CleanupRevokedStreamsLocked();
 }
 
 void UnifiedMqttService::HandleCommand(const std::string& command_no,
@@ -1460,307 +1547,226 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
         command = "ping";
     }
 
+    const bool camera_command = command == "camera.stream.start" ||
+        command == "camera.stream.stop" || command == "camera.stream.signal";
+    const bool display_command = command == "display.stream.start" ||
+        command == "display.stream.stop" || command == "display.stream.signal";
+    std::unique_lock<std::mutex> operation_lock(stream_operation_mutex_, std::defer_lock);
+    if (camera_command || display_command) {
+        operation_lock.lock();
+        CleanupRevokedStreamsLocked();
+    }
+    MqttCommandLedger::Admission admission;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!IsCommandContextCurrentLocked(context) || !effect_authority_active_) {
+            cJSON_Delete(request);
+            return;
+        }
+        admission = command_ledger_.Begin(command_no, payload);
+    }
+    if (admission.disposition != MqttCommandLedger::Disposition::kExecute) {
+        cJSON_Delete(request);
+        if (operation_lock.owns_lock()) operation_lock.unlock();
+        if (admission.disposition != MqttCommandLedger::Disposition::kPending) {
+            QueueCommandPublication(context, admission.acknowledgement);
+        }
+        return;
+    }
+
     bool handled = false;
     bool success = false;
     std::string error_code;
     cJSON* result = cJSON_CreateObject();
-    if (command == "camera.stream.start" || command == "camera.stream.stop" || command == "camera.stream.signal") {
+    if (camera_command || display_command) {
         handled = true;
-        if (web_rtc_camera_service_ == nullptr) {
-            error_code = "camera_stream_unavailable";
+        const bool display = display_command;
+        const std::string prefix = display ? "display" : "camera";
+        bool admitted = false;
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            admitted = IsCommandContextCurrentLocked(context) && effect_authority_active_;
+        }
+        const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
+        const std::string session_id =
+            cJSON_IsString(session_json) && session_json->valuestring != nullptr
+                ? session_json->valuestring : std::string();
+        if (!admitted) {
+            error_code = "command_scope_expired";
+        } else if (display ? web_rtc_display_service_ == nullptr : web_rtc_camera_service_ == nullptr) {
+            error_code = prefix + "_stream_unavailable";
         } else if (!cJSON_IsObject(request)) {
             error_code = "invalid_payload";
-        } else {
-            const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
-            const std::string session_id =
-                cJSON_IsString(session_json) && session_json->valuestring != nullptr
-                    ? session_json->valuestring
-                    : std::string();
-            if (session_id.empty()) {
-                error_code = "missing_session_id";
-            } else if (command == "camera.stream.start") {
-                WebRtcCameraService::Config config;
-                const cJSON* width = cJSON_GetObjectItemCaseSensitive(request, "width");
-                const cJSON* height = cJSON_GetObjectItemCaseSensitive(request, "height");
-                const cJSON* fps = cJSON_GetObjectItemCaseSensitive(request, "fps");
-                const cJSON* chunk_size = cJSON_GetObjectItemCaseSensitive(request, "chunkSize");
-                if (cJSON_IsNumber(width)) config.width = std::clamp(width->valueint, 160, 1280);
-                if (cJSON_IsNumber(height)) config.height = std::clamp(height->valueint, 120, 960);
-                if (cJSON_IsNumber(fps)) config.fps = static_cast<uint8_t>(std::clamp(fps->valueint, 1, 15));
-                if (cJSON_IsNumber(chunk_size)) {
-                    // Camera stream keeps its historical 10KB framing for
-                    // compatibility with existing receivers.
-                    config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 10000));
+        } else if (session_id.empty()) {
+            error_code = "missing_session_id";
+        } else if (command == prefix + ".stream.start") {
+            StreamLeasePtr lease;
+            {
+                std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                if (!IsCommandContextCurrentLocked(context) || !effect_authority_active_) {
+                    error_code = "command_scope_expired";
+                } else if (camera_lease_ != nullptr || display_lease_ != nullptr) {
+                    error_code = prefix + "_stream_busy";
+                } else if (next_stream_instance_nonce_ == std::numeric_limits<uint64_t>::max()) {
+                    error_code = "stream_instance_capacity_exceeded";
+                } else {
+                    ++next_stream_instance_nonce_;
+                    lease = std::make_shared<StreamLease>(context.client_generation,
+                        context.connection_epoch, next_stream_instance_nonce_, session_id);
+                    (display ? display_lease_ : camera_lease_) = lease;
+                    (display ? display_latest_nonce_ : camera_latest_nonce_) = lease->instance_nonce;
                 }
-
-                auto publish_signal = [this, context, session_id](const char* event,
-                                                                         const char* type,
-                                                                         const uint8_t* data,
-                                                                         size_t size) {
+            }
+            if (lease != nullptr) {
+                auto publish_signal = [this, context, lease, display](const char* event,
+                    const char* type, const uint8_t* data, size_t size, bool terminal = false) {
                     cJSON* signal = cJSON_CreateObject();
                     cJSON_AddStringToObject(signal, "status", "ok");
                     cJSON* result = cJSON_CreateObject();
-                    cJSON* camera_stream = cJSON_CreateObject();
-                    cJSON_AddStringToObject(camera_stream, "sessionId", session_id.c_str());
-                    cJSON_AddStringToObject(camera_stream, "event", event);
-                    if (type != nullptr) cJSON_AddStringToObject(camera_stream, "type", type);
+                    cJSON* stream = cJSON_CreateObject();
+                    cJSON_AddStringToObject(stream, "sessionId", lease->session_id.c_str());
+                    cJSON_AddStringToObject(stream, "event", event);
+                    if (type != nullptr) cJSON_AddStringToObject(stream, "type", type);
                     if (data != nullptr && size > 0) {
                         const std::string encoded = EncodeBase64(data, size);
-                        if (!encoded.empty()) {
-                            cJSON_AddStringToObject(camera_stream, "data", encoded.c_str());
-                        }
+                        if (!encoded.empty()) cJSON_AddStringToObject(stream, "data", encoded.c_str());
                     }
-                    cJSON_AddItemToObject(result, "cameraStream", camera_stream);
+                    cJSON_AddItemToObject(result, display ? "displayStream" : "cameraStream", stream);
                     cJSON_AddItemToObject(signal, "result", result);
                     const std::string encoded = EncodeJson(signal);
                     cJSON_Delete(signal);
-                    QueueCommandPublication(context, encoded);
+                    QueueCommandPublication(context, encoded, lease, terminal, display);
                 };
                 auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
                                                      std::vector<uint8_t>&& data) {
                     while (!data.empty() && data.back() == 0) data.pop_back();
                     publish_signal("signal", PeerMessageTypeName(type), data.data(), data.size());
                 };
-                auto on_state = [this, publish_signal, session_id](esp_peer_state_t state) {
-                    publish_signal("state", PeerStateName(state), nullptr, 0);
-                    if (state == ESP_PEER_STATE_CLOSED || state == ESP_PEER_STATE_CONNECT_FAILED ||
-                        state == ESP_PEER_STATE_DISCONNECTED ||
+                auto on_state = [this, publish_signal, lease](esp_peer_state_t state) {
+                    const bool terminal = state == ESP_PEER_STATE_CLOSED ||
+                        state == ESP_PEER_STATE_CONNECT_FAILED || state == ESP_PEER_STATE_DISCONNECTED ||
                         state == ESP_PEER_STATE_DATA_CHANNEL_CLOSED ||
-                        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED) {
-                        std::lock_guard<std::mutex> lock(camera_mutex_);
-                        if (camera_session_id_ == session_id) {
-                            camera_session_id_.clear();
-                        }
-                    }
+                        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED;
+                    if (terminal) RevokeStreamLease(lease);
+                    publish_signal("state", PeerStateName(state), nullptr, 0, terminal);
                 };
-
-                bool already_running = false;
+                const auto configure = [request](auto& config, int max_chunk_size) {
+                    const cJSON* width = cJSON_GetObjectItemCaseSensitive(request, "width");
+                    const cJSON* height = cJSON_GetObjectItemCaseSensitive(request, "height");
+                    const cJSON* fps = cJSON_GetObjectItemCaseSensitive(request, "fps");
+                    const cJSON* chunk_size = cJSON_GetObjectItemCaseSensitive(request, "chunkSize");
+                    if (cJSON_IsNumber(width)) config.width = std::clamp(width->valueint, 160, 1280);
+                    if (cJSON_IsNumber(height)) config.height = std::clamp(height->valueint, 120, 960);
+                    if (cJSON_IsNumber(fps)) config.fps =
+                        static_cast<uint8_t>(std::clamp(fps->valueint, 1, 15));
+                    if (cJSON_IsNumber(chunk_size)) config.chunk_size =
+                        static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, max_chunk_size));
+                };
+                bool peer_started = false;
+                if (display) {
+                    WebRtcDisplayService::Config config;
+                    configure(config, 20000);
+                    auto on_control = [this, lease](const std::string& data, DisplayControlReply reply) {
+                        bool current = false;
+                        {
+                            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                            current = IsStreamPublicationCurrentLocked(lease, false, true);
+                        }
+                        // Teardown belongs to its captured owner even after revocation.
+                        // The UI compares that lease before clearing control state.
+                        if (display_control_callback_ && (data.empty() || current)) {
+                            display_control_callback_(lease, data, std::move(reply));
+                        } else if (reply) {
+                            reply(false, "stream_lease_expired");
+                        }
+                    };
+                    peer_started = web_rtc_display_service_->Start(config, std::move(on_signaling),
+                        std::move(on_state), std::move(on_control));
+                } else {
+                    WebRtcCameraService::Config config;
+                    configure(config, 10000);
+                    peer_started = web_rtc_camera_service_->Start(
+                        config, std::move(on_signaling), std::move(on_state));
+                }
                 {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    already_running = !camera_session_id_.empty() || !display_session_id_.empty();
-                    if (!already_running) {
-                        // Start may synchronously emit signaling or terminal
-                        // callbacks, so reserve its session before calling it.
-                        camera_session_id_ = session_id;
+                    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                    success = peer_started && IsStreamPublicationCurrentLocked(lease, false, display);
+                    if (!success) {
+                        lease->Revoke();
+                        stream_cleanup_pending_ = true;
+                        error_code = peer_started ? "command_scope_expired" : prefix + "_stream_start_failed";
                     }
                 }
-                if (already_running) {
-                    error_code = "camera_stream_busy";
-                } else if (web_rtc_camera_service_->Start(config, std::move(on_signaling),
-                                                          std::move(on_state))) {
-                    success = true;
+                if (success) {
                     cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
                     cJSON_AddStringToObject(result, "transport", "webrtc-datachannel");
-                } else {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    if (camera_session_id_ == session_id) {
-                        camera_session_id_.clear();
-                    }
-                    error_code = "camera_stream_start_failed";
-                }
-            } else if (command == "camera.stream.stop") {
-                bool matches = false;
-                {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    matches = camera_session_id_ == session_id;
-                }
-                if (!matches) {
-                    error_code = "camera_stream_not_found";
-                } else {
-                    web_rtc_camera_service_->Stop();
-                    {
-                        std::lock_guard<std::mutex> lock(camera_mutex_);
-                        camera_session_id_.clear();
-                    }
-                    success = true;
-                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
-                }
-            } else {
-                const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
-                const cJSON* data_json = cJSON_GetObjectItemCaseSensitive(request, "data");
-                const bool valid_type = cJSON_IsString(type_json) && type_json->valuestring != nullptr;
-                const bool valid_data = cJSON_IsString(data_json) && data_json->valuestring != nullptr;
-                esp_peer_msg_type_t message_type = ESP_PEER_MSG_TYPE_NONE;
-                if (valid_type && std::string(type_json->valuestring) == "sdp") {
-                    message_type = ESP_PEER_MSG_TYPE_SDP;
-                } else if (valid_type && std::string(type_json->valuestring) == "candidate") {
-                    message_type = ESP_PEER_MSG_TYPE_CANDIDATE;
-                }
-                bool matches = false;
-                {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    matches = camera_session_id_ == session_id;
-                }
-                if (!matches) {
-                    error_code = "camera_stream_not_found";
-                } else if (!valid_data || message_type == ESP_PEER_MSG_TYPE_NONE) {
-                    error_code = "invalid_signal";
-                } else {
-                    std::vector<uint8_t> decoded = DecodeBase64(data_json->valuestring);
-                    if (decoded.empty()) {
-                        error_code = "invalid_signal_encoding";
-                    } else if (!web_rtc_camera_service_->HandleRemoteMessage(message_type, decoded)) {
-                        error_code = "camera_signal_rejected";
-                    } else {
-                        success = true;
-                        cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
-                    }
-                }
-                /* Keep the branch above explicit so malformed base64 never reaches esp_peer. */
-                if (!success && error_code.empty() && message_type != ESP_PEER_MSG_TYPE_NONE) {
-                    error_code = "camera_signal_rejected";
                 }
             }
-        }
-    } else if (command == "display.stream.start" || command == "display.stream.stop" || command == "display.stream.signal") {
-        handled = true;
-        if (web_rtc_display_service_ == nullptr) {
-            error_code = "display_stream_unavailable";
-        } else if (!cJSON_IsObject(request)) {
-            error_code = "invalid_payload";
+        } else if (command == prefix + ".stream.stop") {
+            StreamLeasePtr lease;
+            {
+                std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                const auto& current = display ? display_lease_ : camera_lease_;
+                if (!IsCommandContextCurrentLocked(context) || !effect_authority_active_) {
+                    error_code = "command_scope_expired";
+                } else if (current != nullptr && current->session_id == session_id &&
+                           IsStreamPublicationCurrentLocked(current, false, display)) {
+                    lease = current;
+                    lease->Revoke();
+                    stream_cleanup_pending_ = true;
+                } else {
+                    error_code = prefix + "_stream_not_found";
+                }
+            }
+            if (lease != nullptr) {
+                CleanupRevokedStreamsLocked();
+                success = true;
+                cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+            }
         } else {
-            const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
-            const std::string session_id =
-                cJSON_IsString(session_json) && session_json->valuestring != nullptr
-                    ? session_json->valuestring
-                    : std::string();
-            if (session_id.empty()) {
-                error_code = "missing_session_id";
-            } else if (command == "display.stream.start") {
-                WebRtcDisplayService::Config config;
-                const cJSON* width = cJSON_GetObjectItemCaseSensitive(request, "width");
-                const cJSON* height = cJSON_GetObjectItemCaseSensitive(request, "height");
-                const cJSON* fps = cJSON_GetObjectItemCaseSensitive(request, "fps");
-                const cJSON* chunk_size = cJSON_GetObjectItemCaseSensitive(request, "chunkSize");
-                if (cJSON_IsNumber(width)) config.width = std::clamp(width->valueint, 160, 1280);
-                if (cJSON_IsNumber(height)) config.height = std::clamp(height->valueint, 120, 960);
-                if (cJSON_IsNumber(fps)) config.fps = static_cast<uint8_t>(std::clamp(fps->valueint, 1, 15));
-                if (cJSON_IsNumber(chunk_size)) {
-                    // A quality-65 320x240 screen JPEG normally fits one
-                    // 20KB chunk, reducing SCTP/main-loop round trips.
-                    config.chunk_size = static_cast<uint16_t>(std::clamp(chunk_size->valueint, 1024, 20000));
-                }
-
-                auto publish_signal = [this, context, session_id](const char* event,
-                                                                         const char* type,
-                                                                         const uint8_t* data,
-                                                                         size_t size) {
-                    cJSON* signal = cJSON_CreateObject();
-                    cJSON_AddStringToObject(signal, "status", "ok");
-                    cJSON* result = cJSON_CreateObject();
-                    cJSON* display_stream = cJSON_CreateObject();
-                    cJSON_AddStringToObject(display_stream, "sessionId", session_id.c_str());
-                    cJSON_AddStringToObject(display_stream, "event", event);
-                    if (type != nullptr) cJSON_AddStringToObject(display_stream, "type", type);
-                    if (data != nullptr && size > 0) {
-                        const std::string encoded = EncodeBase64(data, size);
-                        if (!encoded.empty()) {
-                            cJSON_AddStringToObject(display_stream, "data", encoded.c_str());
-                        }
-                    }
-                    cJSON_AddItemToObject(result, "displayStream", display_stream);
-                    cJSON_AddItemToObject(signal, "result", result);
-                    const std::string encoded = EncodeJson(signal);
-                    cJSON_Delete(signal);
-                    QueueCommandPublication(context, encoded);
-                };
-                auto on_signaling = [publish_signal](esp_peer_msg_type_t type,
-                                                     std::vector<uint8_t>&& data) {
-                    while (!data.empty() && data.back() == 0) data.pop_back();
-                    publish_signal("signal", PeerMessageTypeName(type), data.data(), data.size());
-                };
-                auto on_state = [this, publish_signal, session_id](esp_peer_state_t state) {
-                    publish_signal("state", PeerStateName(state), nullptr, 0);
-                    if (state == ESP_PEER_STATE_CLOSED || state == ESP_PEER_STATE_CONNECT_FAILED ||
-                        state == ESP_PEER_STATE_DISCONNECTED ||
-                        state == ESP_PEER_STATE_DATA_CHANNEL_CLOSED ||
-                        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED) {
-                        std::lock_guard<std::mutex> lock(camera_mutex_);
-                        if (display_session_id_ == session_id) {
-                            display_session_id_.clear();
-                        }
-                    }
-                };
-
-                bool already_running = false;
-                {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    already_running = !display_session_id_.empty() || !camera_session_id_.empty();
-                    if (!already_running) {
-                        // Start may synchronously emit signaling or terminal
-                        // callbacks, so reserve its session before calling it.
-                        display_session_id_ = session_id;
-                    }
-                }
-                if (already_running) {
-                    error_code = "display_stream_busy";
-                } else if (web_rtc_display_service_->Start(config, std::move(on_signaling),
-                                                          std::move(on_state),
-                                                          display_control_callback_)) {
-                    success = true;
-                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
-                    cJSON_AddStringToObject(result, "transport", "webrtc-datachannel");
-                } else {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    if (display_session_id_ == session_id) {
-                        display_session_id_.clear();
-                    }
-                    error_code = "display_stream_start_failed";
-                }
-            } else if (command == "display.stream.stop") {
-                bool matches = false;
-                {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    matches = display_session_id_ == session_id;
-                }
-                if (!matches) {
-                    error_code = "display_stream_not_found";
-                } else {
-                    web_rtc_display_service_->Stop();
-                    {
-                        std::lock_guard<std::mutex> lock(camera_mutex_);
-                        display_session_id_.clear();
-                    }
-                    success = true;
-                    cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
-                }
-            } else {
-                const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
-                const cJSON* data_json = cJSON_GetObjectItemCaseSensitive(request, "data");
-                const bool valid_type = cJSON_IsString(type_json) && type_json->valuestring != nullptr;
-                const bool valid_data = cJSON_IsString(data_json) && data_json->valuestring != nullptr;
-                esp_peer_msg_type_t message_type = ESP_PEER_MSG_TYPE_NONE;
-                if (valid_type && std::string(type_json->valuestring) == "sdp") {
-                    message_type = ESP_PEER_MSG_TYPE_SDP;
-                } else if (valid_type && std::string(type_json->valuestring) == "candidate") {
+            const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
+            const cJSON* data_json = cJSON_GetObjectItemCaseSensitive(request, "data");
+            esp_peer_msg_type_t message_type = ESP_PEER_MSG_TYPE_NONE;
+            if (cJSON_IsString(type_json) && type_json->valuestring != nullptr) {
+                if (std::strcmp(type_json->valuestring, "sdp") == 0) message_type = ESP_PEER_MSG_TYPE_SDP;
+                else if (std::strcmp(type_json->valuestring, "candidate") == 0) {
                     message_type = ESP_PEER_MSG_TYPE_CANDIDATE;
                 }
-                bool matches = false;
-                {
-                    std::lock_guard<std::mutex> lock(camera_mutex_);
-                    matches = display_session_id_ == session_id;
-                }
-                if (!matches) {
-                    error_code = "display_stream_not_found";
-                } else if (!valid_data || message_type == ESP_PEER_MSG_TYPE_NONE) {
-                    error_code = "invalid_signal";
+            }
+            if (!cJSON_IsString(data_json) || data_json->valuestring == nullptr ||
+                message_type == ESP_PEER_MSG_TYPE_NONE) {
+                error_code = "invalid_signal";
+            } else {
+                std::vector<uint8_t> decoded = DecodeBase64(data_json->valuestring);
+                if (decoded.empty()) {
+                    error_code = "invalid_signal_encoding";
                 } else {
-                    std::vector<uint8_t> decoded = DecodeBase64(data_json->valuestring);
-                    if (decoded.empty()) {
-                        error_code = "invalid_signal_encoding";
-                    } else if (!web_rtc_display_service_->HandleRemoteMessage(message_type, decoded)) {
-                        error_code = "display_signal_rejected";
-                    } else {
-                        success = true;
-                        cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    StreamLeasePtr lease;
+                    {
+                        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                        const auto& current = display ? display_lease_ : camera_lease_;
+                        if (!IsCommandContextCurrentLocked(context) || !effect_authority_active_) {
+                            error_code = "command_scope_expired";
+                        } else if (current != nullptr && current->session_id == session_id &&
+                                   IsStreamPublicationCurrentLocked(current, false, display)) {
+                            lease = current;
+                        } else {
+                            error_code = prefix + "_stream_not_found";
+                        }
                     }
-                }
-                /* Keep the branch above explicit so malformed base64 never reaches esp_peer. */
-                if (!success && error_code.empty() && message_type != ESP_PEER_MSG_TYPE_NONE) {
-                    error_code = "display_signal_rejected";
+                    if (lease != nullptr) {
+                        success = display ? web_rtc_display_service_->HandleRemoteMessage(message_type, decoded)
+                                          : web_rtc_camera_service_->HandleRemoteMessage(message_type, decoded);
+                        if (success) cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                        else error_code = prefix + "_signal_rejected";
+                    }
                 }
             }
         }
+        // A disconnect or terminal callback may have invalidated an admitted
+        // operation. Finish its own peer before the next command can start one.
+        CleanupRevokedStreamsLocked();
+        operation_lock.unlock();
     } else if (command == "ping" || IsPingCommand(payload)) {
         handled = true;
         success = true;
@@ -1782,6 +1788,12 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
     cJSON_Delete(request);
     const std::string ack_payload = EncodeJson(root);
     cJSON_Delete(root);
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        // A completed operation remains replayable after a transport epoch
+        // changes. The ledger ticket rejects completion after authority reset.
+        command_ledger_.Complete(admission.ticket, ack_payload);
+    }
 
     if (QueueCommandPublication(context, ack_payload)) {
         ESP_LOGI(TAG, "Command %s response queued for its original connection: %s", command_no.c_str(),

@@ -49,6 +49,8 @@ set(SOURCES
     "phone_os/voice_assistant_service.cc"
     "phone_os/voice_volume_mcp.cc"
     "phone_os/mqtt_volume_effect.cc"
+    "phone_os/mqtt_command_ledger.cc"
+    "phone_os/remote_input_controller.cc"
     "phone_os/mqtt_light_effect.cc"
     "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_barge_in_policy.cc"

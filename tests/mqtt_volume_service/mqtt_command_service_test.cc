@@ -2,8 +2,10 @@
 
 namespace {
 std::string Command(mqtt_host::Fixture& fixture, const std::string& payload,
-                    const std::string& command_no = "command-test") {
-    const std::string topic = "devices/test-device/commands/" + command_no;
+                    const std::string& command_no = "") {
+    static unsigned sequence = 0;
+    const std::string topic = "devices/test-device/commands/" +
+        (command_no.empty() ? "command-test-" + std::to_string(++sequence) : command_no);
     const size_t previous = mqtt_host::Publications().size();
     mqtt_host::Message(topic, payload, payload.size() > 1);
     fixture.Barrier();
@@ -64,12 +66,12 @@ RODAK_TEST("MQTT command handler reports unavailable camera and display services
     }
 }
 
-RODAK_TEST("MQTT command replay is processed again without command number deduplication") {
+RODAK_TEST("MQTT command replay returns its first ACK and rejects conflicting raw payload") {
     mqtt_host::Fixture fixture;
     fixture.Start();
-    const auto first = Command(fixture, "ping");
-    RODAK_CHECK_EQ(Command(fixture, "ping"), first);
-    CheckFailure(Command(fixture, "{\"command\":\"unknown\"}"), "unsupported_command");
+    const auto first = Command(fixture, "ping", "replay-command");
+    RODAK_CHECK_EQ(Command(fixture, "ping", "replay-command"), first);
+    CheckFailure(Command(fixture, "{\"command\":\"unknown\"}", "replay-command"), "command_conflict");
 }
 
 RODAK_TEST("MQTT command queued before reconnect is rejected before handler entry") {
