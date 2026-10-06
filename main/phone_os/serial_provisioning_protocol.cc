@@ -169,6 +169,7 @@ bool IsValidSerialProvisioningBootstrapUrl(const std::string& url) {
                                       ? std::string_view()
                                       : std::string_view(url).substr(authority_end);
     return path.empty() || path == "/" ||
+           path == "/xiaozhi/ota/" ||
            path == "/api/v1/aiot/devices/bootstrap";
 }
 

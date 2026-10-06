@@ -69,6 +69,7 @@ set(SOURCES
     "phone_os/battery_level_model.cc"
     "phone_os/battery_monitor.cc"
     "phone_os/serial_provisioning_protocol.cc"
+    "phone_os/serial_provisioning_binding.cc"
     "phone_os/serial_provisioning_service.cc"
     "phone_os/mqtt_credential_refresh_policy.cc"
     "phone_os/ota_update_service.cc"

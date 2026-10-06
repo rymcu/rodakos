@@ -9,12 +9,16 @@ the voice wire format is defined in [Rodak realtime voice v1](rodak-realtime-voi
 
 ## Scope
 
-Rodak is the operator-side sender. RodakOS is the device-side receiver. A
-successful provisioning session writes only:
+Rodak is the operator-side sender. RodakOS is the device-side receiver. The
+network configuration supplied by a provisioning request contains only:
 
 - WiFi SSID and password to the existing `wifi` NVS namespace.
 - Device Cloud bootstrap URL to the existing `device_cloud` NVS namespace
   (`prov_url` key).
+
+A request carrying a binding nonce may also initialize the device-owned random
+secret in `device_cloud` if no identity exists. It never accepts that secret from
+the desktop, marks the device registered, or grants cloud access by itself.
 
 MQTT credentials, realtime voice descriptors, broker settings, and topic names are not
 sent over serial. RodakOS obtains those values from the configured canonical AIoT bootstrap
@@ -36,8 +40,13 @@ The service label is **Device Cloud**, but the persisted NVS namespace is
 | `unified_mqtt` | Broker, credential, and topic keys | Bootstrap response          |
 
 Changing `device_cloud/prov_url` clears cached `realtime_voice` and `unified_mqtt`
-values before the next bootstrap. MQTT and voice credentials are never accepted
-as serial request fields.
+values before the next bootstrap. When the canonical URL is unchanged, the
+provisioning refresh preserves the registered/activated device identity and only
+refreshes transport credentials. A different origin remains an explicit migration
+boundary that requires the operator to explicitly select a trusted bootstrap URL.
+After that change, the existing device secret is used to request pairing at the new
+origin; this flow does not discover or authorize another origin automatically.
+MQTT and voice credentials are never accepted as serial request fields.
 
 The firmware does not expose textual commands such as `cloud bootstrap set` or
 `wifi provision`. Provisioning uses only the framed `RODAK_PROVISION_V1` line
@@ -66,8 +75,35 @@ Do not start an ESP-IDF REPL or another reader on the same console while a
 provisioning session is active; both readers would consume the same RX stream.
 
 ```text
-RODAK_PROVISION_RESULT {"ok":true}\n
+RODAK_PROVISION_RESULT {"ok":true,"deviceKey":"44:1b:f6:c3:b4:30"}\n
 ```
+
+For an operator-authorized automatic binding attempt, Rodak may include an optional
+`binding_nonce`: 32 random bytes encoded as exactly 64 hexadecimal ASCII characters.
+The firmware rejects an invalid nonce before changing WiFi or cloud configuration.
+It ensures the same random device secret used by AIoT pairing is persisted, then adds
+`bindingProof` to the success reply. A request without the field remains compatible
+and receives no binding proof.
+
+```text
+bindingProof = lowercaseHex(HMAC-SHA256(
+  key = SHA256(UTF8(deviceSecret)),
+  message = ASCII(binding_nonce)
+))
+```
+
+The HMAC key is the raw 32-byte digest, not its hexadecimal spelling. Nonce case is
+preserved when computing the proof. The nonce and proof are not persisted in NVS;
+the long-term secret is never returned over serial. A nonce is scoped to one desktop
+provisioning attempt: Rodak must not authorize binding from a MAC address alone or
+reuse a prior successful proof for another attempt.
+
+Secret creation distinguishes an absent NVS value from a read/type/size error; errors
+abort without replacing the stored identity. The serial cloud save holds the same
+refresh lock as pairing and unbind while it creates the proof and saves the URL.
+An active cloud refresh causes a retryable provisioning failure instead of waiting
+past the serial response deadline. WiFi changes are rolled back through the normal
+provisioning transaction failure path.
 
 Errors use a stable code and do not echo credentials:
 
@@ -79,8 +115,9 @@ The receiver must reject oversized frames, malformed JSON, control characters
 inside values, unknown protocol versions, and URLs using schemes other than
 `http` or `https`. Bootstrap URLs also require a non-empty authority, a valid
 port when present, and no embedded user information. Only the canonical
-`/api/v1/aiot/devices/bootstrap` path or an HTTP(S) origin is accepted; legacy paths, query strings,
-and fragments are rejected. Credentials must never be
+`/api/v1/aiot/devices/bootstrap` path, an HTTP(S) origin, or the exact legacy alias
+`/xiaozhi/ota/` is accepted. The alias is normalized to the canonical AIoT path;
+other legacy paths, query strings, and fragments are rejected. Credentials must never be
 printed in replies or logs.
 An empty `password` is valid for an open WiFi network; non-empty passwords are
 limited to 63 bytes and SSIDs to 32 bytes.
@@ -163,9 +200,11 @@ The serial link is assumed to be physically local. It is not an authenticated
 remote management channel. The sender must require an explicit operator action
 and should use a short-lived provisioning session. The device must not echo the
 WiFi password, MQTT password, JWT, or realtime voice token. Serial provisioning does
-not authorize Device Cloud access. RodakOS requires a separate short-code
-confirmation before it obtains an AIoT access token or enables MQTT and
-realtime voice capabilities.
+not authorize Device Cloud access by itself. The device-owned pairing request still
+requires owner confirmation before it obtains an AIoT access token or enables MQTT
+and realtime voice capabilities. Rodak may complete that confirmation for an explicit
+serial provisioning action only when the session nonce/HMAC matches the pending
+pairing identity; otherwise the short-code confirmation remains required.
 
 RodakOS reuses the ESP-IDF USB Serial/JTAG console VFS; it does not create a
 second serial or USB interface. The service backs that VFS with Espressif's
@@ -238,12 +277,32 @@ store into `DeviceCloudConfigService`, then verify request persistence across a
 service restart, pending-to-confirmed polling, rejected/expired restart, the
 transactional credential commit, and server-confirmed unbind cleanup.
 
+`tests/serial_provisioning` builds the production URL/frame parser and binding-proof
+implementation against host Mbed TLS. Its 19 tests cover the exact legacy alias,
+invalid URL boundaries, frame recovery, independent HMAC vectors, nonce validation,
+case-sensitive nonce bytes and separation across device identities/sessions:
+
+```sh
+cmake -S tests/serial_provisioning -B ~/.cache/rodakos-serial-provisioning -G Ninja
+cmake --build ~/.cache/rodakos-serial-provisioning
+ctest --test-dir ~/.cache/rodakos-serial-provisioning --output-on-failure
+```
+
+The host proof tests do not exercise the USB service, real NVS persistence, HTTP
+confirmation or a device reboot. Those remain part of the integrated hardware gate.
+
 ## Rodak Integration
 
-Rodak should expose a device configuration action that reads `WIFI_SSID`,
-`WIFI_PASSWORD`, and `RODAK_BOOTSTRAP_URL` from a local, ignored `.env`
-file, shows the target serial port, and requires confirmation before sending.
-The action must report only validation, transport, and device result status.
+Rodak's Serial Lab provides a provisioning form with the target serial port,
+WiFi credentials and bootstrap URL. An explicit operator action starts a fresh
+nonce challenge; the main process may confirm the matching pending pairing request
+only against the local running server. The UI distinguishes configuration acceptance
+from the later binding result and does not expose the nonce, proof or device secret.
+
+The `.env` helper remains a compatibility path: it reads `WIFI_SSID`,
+`WIFI_PASSWORD`, and `RODAK_BOOTSTRAP_URL` from a local, ignored file and requires
+confirmation before sending. It does not perform the server-side automatic binding
+confirmation, so the device may still require the ordinary short-code flow.
 
 The server-side bootstrap endpoint remains the source of truth for MQTT and
 realtime voice capabilities. It must not accept MQTT secrets from the desktop
@@ -263,7 +322,11 @@ provisioning flow.
 - Rodak reports the device result and subsequently observes the device's
   bootstrap request and MQTT connection.
 
-## Hardware Acceptance
+## Historical Hardware Acceptance
+
+The following earlier gate predates the nonce/HMAC extension. It establishes the
+serial, bootstrap and MQTT behavior observed in that run; it does not verify the
+current automatic-binding proof, its NVS failure paths, or a newly built firmware.
 
 The wired BigSmart gate has verified settings-preserving firmware updates and
 serial provisioning on the board's USB Serial/JTAG port. The captured boot log
@@ -278,6 +341,40 @@ real-person wake. A Rodak near-field recording preset is not required for the lo
 MultiNet gate; audio fixtures only exercise the post-wake cloud path.
 
 ## Hardware gate
+
+### 2026-10-06 hotspot and binding-proof gate
+
+Source baseline `b8d8f8a` plus this serial provisioning change, built with ESP-IDF 6.0.2.
+Development-signed package `build/packages/ota/20261006-225642`, task
+`serial-binding-20261006-001`, version `0.1.2-dev.1`; normal application flavor with no fault
+injection or Home test population. Main image is 7,015,312 bytes, SHA-256
+`ad93a118807ac909066d91229302d22fee46f9a16ccaf3da69cec835d9e7c7a3`.
+The 16 MiB merged image SHA-256 is
+`0dffd4a47c53b45767157f23cdf4b735ec922dd0109d1d1ab91b6408e3935428`.
+
+The supported `flash_and_test.ps1 -Port COM3 -NoMonitor -AllowDevelopmentPackage` refresh
+preserved NVS and reused verified immutable Recovery package `20260930-231358`.
+`build/logs/first-boot-20261006-225704.log` passed Recovery, main, Home and OTA boot confirmation.
+
+Device `44:1b:f6:c3:b4:30` joined the Windows `RodakOS-Lab` hotspot (2.4 GHz/WPA2), received
+`192.168.137.24`, and used canonical bootstrap at `192.168.137.1:9080`. The laptop's upstream
+was Ethernet; simultaneous WiFi upstream/hotspot operation was not tested. Rodak Serial Lab IPC
+returned `bound` at 15:00:14 UTC after verifying the device-secret proof. Repeating the same
+configuration returned `not_needed` at 15:00:53 UTC, with tokenVersion unchanged at 4. Both rounds
+observed a new MQTT connection, reported shadow and at least two telemetry reports. The normal
+desktop instance was restored and the device reconnected. Desktop evidence is
+`D:/workspace/rodak/.codex-temp/serial-binding-hardware.log` and
+`D:/workspace/rodak/docs/serial-provisioning-verification.md`.
+
+The existing appearance revision reported `fallback/package_unavailable`; no appearance package
+was redeployed or publisher trust granted. This gate does not cover LAN discovery/server-key
+migration, power cuts, rejected pairing, credential rotation, production signing or acoustic tests.
+
+Host validation: 19 protocol/proof tests in Debug and ASan/UBSan with leak detection, and 278
+app-model tests. The real USB/NVS/HTTP/MQTT path is supported by the two hardware rounds above;
+the host tests alone do not establish it.
+
+### Full regression requirements
 
 Use the Recovery-safe refresh flow before testing provisioning. Verify the
 installed partition table and immutable Recovery image, then capture the full

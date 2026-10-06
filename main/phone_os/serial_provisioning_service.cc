@@ -3,6 +3,7 @@
 
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_protocol.h"
+#include "phone_os/serial_provisioning_binding.h"
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include "settings.h"
@@ -378,11 +379,13 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         SendResult(false, error.c_str());
         return false;
     }
-    if (!ApplyRequest(request, error)) {
+    std::string binding_proof;
+    if (!ApplyRequest(request, binding_proof, error)) {
         SendResult(false, error.c_str());
         return false;
     }
-    SendResult(true);
+    const std::string device_key = cloud_config_.GetDeviceKey();
+    SendResult(true, nullptr, device_key.c_str(), binding_proof.c_str());
     return true;
 }
 
@@ -432,11 +435,22 @@ bool SerialProvisioningService::ParseRequest(const std::string& json,
     if (valid && !IsValidSerialProvisioningBootstrapUrl(request.bootstrap_url)) {
         error = "invalid_bootstrap_url";
     }
+    request.binding_nonce.clear();
+    const cJSON* binding_nonce = cJSON_GetObjectItemCaseSensitive(root, "binding_nonce");
+    if (valid && error.empty() && binding_nonce != nullptr) {
+        if (!cJSON_IsString(binding_nonce) || binding_nonce->valuestring == nullptr ||
+            !IsValidSerialProvisioningBindingNonce(binding_nonce->valuestring)) {
+            error = "invalid_binding_nonce";
+        } else {
+            request.binding_nonce = binding_nonce->valuestring;
+        }
+    }
     cJSON_Delete(root);
     return valid && error.empty();
 }
 
-bool SerialProvisioningService::ApplyRequest(const Request& request, std::string& error) {
+bool SerialProvisioningService::ApplyRequest(const Request& request, std::string& binding_proof,
+                                           std::string& error) {
     WiFiConfig previous_wifi;
     std::string previous_ssid;
     std::string previous_password;
@@ -459,8 +473,8 @@ bool SerialProvisioningService::ApplyRequest(const Request& request, std::string
         return false;
     }
     const ProvisioningUrlSaveResult cloud_save_result =
-        cloud_config_.SaveProvisioningUrl(request.bootstrap_url,
-                                          ProvisioningUrlSaveMode::kForceRefresh);
+        cloud_config_.SaveSerialProvisioning(request.bootstrap_url, request.binding_nonce,
+                                             binding_proof);
     if (cloud_save_result != ProvisioningUrlSaveResult::kSaved) {
         bool wifi_restored = false;
         if (had_previous_wifi) {
@@ -540,7 +554,8 @@ void SerialProvisioningService::SendReady() {
     std::fflush(stdout);
 }
 
-void SerialProvisioningService::SendResult(bool ok, const char* error) {
+void SerialProvisioningService::SendResult(bool ok, const char* error, const char* device_key,
+                                         const char* binding_proof) {
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         std::fputs("RODAK_PROVISION_RESULT {\"ok\":false,\"error\":\"internal_error\"}\n",
@@ -551,6 +566,12 @@ void SerialProvisioningService::SendResult(bool ok, const char* error) {
     cJSON_AddBoolToObject(root, "ok", ok);
     if (!ok && error != nullptr && error[0] != '\0') {
         cJSON_AddStringToObject(root, "error", error);
+    }
+    if (ok && device_key != nullptr && device_key[0] != '\0') {
+        cJSON_AddStringToObject(root, "deviceKey", device_key);
+    }
+    if (ok && binding_proof != nullptr && binding_proof[0] != '\0') {
+        cJSON_AddStringToObject(root, "bindingProof", binding_proof);
     }
     char* json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

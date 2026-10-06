@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. This media-save consistency slice starts from `b29d8375`.
+Updated: 2026-10-06. This serial provisioning / binding-proof slice starts from `b8d8f8a`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
 
@@ -20,9 +20,10 @@ firmware build does not change an existing hardware gate.
   exact-ID Home layouts, folders, one-save Arrange drafts, and active-plus-neighbors page residency.
 - On-demand media hardware, SD/USB MSC, local MultiNet wake, canonical
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
-- Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence.
-  The signed firmware package `20261001-234748` is the last recorded device package, not an
-  identity for subsequent local builds; see [appearance verification](appearance-verification.md).
+- Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
+  see [appearance verification](appearance-verification.md). The latest COM3 firmware package is
+  development-signed `20261006-225642`, verified for serial provisioning and same-URL binding
+  preservation; see [serial evidence](serial-provisioning.md#2026-10-06-hotspot-and-binding-proof-gate).
 - Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
   A closed codec accepts configuration without opening hardware; the next open applies it and
   fails with cleanup if the initial API call fails. Voice MCP now exposes absolute/up/down tools
@@ -96,6 +97,9 @@ power-loss, acoustic, or resource-exhaustion evidence.
 
 ## Deferred design decisions
 
+- Pin server identity/public key and verify LAN discovery candidates before automatic endpoint
+  migration. Same-URL serial refresh now preserves registration; stable laptop hotspot networking
+  is hardware-verified. mDNS/DNS-SD migration and Appearance origin trust remain separate work.
 - Keep free drag deferred until physical paging and touch are proven together.
 - Extend host LVGL coverage into PhoneSystem policy when hardware dependencies can be isolated.
 - Refine service-backed status, app capability visibility in Settings/System Info, and consistent

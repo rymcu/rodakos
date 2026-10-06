@@ -3,6 +3,7 @@
 #include "phone_os/device_pairing_protocol.h"
 #include "phone_os/realtime_voice_contract.h"
 #include "phone_os/serial_provisioning_protocol.h"
+#include "phone_os/serial_provisioning_binding.h"
 
 #include "settings.h"
 
@@ -21,6 +22,7 @@
 #include <esp_random.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs.h>
@@ -31,6 +33,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace rodakos {
@@ -1442,6 +1445,35 @@ bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& con
     return config.cloud_generation == config_generation_;
 }
 
+ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
+    const std::string& url, const std::string& binding_nonce, std::string& binding_proof) {
+    binding_proof.clear();
+    std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::try_to_lock);
+    if (!refresh_lock.owns_lock()) {
+        SetError("Device cloud refresh is busy; retry serial provisioning");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    // Keep identity proof and endpoint invalidation in the same transaction.
+    // Refresh/Unbind cannot persist an old identity or erase the proved secret
+    // between those steps; Settings edits also serialize on config_mutex_.
+    std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+    std::string normalized;
+    if (!NormalizeSerialProvisioningBootstrapUrl(url, normalized) ||
+        IsForbiddenLegacyProvisioningHost(normalized)) {
+        SetError("Configure a valid Rodak AIoT bootstrap URL");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    std::string proof;
+    if (!binding_nonce.empty() && !CreateProvisioningBindingProof(binding_nonce, proof)) {
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    const auto result = SaveProvisioningUrl(normalized, ProvisioningUrlSaveMode::kForceRefresh);
+    if (result == ProvisioningUrlSaveResult::kSaved) {
+        binding_proof = std::move(proof);
+    }
+    return result;
+}
+
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
     const std::string& url, ProvisioningUrlSaveMode mode) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
@@ -1461,11 +1493,20 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
         return ProvisioningUrlSaveResult::kFailedRolledBack;
     }
     Load(*previous_config);
+    Settings identity_settings(kCloudNamespace, false);
+    const auto identity_status = identity_settings.ReadString(
+        kAiotSecretKey, previous_config->aiot_device_secret, 512);
+    if (identity_status != SettingsStringReadStatus::kOk &&
+        identity_status != SettingsStringReadStatus::kNotFound) {
+        SetError("Failed to read device identity; provisioning was not changed");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
     std::string previous_url;
+    const bool same_effective_url =
+        NormalizeSerialProvisioningBootstrapUrl(previous_config->provisioning_url, previous_url) &&
+        previous_url == provisioning_url;
     if (mode == ProvisioningUrlSaveMode::kPreserveCredentials &&
-        NormalizeSerialProvisioningBootstrapUrl(previous_config->provisioning_url,
-                                                previous_url) &&
-        previous_url == provisioning_url) {
+        same_effective_url) {
         last_error_.clear();
         return ProvisioningUrlSaveResult::kUnchanged;
     }
@@ -1473,6 +1514,15 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
     ResetMqttConfig(*empty_config);
     empty_config->aiot_device_secret = previous_config->aiot_device_secret;
     ResetAiotCredentials(*empty_config);
+    // A serial provisioning refresh on the same canonical endpoint is a
+    // transport refresh, not a new ownership decision. Keep the durable
+    // registered/activated markers so the next bootstrap can refresh the
+    // token with the persisted device secret instead of opening pairing again.
+    if (mode == ProvisioningUrlSaveMode::kForceRefresh && same_effective_url &&
+        previous_config->aiot_registered && previous_config->aiot_activated) {
+        empty_config->aiot_registered = true;
+        empty_config->aiot_activated = true;
+    }
 
     // An explicit provisioning request is a credential-rotation boundary.
     // Invalidate cached cloud credentials even when the URL is unchanged so
@@ -1624,6 +1674,50 @@ std::string DeviceCloudConfigService::GetClientId() {
         settings.SetString(kUuidKey, uuid);
     }
     return uuid;
+}
+
+std::string DeviceCloudConfigService::GetDeviceKey() {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+    return MacAddress();
+}
+
+bool DeviceCloudConfigService::CreateProvisioningBindingProof(
+    const std::string& nonce, std::string& proof) {
+    proof.clear();
+    if (!IsValidSerialProvisioningBindingNonce(nonce)) {
+        SetError("Invalid serial provisioning binding nonce");
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+    Settings settings(kCloudNamespace, true);
+    std::string secret;
+    const auto status = settings.ReadString(kAiotSecretKey, secret, 512);
+    if (status != SettingsStringReadStatus::kOk &&
+        status != SettingsStringReadStatus::kNotFound) {
+        SetError("Failed to read serial provisioning identity");
+        return false;
+    }
+    if (status == SettingsStringReadStatus::kNotFound || secret.empty()) {
+        uint8_t primary_channel = 0;
+        wifi_second_chan_t secondary_channel = WIFI_SECOND_CHAN_NONE;
+        // esp_fill_random requires active RF entropy for a new long-term key.
+        if (esp_wifi_get_home_channel(&primary_channel, &secondary_channel) != ESP_OK) {
+            SetError("WiFi must be started before creating the provisioning identity");
+            return false;
+        }
+        secret = GenerateDeviceSecret();
+        if (!settings.SetString(kAiotSecretKey, secret) || !settings.Commit()) {
+            (void)settings.Commit();
+            SetError("Failed to persist serial provisioning identity");
+            return false;
+        }
+    }
+    if (!CreateSerialProvisioningBindingProof(secret, nonce, proof)) {
+        SetError("Failed to create serial provisioning binding proof");
+        return false;
+    }
+    last_error_.clear();
+    return true;
 }
 
 std::string DeviceCloudConfigService::last_error() const {

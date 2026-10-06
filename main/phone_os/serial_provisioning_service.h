@@ -50,17 +50,19 @@ private:
         std::string ssid;
         std::string password;
         std::string bootstrap_url;
+        std::string binding_nonce;
     };
 
     static void TaskEntry(void* arg);
     void Run();
     bool HandleLine(const std::string& line);
     bool ParseRequest(const std::string& json, Request& request, std::string& error) const;
-    bool ApplyRequest(const Request& request, std::string& error);
+    bool ApplyRequest(const Request& request, std::string& binding_proof, std::string& error);
     bool PrepareConsoleInput();
     void RestoreConsoleInput();
     void SendReady();
-    void SendResult(bool ok, const char* error = nullptr);
+    void SendResult(bool ok, const char* error = nullptr, const char* device_key = nullptr,
+                    const char* binding_proof = nullptr);
 
     WiFiAdapter* wifi_ = nullptr;
     DeviceCloudConfigService& cloud_config_;

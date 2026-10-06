@@ -106,12 +106,17 @@ public:
     ProvisioningUrlSaveResult SaveProvisioningUrl(
         const std::string& url,
         ProvisioningUrlSaveMode mode = ProvisioningUrlSaveMode::kPreserveCredentials);
+    ProvisioningUrlSaveResult SaveSerialProvisioning(
+        const std::string& url, const std::string& binding_nonce, std::string& binding_proof);
+    // 返回 AIoT 配对与云端主题使用的稳定设备标识。
+    std::string GetDeviceKey();
     std::string GetClientId();
     std::string last_error() const;
 
     static const char* DefaultProvisioningUrl();
 
 private:
+    bool CreateProvisioningBindingProof(const std::string& nonce, std::string& proof);
     bool RefreshAiot(DeviceCloudConfig& config,
                      const std::function<bool()>& can_continue = {},
                      int64_t deadline_ms = 0, bool allow_pairing = true);

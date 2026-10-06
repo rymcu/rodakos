@@ -144,6 +144,16 @@ RODAK_TEST("Serial provisioning normalizes equivalent bootstrap endpoints") {
                    "http://example.com/api/v1/aiot/devices/bootstrap");
 }
 
+RODAK_TEST("Serial provisioning accepts only the exact legacy OTA alias and canonicalizes it") {
+    std::string normalized;
+    RODAK_CHECK(rodakos::NormalizeSerialProvisioningBootstrapUrl(
+        "https://Example.COM:443/xiaozhi/ota/", normalized));
+    RODAK_CHECK_EQ(normalized, "https://example.com/api/v1/aiot/devices/bootstrap");
+    RODAK_CHECK(rodakos::NormalizeSerialProvisioningBootstrapUrl(
+        "http://[fd00::1]:9080/xiaozhi/ota/", normalized));
+    RODAK_CHECK_EQ(normalized, "http://[fd00::1]:9080/api/v1/aiot/devices/bootstrap");
+}
+
 RODAK_TEST("Serial provisioning rejects unsafe bootstrap authorities") {
     const std::string invalid_urls[] = {
         "HTTP://example.com/",
@@ -154,7 +164,10 @@ RODAK_TEST("Serial provisioning rejects unsafe bootstrap authorities") {
         "http://example.com:65536/",
         "http://fd00::1/api/v1/aiot/devices/bootstrap",
         "http://example.com\\api/v1/aiot/devices/bootstrap",
-        "http://example.com/xiaozhi/ota/",
+        "http://example.com/xiaozhi/ota",
+        "http://example.com/xiaozhi/ota/child",
+        "http://example.com/xiaozhi/ota/?token=secret",
+        "http://example.com/xiaozhi/ota/#fragment",
         "https://example.com/bootstrap?channel=stable",
     };
     for (const std::string& url : invalid_urls) {
