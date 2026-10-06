@@ -21,8 +21,6 @@ jobs:
     timeout-minutes: 45
     env:
       IDF_COMPONENT_CACHE_PATH: /root/.cache/rodakos-components
-      RODAKOS_IDF_PATH: ${{ github.workspace }}/.host-idf
-      RODAKOS_CHECKS: ${{ github.workspace }}/host-check-results
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     defaults:
@@ -60,6 +58,19 @@ jobs:
             components/esp_event
             components/tcp_transport
             components/esp_common/include
+
+      - name: Initialize container workspace paths
+        run: |
+          rodak_workspace="$(pwd -P)"
+          rodak_idf="$rodak_workspace/.host-idf"
+          test -d "$rodak_workspace/.git"
+          test -d "$rodak_idf/.git"
+          git config --global --add safe.directory "$rodak_workspace"
+          git config --global --add safe.directory "$rodak_idf"
+          {
+            echo "RODAKOS_IDF_PATH=$rodak_idf"
+            echo "RODAKOS_CHECKS=$rodak_workspace/host-check-results"
+          } >> "$GITHUB_ENV"
 
       - name: Record source and tool identities
         run: |
@@ -108,8 +119,8 @@ jobs:
         with:
           name: rodakos-host-${{ github.sha }}
           path: |
-            ${{ github.workspace }}/host-check-results/*.log
-            ${{ github.workspace }}/host-check-results/**/Testing/Temporary/*.log
+            host-check-results/*.log
+            host-check-results/**/Testing/Temporary/*.log
           if-no-files-found: warn
           retention-days: 14
 

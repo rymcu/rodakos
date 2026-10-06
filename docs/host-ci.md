@@ -24,6 +24,9 @@
   用于 MQTT event overlay 的来源核验。主机 job 不安装 Xtensa 编译器，不执行固件构建。
 - Actions 使用已核对的完整 commit SHA，工作流 token 只有 `contents: read`，checkout
   不保留凭据；PR 检查不使用 `pull_request_target`。
+- 容器内通过运行时 `pwd -P` 确定真实 workspace，再写入 `GITHUB_ENV` 供后续步骤使用。
+  Git 仅信任当前仓库和嵌套 IDF checkout 的两个精确目录；artifact 使用 workspace
+  相对路径，避免宿主机 `/home/runner/work` 与容器 `/__w` 挂载路径混用。
 
 ## 检查覆盖
 
@@ -82,12 +85,25 @@ manager 3.0.3 已在隔离冷缓存中下载并验证六组件，临时 cJSON �
 从 Windows 导出本地快照时使用 `git -c core.autocrlf=false archive`，避免全局换行设置
 把要求 LF 的证书 fixture 转成 CRLF。
 
+### 2026-10-07 首轮 Actions 失败与修复
+
+候选 `897bcce` 的 [Actions 37506516770](https://github.com/rymcu/rodakos/actions/runs/37506516770)
+通过 PowerShell job，但 Linux job 在记录源码身份时因 Git `dubious ownership` 以
+128 退出，尚未执行 Linux 主机测试。该轮同时暴露 job-level `github.workspace`
+表达式展开为宿主路径 `/home/runner/work/rodakos/rodakos`，与容器实际 checkout
+`/__w/rodakos/rodakos` 不同。
+
+修复在两个 checkout 后，从容器运行目录生成 IDF/结果路径并通过 `GITHUB_ENV`
+传递；仅对这两个仓库设置精确 `safe.directory`，上传改用相对路径。此修复重新通过
+actionlint、YAML/Bash 静态检查及隔离目录的路径/信任配置验证；不重复已经通过的主机
+回归。Linux Actions 成功运行和 artifact 验收仍需下一轮结果。
+
 ## #26 仍开放的门禁
 
 此变更没有建立主应用/Recovery 的 ESP-IDF 构建 job。后续仍需固定推荐 Xtensa GCC、
 冷启动生成 Board Manager、验证完整组件依赖图、镜像容量/语音模型符号、普通 flavor
 禁用故障注入，以及 development OTA 包的一致性。主机依赖校验只覆盖前述六个组件。
 
-首次 Actions 运行及 PR 检查展示、仓库套餐允许的 required checks/保护规则也需另行确认。
+首次 Linux Actions 成功运行及 PR 检查展示、仓库套餐允许的 required checks/保护规则仍需确认。
 主机测试成功不会关闭 [发布验收](ota-release-readiness.md) 中的真实掉电、设备资源耗尽、
 声学、跨网络和长期运行门禁。
