@@ -290,6 +290,7 @@ void FileManagerApp::RebuildList() {
         lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(item, 8, 0);
         lv_obj_set_style_pad_all(item, 8, 0);
+        lv_obj_set_style_pad_ver(item, 6, 0);
         lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
 
         auto* badge = lv_obj_create(item);
@@ -307,6 +308,7 @@ void FileManagerApp::RebuildList() {
 
         auto* name = CreateText(item, entry.name.c_str(), &phone_font_14, rodakos_theme_text_primary());
         lv_obj_set_width(name, 178);
+        lv_obj_set_height(name, lv_font_get_line_height(lv_obj_get_style_text_font(name, 0)));
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_align(name, LV_ALIGN_TOP_LEFT, 48, 1);
 
@@ -516,6 +518,7 @@ void FileManagerApp::ShowFileInfo(const rodakos::FileEntry& entry) {
 
         info_title_label_ = CreateText(info_body_, "", &phone_font_14, rodakos_theme_text_primary());
         lv_obj_set_width(info_title_label_, 276);
+        lv_obj_set_height(info_title_label_, lv_font_get_line_height(lv_obj_get_style_text_font(info_title_label_, 0)));
         lv_label_set_long_mode(info_title_label_, LV_LABEL_LONG_DOT);
         lv_obj_align(info_title_label_, LV_ALIGN_TOP_LEFT, 0, 0);
 

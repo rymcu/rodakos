@@ -260,21 +260,35 @@ RODAK_TEST("refresh failure removes stale and partially returned directory entri
 
 RODAK_TEST("missing child keeps attempted path for retry and permits back to parent") {
     Fixture f;
-    f.files.directories["/"].entries = {Entry("album", "/album", true)};
+    const char* directory_name = "System Volume Information";
+    const std::string directory_path = std::string("/") + directory_name;
+    f.files.directories["/"].entries = {Entry(directory_name, directory_path.c_str(), true)};
     f.Create();
-    f.Click("album");
+    auto* item = lv_obj_get_child(f.app().list_container_, 0);
+    auto* name = lv_obj_get_child(item, 1);
+    auto* meta = FindText(item, "Folder");
+    RODAK_CHECK(meta != nullptr);
+    lv_area_t name_area, meta_area;
+    lv_obj_get_coords(name, &name_area);
+    lv_obj_get_coords(meta, &meta_area);
+    RODAK_CHECK_EQ(lv_area_get_height(&name_area),
+                   lv_font_get_line_height(lv_obj_get_style_text_font(name, 0)));
+    RODAK_CHECK(std::string(lv_label_get_text(name)).find("...") != std::string::npos);
+    RODAK_CHECK(name_area.y2 < meta_area.y1);
+    Screenshot("files-long-directory.ppm");
+    lv_obj_send_event(item, LV_EVENT_CLICKED, nullptr); Pump();
     RODAK_CHECK(f.Has("Folder unavailable"));
-    RODAK_CHECK(f.Has("/sdcard/album"));
-    f.files.directories["/album"] = {{Entry("inside.txt", "/album/inside.txt")}};
+    RODAK_CHECK(f.Has(("/sdcard" + directory_path).c_str()));
+    f.files.directories[directory_path] = {{Entry("inside.txt", (directory_path + "/inside.txt").c_str())}};
     f.Click("Retry");
     RODAK_CHECK(f.Has("inside.txt"));
-    RODAK_CHECK_EQ(f.files.reads.back(), "/album");
+    RODAK_CHECK_EQ(f.files.reads.back(), directory_path);
     f.app().NavigateBack();
-    RODAK_CHECK(f.Has("album"));
-    f.files.directories.erase("/album");
-    f.Click("album");
+    RODAK_CHECK_EQ(f.app().entries_.front().name, std::string(directory_name));
+    f.files.directories.erase(directory_path);
+    lv_obj_send_event(lv_obj_get_child(f.app().list_container_, 0), LV_EVENT_CLICKED, nullptr); Pump();
     f.app().NavigateBack();
-    RODAK_CHECK(f.Has("album"));
+    RODAK_CHECK_EQ(f.app().entries_.front().name, std::string(directory_name));
 }
 
 RODAK_TEST("errno from an earlier operation cannot misclassify an unspecified failure") {
@@ -409,12 +423,32 @@ RODAK_TEST("home requests are deduplicated and async allocation failure is visib
 
 RODAK_TEST("ordinary non-image files keep the information view and back behavior") {
     Fixture f;
-    f.files.directories["/"].entries = {Entry("note.txt", "/note.txt")};
+    const char* file_name = "A long ordinary document name with several words.txt";
+    f.files.directories["/"].entries = {Entry(file_name, "/note.txt")};
     f.Create();
-    f.Click("note.txt");
-    RODAK_CHECK(f.Has("note.txt"));
+    auto* item = lv_obj_get_child(f.app().list_container_, 0);
+    auto* name = lv_obj_get_child(item, 1);
+    auto* meta = lv_obj_get_child(item, 2);
+    lv_area_t name_area, meta_area;
+    lv_obj_get_coords(name, &name_area);
+    lv_obj_get_coords(meta, &meta_area);
+    RODAK_CHECK_EQ(lv_area_get_height(&name_area),
+                   lv_font_get_line_height(lv_obj_get_style_text_font(name, 0)));
+    RODAK_CHECK(std::string(lv_label_get_text(name)).find("...") != std::string::npos);
+    RODAK_CHECK(name_area.y2 < meta_area.y1);
+    Screenshot("files-long-filename.ppm");
+    lv_obj_send_event(item, LV_EVENT_CLICKED, nullptr); Pump();
+    RODAK_CHECK(f.app().view_mode_ == FileManagerApp::ViewMode::kInfo);
+    lv_area_t title_area, detail_area;
+    lv_obj_get_coords(f.app().info_title_label_, &title_area);
+    lv_obj_get_coords(f.app().info_detail_label_, &detail_area);
+    RODAK_CHECK_EQ(lv_area_get_height(&title_area),
+                   lv_font_get_line_height(lv_obj_get_style_text_font(f.app().info_title_label_, 0)));
+    RODAK_CHECK(std::string(lv_label_get_text(f.app().info_title_label_)).find("...") != std::string::npos);
+    Screenshot("files-long-info-title.ppm");
+    RODAK_CHECK(title_area.y2 < detail_area.y1);
     RODAK_CHECK(image_requests.empty());
     f.app().NavigateBack();
-    RODAK_CHECK(f.Has("note.txt"));
+    RODAK_CHECK_EQ(f.app().entries_.front().name, std::string(file_name));
     RODAK_CHECK_EQ(f.files.writes, 0);
 }

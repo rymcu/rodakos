@@ -125,6 +125,19 @@ RODAK_TEST("Photos timer allocation failure keeps navigation and retry usable wi
 
 RODAK_TEST("Photo preview retry replaces failures and back or destruction release every image") {
     Fixture f; f.Album(); f.Start();
+    auto& tile = f.app.thumbnail_items_[0];
+    RODAK_CHECK(tile.thumbnail != nullptr);
+    RODAK_CHECK(lv_obj_has_flag(tile.label, LV_OBJ_FLAG_HIDDEN));
+    lv_image_set_inner_align(tile.image, LV_IMAGE_ALIGN_STRETCH);
+    Pump();
+    lv_area_t pixels;
+    lv_obj_get_coords(tile.image, &pixels);
+    lv_point_t center{(pixels.x1 + pixels.x2) / 2, (pixels.y1 + pixels.y2) / 2};
+    RODAK_CHECK(lv_indev_search_obj(lv_screen_active(), &center) == tile.button);
+    Click(tile.image);
+    RODAK_CHECK(f.app.current_view_ == PhotosApp::ViewMode::kFullScreen);
+    RODAK_CHECK(f.app.current_image_ != nullptr);
+    f.app.BackToGrid(); Pump();
     const auto path=f.app.photos_[0].path;
     std::filesystem::remove(path);
     Click(f.app.thumbnail_items_[0].button);
