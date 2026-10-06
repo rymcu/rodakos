@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (music scanning/playback work starts from `9bd388f`; current source and
+Last refreshed: 2026-10-06 (media-save consistency work starts from `b29d8375`; current source and
 validation identity are recorded in the linked roadmap).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
@@ -64,6 +64,12 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   runtime/storage recovery states. Temporary expiry uses Unix time plus a monotonic lifetime limit;
   pending or failed recovery is never reported as a confirmed identity. Software and acoustic
   evidence remain separate; see [identity and wake word](docs/voice-identity-wake-word.md).
+- Recorder and Web upload hold path-scoped FileService leases through writing and cleanup;
+  Camera uses the short I/O lock and exclusive creation. Recorder and Camera report success only
+  after complete writes, flush and close. Recorder library errors remain separate from save
+  results, and Camera delivers completion through a revocable shared result and UI timer.
+  Real SD, power-loss and hardware audio/camera gates remain open. See
+  [media save boundaries](docs/media-save.md).
 - Last recorded signed device package `20261001-234748`: 6,897,584-byte main image (about 6.58 MiB).
   It identifies the earlier COM3 appearance run, not subsequent local builds. The main application
   slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
@@ -181,6 +187,7 @@ docs/
 ├── architecture.md        # Layering and service/app model
 ├── firmware-download.md   # Build, flash, monitor, and esptool details
 ├── esp-peer-integration.md # Camera/display WebRTC peer and hardware evidence
+├── media-save.md         # Recorder, camera, file writer and upload save boundaries
 ├── appearance-verification.md # Signed appearance resource hardware evidence
 ├── home-layout-design.md  # ID-based Home ordering and folder design
 ├── openos-comparison.md   # OpenOS research and RodakOS design decisions

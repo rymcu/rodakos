@@ -1,11 +1,15 @@
 #include "file_service.h"
 #include "rodakos_adapters/file_directory.h"
+#include "rodakos_adapters/file_writer.h"
+#include "rodakos_adapters/file_path_lease.h"
 
 #include <dev_fs_fat.h>
 #include <esp_board_manager.h>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
+#include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cstring>
@@ -189,22 +193,33 @@ public:
         }
 
         std::string full_path = GetFullPath(path);
-        const char* mode = append ? "ab" : "wb";
-        FILE* f = fopen(full_path.c_str(), mode);
-        if (f == nullptr) {
-            ESP_LOGE(TAG, "Failed to open file: %s (%s)", full_path.c_str(), std::strerror(errno));
+        if (WritePathConflicts(full_path)) {
+            return false;
+        }
+        if (!WriteFileBytes(full_path, data, append ? FileWriteMode::kAppend : FileWriteMode::kReplace)) {
+            ESP_LOGE(TAG, "Failed to write file: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
 
-        size_t written = fwrite(data.data(), 1, data.size(), f);
-        fclose(f);
+        ESP_LOGI(TAG, "Wrote %zu bytes to %s", data.size(), full_path.c_str());
+        return true;
+    }
 
-        if (written != data.size()) {
-            ESP_LOGE(TAG, "Failed to write file: %s", full_path.c_str());
+    bool WriteNewFile(const std::string& path, const std::vector<uint8_t>& data) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+        if (!is_mounted_) {
+            ESP_LOGE(TAG, "SD card not mounted");
             return false;
         }
-
-        ESP_LOGI(TAG, "Wrote %zu bytes to %s", written, full_path.c_str());
+        const std::string full_path = GetFullPath(path);
+        if (WritePathConflicts(full_path)) {
+            return false;
+        }
+        if (!WriteFileBytes(full_path, data, FileWriteMode::kCreateNew)) {
+            ESP_LOGE(TAG, "Failed to save new file: %s (%s)", full_path.c_str(), std::strerror(errno));
+            return false;
+        }
+        ESP_LOGI(TAG, "Saved new file: %s (%zu bytes)", full_path.c_str(), data.size());
         return true;
     }
 
@@ -216,6 +231,9 @@ public:
         }
 
         std::string full_path = GetFullPath(path);
+        if (WritePathConflicts(full_path)) {
+            return false;
+        }
         if (unlink(full_path.c_str()) != 0) {
             ESP_LOGE(TAG, "Failed to delete file: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
@@ -233,6 +251,9 @@ public:
         }
 
         std::string full_path = GetFullPath(path);
+        if (WritePathConflicts(full_path)) {
+            return false;
+        }
 
         // Recursively delete directory contents
         std::vector<FileEntry> entries;
@@ -271,6 +292,13 @@ public:
         }
 
         std::string full_path = GetFullPath(path);
+        struct stat existing = {};
+        if (stat(full_path.c_str(), &existing) == 0 && S_ISDIR(existing.st_mode)) {
+            return true;
+        }
+        if (WritePathConflicts(full_path)) {
+            return false;
+        }
         if (mkdir(full_path.c_str(), 0775) != 0) {
             const int err = errno;
             struct stat st;
@@ -294,6 +322,9 @@ public:
 
         std::string full_old = GetFullPath(old_path);
         std::string full_new = GetFullPath(new_path);
+        if (WritePathConflicts(full_old) || WritePathConflicts(full_new)) {
+            return false;
+        }
 
         if (rename(full_old.c_str(), full_new.c_str()) != 0) {
             ESP_LOGE(TAG, "Failed to rename %s to %s (%s)", full_old.c_str(), full_new.c_str(), std::strerror(errno));
@@ -335,12 +366,75 @@ public:
         return operation();
     }
 
+    bool WithWriteLease(const std::string& path, const std::function<bool()>& operation) override {
+        if (!operation) {
+            errno = EINVAL;
+            return false;
+        }
+
+        std::string full_path;
+        std::string normalized_path;
+        {
+            std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+            if (!is_mounted_) {
+                errno = ENODEV;
+                return false;
+            }
+            full_path = GetFullPath(path);
+            if (!NormalizeStoragePath(full_path, mount_point_, normalized_path)) {
+                errno = EINVAL;
+                return false;
+            }
+            if (!write_leases_.TryAcquire(normalized_path)) {
+                errno = EBUSY;
+                return false;
+            }
+        }
+
+        WriteLeaseGuard lease_guard(this, normalized_path);
+        return operation();
+    }
+
 private:
     mutable std::recursive_mutex io_mutex_;
     bool is_mounted_ = false;
     sdmmc_card_t* card_ = nullptr;
     std::string mount_point_ = kMountPoint;
     bool board_ref_acquired_ = false;
+    StoragePathLeaseSet write_leases_;
+
+    class WriteLeaseGuard {
+    public:
+        WriteLeaseGuard(FileServiceImpl* owner, std::string normalized_path)
+            : owner_(owner), normalized_path_(std::move(normalized_path)) {}
+        ~WriteLeaseGuard() {
+            const int callback_errno = errno;
+            owner_->ReleaseWriteLease(normalized_path_);
+            errno = callback_errno;
+        }
+
+    private:
+        FileServiceImpl* owner_;
+        std::string normalized_path_;
+    };
+
+    bool WritePathConflicts(const std::string& full_path) {
+        std::string normalized_path;
+        if (!NormalizeStoragePath(full_path, mount_point_, normalized_path)) {
+            errno = EINVAL;
+            return true;
+        }
+        if (write_leases_.Conflicts(normalized_path)) {
+            errno = EBUSY;
+            return true;
+        }
+        return false;
+    }
+
+    void ReleaseWriteLease(const std::string& normalized_path) {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+        write_leases_.Release(normalized_path);
+    }
 
     void ReleaseBoardRef() {
         if (!board_ref_acquired_) {
@@ -357,14 +451,32 @@ private:
         if (path.empty() || path == "/") {
             return mount_point_;
         }
-        if (path == mount_point_ ||
-            path.compare(0, mount_point_.size() + 1, mount_point_ + "/") == 0) {
-            return path;
+        std::string slash_path = path;
+        std::replace(slash_path.begin(), slash_path.end(), '\\', '/');
+        if (IsMountPath(slash_path)) {
+            if (slash_path.size() == mount_point_.size()) {
+                return mount_point_;
+            }
+            return mount_point_ + slash_path.substr(mount_point_.size());
         }
-        if (path[0] == '/') {
-            return mount_point_ + path;
+        if (slash_path[0] == '/') {
+            return mount_point_ + slash_path;
         }
-        return mount_point_ + "/" + path;
+        return mount_point_ + "/" + slash_path;
+    }
+
+    bool IsMountPath(const std::string& path) const {
+        if (path.size() < mount_point_.size()) {
+            return false;
+        }
+        for (size_t index = 0; index < mount_point_.size(); ++index) {
+            const char left = static_cast<char>(std::tolower(static_cast<unsigned char>(path[index])));
+            const char right = static_cast<char>(std::tolower(static_cast<unsigned char>(mount_point_[index])));
+            if (left != right) {
+                return false;
+            }
+        }
+        return path.size() == mount_point_.size() || path[mount_point_.size()] == '/';
     }
 };
 

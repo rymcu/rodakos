@@ -13,16 +13,27 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <new>
+#include <optional>
 #include <utility>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
-#include <esp_lvgl_port.h>
+
+struct CameraCaptureResult {
+    bool ok = false;
+    std::string saved_path;
+    std::string error;
+    uint64_t generation = 0;
+};
 
 struct CameraCaptureGuard {
-    std::atomic<CameraApp*> app{nullptr};
-    std::atomic<bool> running{false};
-    std::atomic<uint32_t> generation{0};
+    std::mutex mutex;
+    bool revoked = false;
+    bool running = false;
+    uint64_t generation = 0;
+    std::optional<CameraCaptureResult> result;
 };
 
 namespace {
@@ -38,10 +49,7 @@ constexpr uint32_t kPreviewStartDelayMs = 30;
 struct CameraCapturePayload {
     std::shared_ptr<CameraCaptureGuard> guard;
     rodakos::CameraService* camera = nullptr;
-    bool ok = false;
-    std::string saved_path;
-    std::string error;
-    uint32_t generation = 0;
+    uint64_t generation = 0;
 };
 
 void DeferReturnHome(void* user_data) {
@@ -72,43 +80,28 @@ lv_obj_t* CreateCaptureButton(lv_obj_t* parent) {
     return button;
 }
 
-void CaptureCompleteCallback(void* user_data) {
-    auto* payload = static_cast<CameraCapturePayload*>(user_data);
-    if (payload == nullptr) {
-        return;
-    }
-
-    auto guard = payload->guard;
-    CameraApp* app = guard ? guard->app.load() : nullptr;
-    if (app != nullptr) {
-        app->OnCaptureComplete(payload->ok, payload->saved_path, payload->error, payload->generation);
-    } else if (guard && payload->generation == guard->generation.load()) {
-        guard->running.store(false);
-    }
-    delete payload;
-}
-
 void CaptureTask(void* arg) {
-    auto* payload = static_cast<CameraCapturePayload*>(arg);
-    if (payload != nullptr && payload->camera != nullptr) {
-        payload->ok = payload->camera->CapturePhoto(payload->saved_path);
-        if (!payload->ok) {
-            payload->error = payload->camera->last_error();
-        }
-
-        bool queued = false;
-        if (lvgl_port_lock(1000)) {
-            queued = lv_async_call(CaptureCompleteCallback, payload) == LV_RESULT_OK;
-            lvgl_port_unlock();
-        }
-        if (!queued) {
-            if (payload->guard && payload->generation == payload->guard->generation.load()) {
-                payload->guard->running.store(false);
+    // RTOS task deletion does not unwind the stack; release the payload first.
+    {
+        std::unique_ptr<CameraCapturePayload> payload(static_cast<CameraCapturePayload*>(arg));
+        if (payload != nullptr && payload->guard != nullptr) {
+            CameraCaptureResult result;
+            result.generation = payload->generation;
+            if (payload->camera != nullptr) {
+                result.ok = payload->camera->CapturePhoto(result.saved_path);
+                if (!result.ok) {
+                    result.error = payload->camera->last_error();
+                }
+            } else {
+                result.error = "Camera service is not available";
             }
-            delete payload;
+            std::lock_guard<std::mutex> lock(payload->guard->mutex);
+            if (!payload->guard->revoked && payload->guard->running &&
+                payload->guard->generation == result.generation) {
+                // The UI polls this owned result; completion needs no LVGL allocation or lock.
+                payload->guard->result = std::move(result);
+            }
         }
-    } else {
-        delete payload;
     }
     vTaskDelete(nullptr);
 }
@@ -131,7 +124,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     camera_ = context.services().camera();
     audio_focus_ = context.services().audio_focus();
     capture_guard_ = std::make_shared<CameraCaptureGuard>();
-    capture_guard_->app.store(this);
+    preview_ready_ = false;
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -181,11 +174,15 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     lv_obj_center(placeholder_label_);
 
     status_label_ = lv_label_create(root_);
-    lv_obj_set_width(status_label_, 300);
+    lv_obj_set_size(status_label_, 320, 20);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_bg_color(status_label_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(status_label_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(status_label_, 10, 0);
+    lv_obj_set_style_pad_ver(status_label_, 2, 0);
     lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(status_label_, &phone_font_12, 0);
-    lv_obj_align(status_label_, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(status_label_, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     capture_button_ = CreateCaptureButton(root_);
     lv_obj_align(capture_button_, LV_ALIGN_BOTTOM_MID, 0, -24);
@@ -196,6 +193,11 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
 
     UpdateStatus("Starting camera...");
+    capture_result_timer_ = lv_timer_create(CaptureResultTimerCallback, 120, this);
+    if (capture_result_timer_ == nullptr) {
+        UpdateStatus("Failed to monitor photo results", true);
+        return false;
+    }
     preview_start_timer_ = lv_timer_create(PreviewStartTimerCallback, kPreviewStartDelayMs, this);
     if (preview_start_timer_ == nullptr) {
         UpdateStatus("Failed to schedule camera startup", true);
@@ -209,13 +211,21 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
 
 void CameraApp::OnDestroy() {
     if (capture_guard_) {
-        capture_guard_->generation.fetch_add(1);
-        capture_guard_->app.store(nullptr);
+        std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+        capture_guard_->revoked = true;
+        ++capture_guard_->generation;
+        capture_guard_->result.reset();
+        capture_guard_->running = false;
     }
 
     if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_);
+        // Timer callbacks own `this` until removed. A teardown timeout cannot abandon them.
+        PhoneUiLock lock(*ui_, 0);
         if (lock.locked()) {
+            if (capture_result_timer_ != nullptr) {
+                lv_timer_delete(capture_result_timer_);
+                capture_result_timer_ = nullptr;
+            }
             if (preview_start_timer_ != nullptr) {
                 lv_timer_delete(preview_start_timer_);
                 preview_start_timer_ = nullptr;
@@ -243,6 +253,8 @@ void CameraApp::OnDestroy() {
     capture_button_ = nullptr;
     preview_pixels_.clear();
     displayed_sequence_ = 0;
+    preview_ready_ = false;
+    capture_guard_.reset();
     camera_ = nullptr;
     audio_focus_ = nullptr;
     context_ = nullptr;
@@ -285,15 +297,27 @@ void CameraApp::CapturePhoto() {
         UpdateStatus("Camera service is not available", true);
         return;
     }
-    if (capture_guard_->running.exchange(true)) {
+    if (!preview_ready_) {
+        UpdateStatus("Camera preview is not ready", true);
         return;
     }
-
-    const uint32_t generation = capture_guard_->generation.fetch_add(1) + 1;
-    auto* payload = new CameraCapturePayload();
+    auto* payload = new (std::nothrow) CameraCapturePayload();
+    if (payload == nullptr) {
+        UpdateStatus("No memory to save photo", true);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+        if (capture_guard_->revoked || capture_guard_->running) {
+            delete payload;
+            return;
+        }
+        capture_guard_->running = true;
+        capture_guard_->result.reset();
+        payload->generation = ++capture_guard_->generation;
+    }
     payload->guard = capture_guard_;
     payload->camera = camera_;
-    payload->generation = generation;
 
     UpdateStatus("Saving photo...");
     if (capture_button_ != nullptr) {
@@ -302,7 +326,10 @@ void CameraApp::CapturePhoto() {
     const BaseType_t ret =
         xTaskCreate(CaptureTask, "camera_capture", kCaptureTaskStackBytes, payload, 3, nullptr);
     if (ret != pdPASS) {
-        capture_guard_->running.store(false);
+        {
+            std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+            capture_guard_->running = false;
+        }
         delete payload;
         if (capture_button_ != nullptr) {
             lv_obj_clear_state(capture_button_, LV_STATE_DISABLED);
@@ -315,12 +342,17 @@ void CameraApp::CapturePhoto() {
 void CameraApp::OnCaptureComplete(bool ok,
                                   const std::string& saved_path,
                                   const std::string& error,
-                                  uint32_t generation) {
-    if (!capture_guard_ || generation != capture_guard_->generation.load()) {
-        return;
+                                  uint64_t generation) {
+    if (!capture_guard_) return;
+    {
+        std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+        if (capture_guard_->revoked || !capture_guard_->running ||
+            generation != capture_guard_->generation) {
+            return;
+        }
+        capture_guard_->running = false;
     }
-    capture_guard_->running.store(false);
-    if (capture_button_ != nullptr) {
+    if (capture_button_ != nullptr && preview_ready_) {
         lv_obj_clear_state(capture_button_, LV_STATE_DISABLED);
     }
 
@@ -336,6 +368,31 @@ void CameraApp::OnCaptureComplete(bool ok,
         if (ui_ != nullptr) {
             ui_->ShowToastUnlocked("Capture failed");
         }
+    }
+}
+
+bool CameraApp::CaptureInFlight() const {
+    if (!capture_guard_) return false;
+    std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+    return capture_guard_->running;
+}
+
+void CameraApp::CaptureResultTimerCallback(lv_timer_t* timer) {
+    auto* self = static_cast<CameraApp*>(lv_timer_get_user_data(timer));
+    if (self != nullptr) self->ConsumeCaptureResult();
+}
+
+void CameraApp::ConsumeCaptureResult() {
+    if (!capture_guard_) return;
+    std::optional<CameraCaptureResult> result;
+    {
+        std::lock_guard<std::mutex> lock(capture_guard_->mutex);
+        if (capture_guard_->revoked) return;
+        result = std::move(capture_guard_->result);
+        capture_guard_->result.reset();
+    }
+    if (result) {
+        OnCaptureComplete(result->ok, result->saved_path, result->error, result->generation);
     }
 }
 
@@ -355,6 +412,8 @@ void CameraApp::UpdatePreview() {
     if (!camera_->GetLatestFrame(frame)) {
         const auto state = camera_->GetState();
         if (!state.preview_running && !state.last_error.empty()) {
+            preview_ready_ = false;
+            if (capture_button_ != nullptr) lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
             UpdateStatus(state.last_error.c_str(), true);
             if (placeholder_label_ != nullptr) {
                 lv_label_set_text(placeholder_label_, "Camera unavailable");
@@ -375,6 +434,7 @@ void CameraApp::UpdatePreview() {
     }
 
     const bool first_displayed_frame = displayed_sequence_ == 0;
+    preview_ready_ = true;
     preview_pixels_ = std::move(frame.rgb565);
     displayed_sequence_ = frame.sequence;
 
@@ -401,7 +461,7 @@ void CameraApp::UpdatePreview() {
     if (placeholder_label_ != nullptr) {
         lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
     }
-    if (capture_button_ != nullptr && (!capture_guard_ || !capture_guard_->running.load())) {
+    if (capture_button_ != nullptr && !CaptureInFlight()) {
         lv_obj_clear_state(capture_button_, LV_STATE_DISABLED);
     }
     if (first_displayed_frame) {

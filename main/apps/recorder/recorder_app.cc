@@ -134,6 +134,12 @@ const char* StatusText(rodakos::RecordingStatus status) {
     }
 }
 
+std::string RecordingError(const rodakos::RecordingState& state) {
+    if (state.status != rodakos::RecordingStatus::kError) return {};
+    if (!state.last_error.empty()) return state.last_error;
+    return state.message.empty() ? "Recording failed" : state.message;
+}
+
 std::string FormatDuration(uint32_t duration_ms) {
     const uint32_t total_seconds = duration_ms / 1000;
     const uint32_t minutes = total_seconds / 60;
@@ -188,6 +194,10 @@ bool RecorderApp::OnCreate(PhoneAppContext& context) {
     RebuildRecordingList();
     RefreshState();
     refresh_timer_ = lv_timer_create(RefreshTimerCallback, kRefreshPeriodMs, this);
+    if (refresh_timer_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create recorder refresh timer");
+        return false;
+    }
 
     ESP_LOGI(TAG, "Recorder app created with %zu recordings", displayed_recordings_.size());
     return true;
@@ -230,7 +240,8 @@ void RecorderApp::OnPause() {
 
 void RecorderApp::OnDestroy() {
     if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_);
+        // The refresh timer must be removed before its App userdata is released.
+        PhoneUiLock lock(*ui_, 0);
         if (lock.locked()) {
             DestroyUi();
         }
@@ -270,6 +281,10 @@ bool RecorderApp::OnThemeChanged(PhoneAppContext& context) {
         lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
     }
     refresh_timer_ = lv_timer_create(RefreshTimerCallback, kRefreshPeriodMs, this);
+    if (refresh_timer_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create recorder refresh timer after theme change");
+        return false;
+    }
     return true;
 }
 
@@ -302,14 +317,14 @@ void RecorderApp::CreateUi() {
     lv_obj_align(mic_icon, LV_ALIGN_LEFT_MID, 14, 0);
 
     title_label_ = CreateText(status_card, "Ready", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_set_width(title_label_, 142);
+    lv_obj_set_size(title_label_, 108, 22);
     lv_label_set_long_mode(title_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(title_label_, LV_ALIGN_TOP_LEFT, 50, 10);
 
     status_label_ = CreateText(status_card, "Ready", &phone_font_12,
                                rodakos_theme_text_secondary());
-    lv_obj_set_width(status_label_, 142);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(status_label_, 108, 30);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
     lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 50, 35);
 
     duration_label_ = CreateText(status_card, "0:00", &phone_font_18, rodakos_theme_text_primary());
@@ -393,14 +408,36 @@ void RecorderApp::RebuildRecordingList() {
         return;
     }
     lv_obj_clean(list_);
+    const auto state = recording_ != nullptr ? recording_->GetState() : rodakos::RecordingState{};
+    last_library_error_ = recording_ != nullptr ? state.library_error : "Recording service missing";
+    last_recording_error_ = RecordingError(state);
     displayed_recordings_ =
         recording_ != nullptr ? recording_->GetRecordings() : std::vector<rodakos::RecordingEntry>{};
 
     if (count_label_ != nullptr) {
-        lv_label_set_text_fmt(count_label_, "%zu files", displayed_recordings_.size());
+        if (!last_library_error_.empty()) {
+            lv_label_set_text(count_label_, "Unavailable");
+        } else {
+            lv_label_set_text_fmt(count_label_, "%zu files", displayed_recordings_.size());
+        }
+    }
+
+    auto show_error = [&](const std::string& message) {
+        auto* label = CreateText(list_, message.c_str(), &phone_font_12, rodakos_theme_error());
+        lv_obj_set_width(label, 300);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    };
+    if (!last_recording_error_.empty()) {
+        show_error(last_recording_error_);
+    }
+    if (!last_library_error_.empty()) {
+        if (last_library_error_ != last_recording_error_) show_error(last_library_error_);
+        return;
     }
 
     if (displayed_recordings_.empty()) {
+        if (!last_recording_error_.empty()) return;
         auto* empty = CreateText(list_, "No recordings", &phone_font_12,
                                  rodakos_theme_text_tertiary());
         lv_obj_set_width(empty, 300);
@@ -422,7 +459,7 @@ void RecorderApp::RebuildRecordingList() {
 
         auto* title = CreateText(row, entry.title.c_str(), &phone_font_14,
                                  rodakos_theme_text_primary());
-        lv_obj_set_width(title, 220);
+        lv_obj_set_size(title, 220, 17);
         lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
         lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 4);
 
@@ -567,10 +604,15 @@ void RecorderApp::RefreshState() {
         lv_label_set_text(title_label_, "Ready");
     }
 
-    const char* status_text = !state.message.empty() ? state.message.c_str() : StatusText(state.status);
+    const auto recording_error = RecordingError(state);
+    const bool idle_library_error = state.status == rodakos::RecordingStatus::kIdle &&
+                                    !state.library_error.empty();
+    const char* status_text = !recording_error.empty() ? "Recording failed" :
+                              idle_library_error ? state.library_error.c_str() :
+                              !state.message.empty() ? state.message.c_str() : StatusText(state.status);
     lv_label_set_text(status_label_, status_text);
     lv_obj_set_style_text_color(status_label_,
-                                state.status == rodakos::RecordingStatus::kError
+                                state.status == rodakos::RecordingStatus::kError || idle_library_error
                                     ? rodakos_theme_error()
                                     : rodakos_theme_text_secondary(),
                                 0);
@@ -581,9 +623,10 @@ void RecorderApp::RefreshState() {
     lv_label_set_text(size_label_, size.c_str());
     UpdateRecordButton(active);
 
-    if (last_status_ != state.status) {
-        if (last_status_ != rodakos::RecordingStatus::kIdle &&
-            !IsRecordingActive(state.status)) {
+    const bool library_changed = last_library_error_ != state.library_error ||
+                                 last_recording_error_ != recording_error;
+    if (last_status_ != state.status || library_changed) {
+        if (!IsRecordingActive(state.status) || library_changed) {
             RebuildRecordingList();
         }
         last_status_ = state.status;

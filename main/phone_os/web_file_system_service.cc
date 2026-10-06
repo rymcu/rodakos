@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <inttypes.h>
@@ -248,6 +249,7 @@ std::string GenerateAccessToken() {
 }
 
 void SendText(httpd_req_t* req, int status_code, const char* status, const char* text) {
+    (void)status_code;
     httpd_resp_set_status(req, status);
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
@@ -598,7 +600,7 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
     if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (req->content_len <= 0 || req->content_len > kMaxUploadBytes) {
+    if (req->content_len <= 0 || static_cast<size_t>(req->content_len) > kMaxUploadBytes) {
         SendText(req, 413, "413 Payload Too Large", "Invalid upload size");
         return ESP_FAIL;
     }
@@ -615,64 +617,97 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
-    const std::string full_path = std::string(self->file_service_->GetMountPoint()) + upload_path;
     if (!self->TryBeginWrite("Uploading", upload_path)) {
         SendText(req, 409, "409 Conflict", "Another write is already running");
         return ESP_FAIL;
     }
 
-    FILE* fp = std::fopen(full_path.c_str(), "wb");
-    if (fp == nullptr) {
-        self->SetBusy(false);
-        SendText(req, 500, "500 Internal Server Error", "Cannot open destination file");
-        return ESP_FAIL;
-    }
-
-    uint8_t* buffer = AllocIoBuffer();
-    if (buffer == nullptr) {
-        std::fclose(fp);
-        self->SetBusy(false);
-        SendText(req, 500, "500 Internal Server Error", "No IO buffer");
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Receiving upload %s (%d bytes)", upload_path.c_str(), req->content_len);
-
-    int remaining = req->content_len;
+    const std::string full_path = std::string(self->file_service_->GetMountPoint()) + upload_path;
     size_t written_total = 0;
-    bool failed = false;
-    int timeout_count = 0;
-    while (remaining > 0) {
-        const int to_read = std::min<int>(remaining, static_cast<int>(kIoBufferSize));
-        const int received = httpd_req_recv(req, reinterpret_cast<char*>(buffer), to_read);
-        if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT && ++timeout_count <= kMaxUploadReceiveTimeouts) {
-                continue;
+    int lease_errno = 0;
+    std::string failure_message = "Upload failed";
+    const bool leased = self->file_service_->WithWriteLease(upload_path, [&]() {
+        FILE* fp = std::fopen(full_path.c_str(), "wb");
+        if (fp == nullptr) {
+            failure_message = "Cannot open destination file";
+            lease_errno = errno;
+            return false;
+        }
+
+        uint8_t* buffer = AllocIoBuffer();
+        if (buffer == nullptr) {
+            std::fclose(fp);
+            std::remove(full_path.c_str());
+            failure_message = "No IO buffer";
+            lease_errno = ENOMEM;
+            return false;
+        }
+
+        ESP_LOGI(TAG, "Receiving upload %s (%d bytes)", upload_path.c_str(), req->content_len);
+        int remaining = req->content_len;
+        bool failed = false;
+        int operation_errno = 0;
+        int timeout_count = 0;
+        while (remaining > 0) {
+            const int to_read = std::min<int>(remaining, static_cast<int>(kIoBufferSize));
+            const int received = httpd_req_recv(req, reinterpret_cast<char*>(buffer), to_read);
+            if (received <= 0) {
+                if (received == HTTPD_SOCK_ERR_TIMEOUT && ++timeout_count <= kMaxUploadReceiveTimeouts) {
+                    continue;
+                }
+                failure_message = "Upload receive failed";
+                operation_errno = EIO;
+                failed = true;
+                break;
+            }
+            timeout_count = 0;
+
+            const size_t written = std::fwrite(buffer, 1, static_cast<size_t>(received), fp);
+            if (written != static_cast<size_t>(received) || std::ferror(fp) != 0) {
+                failure_message = "Upload write failed";
+                operation_errno = EIO;
+                failed = true;
+                break;
+            }
+
+            written_total += written;
+            remaining -= received;
+            self->AddActiveBytes(written);
+        }
+
+        heap_caps_free(buffer);
+        if (!failed && std::fflush(fp) != 0) {
+            failure_message = "Upload flush failed";
+            operation_errno = errno;
+            failed = true;
+        }
+        if (std::fclose(fp) != 0) {
+            if (!failed) {
+                failure_message = "Upload close failed";
+                operation_errno = errno;
             }
             failed = true;
-            break;
         }
-        timeout_count = 0;
-
-        const size_t written = std::fwrite(buffer, 1, static_cast<size_t>(received), fp);
-        if (written != static_cast<size_t>(received)) {
-            failed = true;
-            break;
+        if (failed) {
+            std::remove(full_path.c_str());
+            lease_errno = operation_errno != 0 ? operation_errno : EIO;
+            errno = lease_errno;
+            return false;
         }
-
-        written_total += written;
-        remaining -= received;
-        self->AddActiveBytes(written);
+        return true;
+    });
+    if (!leased && lease_errno == 0) {
+        lease_errno = errno;
     }
 
-    heap_caps_free(buffer);
-    std::fclose(fp);
-
-    if (failed) {
-        std::remove(full_path.c_str());
-        self->SetBusy(false);
-        SendText(req, 500, "500 Internal Server Error", "Upload failed");
-        ESP_LOGE(TAG, "Upload failed: %s", upload_path.c_str());
+    self->SetBusy(false);
+    if (!leased) {
+        if (lease_errno == EBUSY) {
+            SendText(req, 409, "409 Conflict", "Destination is busy");
+        } else {
+            SendText(req, 500, "500 Internal Server Error", failure_message.c_str());
+        }
+        ESP_LOGE(TAG, "Upload failed: %s (%s)", upload_path.c_str(), failure_message.c_str());
         return ESP_FAIL;
     }
 

@@ -23,6 +23,8 @@ set(SOURCES
     "rodakos_adapters/wifi_config.cc"
     "rodakos_adapters/file_service.cc"
     "rodakos_adapters/file_directory.cc"
+    "rodakos_adapters/file_path_lease.cc"
+    "rodakos_adapters/file_writer.cc"
     "phone_os/phone_app_registry.cc"
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"

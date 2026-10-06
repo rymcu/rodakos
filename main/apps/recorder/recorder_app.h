@@ -4,6 +4,7 @@
 #include "phone_os/recording_service.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include <lvgl.h>
@@ -45,6 +46,8 @@ private:
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::RecordingStatus last_status_ = rodakos::RecordingStatus::kIdle;
+    std::string last_library_error_;
+    std::string last_recording_error_;
     std::vector<rodakos::RecordingEntry> displayed_recordings_;
 
     lv_obj_t* root_ = nullptr;

@@ -90,6 +90,7 @@ private:
     FileService* file_service_ = nullptr;
     CameraDevice camera_device_;
     std::mutex lifecycle_mutex_;
+    std::mutex capture_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskHandle_t preview_task_ = nullptr;
     TaskHandle_t jpeg_stream_task_ = nullptr;

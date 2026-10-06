@@ -203,7 +203,11 @@ CameraService::CameraService(FileService* file_service) : file_service_(file_ser
 
 CameraService::~CameraService() {
     StopJpegStream();
+    StopPreview(PreviewOwner::kRemote);
     StopPreview();
+    // A JPEG callback can itself capture a photo, so drain those workers before
+    // taking this lock. In-flight storage still owns the service state until it returns.
+    std::lock_guard<std::mutex> capture_lock(capture_mutex_);
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -505,6 +509,8 @@ void CameraService::StopJpegStream() {
 }
 
 bool CameraService::CapturePhoto(std::string& saved_path) {
+    std::lock_guard<std::mutex> capture_lock(capture_mutex_);
+    saved_path.clear();
     std::vector<uint8_t> encoded;
     if (!CaptureJpeg(encoded)) {
         return false;
@@ -514,25 +520,36 @@ bool CameraService::CapturePhoto(std::string& saved_path) {
         SetError("File service is not available");
         return false;
     }
-    if (!file_service_->IsMounted() && !file_service_->Init()) {
-        SetError("SD card is not available");
-        return false;
-    }
-    if (!file_service_->Exists(kPhotoDir) && !file_service_->CreateDirectory(kPhotoDir)) {
-        SetError("Failed to create /photos on SD card");
+    std::string committed_path;
+    const bool saved = file_service_->WithIoLock([&]() {
+        if (!file_service_->IsMounted() && !file_service_->Init()) {
+            SetError("SD card is not available");
+            return false;
+        }
+        if (!file_service_->Exists(kPhotoDir) && !file_service_->CreateDirectory(kPhotoDir)) {
+            SetError("Failed to create /photos on SD card");
+            return false;
+        }
+
+        const std::string candidate = BuildPhotoPath();
+        if (candidate.empty()) {
+            SetError("Failed to choose a unique photo path");
+            return false;
+        }
+        // The I/O lock serializes service writers; exclusive creation also
+        // protects existing photos from writers outside this service instance.
+        if (!file_service_->WriteNewFile(candidate, encoded)) {
+            SetError("Failed to save photo");
+            return false;
+        }
+        committed_path = candidate;
+        return true;
+    });
+    if (!saved) {
         return false;
     }
 
-    saved_path = BuildPhotoPath();
-    if (saved_path.empty()) {
-        SetError("Failed to choose a unique photo path");
-        return false;
-    }
-    if (!file_service_->WriteFile(saved_path, encoded, false)) {
-        SetError("Failed to save photo");
-        return false;
-    }
-
+    saved_path = committed_path;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         last_saved_path_ = saved_path;

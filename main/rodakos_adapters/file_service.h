@@ -4,6 +4,7 @@
 #include <vector>
 #include <functional>
 #include <cstdint>
+#include <utility>
 
 namespace rodakos {
 
@@ -115,6 +116,16 @@ public:
      * @return true if successful
      */
     virtual bool WriteFile(const std::string& path, const std::vector<uint8_t>& data, bool append = false) = 0;
+
+    // Implementations must create exclusively and include flush/close in success.
+    // An implementation without this capability must never fall back to overwrite.
+    virtual bool WriteNewFile(const std::string&, const std::vector<uint8_t>&) { return false; }
+
+    // Reserves the normalized path and its ancestor/descendant namespace for
+    // the duration of operation. The callback runs without the FileService I/O
+    // mutex, so long media writes do not block unrelated reads or the UI.
+    // Implementations must fail closed when leases are unsupported.
+    virtual bool WithWriteLease(const std::string&, const std::function<bool()>&) { return false; }
 
     /**
      * @brief Delete file

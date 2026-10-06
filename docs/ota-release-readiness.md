@@ -14,7 +14,7 @@ recorded signed package is `build/packages/ota/20261001-234748`; its main image 
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-builds recorded below. The latest slice is [music scanning/playback validation](#2026-10-06-music-scanning-and-playback-validation).
+builds recorded below. The latest slice is [Recorder/Camera save validation](#2026-10-06-media-save-validation).
 
 The MQTT-volume slice recorded 266 app-model tests in Debug and ASan/UBSan, including eighteen MQTT volume
 effect cases. Fourteen new tests instantiate the actual MQTT service and exercise callbacks,
@@ -404,7 +404,66 @@ their existing persistence semantics; this change adds no remote media effect or
 No hardware, serial, flashing, packaging or device NVS operation was performed. Real SD-card
 removal/slow-card behavior, audio focus with Recorder/voice, audible output, resource exhaustion,
 NVS power cuts and signed-OTA soak remain open. Recorder final-save and Camera completion-delivery
-errors remain separate implementation work.
+errors were still separate implementation work at this music baseline; their later software evidence is recorded below.
+
+## 2026-10-06 media save validation
+
+Source baseline: RodakOS `b29d8375` and Rodak `e52869b7`, plus this media-save working tree.
+Recorder checks the final WAV seek/header, stream flush and close before publishing Saved; library
+scan errors remain separate from that save result. Cancellation cannot overwrite a finalization
+or cleanup error. Camera workers publish an owned, generation-bound result; an independent LVGL
+timer consumes it without worker-side LVGL locking or async allocation. App teardown revokes
+old results and removes timers before releasing UI objects.
+
+FileService serializes short mutations and reserves normalized paths for long Recorder/Web
+writes. The lease covers creation, data writes, finalization and cleanup, rejects conflicting
+parent/child paths, and releases without holding the global I/O lock through recording or network
+receive. Exclusive creation protects existing photos and recordings. These guarantees cover
+cooperating FileService callers; flush/close success does not establish power-loss durability.
+See [media save behavior](media-save.md) for the implementation and hardware boundaries.
+
+Seven focused targets pass **79 cases** in both Debug and ASan/UBSan with leak detection:
+
+| Target | Cases | Production coverage / host substitutions |
+| --- | --- | --- |
+| File writer | 10 | Real stdio write helper; linker-injected failures |
+| Path leases | 5 | Real normalization and conflict helper |
+| Recording service | 17 | Real service, threads and WAV files; storage/audio/focus adapters are fakes |
+| Recorder UI | 14 | Real app, recording service and LVGL; hardware/playback adapters are fakes |
+| Camera capture | 14 | Real CameraService, FileService and writer; V4L2/JPEG/board dependencies are fakes |
+| Camera UI | 13 | Real app, host lifecycle and LVGL; CameraService/focus are fakes |
+| Web upload | 6 | Real UploadHandler, host files and stdio fault injection; HTTP/FileService are fakes |
+
+The upload target verifies actual 409 admission conflicts, 200 success, and 500 responses for
+truncated input, stream error, flush and close failure. The recorder cancellation regression stops
+before PCM capture and verifies that flush/close/remove failures stay errors. Forced overlapping
+recordings exercise active-name collision recovery. The existing app-model target also passes all
+277 cases in both modes. Camera/Recorder screenshots were reviewed for long paths, error states and
+layout; the host fonts do not validate device typography. No desktop application code changed, so
+this slice does not claim a new full desktop coverage, Electron E2E or cross-repository protocol run.
+
+ESP-IDF **6.0.2** final incremental build passes. Main image: **7,013,664 bytes**, below the
+13,959,168-byte `ota_0` slot. SHA-256:
+`51e5cce984071dc83aaab26a60b9fcaedf8c8d824a4243acfb518d38a23c9106`.
+The 16 changed production inputs match their pre-build hashes. `sdkconfig`, `dependencies.lock`
+and the configured test public key are unchanged; Home test population remains OFF. Recovery was
+not rebuilt. Generic IDF factory-partition flashing suggestions do not apply to this layout.
+
+Rodak stores 74 source/test/config file hashes in `.codex-temp/media-save-source-snapshot.json`,
+16 host binary hashes in `media-save-test-binaries.json`, and the main-image identity in
+`media-save-firmware.json`. The sorted source map SHA-256 is
+`1690d1dcc90811aa356919f6af8964e23334e0c475b6e8e33cd44d7213f5e749`.
+Final logs are `media-save-file-writer-final.log`, `media-save-file-path-lease-final.log`,
+`media-save-camera-capture-final.log`, `media-save-camera-ui-app-model.log`,
+`media-save-recording-final.log`, `media-save-recording-final-asan.log`,
+`media-save-recorder-ui-after-review-debug.log`, `media-save-recorder-ui-after-review-asan.log`,
+`media-save-web-upload-final.log` and `media-save-idf-build-final.log`. Reproduction commands and
+per-target fake boundaries are linked from [media save behavior](media-save.md).
+
+No hardware, serial port, flashing, packaging or device NVS operation was performed. Physical SD
+removal/slow-card behavior, camera/JPEG quality, codec and acoustic behavior, full LVGL exhaustion,
+power interruption and eight-hour signed-OTA soak remain open. No new remote media effect or MCP
+capability is introduced.
 
 ## Build and package
 

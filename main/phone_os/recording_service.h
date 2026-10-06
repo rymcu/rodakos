@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,7 @@ struct RecordingState {
     std::string title;
     std::string message = "Ready";
     std::string last_error;
+    std::string library_error;
     uint32_t sample_rate = 0;
     uint16_t channels = 0;
     uint16_t bits_per_sample = 0;
@@ -78,15 +80,22 @@ private:
     static void RecordingTaskEntry(void* arg);
     void RecordingTask();
 
-    bool PrepareStorage();
+    bool PrepareStorage(std::string& error);
     std::string BuildRecordingPath();
+    std::string CandidateRecordingPath(const std::string& base, int suffix) const;
+    FILE* CreateRecordingFile(const std::string& path, std::string& full_path,
+                              std::string& error, bool& collision);
+    bool RecordWithinLease(const RecordingConfig& config, const std::string& path,
+                           std::string& error, bool& cancelled, bool& collision);
+    bool RefreshRecordingsLocked();
+    void RequestStop();
+    void SetLibraryError(const std::string& error);
     std::string FullPath(const std::string& path) const;
     bool RequestAudioFocus();
     void ReleaseAudioFocus();
     bool ShouldStop() const;
     bool HasTask() const;
     bool JoinTask(uint32_t timeout_ms);
-    void MarkTaskStarting();
     void StoreTaskHandle(TaskHandle_t task);
     void ClearTask();
     void SetState(RecordingStatus status, const char* message = nullptr);
@@ -98,6 +107,7 @@ private:
     FileService* file_service_ = nullptr;
     AudioFocusService* audio_focus_ = nullptr;
     SemaphoreHandle_t mutex_ = nullptr;
+    SemaphoreHandle_t operation_mutex_ = nullptr;
     TaskHandle_t task_ = nullptr;
     bool task_active_ = false;
     bool stop_requested_ = false;

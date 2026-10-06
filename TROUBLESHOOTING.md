@@ -273,6 +273,29 @@ can still fail later, and Music displays the asynchronous error rather than a ge
 percentage. A failed hardware resume cancels the paused worker so a new play request can retry.
 See [music playback](docs/music-playback.md) for software tests and hardware limits.
 
+### Recorder shows an error after stopping
+
+`Start` only accepts an asynchronous recording task. Recorder shows **Saved** only after the WAV
+data length and RIFF length are rewritten successfully and the file's seek, final header write,
+flush and close all succeed. A read/write, focus, task, finalization or cleanup error remains visible
+with its specific message and can be retried. A cancellation with a flush/close/remove failure is
+also an error; it is not downgraded to **Cancelled**.
+
+The recording path is created exclusively. A timestamp collision tries a bounded suffix; a path
+lease protects the file from cooperating FileService Delete/Rename/upload operations until final
+cleanup. `library_error` describes a later directory scan and does not invalidate an already Saved
+recording. Check [media save boundaries](docs/media-save.md) when the list is empty while the last
+save still says Saved.
+
+### Camera capture or upload reports a file conflict
+
+Camera capture uses a short FileService I/O lock and `WriteNewFile`; it publishes a result only after
+the complete file is closed. Web upload holds a path lease through receive, flush, close and failure
+cleanup. A cooperating writer on the same or a parent/child path may return a conflict; retry after
+the other operation finishes. A conflict or write failure does not mean that an older successful
+photo was lost. Real SD removal, slow-card behavior and hardware resource pressure still require
+device validation.
+
 ## Out Of Memory Loading Images
 
 Checks:

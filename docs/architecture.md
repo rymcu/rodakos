@@ -139,7 +139,10 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - Home: phone desktop, status area, app grid, dock/page affordances.
 - Settings: WiFi, display/theme/brightness, USB disk mode, web/cloud file tools, time sync.
 - Photos: scans `/photos`, `/DCIM`, and fallback roots for images.
-- Camera: opens camera service on demand, previews and captures to storage.
+- Camera: opens camera service on demand, previews and captures to storage. Capture completion is
+  published only after exclusive `WriteNewFile` creation, complete output, flush and close. The
+  short FileService I/O lock protects the write; a UI teardown can revoke the shared result guard
+  while an already admitted capture finishes independently. See [media save boundaries](media-save.md).
 - Clock: local display and network time sync entry points.
 - Calendar: local month navigation and current-day selection.
 - File Manager: browses and manages FileService-backed storage.
@@ -147,6 +150,9 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - System Info: firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
+  Start admission is separate from Saved; final WAV header, flush and close failures remain errors,
+  and `library_error` does not overwrite a completed save. Path leases cover creation, data, final
+  header and cleanup without holding the entire storage I/O lock. See [media save boundaries](media-save.md).
 - Assistant: configuration and status for the local "你好达克" monitor; interaction runs as a
   system service rather than an app-owned Talk/Stop session.
 - Smart: light/smart-device control surface.
@@ -162,6 +168,10 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   the RAP1 layout, HTTP limitations, limits and still-required hardware evidence.
 
 - SD storage mounts on demand through FileService; USB MSC mode is an early-boot path and does not start normal UI/services.
+- FileService write leases normalize paths, reject NUL/parent traversal and conflicting mutations
+  on the same, parent or child path; unrelated reads and writes remain available. FileService and
+  CameraService are static services in `main.cc`; callers must keep them alive until workers and
+  leases exit. FileService unmount does not drain active leases.
 - Audio, music, voice assistant, camera, web file server, and cloud services are initialized as services but open heavy hardware paths only when needed.
 - `AudioOutputService` owns the shared output configuration. With an open codec it commits a new
   volume only after `AudioCodecOutput::SetVolume` succeeds. `AudioService` reads that shared value
