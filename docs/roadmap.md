@@ -1,8 +1,10 @@
 # RodakOS Roadmap
 
-The current trusted server transport slice starts from `7101282`.
+The trusted-server transport history starts from `7101282`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
+The current device runs `1e8a622` / package 011; its bounded UI and WSS evidence is recorded in
+[cloud diagnosis verification](https://github.com/rymcu/rodak/blob/master/docs/cloud-diagnostics-verification.md).
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -25,7 +27,7 @@ firmware build does not change an existing hardware gate.
   covers a real 137/88 subnet round trip selected through USB WiFi configuration,
   retained binding/token, and two WSS silent connect/stop sessions on the 88 subnet;
   see the [Rodak verification record](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
-  This does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
+  That 006 evidence does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
   or extended soak.
   Package 009 also passed a same-SRV-port two-address gate: an unreachable first
   candidate failed, the genuine second candidate authenticated, and numeric MQTTS
@@ -47,6 +49,13 @@ firmware build does not change an existing hardware gate.
   must preserve NVS using a package supporting the stored version. Damaged-trust recovery and
   physical power-cut acceptance are still open;
   see [trusted server discovery](trusted-server-discovery.md).
+  The latest strict USB/port/60-second network gate was package 010 (`20261007-033823`,
+  source `554d05f`): both trusted USB rounds, bidirectional HTTPS/MQTTS port recovery,
+  fresh shadow/telemetry and wake health passed with the original binding/token.
+  `not_needed` describes the binding result, not whether configuration or trust records were written.
+  No allocation failure was detected in that network window; a later display/UI run did fail to
+  create a cloud-refresh task. Package 011 was subsequently flashed preserving NVS, but its UI/WSS
+  checks do not repeat or replace 010's full bounded network gate.
 
 - ESP32-S3 BigSmart: 16 MiB flash, 8 MiB PSRAM, ESP-IDF 6.0.2, LVGL 9.3,
   `esp_lvgl_port` 2.8, local Board Manager definitions and pinned component resolution.
@@ -56,14 +65,17 @@ firmware build does not change an existing hardware gate.
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
 - Assistant and Device Cloud now share fixed, typed cloud diagnostics and a two-step Settings
   recovery route. Bound devices can retry expired/rejected credentials or unavailable voice without
-  unbinding. Production cloud/voice services and LVGL recovery pages have host regression coverage;
-  real DNS/HTTP cancellation latency, device typography/touch and resource pressure remain open
+  unbinding. Package 011 passed controlled single-request HTTP 401 injection, actual device frames
+  showing the corrected failure/disabled-wake text, a first-attempt Settings retry, wake off/on,
+  and two WSS silence sessions after the display stream stopped. These results preserve the original
+  binding and do not establish real credential expiry/revocation, physical touch or human speech.
+  The UI suite has 15-case LVGL host coverage, including persistent task-start/delivery failures;
+  011 did not reproduce 010's task-creation failure. Real DNS/HTTP cancellation latency,
+  device typography/touch and resource pressure remain open
   under [#24](https://github.com/rymcu/rodakos/issues/24); see [cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery).
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
-  see [appearance verification](appearance-verification.md). The last bounded strict COM3 pass is
-  development-signed `20261007-023218`, verified for trusted serial refresh, MQTTS,
-  telemetry and bidirectional port recovery with retained binding; see
-  [compact-authority hardware evidence](trusted-server-discovery.md#ninth-hardware-attempt-bounded-gate-passed).
+  see [appearance verification](appearance-verification.md). Fresh physical publisher/origin trust,
+  power interruption, slow-card/fallback and peak-memory acceptance remain separate gates.
 - Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
   A closed codec accepts configuration without opening hardware; the next open applies it and
   fails with cleanup if the initial API call fails. Voice MCP now exposes absolute/up/down tools
@@ -121,15 +133,15 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | Embedded image/camera/voice/MQTT allocation-failure runs and full LVGL exhaustion behavior; one-shot hooks are not arbitrary OOM recovery. 009's bounded silent-WSS pass reported internal-heap historical minimum 863 bytes; full audio/TLS concurrency, peak allocation pressure and extended soak remain open | [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak), [WSS evidence](trusted-server-discovery.md#ninth-package-wss-silence-and-resource-boundary) |
+| Resource recovery | Real image/camera/voice/MQTT allocation failures, SD/concurrent resource recovery and full LVGL exhaustion remain open. 010 failed to create a Settings refresh task during display/navigation load; 011's persistent failure prompt is host-verified only. WSS historical heap minima of 863 B (009) and 4459 B (011) have different run histories and do not prove improved capacity. Full audio/TLS pressure, resource return and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak), [010/011 evidence](https://github.com/rymcu/rodak/blob/master/docs/cloud-diagnostics-verification.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
-| Media/storage | Large-file and low-memory SD runs; physical Music retry/preemption/resume; Photos/File Manager error states; real SD removal/slow-card behavior; microphone/camera/audio-focus integration, device typography/touch and resource recovery | [Media save](media-save.md), [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
+| Media/storage | #35 owns Photos/File Manager scan-failure propagation, empty/stale-list distinction, reliable retry, resource-safe UI cleanup and host/build checks; preserve existing missing-card/empty-folder and image-preview error UI. #28 owns real SD removal/slow-card behavior, app recovery, physical typography/touch, arbitrary OOM, concurrency and soak. Music retry/preemption/resume and microphone/camera/audio-focus evidence retain their hardware boundaries | [RodakOS #35](https://github.com/rymcu/rodakos/issues/35), [Media save](media-save.md), [RodakOS #28](https://github.com/rymcu/rodakos/issues/28) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
-| Ordinary commands | Hardware validation of stream revocation/cleanup, sustained reconnect and resource contention, remote input and ACK timing; recent-cache software tests do not establish persistence, unbounded deduplication or physical rollback | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary) |
+| Ordinary commands | 010/011 recorded real display frames and explicitly authorized remote input. Stream revocation/cleanup under abnormal connections, sustained reconnect/resource contention, late-input/ACK timing and GT911 physical touch still need hardware validation; recent-cache tests do not establish persistence, unbounded deduplication or physical rollback | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary), [010/011 display evidence](https://github.com/rymcu/rodak/blob/master/docs/cloud-diagnostics-verification.md) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 
 Already recorded COM3 voice, provisioning, WebRTC, and appearance gates remain accepted within
