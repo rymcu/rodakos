@@ -24,11 +24,14 @@ std::function<void(const std::string&)> on_http_open;
 std::function<void()> on_discovery;
 
 void Reset() {
+    fake_clock_us = 100000;
     strings.clear(); booleans.clear(); integers.clear(); replies.clear(); requests.clear();
     discoveries.clear(); read_error_key.clear(); write_error_key.clear(); discovery_calls = 0;
     on_http_open = {}; on_discovery = {};
     authority_write_capacity = 4000;
 }
+
+void AdvanceTimeMs(int64_t milliseconds) { fake_clock_us += milliseconds * 1000; }
 
 rodakos::ServerTrust TestTrust() {
     rodakos::ServerTrust trust;

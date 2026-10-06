@@ -68,6 +68,7 @@ void CloudRefreshTask(void* arg) {
         if (!queued) {
             auto guard = payload->guard;
             if (guard && payload->generation == guard->refresh_generation.load()) {
+                guard->refresh_completion_failed.store(true);
                 guard->refresh_in_progress.store(false);
             }
             delete payload;
@@ -259,6 +260,12 @@ void SettingsApp::CreateDeviceCloudPage() {
         auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
         if (self != nullptr && self->cloud_refresh_guard_ &&
             !self->cloud_refresh_guard_->refresh_in_progress.load()) {
+            if (self->cloud_refresh_guard_->refresh_completion_failed.load()) {
+                self->cloud_pairing_error_ = rodakos::CloudDiagnosticTitle(
+                    rodakos::CloudDiagnosticCode::kRefreshFailed);
+                self->UpdateDeviceCloudPage();
+                return;
+            }
             self->RefreshDeviceCloud();
         }
     }, 2000, this);
@@ -280,13 +287,19 @@ void SettingsApp::UpdateDeviceCloudPage() {
     const std::string pairing_code = !config.pairing_code.empty()
                                          ? config.pairing_code
                                          : cloud_pairing_code_;
-    const bool aiot_bound = config.has_aiot_config;
+    const bool aiot_bound = config.aiot_registered && config.aiot_activated && !config.unbind_pending;
+    const auto diagnostic = cloud_refresh_guard_ && cloud_refresh_guard_->refresh_completion_failed.load()
+        ? rodakos::CloudDiagnosticCode::kRefreshFailed : device_cloud->diagnostic();
+    const bool needs_attention = diagnostic != rodakos::CloudDiagnosticCode::kReady &&
+                                 diagnostic != rodakos::CloudDiagnosticCode::kRefreshing;
     const bool pairing_pending = config.has_pairing_request &&
         rodakos::ClassifyDevicePairingStatus(config.pairing_status) ==
             rodakos::DevicePairingStatus::kPending;
     const bool pairing_error = config.has_pairing_request && !pairing_pending;
     lv_label_set_text(cloud_status_label_,
-                      aiot_bound
+                      aiot_bound && diagnostic != rodakos::CloudDiagnosticCode::kReady
+                          ? rodakos::CloudDiagnosticTitle(diagnostic)
+                          : aiot_bound
                           ? "已绑定到 Rodak"
                           : (!cloud_pairing_error_.empty()
                                  ? cloud_pairing_error_.c_str()
@@ -314,7 +327,9 @@ void SettingsApp::UpdateDeviceCloudPage() {
     }
     if (cloud_guide_label_ != nullptr) {
         lv_label_set_text(cloud_guide_label_,
-                          aiot_bound
+                          aiot_bound && diagnostic != rodakos::CloudDiagnosticCode::kReady
+                              ? rodakos::CloudDiagnosticHint(diagnostic)
+                              : aiot_bound
                               ? "设备云服务已启用，可接收控制和更新。"
                               : (!cloud_pairing_error_.empty() || pairing_error
                                      ? "配对码仍然有效，请检查网络后点击重试。"
@@ -327,20 +342,21 @@ void SettingsApp::UpdateDeviceCloudPage() {
     if (cloud_pairing_button_label_ != nullptr) {
         lv_label_set_text(cloud_pairing_button_label_,
                           aiot_bound
-                              ? "已绑定"
+                              ? "重试连接"
                               : ((!cloud_pairing_error_.empty() || pairing_error)
                                      ? "重试"
                                      : (pairing_pending ? "检查连接" : "开始连接")));
     }
     if (cloud_pairing_button_ != nullptr) {
         lv_obj_clear_state(cloud_pairing_button_, LV_STATE_DISABLED);
-        if (aiot_bound) {
+        if (aiot_bound && !needs_attention) {
             lv_obj_add_flag(cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN);
         }
     }
     if (cloud_unbind_button_ != nullptr) {
+        lv_obj_set_y(cloud_unbind_button_, aiot_bound && needs_attention ? 400 : 258);
         if (aiot_bound) {
             lv_obj_clear_flag(cloud_unbind_button_, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -349,7 +365,8 @@ void SettingsApp::UpdateDeviceCloudPage() {
     }
     if (cloud_pairing_timer_ != nullptr) {
         if (current_page_ == SettingsPage::kDeviceCloud &&
-            pairing_pending && !aiot_bound && cloud_pairing_error_.empty()) {
+            ((cloud_refresh_guard_ && cloud_refresh_guard_->refresh_in_progress.load()) ||
+             (pairing_pending && !aiot_bound && cloud_pairing_error_.empty()))) {
             lv_timer_resume(cloud_pairing_timer_);
             lv_timer_reset(cloud_pairing_timer_);
         } else {
@@ -485,6 +502,11 @@ void SettingsApp::RefreshDeviceCloud() {
     }
 
     cloud_pairing_error_.clear();
+    cloud_refresh_guard_->refresh_completion_failed.store(false);
+    if (cloud_pairing_timer_ != nullptr) {
+        lv_timer_resume(cloud_pairing_timer_);
+        lv_timer_reset(cloud_pairing_timer_);
+    }
     if (cloud_pairing_button_ != nullptr) {
         lv_obj_add_state(cloud_pairing_button_, LV_STATE_DISABLED);
     }
@@ -502,6 +524,7 @@ void SettingsApp::RefreshDeviceCloud() {
     if (ret != pdPASS) {
         cloud_refresh_guard_->refresh_in_progress.store(false);
         delete payload;
+        UpdateDeviceCloudPage();
         ui_->ShowToastUnlocked("Device services failed");
         if (cloud_status_label_ != nullptr) {
             lv_label_set_text(cloud_status_label_, "Refresh task failed");
@@ -527,19 +550,18 @@ void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
     const bool pairing_pending = config.has_pairing_request &&
         rodakos::ClassifyDevicePairingStatus(config.pairing_status) ==
             rodakos::DevicePairingStatus::kPending;
+    auto* service = context_ != nullptr ? context_->services().device_cloud() : nullptr;
+    const auto diagnostic = service != nullptr ? service->diagnostic() : rodakos::CloudDiagnosticCode::kRefreshFailed;
     cloud_pairing_error_ = (!ok && (!pairing_pending || !IsExpectedPairingWait(error)))
-                               ? (error.empty() ? "连接 Rodak 失败，请重试" : error)
+                               ? rodakos::CloudDiagnosticTitle(diagnostic)
                                : std::string();
     UpdateDeviceCloudPage();
     if (ok && config.has_aiot_config) {
         if (context_ != nullptr) {
             context_->services().NotifyDeviceCloudBound();
         }
-        ui_->ShowToastUnlocked("设备绑定成功");
-        if (cloud_status_label_ != nullptr) {
-            lv_label_set_text(cloud_status_label_,
-                              "已绑定到 Rodak");
-        }
+        ui_->ShowToastUnlocked(diagnostic == rodakos::CloudDiagnosticCode::kReady
+                                  ? "设备连接已更新" : rodakos::CloudDiagnosticTitle(diagnostic));
     } else if (!ok && pairing_pending && IsExpectedPairingWait(error)) {
         if (cloud_status_label_ != nullptr) {
             lv_label_set_text(cloud_status_label_, "等待在 Rodak 中确认");
@@ -549,9 +571,9 @@ void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
                                   config.pairing_code.c_str());
         }
     } else if (!ok) {
-        ui_->ShowToastUnlocked(error.empty() ? "Device services failed" : error.c_str());
+        ui_->ShowToastUnlocked(rodakos::CloudDiagnosticTitle(diagnostic));
         if (cloud_status_label_ != nullptr) {
-            lv_label_set_text(cloud_status_label_, error.empty() ? "Refresh failed" : error.c_str());
+            lv_label_set_text(cloud_status_label_, rodakos::CloudDiagnosticTitle(diagnostic));
         }
         if (config.has_activation_code && cloud_activation_label_ != nullptr) {
             lv_label_set_text_fmt(cloud_activation_label_, "Activation: %s",
@@ -561,7 +583,7 @@ void SettingsApp::OnDeviceCloudRefreshComplete(bool ok,
 }
 
 void SettingsApp::OnDeviceCloudUnbindComplete(bool ok,
-                                              const std::string& error,
+                                              const std::string&,
                                               uint32_t generation) {
     if (ui_ == nullptr || !cloud_refresh_guard_ ||
         generation != cloud_refresh_guard_->refresh_generation.load()) {
@@ -576,8 +598,7 @@ void SettingsApp::OnDeviceCloudUnbindComplete(bool ok,
     if (ok && context_ != nullptr) {
         context_->services().NotifyDeviceCloudUnbound();
     }
-    ui_->ShowToastUnlocked(ok ? "设备已解除绑定"
-                              : (error.empty() ? "设备解绑失败" : error.c_str()));
+    ui_->ShowToastUnlocked(ok ? "设备已解除绑定" : "设备解绑失败，请检查网络后重试");
 }
 
 void SettingsApp::ShowCloudProvisioningUrlDialog() {

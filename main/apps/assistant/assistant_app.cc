@@ -4,12 +4,14 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/device_cloud_config.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_ui/phone_components.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
+#include "rodakos_adapters/wifi_adapter.h"
 
 #include <esp_log.h>
 
@@ -23,6 +25,11 @@ void DeferReturnHome(void* user_data) {
     if (context != nullptr) {
         context->navigation().ReturnHome();
     }
+}
+
+void DeferSettings(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) context->navigation().Launch("settings");
 }
 
 void RefreshTimerCallback(lv_timer_t* timer) {
@@ -100,6 +107,7 @@ bool AssistantApp::OnCreate(PhoneAppContext& context) {
     ui_ = &context.ui();
     assistant_ = context.services().voice_assistant();
     wake_ = context.services().voice_wake();
+    cloud_ = context.services().device_cloud();
 
     if (assistant_ != nullptr) {
         assistant_->Init();
@@ -145,6 +153,10 @@ void AssistantApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            if (context_ != nullptr) {
+                lv_async_call_cancel(DeferSettings, context_);
+                lv_async_call_cancel(DeferReturnHome, context_);
+            }
             if (refresh_timer_ != nullptr) {
                 lv_timer_delete(refresh_timer_);
                 refresh_timer_ = nullptr;
@@ -166,6 +178,7 @@ void AssistantApp::OnDestroy() {
     ui_ = nullptr;
     assistant_ = nullptr;
     wake_ = nullptr;
+    cloud_ = nullptr;
 }
 
 void AssistantApp::CreateUi() {
@@ -234,31 +247,51 @@ void AssistantApp::CreateUi() {
     runtime_detail_label_ = CreateText(runtime_card, "Wake runtime: unavailable", &phone_font_12,
                                        rodakos_theme_text_secondary());
     lv_obj_set_width(runtime_detail_label_, 236);
-    lv_label_set_long_mode(runtime_detail_label_, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(runtime_detail_label_, LV_LABEL_LONG_WRAP);
     lv_obj_align(runtime_detail_label_, LV_ALIGN_LEFT_MID, 44, 0);
 
     auto* cloud_card = CreateCard(root_, 206, 32);
+    lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(cloud_card, [](lv_event_t* event) {
+        static_cast<AssistantApp*>(lv_event_get_user_data(event))->NavigateSettings();
+    }, LV_EVENT_CLICKED, this);
     auto* cloud_icon = CreateText(cloud_card, FONT_AWESOME_CLOUD, PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(cloud_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
-    cloud_detail_label_ = CreateText(cloud_card, "Wake-only cloud", &phone_font_12,
-                                     rodakos_theme_text_tertiary());
+    cloud_detail_label_ = CreateText(cloud_card, "Settings > Device Cloud", &phone_font_12,
+                                     rodakos_theme_primary());
     lv_obj_set_width(cloud_detail_label_, 236);
     lv_label_set_long_mode(cloud_detail_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(cloud_detail_label_, LV_ALIGN_LEFT_MID, 44, 0);
 }
 
 void AssistantApp::RefreshState() {
-    if (assistant_status_label_ == nullptr || assistant_ == nullptr) {
+    if (assistant_status_label_ == nullptr) {
         return;
     }
 
-    const auto assistant_state = assistant_->GetState();
-    lv_label_set_text_fmt(assistant_status_label_, "Assistant - %s",
-                          PhaseText(assistant_state.phase));
-    lv_label_set_text_fmt(assistant_detail_label_, "%s%s",
-                          assistant_state.focus_active ? "Exclusive focus - " : "",
-                          assistant_state.message.empty() ? "Ready" : assistant_state.message.c_str());
+    const auto assistant_state = assistant_ != nullptr ? assistant_->GetState() : rodakos::VoiceAssistantState{};
+    const auto cloud_state = cloud_ != nullptr ? cloud_->diagnostic_state() : rodakos::CloudDiagnosticState{};
+    auto diagnostic = cloud_state.code;
+    if (assistant_ == nullptr) diagnostic = rodakos::CloudDiagnosticCode::kVoiceUnavailable;
+    if (assistant_state.phase == rodakos::VoiceAssistantPhase::kError &&
+        rodakos::IsNewerCloudDiagnostic(assistant_state.diagnostic_revision, cloud_state.revision)) {
+        diagnostic = assistant_state.diagnostic;
+    }
+    auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
+    if (wifi != nullptr && wifi->GetStatus() != WiFiStatus::kConnected &&
+        diagnostic != rodakos::CloudDiagnosticCode::kUnconfigured &&
+        diagnostic != rodakos::CloudDiagnosticCode::kTrustUnavailable) {
+        diagnostic = rodakos::CloudDiagnosticCode::kNetworkUnavailable;
+    }
+    const bool active = assistant_state.phase == rodakos::VoiceAssistantPhase::kListening ||
+                        assistant_state.phase == rodakos::VoiceAssistantPhase::kSpeaking;
+    const auto display_phase = assistant_state.phase == rodakos::VoiceAssistantPhase::kError &&
+                               diagnostic == rodakos::CloudDiagnosticCode::kReady
+                                   ? rodakos::VoiceAssistantPhase::kIdle : assistant_state.phase;
+    lv_label_set_text_fmt(assistant_status_label_, "Assistant - %s", PhaseText(display_phase));
+    lv_label_set_text(assistant_detail_label_, active ? "Voice session active"
+                              : rodakos::CloudDiagnosticTitle(diagnostic));
 
     if (wake_ != nullptr && wake_switch_ != nullptr) {
         const auto wake_state = wake_->GetState();
@@ -282,10 +315,9 @@ void AssistantApp::RefreshState() {
         lv_label_set_text(wake_status_label_, "Wake service unavailable");
     }
 
-    lv_label_set_text_fmt(cloud_detail_label_, "%s/%s - %s",
-                          assistant_state.transport_name.empty() ? "offline" : assistant_state.transport_name.c_str(),
-                          assistant_state.recorder_name.empty() ? "offline" : assistant_state.recorder_name.c_str(),
-                          assistant_state.transport_active ? "wake session" : "wake-only");
+    if (!active && runtime_detail_label_ != nullptr) {
+        lv_label_set_text(runtime_detail_label_, rodakos::CloudDiagnosticHint(diagnostic));
+    }
 }
 
 void AssistantApp::ToggleWakeListening(bool enabled) {
@@ -305,6 +337,13 @@ void AssistantApp::ToggleWakeListening(bool enabled) {
 
 void AssistantApp::NavigateHome() {
     lv_async_call(DeferReturnHome, context_);
+}
+
+void AssistantApp::NavigateSettings() {
+    if (context_ != nullptr) {
+        lv_async_call_cancel(DeferSettings, context_);
+        lv_async_call(DeferSettings, context_);
+    }
 }
 
 void RegisterAssistantApp(PhoneAppRegistry& registry) {

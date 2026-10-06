@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/cloud_credential_freshness.h"
+#include "phone_os/cloud_diagnostic.h"
 #include "phone_os/server_trust.h"
 
 #include <cstddef>
@@ -106,7 +107,8 @@ public:
     bool Load(DeviceCloudConfig& config);
     bool Refresh(DeviceCloudConfig& config);
     bool PrepareVoiceConfig(DeviceCloudConfig& config,
-                            const std::function<bool()>& can_continue = {});
+                            const std::function<bool()>& can_continue = {},
+                            CloudDiagnosticCode* failure = nullptr);
     void InvalidateAccessTokenFreshness(const std::string& rejected_token);
     bool IsVoiceConfigCurrent(const DeviceCloudConfig& config) const;
     bool Unbind(DeviceCloudConfig& config);
@@ -120,6 +122,8 @@ public:
     std::string GetDeviceKey();
     std::string GetClientId();
     std::string last_error() const;
+    CloudDiagnosticCode diagnostic() const;
+    CloudDiagnosticState diagnostic_state() const;
 
     static const char* DefaultProvisioningUrl();
 
@@ -128,14 +132,23 @@ private:
     bool RefreshAiot(DeviceCloudConfig& config,
                      const std::function<bool()>& can_continue = {},
                      int64_t deadline_ms = 0, bool allow_pairing = true,
-                     bool* credentials_rejected = nullptr);
+                     bool* credentials_rejected = nullptr,
+                     CloudDiagnosticCode* failure = nullptr);
     bool RefreshWithDiscovery(DeviceCloudConfig& config);
-    void SetError(const std::string& message);
+    void SetError(const std::string& message,
+                  CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kRefreshFailed);
+    void ObserveDiagnosticConfig(const DeviceCloudConfig& config);
+    void PublishDiagnostic(CloudDiagnosticCode diagnostic) const;
 
     mutable std::recursive_mutex config_mutex_;
     std::mutex refresh_mutex_;
     uint32_t config_generation_ = 0;
     std::string last_error_;
+    mutable CloudDiagnosticCode diagnostic_ = CloudDiagnosticCode::kUnconfigured;
+    mutable uint32_t diagnostic_generation_ = 0;
+    mutable bool diagnostic_initialized_ = false;
+    mutable int64_t diagnostic_updated_at_ms_ = 0;
+    mutable uint32_t diagnostic_revision_ = 0;
     std::string fresh_access_token_;
     CloudCredentialFreshness credential_freshness_;
 };

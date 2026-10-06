@@ -335,6 +335,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     interaction_generation = NextRealtimeVoiceGeneration(interaction_generation_);
     interaction_generation_ = interaction_generation;
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
+    diagnostic_ = CloudDiagnosticCode::kRefreshing;
     xSemaphoreGive(mutex_);
 
     if (can_start && !can_start()) {
@@ -357,8 +358,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
             return IsInteractionCurrent(interaction_generation) &&
                    (!can_start || can_start());
         })) {
-        FinishInteraction(
-            VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
+        FinishTransportFailure(transport_.last_failure(), interaction_generation);
         return false;
     }
     if (!IsInteractionCurrent(interaction_generation)) {
@@ -405,8 +405,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     uint32_t opened_transport_generation = 0;
     if (!OpenTransportForInteraction(
             trigger, wake_word, interaction_generation, opened_transport_generation)) {
-        FinishInteraction(
-            VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
+        FinishTransportFailure(transport_.last_failure(), interaction_generation);
         return false;
     }
     if (!IsInteractionCurrent(interaction_generation)) {
@@ -414,8 +413,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     }
     if (!transport_.SendStartListening(
             VoiceListeningMode::kRealtime, opened_transport_generation)) {
-        FinishInteraction(
-            VoiceAssistantPhase::kError, transport_.last_error(), interaction_generation);
+        FinishTransportFailure(transport_.last_failure(), interaction_generation);
         return false;
     }
     bool transport_committed = false;
@@ -594,6 +592,9 @@ VoiceAssistantState VoiceAssistantService::GetState() {
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     state.phase = phase_;
+    state.diagnostic = diagnostic_;
+    state.diagnostic_at_ms = diagnostic_at_ms_;
+    state.diagnostic_revision = diagnostic_revision_;
     state.trigger = trigger_;
     state.initialized = initialized_;
     state.stopping = stopping_;
@@ -611,6 +612,7 @@ VoiceAssistantState VoiceAssistantService::GetState() {
 
 void VoiceAssistantService::SetPhaseLocked(VoiceAssistantPhase phase, const char* message) {
     phase_ = phase;
+    if (phase != VoiceAssistantPhase::kError) diagnostic_ = CloudDiagnosticCode::kReady;
     if (message != nullptr) {
         message_ = message;
     }
@@ -630,9 +632,18 @@ bool VoiceAssistantService::IsInteractionCurrent(uint32_t generation) {
     return current;
 }
 
+void VoiceAssistantService::FinishTransportFailure(const VoiceTransportFailure& failure,
+                                                     uint32_t expected_generation) {
+    const auto diagnostic = VoiceFailureDiagnostic(failure);
+    FinishInteraction(diagnostic == CloudDiagnosticCode::kCancelled ? VoiceAssistantPhase::kIdle
+                                                                   : VoiceAssistantPhase::kError,
+                      CloudDiagnosticTitle(diagnostic), expected_generation, diagnostic);
+}
+
 void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
                                                const std::string& message,
-                                               uint32_t expected_generation) {
+                                               uint32_t expected_generation,
+                                               CloudDiagnosticCode diagnostic) {
     if (mutex_ == nullptr) {
         return;
     }
@@ -674,6 +685,9 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     cleanup_generation_ = cleanup_generation;
     cleanup_final_phase_ = final_phase;
     cleanup_message_ = message.empty() ? "Ready" : message;
+    cleanup_diagnostic_ = final_phase == VoiceAssistantPhase::kError ? diagnostic : CloudDiagnosticCode::kReady;
+    diagnostic_at_ms_ = esp_timer_get_time() / 1000;
+    diagnostic_revision_ = NextCloudDiagnosticRevision();
     token = focus_token_;
     should_release = focus_active_;
     should_stop_transport = transport_active_;
@@ -747,6 +761,7 @@ void VoiceAssistantService::CompleteInteractionCleanupLocked(uint32_t generation
     }
 
     SetPhaseLocked(cleanup_final_phase_, cleanup_message_.c_str());
+    diagnostic_ = cleanup_diagnostic_;
     stopping_ = false;
     cleanup_resources_released_ = false;
     cleanup_generation_ = 0;
@@ -1325,15 +1340,12 @@ void VoiceAssistantService::HandleTransportFailure(VoiceTransportFailure failure
         transport_.CloseAudioChannel();
         transport_.WaitForAudioChannelClosed();
         DiscardPendingRecorderFrames();
-        ESP_LOGW(TAG, "Voice transport failed: code=%s retry=%u delay_ms=%u",
-                 failure.code.c_str(), static_cast<unsigned>(result.attempt),
+        ESP_LOGW(TAG, "Voice transport failed: kind=%d retry=%u delay_ms=%u",
+                 static_cast<int>(failure.kind), static_cast<unsigned>(result.attempt),
                  static_cast<unsigned>(result.delay_ms));
         return;
     }
 
-    const std::string message = result.failure.message.empty()
-        ? failure.message
-        : result.failure.message;
     if (result.outcome == VoiceAssistantReconnectOutcome::kCancelled) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool stopping = stopping_ || !io_running_ ||
@@ -1343,7 +1355,8 @@ void VoiceAssistantService::HandleTransportFailure(VoiceTransportFailure failure
             return;
         }
     }
-    FinishInteraction(VoiceAssistantPhase::kError, message, interaction_generation);
+    FinishTransportFailure(result.failure.kind == VoiceTransportFailureKind::kNone
+                               ? transport_.last_failure() : result.failure, interaction_generation);
 }
 
 void VoiceAssistantService::ProcessReconnect(uint32_t interaction_generation) {
@@ -1424,9 +1437,6 @@ void VoiceAssistantService::ProcessReconnect(uint32_t interaction_generation) {
         return;
     }
 
-    const std::string message = result.failure.message.empty()
-        ? "Voice reconnect failed"
-        : result.failure.message;
     if (result.outcome == VoiceAssistantReconnectOutcome::kCancelled) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool stopping = stopping_ || !io_running_ ||
@@ -1436,7 +1446,8 @@ void VoiceAssistantService::ProcessReconnect(uint32_t interaction_generation) {
             return;
         }
     }
-    FinishInteraction(VoiceAssistantPhase::kError, message, interaction_generation);
+    FinishTransportFailure(result.failure.kind == VoiceTransportFailureKind::kNone
+                               ? transport_.last_failure() : result.failure, interaction_generation);
 }
 
 void VoiceAssistantService::QueueTransportFailure(VoiceTransportFailure failure) {

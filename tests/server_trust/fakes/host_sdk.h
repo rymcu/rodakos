@@ -20,7 +20,8 @@ inline void esp_fill_random(void* value, size_t size) { std::memset(value, 0xa5,
 inline int esp_wifi_get_home_channel(uint8_t*, wifi_second_chan_t*) { return 0; }
 struct esp_app_desc_t { const char* version = "test"; };
 inline const esp_app_desc_t* esp_app_get_description() { static esp_app_desc_t value; return &value; }
-inline int64_t esp_timer_get_time() { static int64_t tick = 100000; return ++tick; }
+inline int64_t fake_clock_us = 100000;
+inline int64_t esp_timer_get_time() { return ++fake_clock_us; }
 inline void vTaskDelay(unsigned) {}
 #define pdMS_TO_TICKS(value) (value)
 #define ESP_LOGI(...) ((void)0)

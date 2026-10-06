@@ -31,6 +31,39 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
   This is cooperative: an in-flight DNS or HTTP library call can return later, after which its
   result is rejected. Immediate Stop cancellation during those calls remains a hardware gate.
 
+## Device Cloud Diagnosis and Recovery
+
+The Assistant status distinguishes an unconfigured binding, rejected credentials, credentials that
+need refresh, a failed refresh, an unreachable server, unavailable voice capability, and invalid
+server trust. `DeviceCloudConfigService` holds the current typed diagnosis in RAM; UI polling does
+not read NVS or parse certificates. Refresh failures remain visible across ordinary configuration
+reads, while a later successful refresh replaces them. Superseded configuration requests cannot
+publish a diagnosis for the new configuration. A shared RAM revision orders cloud and voice
+diagnoses even within one millisecond; refresh, rejection and expiry each advance it. Diagnostic
+messages and recovery hints are fixed text; server error bodies, tokens and device secrets are
+not displayed or included in failure logs.
+
+The bottom **Settings > Device Cloud** control opens the existing Settings app. Select its
+**连接与云服务** page to retry or repair provisioning. This is a two-step route, not a new provisioning
+surface. A bound device keeps its binding when its token or voice capability needs attention; the
+page exposes **重试连接** separately from the existing confirmed-unbind action. Rejected
+credentials on an already bound legacy server are also retried without creating a new pairing
+request. Initial enrollment still uses the existing explicit pairing flow. Missing voice
+capability does not invalidate working MQTT credentials or the shared credential preparation used
+by Appearance. A later successful cloud refresh clears the Assistant's stale error presentation.
+
+Opening these pages does not open a voice WebSocket. Local wake still owns voice startup and
+cooperative cancellation; disabling wake or stopping a preparation cannot publish its late result
+into a later interaction. The three-second preparation budget is cooperative, not a hard interrupt
+of an active DNS/HTTP library call.
+
+Host coverage uses the production cloud service with controlled HTTP/NVS fakes, the real voice
+service and its task/queue lifecycle, and [real LVGL Assistant/Device Cloud pages](../tests/assistant_ui/README.md).
+It covers failure classes, recovery, stale generations, delayed callbacks after destruction and
+the separate retry/unbind hit regions. Device text readability, physical touches, real network
+cancellation latency and low-memory concurrent audio remain hardware gates under
+[RodakOS #24](https://github.com/rymcu/rodakos/issues/24).
+
 ## State Flow
 
 ```mermaid

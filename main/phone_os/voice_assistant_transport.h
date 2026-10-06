@@ -1,5 +1,7 @@
 #pragma once
 
+#include "phone_os/cloud_diagnostic.h"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -54,7 +56,22 @@ struct VoiceTransportFailure {
     std::string message;
     bool retryable = false;
     uint32_t transport_generation = 0;
+    CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kVoiceUnavailable;
 };
+
+inline CloudDiagnosticCode VoiceFailureDiagnostic(const VoiceTransportFailure& failure) {
+    if (failure.code == "access_token_expired") return CloudDiagnosticCode::kCredentialsExpired;
+    if (failure.code == "credential_refresh_failed") return failure.diagnostic;
+    switch (failure.kind) {
+        case VoiceTransportFailureKind::kAuthentication: return CloudDiagnosticCode::kCredentialsRejected;
+        case VoiceTransportFailureKind::kNetwork:
+        case VoiceTransportFailureKind::kTimeout:
+        case VoiceTransportFailureKind::kSend: return CloudDiagnosticCode::kNetworkUnavailable;
+        case VoiceTransportFailureKind::kCancelled: return CloudDiagnosticCode::kCancelled;
+        case VoiceTransportFailureKind::kConfiguration: return CloudDiagnosticCode::kUnconfigured;
+        default: return CloudDiagnosticCode::kVoiceUnavailable;
+    }
+}
 
 enum class VoiceTransportFailureOrigin {
     kNone,

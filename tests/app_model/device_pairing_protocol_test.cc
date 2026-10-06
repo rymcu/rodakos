@@ -83,7 +83,7 @@ RODAK_TEST("Pairing parser returns server rejection and malformed JSON errors") 
 
     RODAK_CHECK_FALSE(Parse(R"({"code":409,"message":"request already exists"})",
                             DevicePairingResponseType::kCreateRequest, response, error));
-    RODAK_CHECK_EQ(error, "request already exists");
+    RODAK_CHECK_EQ(error, "Pairing request was rejected by the server");
 
     RODAK_CHECK_FALSE(Parse("not-json", DevicePairingResponseType::kStatus,
                             response, error));

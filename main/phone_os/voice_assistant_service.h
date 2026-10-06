@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/voice_assistant_state.h"
 #include "phone_os/voice_assistant_reconnect_coordinator.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_conversation_policy.h"
@@ -23,35 +24,6 @@ namespace rodakos {
 
 class AudioOutputService;
 class VoiceAssistantAudioCodec;
-
-enum class VoiceAssistantPhase {
-    kIdle,
-    kConnecting,
-    kListening,
-    kSpeaking,
-    kError,
-};
-
-enum class VoiceAssistantTrigger {
-    kManual,
-    kWakeWord,
-    kRemote,
-};
-
-struct VoiceAssistantState {
-    VoiceAssistantPhase phase = VoiceAssistantPhase::kIdle;
-    VoiceAssistantTrigger trigger = VoiceAssistantTrigger::kManual;
-    bool initialized = false;
-    bool stopping = false;
-    bool focus_active = false;
-    bool transport_active = false;
-    bool recorder_active = false;
-    uint32_t focus_token = 0;
-    std::string message;
-    std::string last_wake_word;
-    std::string transport_name;
-    std::string recorder_name;
-};
 
 class VoiceAssistantService {
 public:
@@ -86,7 +58,9 @@ private:
     bool IsInteractionCurrent(uint32_t generation);
     void FinishInteraction(VoiceAssistantPhase final_phase,
                            const std::string& message,
-                           uint32_t expected_generation = 0);
+                           uint32_t expected_generation = 0,
+                           CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kVoiceUnavailable);
+    void FinishTransportFailure(const VoiceTransportFailure& failure, uint32_t expected_generation);
     void CompleteInteractionCleanupLocked(uint32_t generation);
     void CompleteStartAttempt(TaskHandle_t task);
     void WaitForCleanupComplete();
@@ -153,6 +127,7 @@ private:
     TaskHandle_t cleanup_task_ = nullptr;
     VoiceAssistantPhase cleanup_final_phase_ = VoiceAssistantPhase::kIdle;
     std::string cleanup_message_ = "Ready";
+    CloudDiagnosticCode cleanup_diagnostic_ = CloudDiagnosticCode::kReady;
     VoiceConversationPolicy conversation_policy_;
     VoiceBargeInPolicy barge_in_policy_;
     VoiceVadEndPolicy vad_end_policy_;
@@ -166,6 +141,9 @@ private:
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
     std::string message_ = "Ready";
+    CloudDiagnosticCode diagnostic_ = CloudDiagnosticCode::kReady;
+    int64_t diagnostic_at_ms_ = 0;
+    uint32_t diagnostic_revision_ = 0;
     std::string last_wake_word_;
 };
 

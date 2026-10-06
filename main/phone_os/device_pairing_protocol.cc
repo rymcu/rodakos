@@ -56,10 +56,7 @@ bool ParseDevicePairingResponse(const std::string& json,
 
     const cJSON* code = cJSON_GetObjectItemCaseSensitive(root.get(), "code");
     if (code != nullptr && (!cJSON_IsNumber(code) || code->valueint != 200)) {
-        const cJSON* message = cJSON_GetObjectItemCaseSensitive(root.get(), "message");
-        error = cJSON_IsString(message) && message->valuestring != nullptr
-                    ? message->valuestring
-                    : "Pairing request was rejected by the server";
+        error = "Pairing request was rejected by the server";
         return false;
     }
 

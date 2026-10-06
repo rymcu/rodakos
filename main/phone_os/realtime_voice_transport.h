@@ -76,7 +76,8 @@ private:
                                      uint32_t generation = 0,
                                      VoiceTransportFailureOrigin origin =
                                          VoiceTransportFailureOrigin::kNone,
-                                     bool* claimed = nullptr);
+                                     bool* claimed = nullptr,
+                                     CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kVoiceUnavailable);
     bool ResolveLocalOperationFailure(VoiceTransportFailureKind kind,
                                       const std::string& code,
                                       const std::string& message,

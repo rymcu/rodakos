@@ -176,9 +176,19 @@ bool RodakRealtimeVoiceTransport::PrepareInteraction(VoiceOpenGuard can_continue
     }
     // New wakes run on wake_notify's internal stack; reconnect runs in PSRAM.
     // Keep HTTP/NVS work here and use only this RAM snapshot for reconnect.
-    if (!config_service_.PrepareVoiceConfig(config_, can_continue)) {
-        SetFailure(VoiceTransportFailureKind::kAuthentication,
-                   "credential_refresh_failed", config_service_.last_error(), false);
+    CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kRefreshFailed;
+    if (!config_service_.PrepareVoiceConfig(config_, can_continue, &diagnostic)) {
+        const auto kind = diagnostic == CloudDiagnosticCode::kCancelled
+            ? VoiceTransportFailureKind::kCancelled
+            : diagnostic == CloudDiagnosticCode::kNetworkUnavailable
+                ? VoiceTransportFailureKind::kNetwork : VoiceTransportFailureKind::kConfiguration;
+        SetFailure(kind, "credential_refresh_failed", CloudDiagnosticTitle(diagnostic), false,
+                   0, VoiceTransportFailureOrigin::kNone, nullptr, diagnostic);
+        return false;
+    }
+    if (!config_.has_realtime_voice_config) {
+        SetFailure(VoiceTransportFailureKind::kServer, "voice_unavailable",
+                   "Rodak voice service is not configured", false);
         return false;
     }
     client_id_header_ = config_service_.GetClientId();
@@ -1245,7 +1255,7 @@ bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
             VoiceTransportFailureKind::kSend, "control_send_failed",
             "Failed to send complete websocket text", true, expected_generation);
     }
-    ESP_LOGD(TAG, "Sent text: %s", text.c_str());
+    ESP_LOGD(TAG, "Sent voice control frame: bytes=%u", static_cast<unsigned>(text.size()));
     return true;
 }
 
@@ -1315,7 +1325,7 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     }
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
-        ESP_LOGW(TAG, "Invalid JSON from voice cloud: %.*s", len, data);
+        ESP_LOGW(TAG, "Invalid JSON from voice cloud: bytes=%d", len);
         SetError("Invalid JSON from voice cloud", generation);
         return;
     }
@@ -1735,8 +1745,11 @@ void RodakRealtimeVoiceTransport::ParseSessionReady(const std::string& payload,
 VoiceTransportFailure RodakRealtimeVoiceTransport::SetFailure(
     VoiceTransportFailureKind kind, const std::string& code, const std::string& message,
     bool retryable, uint32_t generation, VoiceTransportFailureOrigin origin,
-    bool* claimed) {
-    const std::string normalized = message.empty() ? "Voice cloud transport error" : message;
+    bool* claimed, CloudDiagnosticCode diagnostic) {
+    (void)message;
+    const auto safe_diagnostic = VoiceFailureDiagnostic({
+        .kind = kind, .code = code, .message = {}, .diagnostic = diagnostic});
+    const std::string normalized = CloudDiagnosticTitle(safe_diagnostic);
     uint32_t resolved_generation = generation;
     VoiceTransportFailure failure;
     bool accepted = false;
@@ -1754,6 +1767,7 @@ VoiceTransportFailure RodakRealtimeVoiceTransport::SetFailure(
             .message = normalized,
             .retryable = retryable,
             .transport_generation = resolved_generation,
+            .diagnostic = safe_diagnostic,
         };
         if (generation == 0 || resolved_generation == connection_generation_) {
             if (origin != VoiceTransportFailureOrigin::kNone) {
@@ -1775,14 +1789,15 @@ VoiceTransportFailure RodakRealtimeVoiceTransport::SetFailure(
             .message = normalized,
             .retryable = retryable,
             .transport_generation = generation,
+            .diagnostic = safe_diagnostic,
         };
         last_failure_ = failure;
     }
     if (claimed != nullptr) {
         *claimed = accepted;
     }
-    ESP_LOGW(TAG, "%s: code=%s retryable=%d generation=%" PRIu32,
-             failure.message.c_str(), failure.code.c_str(), failure.retryable ? 1 : 0,
+    ESP_LOGW(TAG, "%s: kind=%d retryable=%d generation=%" PRIu32,
+             CloudDiagnosticTitle(VoiceFailureDiagnostic(failure)), static_cast<int>(failure.kind), failure.retryable ? 1 : 0,
              resolved_generation);
     return failure;
 }

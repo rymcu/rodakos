@@ -125,6 +125,7 @@ constexpr const char* kAiotUnbindPath = "/api/v1/aiot/devices/binding/unbind";
 struct HttpResponse {
     int status_code = 0;
     std::string body;
+    CloudDiagnosticCode failure = CloudDiagnosticCode::kNetworkUnavailable;
 };
 
 int ResponseBusinessCode(const HttpResponse& response) {
@@ -246,10 +247,12 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
                        const std::function<bool()>& can_continue = {},
                        int64_t deadline_ms = 0) {
     if (can_continue && !can_continue()) {
+        output.failure = CloudDiagnosticCode::kCancelled;
         error = "AIoT HTTP request cancelled";
         return false;
     }
     if (url.empty()) {
+        output.failure = CloudDiagnosticCode::kUnconfigured;
         error = "AIoT endpoint URL is empty";
         return false;
     }
@@ -263,16 +266,19 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
     http_config.user_agent = "RodakOS/aiot";
     std::string connect_url;
     if (!ConfigureServerTrustHttp(cloud, url, http_config, &connect_url)) {
+        output.failure = CloudDiagnosticCode::kTrustUnavailable;
         error = "AIoT destination does not match the installed server trust";
         return false;
     }
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == nullptr) {
+        output.failure = CloudDiagnosticCode::kRefreshFailed;
         error = "Failed to create AIoT HTTP client";
         return false;
     }
     if (!ConfigureServerTrustHttpHost(cloud, url, client)) {
+        output.failure = CloudDiagnosticCode::kTrustUnavailable;
         esp_http_client_cleanup(client);
         error = "Cannot configure AIoT logical HTTP host";
         return false;
@@ -288,6 +294,7 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
             return false;
         }
         error = "AIoT HTTP request cancelled";
+        output.failure = CloudDiagnosticCode::kCancelled;
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return true;
@@ -367,6 +374,7 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
     esp_http_client_cleanup(client);
     if (can_continue && !can_continue()) {
         error = "AIoT HTTP request cancelled";
+        output.failure = CloudDiagnosticCode::kCancelled;
         return false;
     }
     if (read_len < 0) {
@@ -376,6 +384,7 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
     output.body.assign(response.data(), static_cast<size_t>(read_len));
     if (read_len == static_cast<int>(max_response_bytes)) {
         error = "AIoT HTTP response is too large";
+        output.failure = CloudDiagnosticCode::kRefreshFailed;
         return false;
     }
     return true;
@@ -388,10 +397,7 @@ cJSON* ResponseData(cJSON* root, std::string& error) {
     }
     const cJSON* code = cJSON_GetObjectItemCaseSensitive(root, "code");
     if (cJSON_IsNumber(code) && code->valueint != 200) {
-        const cJSON* message = cJSON_GetObjectItemCaseSensitive(root, "message");
-        error = cJSON_IsString(message) && message->valuestring != nullptr
-                    ? message->valuestring
-                    : "AIoT server rejected the request";
+        error = "AIoT server rejected the request";
         return nullptr;
     }
     cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
@@ -829,24 +835,26 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     config.aiot_token_expires_at_ms = config.aiot_access_token == fresh_access_token_
         ? credential_freshness_.expires_at_ms() : 0;
     config.cloud_generation = config_generation_;
+    if (!diagnostic_initialized_ || diagnostic_generation_ != config_generation_) {
+        ObserveDiagnosticConfig(config);
+    }
     return config.has_aiot_config;
 }
 
 bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                           const std::function<bool()>& can_continue,
                                           int64_t deadline_ms, bool allow_pairing,
-                                          bool* credentials_rejected) {
+                                          bool* credentials_rejected,
+                                          CloudDiagnosticCode* failure) {
+    if (failure != nullptr) *failure = CloudDiagnosticCode::kRefreshFailed;
     if (credentials_rejected != nullptr) *credentials_rejected = false;
     const int64_t refresh_started_ms = esp_timer_get_time() / 1000;
-    if (config.server_trust_error) {
-        SetError("Server trust record is unreadable; refusing cloud access");
-        return false;
-    }
     uint32_t config_generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         config_generation = config.cloud_generation;
         if (config_generation != config_generation_) {
+            if (failure != nullptr) *failure = CloudDiagnosticCode::kCancelled;
             last_error_ = "AIoT refresh snapshot was superseded before connection";
             return false;
         }
@@ -856,10 +864,24 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         return config_generation == config_generation_;
     };
+    const auto fail = [&](const std::string& message,
+                          CloudDiagnosticCode code = CloudDiagnosticCode::kRefreshFailed) {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        if (config_generation != config_generation_ || (can_continue && !can_continue())) {
+            code = CloudDiagnosticCode::kCancelled;
+        }
+        if (failure != nullptr) *failure = code;
+        if (config_generation == config_generation_) SetError(message, code);
+    };
+    if (config.server_trust_error) {
+        fail("Server trust record is unreadable; refusing cloud access",
+             CloudDiagnosticCode::kTrustUnavailable);
+        return false;
+    }
     const std::string bootstrap_url = ResolveAiotBootstrapUrl(config.provisioning_url);
     const std::string origin = UrlOrigin(bootstrap_url);
     if (origin.empty()) {
-        SetError("AIoT bootstrap URL has no valid origin");
+        fail("AIoT bootstrap URL has no valid origin");
         return false;
     }
 
@@ -868,14 +890,14 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (!PerformHttpRequest(config, bootstrap_url, HTTP_METHOD_GET, {}, {},
                             kMaxAiotResponseBytes, bootstrap_response, error,
                             request_allowed, deadline_ms)) {
-        SetError(error);
+        fail(error, bootstrap_response.failure);
         return false;
     }
 
     cJSON* bootstrap_root = nullptr;
     cJSON* bootstrap_data = nullptr;
     if (!ParseResponse(bootstrap_response, bootstrap_root, bootstrap_data, error)) {
-        SetError(error);
+        fail(error);
         return false;
     }
 
@@ -890,19 +912,19 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     }
     if (cJSON_IsString(bootstrap_module) && bootstrap_module->valuestring != nullptr &&
         std::strcmp(bootstrap_module->valuestring, "aiot") != 0) {
-        SetError("AIoT bootstrap module is unsupported");
+        fail("AIoT bootstrap module is unsupported");
         cJSON_Delete(bootstrap_root);
         return false;
     }
     if (cJSON_IsString(bootstrap_protocol) && bootstrap_protocol->valuestring != nullptr &&
         std::strcmp(bootstrap_protocol->valuestring, kRodakAiotProtocol) != 0) {
-        SetError("AIoT bootstrap protocol is unsupported");
+        fail("AIoT bootstrap protocol is unsupported");
         cJSON_Delete(bootstrap_root);
         return false;
     }
     if (cJSON_IsString(bootstrap_product) && bootstrap_product->valuestring != nullptr &&
         std::strcmp(bootstrap_product->valuestring, kRodakBigSmartProductKey) != 0) {
-        SetError("AIoT bootstrap product is not rymcu-bigsmart");
+        fail("AIoT bootstrap product is not rymcu-bigsmart");
         cJSON_Delete(bootstrap_root);
         return false;
     }
@@ -938,7 +960,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         protocol_version = kRodakAiotProtocolVersion;
     }
     if (protocol_version != kRodakAiotProtocolVersion) {
-        SetError("AIoT bootstrap protocol version is unsupported");
+        fail("AIoT bootstrap protocol version is unsupported");
         cJSON_Delete(bootstrap_root);
         return false;
     }
@@ -972,7 +994,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (!PerformHttpRequest(config, origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
                                 kMaxAiotResponseBytes, token_response, error,
                                 request_allowed, deadline_ms)) {
-            SetError(error);
+            fail(error, token_response.failure);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -982,7 +1004,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             business_code == 403 || business_code == 404) {
             if (credentials_rejected != nullptr) *credentials_rejected = true;
             if (!allow_pairing || !config.server_trust.empty()) {
-                SetError("Rodak rejected device credentials; reconnect from Settings");
+                fail("Rodak rejected device credentials; reconnect from Settings", CloudDiagnosticCode::kCredentialsRejected);
                 cJSON_Delete(bootstrap_root);
                 return false;
             }
@@ -991,7 +1013,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             ResetAiotCredentials(config);
             ResetMqttConfig(config);
         } else if (!ParseResponse(token_response, token_root, token_data, error)) {
-            SetError("AIoT token refresh failed: " + error);
+            fail("AIoT token refresh failed: " + error);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -999,7 +1021,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
 
     if (token_data == nullptr) {
     if (!allow_pairing) {
-        SetError("Connect this device to Rodak in Settings first");
+        fail("Connect this device to Rodak in Settings first", CloudDiagnosticCode::kUnconfigured);
         cJSON_Delete(bootstrap_root);
         return false;
     }
@@ -1013,7 +1035,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         if (!PersistAiotIdentity(config)) {
-            SetError("Failed to persist AIoT device secret");
+            fail("Failed to persist AIoT device secret");
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1048,12 +1070,12 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         HttpResponse response;
         if (!PerformHttpRequest(config, pairing_url, HTTP_METHOD_POST, request_json, {},
                                 kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
-            SetError(error);
+            fail(error, response.failure);
             cJSON_Delete(bootstrap_root);
             return false;
         }
         if (response.status_code < 200 || response.status_code >= 300) {
-            SetError("AIoT pairing request failed: HTTP status " +
+            fail("AIoT pairing request failed: HTTP status " +
                      std::to_string(response.status_code));
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1062,7 +1084,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (!ParseDevicePairingResponse(response.body,
                                         DevicePairingResponseType::kCreateRequest,
                                         pairing_response, error)) {
-            SetError("AIoT pairing request failed: " + error);
+            fail("AIoT pairing request failed: " + error);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1077,7 +1099,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         HttpResponse response;
         if (!PerformHttpRequest(config, status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
                                 kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
-            SetError(error);
+            fail(error, response.failure);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1091,13 +1113,13 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 std::lock_guard<std::recursive_mutex> lock(config_mutex_);
                 cleared = PersistAiotIdentity(config);
             }
-            SetError(cleared ? "配对申请已失效，请重新发起绑定"
+            fail(cleared ? "配对申请已失效，请重新发起绑定"
                              : "配对申请已失效，但本地状态清理失败");
             cJSON_Delete(bootstrap_root);
             return false;
         }
         if (response.status_code < 200 || response.status_code >= 300) {
-            SetError("AIoT pairing status failed: HTTP status " +
+            fail("AIoT pairing status failed: HTTP status " +
                      std::to_string(response.status_code));
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1106,7 +1128,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (!ParseDevicePairingResponse(response.body,
                                         DevicePairingResponseType::kStatus,
                                         pairing_response, error)) {
-            SetError("AIoT pairing status failed: " + error);
+            fail("AIoT pairing status failed: " + error);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1117,7 +1139,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         cJSON* root = nullptr;
         cJSON* data = nullptr;
         if (!ParseResponse(response, root, data, error)) {
-            SetError("AIoT pairing status failed: " + error);
+            fail("AIoT pairing status failed: " + error);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1127,7 +1149,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (config.pairing_request_id.empty() || config.pairing_request_token.empty() ||
         config.pairing_code.empty()) {
         ResetPairingRequest(config);
-        SetError("AIoT pairing response is incomplete");
+        fail("AIoT pairing response is incomplete");
         cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
@@ -1144,7 +1166,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         }
     }
     if (!pairing_persisted) {
-        SetError("Failed to persist pairing request");
+        fail("Failed to persist pairing request");
         cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
@@ -1159,7 +1181,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 std::lock_guard<std::recursive_mutex> lock(config_mutex_);
                 cleared = PersistAiotIdentity(config);
             }
-            SetError(!cleared ? "配对终态清理失败，请重试"
+            fail(!cleared ? "配对终态清理失败，请重试"
                               : (classified_status == DevicePairingStatus::kRejected
                                      ? "配对申请已拒绝，请重新发起绑定"
                                      : "配对申请已过期，请重新发起绑定"));
@@ -1167,9 +1189,10 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             cJSON_Delete(bootstrap_root);
             return false;
         }
-        SetError(config.pairing_code.empty()
+        fail(config.pairing_code.empty()
                      ? "等待设备绑定确认"
-                     : "等待设备绑定确认，配对码：" + config.pairing_code);
+                     : "等待设备绑定确认，配对码：" + config.pairing_code,
+             CloudDiagnosticCode::kUnconfigured);
         cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
@@ -1186,7 +1209,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     config.aiot_registered = false;
     config.aiot_activated = false;
     if (token_data == nullptr) {
-        SetError("AIoT pairing confirmation did not include credentials");
+        fail("AIoT pairing confirmation did not include credentials");
         cJSON_Delete(token_root);
         cJSON_Delete(bootstrap_root);
         return false;
@@ -1221,7 +1244,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         const auto* transport = cJSON_GetObjectItemCaseSensitive(mqtt_object, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring == nullptr ||
             std::strcmp(transport->valuestring, "mqtts") != 0) {
-            SetError("Pinned server did not provide an MQTT TLS descriptor");
+            fail("Pinned server did not provide an MQTT TLS descriptor");
             cJSON_Delete(token_root);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1314,7 +1337,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         RealtimeVoiceDescriptor voice_descriptor;
         std::string voice_error;
         if (!ParseRealtimeVoiceDescriptor(realtime_voice, voice_descriptor, voice_error)) {
-            SetError("Realtime voice descriptor is invalid: " + voice_error);
+            fail("Realtime voice descriptor is invalid", CloudDiagnosticCode::kVoiceUnavailable);
             cJSON_Delete(token_root);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1322,7 +1345,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (!config.server_trust.empty() &&
             !IsServerTrustVoiceDestination(config.server_trust, config.provisioning_url,
                                             voice_descriptor.endpoint)) {
-            SetError("Realtime voice endpoint does not match the pinned server");
+            fail("Realtime voice endpoint does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
             cJSON_Delete(token_root);
             cJSON_Delete(bootstrap_root);
             return false;
@@ -1351,7 +1374,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     cJSON_Delete(token_root);
 
     if (config.aiot_access_token.empty()) {
-        SetError("AIoT token response did not contain an access token");
+        fail("AIoT token response did not contain an access token");
         cJSON_Delete(bootstrap_root);
         return false;
     }
@@ -1376,7 +1399,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (!config.server_trust.empty() &&
         (mqtt_host != config.server_trust.tls_name || mqtt_port <= 0 || mqtt_port > 65535 ||
          ServerTrustUrlOrigin(mqtt_http_base_url) != origin)) {
-        SetError("MQTT descriptor does not match the pinned server");
+        fail("MQTT descriptor does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
         cJSON_Delete(bootstrap_root);
         return false;
     }
@@ -1409,7 +1432,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         if (config_generation != config_generation_) {
-            SetError("AIoT provisioning endpoint changed while refresh was in progress");
+            fail("AIoT provisioning endpoint changed while refresh was in progress",
+                 CloudDiagnosticCode::kCancelled);
             cJSON_Delete(bootstrap_root);
             return false;
         }
@@ -1429,7 +1453,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             auto previous_config = std::unique_ptr<DeviceCloudConfig>(
                 new (std::nothrow) DeviceCloudConfig());
             if (previous_config == nullptr) {
-                SetError("Not enough memory to snapshot AIoT credentials");
+                fail("Not enough memory to snapshot AIoT credentials");
             } else {
                 Load(*previous_config);
 
@@ -1504,11 +1528,12 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     }
     if (!credentials_persisted) {
         if (!generation_matches) {
-            SetError("AIoT provisioning endpoint changed while refresh was in progress");
+            fail("AIoT provisioning endpoint changed while refresh was in progress",
+                 CloudDiagnosticCode::kCancelled);
         } else if (!rollback_ok) {
-            SetError("AIoT credentials state is uncertain after persistence failure");
+            fail("AIoT credentials state is uncertain after persistence failure");
         } else {
-            SetError("Failed to persist AIoT credentials");
+            fail("Failed to persist AIoT credentials");
         }
         cJSON_Delete(bootstrap_root);
         return false;
@@ -1517,6 +1542,13 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     ESP_LOGI(TAG, "Rodak AIoT enrollment complete: device=%s broker=%s:%d",
              config.mqtt_device_key.c_str(), config.mqtt_broker_address.c_str(),
              config.mqtt_broker_port);
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        if (config.cloud_generation == config_generation_) {
+            last_error_.clear();
+            ObserveDiagnosticConfig(config);
+        }
+    }
     return true;
 }
 
@@ -1525,6 +1557,7 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     {
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
         Load(config);
+        PublishDiagnostic(CloudDiagnosticCode::kRefreshing);
     }
     if (config.provisioning_url.empty()) {
         config.provisioning_url = kDefaultProvisioningUrl;
@@ -1543,7 +1576,8 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
 bool DeviceCloudConfigService::RefreshWithDiscovery(DeviceCloudConfig& config) {
     const auto initial_generation = config.cloud_generation;
     bool credentials_rejected = false;
-    if (RefreshAiot(config, {}, 0, true, &credentials_rejected)) return true;
+    const bool allow_pairing = !config.aiot_registered || !config.aiot_activated;
+    if (RefreshAiot(config, {}, 0, allow_pairing, &credentials_rejected)) return true;
     if (credentials_rejected) { Load(config); return false; }
     Load(config);
     if (config.cloud_generation != initial_generation) return false;
@@ -1581,7 +1615,16 @@ bool DeviceCloudConfigService::RefreshWithDiscovery(DeviceCloudConfig& config) {
 }
 
 bool DeviceCloudConfigService::PrepareVoiceConfig(
-    DeviceCloudConfig& config, const std::function<bool()>& can_continue) {
+    DeviceCloudConfig& config, const std::function<bool()>& can_continue,
+    CloudDiagnosticCode* failure) {
+    if (failure != nullptr) *failure = CloudDiagnosticCode::kRefreshFailed;
+    bool config_admitted = false;
+    const auto reject = [&](const std::string& message, CloudDiagnosticCode code) {
+        if (failure != nullptr) *failure = code;
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        if (config_admitted && config.cloud_generation == config_generation_ &&
+            code != CloudDiagnosticCode::kCancelled) SetError(message, code);
+    };
     const int64_t deadline_ms = esp_timer_get_time() / 1000 + 3000;
     const auto allowed = [&]() {
         return esp_timer_get_time() / 1000 < deadline_ms &&
@@ -1590,7 +1633,9 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
     std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::defer_lock);
     while (!refresh_lock.try_lock()) {
         if (!allowed()) {
-            SetError("Rodak credential preparation cancelled or timed out");
+            reject("Rodak credential preparation cancelled or timed out",
+                     can_continue && !can_continue() ? CloudDiagnosticCode::kCancelled
+                                                     : CloudDiagnosticCode::kRefreshFailed);
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -1598,32 +1643,61 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
     {
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
         Load(config);
+        config_admitted = true;
+        if (!allowed()) {
+            reject("Rodak credential preparation cancelled or timed out",
+                   can_continue && !can_continue() ? CloudDiagnosticCode::kCancelled
+                                                   : CloudDiagnosticCode::kRefreshFailed);
+            config.aiot_token_expires_at_ms = 0;
+            return false;
+        }
         if (config.server_trust_error || config.server_trust_pending ||
             !config.aiot_registered || !config.aiot_activated ||
             config.aiot_device_secret.empty() || config.aiot_pending ||
             config.has_pairing_request || config.unbind_pending) {
-            SetError("Connect this device to Rodak in Settings first");
+            reject("Connect this device to Rodak in Settings first",
+                     config.server_trust_error ? CloudDiagnosticCode::kTrustUnavailable
+                                               : CloudDiagnosticCode::kUnconfigured);
             return false;
         }
         if (config.has_aiot_config && config.aiot_access_token == fresh_access_token_ &&
             !credential_freshness_.NeedsRefresh(esp_timer_get_time() / 1000)) {
+            ObserveDiagnosticConfig(config);
             return true;
         }
+        PublishDiagnostic(CloudDiagnosticCode::kRefreshing);
     }
     if (!IsValidSerialProvisioningBootstrapUrl(config.provisioning_url) ||
         IsForbiddenLegacyProvisioningHost(config.provisioning_url)) {
-        SetError("Configure a valid Rodak AIoT bootstrap URL in Settings");
+        reject("Configure a valid Rodak AIoT bootstrap URL in Settings",
+                 CloudDiagnosticCode::kUnconfigured);
         return false;
     }
     ESP_LOGI(TAG, "Refreshing expired or unverified credentials before voice connection");
-    if (!allowed() || !RefreshAiot(config, allowed, deadline_ms, false)) {
+    if (!allowed()) {
+        reject("Rodak credential preparation cancelled or timed out",
+                 can_continue && !can_continue() ? CloudDiagnosticCode::kCancelled
+                                                 : CloudDiagnosticCode::kRefreshFailed);
+        config.aiot_token_expires_at_ms = 0;
+        return false;
+    }
+    CloudDiagnosticCode refresh_failure = CloudDiagnosticCode::kRefreshFailed;
+    if (!RefreshAiot(config, allowed, deadline_ms, false, nullptr, &refresh_failure)) {
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
-        credential_freshness_.ObserveRefresh(false, 0, 0);
+        if (refresh_failure == CloudDiagnosticCode::kCancelled &&
+            config.cloud_generation == config_generation_ && (!can_continue || can_continue())) {
+            refresh_failure = CloudDiagnosticCode::kRefreshFailed;
+            SetError("Rodak credential preparation timed out", refresh_failure);
+        }
+        if (failure != nullptr) *failure = refresh_failure;
+        if (config.cloud_generation == config_generation_) {
+            credential_freshness_.ObserveRefresh(false, 0, 0);
+        }
         config.aiot_token_expires_at_ms = 0;
         return false;
     }
     if (config.aiot_token_expires_at_ms <= esp_timer_get_time() / 1000) {
-        SetError("Rodak token response has no usable expiry");
+        reject("Rodak token response has no usable expiry", CloudDiagnosticCode::kCredentialsExpired);
         return false;
     }
     return config.has_aiot_config;
@@ -1634,6 +1708,7 @@ void DeviceCloudConfigService::InvalidateAccessTokenFreshness(const std::string&
     if (fresh_access_token_ == rejected_token) {
         fresh_access_token_.clear();
         credential_freshness_.ObserveRefresh(false, 0, 0);
+        PublishDiagnostic(CloudDiagnosticCode::kCredentialsRejected);
     }
 }
 
@@ -2016,10 +2091,51 @@ std::string DeviceCloudConfigService::last_error() const {
     return last_error_;
 }
 
-void DeviceCloudConfigService::SetError(const std::string& message) {
+CloudDiagnosticCode DeviceCloudConfigService::diagnostic() const {
+    return diagnostic_state().code;
+}
+
+CloudDiagnosticState DeviceCloudConfigService::diagnostic_state() const {
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+    if (diagnostic_generation_ != config_generation_) {
+        PublishDiagnostic(CloudDiagnosticCode::kUnconfigured);
+        // A changed configuration revokes older voice errors immediately; its
+        // next normal Load will derive the precise trust/credential condition.
+        diagnostic_initialized_ = false;
+    }
+    if (diagnostic_ == CloudDiagnosticCode::kReady &&
+        credential_freshness_.NeedsRefresh(esp_timer_get_time() / 1000)) {
+        PublishDiagnostic(CloudDiagnosticCode::kCredentialsExpired);
+    }
+    return {diagnostic_, diagnostic_updated_at_ms_, diagnostic_revision_};
+}
+
+void DeviceCloudConfigService::ObserveDiagnosticConfig(const DeviceCloudConfig& config) {
+    CloudDiagnosticCode diagnostic;
+    if (config.server_trust_error) diagnostic = CloudDiagnosticCode::kTrustUnavailable;
+    else if (config.server_trust_pending || config.aiot_pending || config.unbind_pending ||
+             !config.aiot_registered || !config.aiot_activated || config.aiot_device_secret.empty()) {
+        diagnostic = CloudDiagnosticCode::kUnconfigured;
+    } else if (config.aiot_token_expires_at_ms <= esp_timer_get_time() / 1000) {
+        diagnostic = CloudDiagnosticCode::kCredentialsExpired;
+    } else diagnostic = config.has_realtime_voice_config ? CloudDiagnosticCode::kReady
+                                                         : CloudDiagnosticCode::kVoiceUnavailable;
+    PublishDiagnostic(diagnostic);
+}
+
+void DeviceCloudConfigService::PublishDiagnostic(CloudDiagnosticCode diagnostic) const {
+    diagnostic_ = diagnostic;
+    diagnostic_generation_ = config_generation_;
+    diagnostic_initialized_ = true;
+    diagnostic_updated_at_ms_ = esp_timer_get_time() / 1000;
+    diagnostic_revision_ = NextCloudDiagnosticRevision();
+}
+
+void DeviceCloudConfigService::SetError(const std::string& message, CloudDiagnosticCode diagnostic) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     last_error_ = message;
-    ESP_LOGW(TAG, "%s", last_error_.c_str());
+    PublishDiagnostic(diagnostic);
+    ESP_LOGW(TAG, "%s", CloudDiagnosticTitle(diagnostic));
 }
 
 }  // namespace rodakos

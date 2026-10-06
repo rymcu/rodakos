@@ -33,9 +33,12 @@ For ASan/UBSan, use a separate build directory and add these configure arguments
 ```
 
 Run its test executable with `ASAN_OPTIONS=detect_leaks=1`. CTest has a 30-second timeout so a
-lifecycle deadlock fails the run. Ten cases cover startup initialization, handshake rejection,
+lifecycle deadlock fails the run. Cases cover startup initialization, handshake rejection,
 repeat calls, stale generations, Stop cancellation, startup cancellation, reconnect scope and
 early initialization, bounded queue pressure, canonical envelope rejection and response roundtrips.
+Cloud diagnosis cases additionally verify fixed credential/network/capability messages, no
+WebSocket on failed preparation, recorder cleanup, successful later wake, and Stop during a
+preparation without publishing its late failure into the next interaction.
 
 Passing this target establishes software lifecycle behavior with controlled host dependencies.
 It does not validate real FreeRTOS scheduling, WebSocket close latency, I2C, ADC/DAC, or audible

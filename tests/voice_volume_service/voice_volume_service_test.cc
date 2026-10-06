@@ -74,6 +74,12 @@ private:
 class Transport final : public rodakos::VoiceAssistantTransport {
 public:
     bool Start() override { return true; }
+    bool PrepareInteraction(rodakos::VoiceOpenGuard can_continue = {}) override {
+        ++prepare_calls;
+        if (on_prepare) on_prepare();
+        if (can_continue && !can_continue()) return false;
+        return prepare_ok;
+    }
     bool OpenAudioChannel(rodakos::VoiceOpenGuard can_continue = {}) override {
         if (can_continue && !can_continue()) return false;
         ++generation;
@@ -136,7 +142,7 @@ public:
     void SetMcpEndpointAvailable(bool value) override { mcp_available = value; }
     const char* name() const override { return "host-transport"; }
     std::string last_error() const override { return "host transport error"; }
-    rodakos::VoiceTransportFailure last_failure() const override { return {}; }
+    rodakos::VoiceTransportFailure last_failure() const override { return failure; }
 
     void Emit(const std::string& payload, uint32_t expected = 0) {
         const uint32_t scope = expected == 0 ? generation.load() : expected;
@@ -200,6 +206,10 @@ public:
     std::atomic<bool> initialize_on_open{false};
     std::atomic<bool> mcp_available{false};
     std::function<void()> on_open;
+    std::function<void()> on_prepare;
+    bool prepare_ok = true;
+    unsigned prepare_calls = 0;
+    rodakos::VoiceTransportFailure failure;
 
 private:
     static std::string SessionId(uint32_t value) {
@@ -277,6 +287,45 @@ RODAK_TEST("Voice service requires initialize and replays one committed relative
     RODAK_CHECK_EQ(f.output.volume(), 70);
     auto parsed = Parse(accepted);
     RODAK_CHECK_EQ(Get(Receipt(parsed), "configurationRevision")->valueint, 1);
+}
+
+RODAK_TEST("Voice diagnostics distinguish preparation failures without exposing backend messages") {
+    using rodakos::CloudDiagnosticCode;
+    for (auto code : {CloudDiagnosticCode::kUnconfigured, CloudDiagnosticCode::kCredentialsRejected,
+                      CloudDiagnosticCode::kCredentialsExpired, CloudDiagnosticCode::kRefreshFailed,
+                      CloudDiagnosticCode::kNetworkUnavailable, CloudDiagnosticCode::kVoiceUnavailable}) {
+        Fixture f;
+        RODAK_CHECK(f.service.Init());
+        RODAK_CHECK_EQ(f.transport.prepare_calls, 0U);
+        RODAK_CHECK_EQ(f.transport.connection_generation(), 0U);
+        f.transport.prepare_ok = false;
+        f.transport.failure = {rodakos::VoiceTransportFailureKind::kConfiguration,
+            "credential_refresh_failed", "raw-secret-token-response", false, 0, code};
+        RODAK_CHECK_FALSE(f.Start());
+        const auto state = f.service.GetState();
+        RODAK_CHECK_EQ(state.phase, rodakos::VoiceAssistantPhase::kError);
+        RODAK_CHECK_EQ(state.diagnostic, code);
+        RODAK_CHECK_EQ(state.message, rodakos::CloudDiagnosticTitle(code));
+        RODAK_CHECK_EQ(f.transport.connection_generation(), 0U);
+        RODAK_CHECK_FALSE(f.recorder.IsRunning());
+        f.transport.prepare_ok = true;
+        RODAK_CHECK(f.Start());
+        RODAK_CHECK_EQ(f.service.GetState().phase, rodakos::VoiceAssistantPhase::kListening);
+        RODAK_CHECK_EQ(f.service.GetState().diagnostic, CloudDiagnosticCode::kReady);
+    }
+}
+
+RODAK_TEST("Stopping during credential preparation cannot publish a stale error or open voice") {
+    Fixture f;
+    f.transport.on_prepare = [&] { f.service.StopInteraction(); };
+    f.transport.failure = {rodakos::VoiceTransportFailureKind::kCancelled,
+                          "prepare_cancelled", "raw-secret-token-response", false};
+    RODAK_CHECK_FALSE(f.Start());
+    RODAK_CHECK_EQ(f.service.GetState().phase, rodakos::VoiceAssistantPhase::kIdle);
+    RODAK_CHECK_EQ(f.transport.connection_generation(), 0U);
+    RODAK_CHECK_FALSE(f.recorder.IsRunning());
+    f.transport.on_prepare = {};
+    RODAK_CHECK(f.Start());
 }
 
 RODAK_TEST("Voice service drops stale generations and resets handshake and ledger after stop") {

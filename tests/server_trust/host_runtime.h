@@ -43,6 +43,7 @@ extern unsigned discovery_calls;
 extern std::function<void(const std::string&)> on_http_open;
 extern std::function<void()> on_discovery;
 void Reset();
+void AdvanceTimeMs(int64_t milliseconds);
 rodakos::ServerTrust TestTrust();
 std::string BootstrapUrl(int port = 9443);
 void SeedBoundLegacy();

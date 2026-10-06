@@ -10,9 +10,9 @@ if [[ ! -f "$rodak_idf_source/components/esp_event/esp_event.c" ]]; then
 fi
 export RODAKOS_IDF_PATH="$rodak_idf_source"
 mkdir -p "$rodak_checks"
-for rodak_suite in app_model home_ui ota_security codec_volume mqtt_event_patch mqtt_volume_service websocket_redirect_patch \
+for rodak_suite in app_model home_ui assistant_ui ota_security codec_volume mqtt_event_patch mqtt_volume_service websocket_redirect_patch \
     serial_provisioning server_trust server_trust_nvs_storage wifi_adapter \
-    voice_wake_service voice_audio_frontend_identity voice_identity_integration \
+    voice_wake_service voice_volume_service voice_audio_frontend_identity voice_identity_integration \
     file_path_lease web_file_upload file_directory audio_playback_service music_ui file_writer \
     recording_service recorder_ui camera_capture camera_ui; do
     rodak_target="$rodak_checks/asan-$rodak_suite"

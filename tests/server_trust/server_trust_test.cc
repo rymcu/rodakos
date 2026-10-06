@@ -48,6 +48,26 @@ void Activate(DeviceCloudConfigService& service) {
     RODAK_CHECK(config.has_mqtt_config);
     RODAK_CHECK_FALSE(config.server_trust_pending);
 }
+
+void RespondVoice() {
+    trust_test::RespondBound();
+    const auto url = rodakos::ServerTrustUrlOrigin(trust_test::BootstrapUrl()) + "/api/v1/aiot/devices/auth/token";
+    auto* root = cJSON_Parse(trust_test::replies[url].body.c_str());
+    auto* voice = cJSON_Parse(R"({"schema":"rodak-realtime-voice/v1","protocol":"rodak-realtime-voice",
+        "protocolVersion":1,"transport":"websocket","authMode":"device-token",
+        "uplink":{"codec":"opus","sampleRateHz":16000,"channels":1,"frameDurationMs":60},
+        "downlink":{"codec":"opus","sampleRateHz":24000,"channels":1,"frameDurationMs":60},
+        "limits":{"maxAudioFrameBytes":8192,"maxControlBytes":65536},"features":[],
+        "capabilities":["session","audio-input","audio-output"],
+        "events":["session.open","session.ready","input.start","input.stop","wake.detected",
+                  "playback.abort","vad","output.start","output.stop","session.end","mcp","error"]})");
+    const auto endpoint = "wss://" + trust_test::TestTrust().tls_name + ":9443/voice";
+    cJSON_AddStringToObject(voice, "endpoint", endpoint.c_str());
+    cJSON_AddItemToObject(cJSON_GetObjectItemCaseSensitive(root, "data"), "realtimeVoice", voice);
+    char* json = cJSON_PrintUnformatted(root);
+    trust_test::replies[url].body = json;
+    cJSON_free(json); cJSON_Delete(root);
+}
 }  // namespace
 
 RODAK_TEST("USB trust derives the stable identity from certificate SPKI") {
@@ -645,4 +665,186 @@ RODAK_TEST("An exhausted authority write preserves the previous record and ident
     RODAK_CHECK_EQ(trust_test::strings["device_cloud/device_secret"], "existing-device-secret");
     RODAK_CHECK(trust_test::booleans["device_cloud/server_pinned"]);
     RODAK_CHECK(proof.empty());
+}
+
+RODAK_TEST("Cloud diagnostics distinguish configuration, network, rejection and refresh failures") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset();
+    DeviceCloudConfigService empty;
+    DeviceCloudConfig config;
+    CloudDiagnosticCode failure;
+    RODAK_CHECK_FALSE(empty.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kUnconfigured);
+    RODAK_CHECK(trust_test::requests.empty());
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kVoiceUnavailable);
+    service.InvalidateAccessTokenFreshness("new-token");
+    trust_test::replies.clear();
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kNetworkUnavailable);
+    trust_test::RespondBound();
+    const auto token_url = rodakos::ServerTrustUrlOrigin(trust_test::BootstrapUrl()) + "/api/v1/aiot/devices/auth/token";
+    trust_test::replies[token_url] = {401, R"({"message":"raw-secret-token-response"})"};
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kCredentialsRejected);
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/device_secret"], "existing-device-secret");
+    trust_test::replies[token_url] = {200, R"({"code":500,"message":"raw-secret-token-response"})"};
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kRefreshFailed);
+    RODAK_CHECK(service.last_error().find("raw-secret-token-response") == std::string::npos);
+    RespondVoice();
+    RODAK_CHECK(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kReady);
+    RODAK_CHECK(service.last_error().empty());
+    RODAK_CHECK(config.has_realtime_voice_config);
+    trust_test::AdvanceTimeMs(3600001);
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kCredentialsExpired);
+    DeviceCloudConfigService reboot;
+    reboot.Load(config);
+    RODAK_CHECK_EQ(reboot.diagnostic(), CloudDiagnosticCode::kCredentialsExpired);
+}
+
+RODAK_TEST("Cancelled HTTP preparation cannot publish ready or mutate credentials") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    service.InvalidateAccessTokenFreshness("new-token");
+    RespondVoice();
+    const auto before = trust_test::strings;
+    bool allowed = true;
+    trust_test::on_http_open = [&](const auto&) { allowed = false; };
+    DeviceCloudConfig config;
+    CloudDiagnosticCode failure;
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, [&] { return allowed; }, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kCancelled);
+    RODAK_CHECK_EQ(trust_test::strings, before);
+    RODAK_CHECK_EQ(config.aiot_token_expires_at_ms, 0);
+    trust_test::on_http_open = {};
+    RODAK_CHECK(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kReady);
+}
+
+RODAK_TEST("Cancelled preparation cannot reuse fresh credentials or overwrite the current diagnosis") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    service.InvalidateAccessTokenFreshness("new-token");
+    RespondVoice();
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    const auto before = service.diagnostic_state();
+    const auto requests_before = trust_test::requests.size();
+    trust_test::AdvanceTimeMs(20);
+    CloudDiagnosticCode failure;
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, [] { return false; }, &failure));
+    RODAK_CHECK_EQ(failure, CloudDiagnosticCode::kCancelled);
+    RODAK_CHECK_EQ(config.aiot_token_expires_at_ms, 0);
+    RODAK_CHECK_EQ(service.diagnostic_state().code, before.code);
+    RODAK_CHECK_EQ(service.diagnostic_state().updated_at_ms, before.updated_at_ms);
+    RODAK_CHECK_EQ(service.diagnostic_state().revision, before.revision);
+    RODAK_CHECK_EQ(trust_test::requests.size(), requests_before);
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK(config.aiot_token_expires_at_ms > 0);
+    RODAK_CHECK_EQ(trust_test::requests.size(), requests_before);
+}
+
+RODAK_TEST("Cloud diagnosis ordering advances for rejection, refresh and expiry even within one clock tick") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    const auto first = service.diagnostic_state();
+    service.InvalidateAccessTokenFreshness("new-token");
+    const auto rejected = service.diagnostic_state();
+    RODAK_CHECK_EQ(rejected.code, CloudDiagnosticCode::kCredentialsRejected);
+    RODAK_CHECK(rodakos::IsNewerCloudDiagnostic(rejected.revision, first.revision));
+    RespondVoice();
+    bool observed_refreshing = false;
+    trust_test::on_http_open = [&](const auto&) {
+        const auto refreshing = service.diagnostic_state();
+        observed_refreshing = refreshing.code == CloudDiagnosticCode::kRefreshing &&
+                              rodakos::IsNewerCloudDiagnostic(refreshing.revision, rejected.revision);
+    };
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK(observed_refreshing);
+    const auto ready = service.diagnostic_state();
+    RODAK_CHECK_EQ(ready.updated_at_ms, rejected.updated_at_ms);
+    RODAK_CHECK(rodakos::IsNewerCloudDiagnostic(ready.revision, rejected.revision));
+    trust_test::AdvanceTimeMs(3600001);
+    const auto expired = service.diagnostic_state();
+    RODAK_CHECK_EQ(expired.code, CloudDiagnosticCode::kCredentialsExpired);
+    RODAK_CHECK(rodakos::IsNewerCloudDiagnostic(expired.revision, ready.revision));
+    RODAK_CHECK_EQ(service.diagnostic_state().revision, expired.revision);
+}
+
+RODAK_TEST("Retrying a legacy bound device never opens pairing after credential rejection") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service;
+    const auto before_strings = trust_test::strings;
+    const auto before_booleans = trust_test::booleans;
+    DeviceCloudConfig config;
+    service.Load(config);
+    trust_test::replies[config.provisioning_url] = {200,
+        R"({"code":200,"data":{"module":"aiot","protocol":"rodak-aiot","productKey":"rymcu-bigsmart","protocolVersion":1}})"};
+    const auto token_url = rodakos::ServerTrustUrlOrigin(config.provisioning_url) + "/api/v1/aiot/devices/auth/token";
+    trust_test::replies[token_url] = {401, R"({"message":"raw-secret-token-response"})"};
+    RODAK_CHECK_FALSE(service.Refresh(config));
+    RODAK_CHECK_EQ(service.diagnostic(), rodakos::CloudDiagnosticCode::kCredentialsRejected);
+    RODAK_CHECK_EQ(trust_test::strings, before_strings);
+    RODAK_CHECK_EQ(trust_test::booleans, before_booleans);
+    RODAK_CHECK(config.aiot_registered && config.aiot_activated);
+    RODAK_CHECK_FALSE(config.has_pairing_request);
+    RODAK_CHECK_EQ(trust_test::requests.size(), 2U);
+}
+
+RODAK_TEST("Pairing response text cannot enter cloud errors consumed by MQTT logging") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    trust_test::booleans["device_cloud/registered"] = false;
+    trust_test::booleans["device_cloud/activated"] = false;
+    DeviceCloudConfigService service;
+    DeviceCloudConfig config;
+    service.Load(config);
+    trust_test::replies[config.provisioning_url] = {200,
+        R"({"code":200,"data":{"module":"aiot","protocol":"rodak-aiot","productKey":"rymcu-bigsmart","protocolVersion":1}})"};
+    const auto origin = rodakos::ServerTrustUrlOrigin(config.provisioning_url);
+    trust_test::replies[origin + "/api/v1/aiot/devices/binding/request"] = {200,
+        R"({"code":500,"message":"raw-secret-token-response"})"};
+    RODAK_CHECK_FALSE(service.Refresh(config));
+    RODAK_CHECK_EQ(service.last_error(), "AIoT pairing request failed: Pairing request was rejected by the server");
+}
+
+RODAK_TEST("An in-flight configuration replacement invalidates the preparation diagnosis") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service;
+    DeviceCloudConfig config;
+    service.Load(config);
+    const auto old = config;
+    trust_test::on_http_open = [&](const auto&) {
+        RODAK_CHECK_EQ(service.SaveProvisioningUrl("http://192.168.137.2:9080/api/v1/aiot/devices/bootstrap"),
+                       ProvisioningUrlSaveResult::kSaved);
+    };
+    rodakos::CloudDiagnosticCode failure;
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, rodakos::CloudDiagnosticCode::kCancelled);
+    RODAK_CHECK_FALSE(service.IsVoiceConfigCurrent(old));
+    RODAK_CHECK_EQ(service.diagnostic(), rodakos::CloudDiagnosticCode::kUnconfigured);
+    service.Load(config);
+    RODAK_CHECK_EQ(service.diagnostic(), rodakos::CloudDiagnosticCode::kUnconfigured);
+    RODAK_CHECK_FALSE(config.has_realtime_voice_config);
+    RODAK_CHECK_EQ(config.aiot_device_secret, "existing-device-secret");
+}
+
+RODAK_TEST("Cooperative credential deadline exhaustion is a refresh failure rather than a user stop") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    service.InvalidateAccessTokenFreshness("new-token");
+    RespondVoice();
+    trust_test::on_http_open = [&](const auto&) { trust_test::AdvanceTimeMs(4000); };
+    rodakos::CloudDiagnosticCode failure;
+    DeviceCloudConfig config;
+    RODAK_CHECK_FALSE(service.PrepareVoiceConfig(config, {}, &failure));
+    RODAK_CHECK_EQ(failure, rodakos::CloudDiagnosticCode::kRefreshFailed);
+    RODAK_CHECK_EQ(service.diagnostic(), failure);
+    RODAK_CHECK_EQ(config.aiot_token_expires_at_ms, 0);
 }

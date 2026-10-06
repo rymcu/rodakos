@@ -54,6 +54,11 @@ firmware build does not change an existing hardware gate.
   exact-ID Home layouts, folders, one-save Arrange drafts, and active-plus-neighbors page residency.
 - On-demand media hardware, SD/USB MSC, local MultiNet wake, canonical
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
+- Assistant and Device Cloud now share fixed, typed cloud diagnostics and a two-step Settings
+  recovery route. Bound devices can retry expired/rejected credentials or unavailable voice without
+  unbinding. Production cloud/voice services and LVGL recovery pages have host regression coverage;
+  real DNS/HTTP cancellation latency, device typography/touch and resource pressure remain open
+  under [#24](https://github.com/rymcu/rodakos/issues/24); see [cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery).
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
   see [appearance verification](appearance-verification.md). The last bounded strict COM3 pass is
   development-signed `20261007-023218`, verified for trusted serial refresh, MQTTS,
@@ -152,8 +157,9 @@ build size/hash with its source baseline in the evidence document; preserve olde
 identities as dated evidence. Test-only populations and fault-injection flavors must be disabled
 before normal device use.
 
-Continue cloud credential diagnostics and retain the non-voice serial/Device Cloud provisioning
-gate as a regression check; its prior hardware acceptance does not remove ongoing diagnostics.
+Retain typed cloud diagnosis and the non-voice serial/Device Cloud provisioning gate as regression
+checks. Complete their physical recovery/readability gates; prior provisioning acceptance does not
+establish the new recovery UI or immediate cancellation of active DNS/HTTP calls.
 
 Runtime binary plug-in loading, execution of application images directly from SD, and a parallel
 hand-written board layer remain outside the current scope.
