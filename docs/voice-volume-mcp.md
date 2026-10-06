@@ -125,6 +125,40 @@ Plain MQTT desired/reported volume retains its configuration-only evidence bound
 [MQTT effect contract](mqtt-volume-effects.md) now correlates single-dispatch volume writes on
 `effects/receipt`; it does not upgrade ordinary shadow reports into execution evidence.
 
+## Desktop manual entry
+
+Rodak's MCP manager now routes manual calls to these same three native tools through its
+persistent device-effect path. This host-side entry reuses the firmware implementation at
+RodakOS baseline `15ffa5cc017512d6c6b451a59da6b7204045f032`; it adds no firmware endpoint,
+transport or MCP tool. It requires the existing active canonical voice connection and does not
+open a separate idle-control channel or keep the voice interaction alive.
+
+The host issues correlation from its trusted execution context, scopes each user-request nonce
+to its renderer owner, and binds dispatch to the authenticated device/token/session/connection.
+Manual and voice calls share the session RPC allocator and device ledger. Ordinary manual
+volume remains a write with no additional confirmation dialog; existing permission and risk
+checks still apply. A same-name generic MCP tool retains its normal manual behavior.
+
+Arguments remain unchanged, including omitted relative `step`. Omitted step and explicit
+`step: 10` produce different deduplication request identities even though the current device
+default is 10. A changed request cannot reuse the same effect ID. Manual aliases also consume
+the existing 64-entry session ledger; opening a new connection to retry an unknown operation is
+not safe. Repeated host nonces return the persisted outcome before resolving a replacement
+session, and lost/late responses do not automatically repeat the tool.
+
+Rodak's `scripts/run-rodakos-mcp-conformance.mjs` now runs five voice and eleven manual cases.
+The manual path uses real pairing, canonical WebSocket and the original MCP session, with
+JSON-RPC payloads delegated to the existing production `rodakos_mcp_fixture`. It covers the three
+tools, duplicate concurrent nonces, a manual call during an existing voice turn, generic tools,
+identity/connection changes, real codec-fake rejection and a dropped real response with the
+normal 30-second timeout. The tested host ELF remains unchanged for this host-only feature
+(SHA-256 `db82cece506b859970ea28e2c5b5e7425aa3ba3ef2a901929939ff8946616288`);
+no firmware rebuild, flash or hardware acceptance is implied.
+
+This CLI binds device generation 1 and handles inner MCP payloads. Its bridge is not a complete
+`VoiceAssistantService`/ESP32 transport execution. The separate actual-service tests below
+provide lifecycle and canonical-envelope evidence, not a single combined end-to-end hardware run.
+
 ## Verification
 
 `tests/app_model/` covers the real atomic output/playback/adapter stack and MCP dispatcher.

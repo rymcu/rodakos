@@ -1,7 +1,7 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. Reviewed source baseline: `4a72e8c` (voice/MQTT volume effects),
-plus atomic RGB light patches and actual driver/MQTT service validation described below.
+Updated: 2026-10-06. Reviewed firmware source baseline: `15ffa5c` (voice/MQTT volume effects
+and atomic RGB light patches). Rodak's new manual MCP entry reuses this firmware unchanged.
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -40,6 +40,12 @@ firmware build does not change an existing hardware gate.
   discovered identity and correlated software receipts. Recent-64 retention with an authority-wide
   version watermark supports continuous updates without repeating evicted effects. This does not
   add a backlight MCP capability; see [MQTT light effects](mqtt-light-effects.md).
+- Rodak's MCP manager now shares the three native audio tools and software receipts with voice
+  sessions. The host adds owner/nonce deduplication and a lease on the existing authenticated
+  connection, without adding a firmware tool or restarting voice interaction. Five voice and
+  eleven manual cross-repository scenarios exercise the production payload dispatcher with SDK
+  fakes; full service/envelope coverage remains a separate host target. This host-only change
+  does not rebuild firmware or add hardware evidence; see [manual MCP entry](voice-volume-mcp.md#desktop-manual-entry).
 
 ## Remaining acceptance and implementation work
 
