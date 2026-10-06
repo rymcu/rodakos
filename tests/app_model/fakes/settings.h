@@ -42,6 +42,10 @@ struct FakeSettingsState {
     SettingsStringWriteStatus write_status = SettingsStringWriteStatus::kOk;
     bool bool_set_result = true;
     bool commit_result = true;
+    std::map<int, SettingsStringReadStatus> string_read_results;
+    std::map<int, SettingsStringWriteStatus> string_write_results;
+    std::map<int, bool> commit_results;
+    bool error_write_mutates = false;
     int read_calls = 0;
     int set_calls = 0;
     int commit_calls = 0;
@@ -139,13 +143,19 @@ public:
             state.operations.push_back("read:" + namespace_ + ":" + key);
             value.clear();
             delay_ms = state.read_delay_ms;
-            if (state.read_override.has_value()) {
+            const auto scripted = state.string_read_results.find(state.read_calls);
+            if (scripted != state.string_read_results.end()) {
+                result = scripted->second;
+            } else if (state.read_override.has_value()) {
                 result = *state.read_override;
             } else {
                 const auto it = state.committed_values.find(
                     rodakos_test::SettingsStorageKey(namespace_, key));
                 if (it == state.committed_values.end()) {
-                    result = SettingsStringReadStatus::kNotFound;
+                    result = state.committed_bool_values.count(
+                                 rodakos_test::SettingsStorageKey(namespace_, key))
+                                 ? SettingsStringReadStatus::kTypeMismatch
+                                 : SettingsStringReadStatus::kNotFound;
                 } else if (it->second.size() > max_value_bytes) {
                     result = SettingsStringReadStatus::kTooLarge;
                 } else {
@@ -169,15 +179,19 @@ public:
         auto& state = rodakos_test::SettingsState();
         ++state.set_calls;
         state.operations.push_back("set:" + namespace_ + ":" + key);
-        if (!read_write_ || state.write_status == SettingsStringWriteStatus::kError) {
+        const auto scripted = state.string_write_results.find(state.set_calls);
+        const auto write_status = scripted == state.string_write_results.end()
+                                      ? state.write_status : scripted->second;
+        if (!read_write_ || (write_status == SettingsStringWriteStatus::kError &&
+                            !state.error_write_mutates)) {
             return SettingsStringWriteStatus::kError;
         }
         state.committed_values[rodakos_test::SettingsStorageKey(namespace_, key)] = value;
-        if (state.write_status == SettingsStringWriteStatus::kOk) {
+        if (write_status == SettingsStringWriteStatus::kOk) {
             dirty_ = true;
             commit_attempted_ = false;
         }
-        return state.write_status;
+        return write_status;
     }
 
     bool GetBool(const std::string& key, bool default_value = false) {
@@ -228,7 +242,10 @@ public:
         ++state.commit_calls;
         state.operations.push_back("commit:" + namespace_);
         commit_attempted_ = true;
-        if (!read_write_ || !state.commit_result) {
+        const auto scripted = state.commit_results.find(state.commit_calls);
+        const bool commit_result = scripted == state.commit_results.end()
+                                       ? state.commit_result : scripted->second;
+        if (!read_write_ || !commit_result) {
             return false;
         }
         dirty_ = false;

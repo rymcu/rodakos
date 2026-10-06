@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <limits>
+#include <sys/time.h>
 
 namespace {
 constexpr const char* TAG = "TimeService";
@@ -186,8 +188,18 @@ size_t TimeServiceFindNtpServerIndex(const std::string& server) {
 }
 
 bool TimeServiceTimeIsValid() {
-    std::time_t now = std::time(nullptr);
-    std::tm timeinfo = {};
-    localtime_r(&now, &timeinfo);
-    return timeinfo.tm_year >= 120;
+    int64_t unix_ms = 0;
+    return TimeServiceUnixTimeMs(unix_ms);
+}
+
+bool TimeServiceUnixTimeMs(int64_t& unix_ms) {
+    timeval now{};
+    unix_ms = 0;
+    // The existing product validity floor is 2020. Read the clock once so an
+    // SNTP step cannot fall between validation and the returned Unix value.
+    if (gettimeofday(&now, nullptr) != 0 || now.tv_sec < 1577836800 ||
+        now.tv_sec > (std::numeric_limits<int64_t>::max() - 999) / 1000 ||
+        now.tv_usec < 0 || now.tv_usec >= 1000000) return false;
+    unix_ms = static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_usec / 1000;
+    return true;
 }

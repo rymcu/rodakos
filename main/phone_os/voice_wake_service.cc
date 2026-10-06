@@ -1,6 +1,9 @@
 #include "phone_os/voice_wake_service.h"
 
 #include "phone_os/voice_wake_settings.h"
+#include "phone_os/time_service.h"
+
+#include <utility>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -58,8 +61,15 @@ bool UnavailableVoiceWakeRuntime::ConfigureWakeWord(const VoiceIdentityConfig&) 
     return false;
 }
 
-VoiceWakeService::VoiceWakeService(VoiceAssistantService& assistant, VoiceWakeRuntime& runtime)
-    : assistant_(assistant), runtime_(runtime) {
+VoiceWakeService::VoiceWakeService(VoiceAssistantService& assistant, VoiceWakeRuntime& runtime,
+                                   VoiceIdentityClock clock)
+    : assistant_(assistant), runtime_(runtime), identity_clock_(std::move(clock)) {
+    if (!identity_clock_) identity_clock_ = []() {
+        VoiceIdentityClockSnapshot snapshot;
+        snapshot.unix_valid = TimeServiceUnixTimeMs(snapshot.unix_ms);
+        snapshot.monotonic_ms = esp_timer_get_time() / 1000;
+        return snapshot;
+    };
     mutex_ = xSemaphoreCreateMutex();
 }
 
@@ -82,6 +92,9 @@ bool VoiceWakeService::Init() {
         return false;
     }
     if (!initialized_) {
+        // A failed migration/read may already have changed storage. Ordinary
+        // GetState/Start retries must not turn that uncertainty into success.
+        if (identity_recovery_required_) { xSemaphoreGive(mutex_); return false; }
         if (!LoadSettingsLocked()) {
             SetStatusLocked(VoiceWakeStatus::kError, "Failed to load wake setting");
             xSemaphoreGive(mutex_);
@@ -91,6 +104,7 @@ bool VoiceWakeService::Init() {
         initialized_ = true;
         SetStatusLocked(enabled_ ? VoiceWakeStatus::kUnavailable : VoiceWakeStatus::kDisabled,
                         enabled_ ? "Wake runtime unavailable" : "Disabled");
+        ReconcileIdentityLocked();
     }
     xSemaphoreGive(mutex_);
     return true;
@@ -125,6 +139,10 @@ void VoiceWakeService::Deinit() {
     runtime_.Deinit();
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        runtime_identity_configured_ = false;
+        identity_recovery_required_ = false;
+        identity_waiting_clock_ = false;
+        identity_deadline_ = {};
         service_stopping_ = false;
         xSemaphoreGive(mutex_);
     }
@@ -137,14 +155,18 @@ bool VoiceWakeService::Start() {
 
     bool started = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (service_stopping_) {
+    if (service_stopping_ || !initialized_) {
         started = false;
-    } else if (!enabled_) {
-        SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
-        started = true;
+    } else if (identity_recovery_required_) {
+        started = false;
     } else {
         EnsureSupervisorTaskLocked();
-        started = StartRuntimeLocked();
+        if (!enabled_) {
+            SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
+            started = task_running_ && ReconcileIdentityLocked();
+        } else {
+            started = StartRuntimeLocked();
+        }
     }
     xSemaphoreGive(mutex_);
     return started;
@@ -179,7 +201,11 @@ bool VoiceWakeService::SetEnabled(bool enabled) {
 
     bool active = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (service_stopping_) {
+    if (service_stopping_ || !initialized_) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    if (enabled && identity_recovery_required_) {
         xSemaphoreGive(mutex_);
         return false;
     }
@@ -222,24 +248,28 @@ bool VoiceWakeService::IsEnabled() {
 }
 
 VoiceWakeState VoiceWakeService::GetState() {
+    const bool ready = Init();
     VoiceWakeState state;
-    if (!Init()) {
+    if (mutex_ == nullptr) {
         state.status = VoiceWakeStatus::kError;
         state.message = "Wake service unavailable";
         return state;
     }
-
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (ready && !service_stopping_) ReconcileIdentityLocked();
     state.enabled = enabled_;
     state.runtime_available = runtime_.IsAvailable();
     state.listening = listening_ && runtime_.IsListening();
-    state.status = status_;
+    state.status = ready && initialized_ ? status_ : VoiceWakeStatus::kError;
     state.runtime_name = runtime_.name();
     state.message = message_;
     state.last_wake_word = last_wake_word_;
-    state.voice_identity = active_identity_;
+    state.voice_identity = runtime_identity_;
     state.voice_identity_status = voice_identity_status_;
     state.voice_identity_error = voice_identity_error_;
+    state.voice_identity_revision_watermark = identity_record_.last_accepted.revision;
+    state.voice_identity_active_confirmed = initialized_ && !service_stopping_ && runtime_identity_configured_ &&
+        !identity_recovery_required_ && !identity_waiting_clock_;
     xSemaphoreGive(mutex_);
     return state;
 }
@@ -259,11 +289,26 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
     bool should_start = false;
     std::string detected = wake_word.empty() ? "wake word" : wake_word;
 
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool current = initialized_ && task_running_ && enabled_ && !service_stopping_ &&
+        !identity_recovery_required_ && enable_generation_ == enable_generation;
+    xSemaphoreGive(mutex_);
+    if (!current) return;
+
     // AEC/VAD frontends may report a wake phrase while TTS is active. Treat it
     // as a barge-in on the existing session instead of opening a second one.
     const VoiceAssistantState assistant_state = assistant_.GetState();
     if (assistant_state.phase == VoiceAssistantPhase::kSpeaking) {
-        if (assistant_.InterruptSpeaking()) {
+        // GetState may have waited while Stop or an identity change invalidated
+        // this callback. Keep that generation current through the short setter.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool can_interrupt = initialized_ && task_running_ && enabled_ &&
+            !service_stopping_ && !identity_recovery_required_ &&
+            enable_generation_ == enable_generation;
+        const bool interrupted = can_interrupt && assistant_.InterruptSpeaking();
+        xSemaphoreGive(mutex_);
+        if (interrupted) {
             ESP_LOGI(TAG, "Wake word interrupted active TTS: %s", detected.c_str());
         }
         return;
@@ -368,24 +413,17 @@ void VoiceWakeService::SupervisorTask(void* arg) {
 
 bool VoiceWakeService::LoadSettingsLocked() {
     enabled_ = false;
-    if (!LoadVoiceWakeSettings(enabled_)) {
+    std::string error;
+    if (!LoadVoiceWakeSettings(enabled_) ||
+        !LoadVoiceWakeIdentitySettings(identity_record_, error)) {
+        FreezeIdentityLocked(error.empty() ? "failed to load voice identity settings" : error);
         return false;
     }
-    if (!LoadVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
-        return false;
-    }
-    if (IsVoiceIdentityExpired(active_identity_, esp_timer_get_time() / 1000)) {
-        active_identity_ = persistent_identity_;
-        if (!SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
-            return false;
-        }
-        voice_identity_status_ = "expired";
-    } else {
-        voice_identity_status_ = "applied";
-    }
-    voice_identity_error_.clear();
-    ESP_LOGI(TAG, "Wake listener setting restored from NVS: %s",
-             enabled_ ? "enabled" : "disabled");
+    runtime_identity_configured_ = false;
+    identity_waiting_clock_ = false;
+    identity_deadline_ = {};
+    voice_identity_status_ = "pending";
+    voice_identity_error_ = "voice identity runtime is not configured";
     return true;
 }
 
@@ -467,26 +505,19 @@ void VoiceWakeService::SupervisorTick() {
         xSemaphoreGive(mutex_);
         return;
     }
+    if (!ReconcileIdentityLocked()) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
     if (!enabled_) {
         StopRuntimeLocked("Disabled");
         xSemaphoreGive(mutex_);
         return;
     }
     LogHealthIfDueLocked();
-    if (IsVoiceIdentityExpired(active_identity_, esp_timer_get_time() / 1000)) {
-        active_identity_ = persistent_identity_;
-        if (listening_) {
-            runtime_.StopListening();
-            listening_ = false;
-        }
-        runtime_.ConfigureWakeWord(active_identity_);
-        SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_);
-        voice_identity_status_ = "expired";
-        voice_identity_error_.clear();
-    }
     if (listening_ && !runtime_.IsListening()) {
         listening_ = false;
-        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
+        SetStatusLocked(VoiceWakeStatus::kError, runtime_.LastErrorSnapshot().c_str());
         ESP_LOGW(TAG, "Wake runtime stopped capturing; re-arming");
     }
     if (assistant_starting_) {
@@ -543,39 +574,26 @@ void VoiceWakeService::SupervisorTick() {
 }
 
 bool VoiceWakeService::StartRuntimeLocked() {
+    if (!ReconcileIdentityLocked(true)) return false;
+    return StartConfiguredRuntimeLocked();
+}
+
+bool VoiceWakeService::StartConfiguredRuntimeLocked() {
     if (!initialized_ || service_stopping_ || !task_running_ || !enabled_ ||
-        assistant_starting_) {
+        assistant_starting_ || identity_recovery_required_ || !runtime_identity_configured_) {
         listening_ = false;
         return false;
     }
-    if (!runtime_.IsAvailable()) {
-        listening_ = false;
-        SetStatusLocked(VoiceWakeStatus::kUnavailable, runtime_.last_error());
-        return false;
-    }
-
-    if (!runtime_.Init()) {
-        listening_ = false;
-        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
-        return false;
-    }
-
-    if (!runtime_.ConfigureWakeWord(active_identity_)) {
-        listening_ = false;
-        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
-        return false;
-    }
-
     const uint32_t enable_generation = enable_generation_;
     const bool started = runtime_.StartListening([this, enable_generation](const std::string& wake_word) {
         HandleWakeWordDetected(wake_word, enable_generation);
     });
     if (!started) {
+        runtime_.StopListening();
         listening_ = false;
-        SetStatusLocked(VoiceWakeStatus::kError, runtime_.last_error());
+        SetStatusLocked(VoiceWakeStatus::kError, runtime_.LastErrorSnapshot().c_str());
         return false;
     }
-
     listening_ = true;
     SetStatusLocked(VoiceWakeStatus::kListening, "Listening");
     return true;
@@ -596,69 +614,267 @@ void VoiceWakeService::SetStatusLocked(VoiceWakeStatus status, const char* messa
     message_ = message != nullptr && message[0] != '\0' ? message : StatusMessage(status);
 }
 
+bool VoiceWakeService::ConfigureIdentityLocked(const VoiceIdentityConfig& config, std::string& error) {
+    runtime_identity_configured_ = false;
+    if (!runtime_.IsAvailable() || !runtime_.Init() || !runtime_.ConfigureWakeWord(config)) {
+        error = runtime_.LastErrorSnapshot();
+        if (error.empty()) error = "wake runtime rejected voice identity";
+        return false;
+    }
+    runtime_identity_ = config;
+    runtime_identity_configured_ = true;
+    return true;
+}
+
+void VoiceWakeService::FreezeIdentityLocked(const std::string& error) {
+    ++enable_generation_;
+    runtime_.StopListening();
+    listening_ = false;
+    runtime_identity_configured_ = false;
+    identity_recovery_required_ = true;
+    voice_identity_status_ = "recovery_failed";
+    voice_identity_error_ = error;
+    SetStatusLocked(VoiceWakeStatus::kError, error.c_str());
+}
+
+bool VoiceWakeService::IsTemporaryExpiredLocked(const VoiceIdentityConfig& config,
+                                               const VoiceIdentityClockSnapshot& clock) {
+    if (config.mode != VoiceIdentityApplyMode::kTemporary) return false;
+    if (clock.unix_valid && IsVoiceIdentityExpired(config, clock.unix_ms)) return true;
+    if (!identity_deadline_.armed || identity_deadline_.revision != config.revision ||
+        identity_deadline_.expires_at_ms != config.expires_at_ms) {
+        if (!clock.unix_valid) return false;
+        identity_deadline_ = {true, config.revision, config.expires_at_ms,
+                              clock.monotonic_ms, config.expires_at_ms - clock.unix_ms};
+    }
+    // Only elapsed monotonic time is compared with a duration derived from a
+    // trusted Unix snapshot. A backward wall-clock step cannot renew the lease.
+    return clock.monotonic_ms >= identity_deadline_.monotonic_start_ms &&
+        clock.monotonic_ms - identity_deadline_.monotonic_start_ms >= identity_deadline_.remaining_ms;
+}
+
+bool VoiceWakeService::ApplyIdentityRecordLocked(const VoiceIdentityRecord& next,
+                                                const char* status, std::string& error,
+                                                bool expiry) {
+    const VoiceIdentityRecord previous = identity_record_;
+    const VoiceIdentityConfig previous_runtime = runtime_identity_;
+    const bool previous_confirmed = runtime_identity_configured_;
+    const bool was_listening = listening_;
+    const auto previous_deadline = identity_deadline_;
+    const bool previous_waiting = identity_waiting_clock_;
+    const bool record_changed = !VoiceIdentityConfigEquals(previous.persistent, next.persistent) ||
+        !VoiceIdentityConfigEquals(previous.active, next.active) ||
+        !VoiceIdentityConfigEquals(previous.last_accepted, next.last_accepted);
+    if (!VoiceIdentityConfigEquals(previous.active, next.active)) {
+        identity_deadline_ = {};
+        if (next.active.mode == VoiceIdentityApplyMode::kTemporary &&
+            IsTemporaryExpiredLocked(next.active, identity_clock_())) {
+            identity_deadline_ = previous_deadline;
+            error = "temporary voice identity expired before application";
+            voice_identity_status_ = "rejected";
+            voice_identity_error_ = error;
+            return false;
+        }
+    }
+    ++enable_generation_;
+    runtime_.StopListening();
+    listening_ = false;
+    bool persisted = false;
+    bool configured = ConfigureIdentityLocked(next.active, error);
+    if (configured && record_changed) {
+        const auto saved = SaveVoiceWakeIdentitySettings(next, error);
+        if (saved == VoiceIdentitySaveStatus::kIndeterminate) {
+            FreezeIdentityLocked(error.empty() ? "voice identity persistence is indeterminate" : error);
+            return false;
+        }
+        persisted = saved == VoiceIdentitySaveStatus::kSaved;
+        configured = persisted;
+    }
+    if (configured) {
+        identity_record_ = next;
+        identity_waiting_clock_ = false;
+        if (next.active.mode == VoiceIdentityApplyMode::kTemporary &&
+            IsTemporaryExpiredLocked(next.active, identity_clock_())) {
+            VoiceIdentityRecord expired = next;
+            expired.active = expired.persistent;
+            if (!ApplyIdentityRecordLocked(expired, "expired", error, true)) return false;
+            if (was_listening && !StartConfiguredRuntimeLocked()) {
+                error = "wake listener could not resume after immediate identity expiry";
+                FreezeIdentityLocked(error);
+                return false;
+            }
+            return true;
+        }
+        if (!was_listening || StartConfiguredRuntimeLocked()) {
+            voice_identity_status_ = status;
+            voice_identity_error_.clear();
+            error.clear();
+            return true;
+        }
+        error = runtime_.LastErrorSnapshot();
+        if (error.empty()) error = "wake listener could not restart after identity change";
+    }
+
+    const std::string operation_error = error.empty() ? "voice identity change failed" : error;
+    runtime_.StopListening();
+    listening_ = false;
+    std::string restore_error;
+    const bool runtime_restored = previous_confirmed && ConfigureIdentityLocked(previous_runtime, restore_error);
+    bool storage_restored = true;
+    if (persisted) {
+        storage_restored = SaveVoiceWakeIdentitySettings(previous, restore_error) == VoiceIdentitySaveStatus::kSaved;
+    }
+    if (storage_restored) identity_record_ = previous;
+    identity_deadline_ = previous_deadline;
+    identity_waiting_clock_ = previous_waiting;
+    // A failed candidate may have consumed the remaining lifetime of the old
+    // identity. Restoring its graph is not permission to restart an expired wake.
+    const bool previous_expired = IsTemporaryExpiredLocked(previous_runtime, identity_clock_());
+    const bool listener_restored = runtime_restored && storage_restored && !expiry && !previous_expired &&
+        (!was_listening || StartConfiguredRuntimeLocked());
+    if (!listener_restored) {
+        error = operation_error + "; identity recovery failed";
+        if (!restore_error.empty()) error += ": " + restore_error;
+        FreezeIdentityLocked(error);
+        return false;
+    }
+    voice_identity_status_ = "rejected";
+    voice_identity_error_ = operation_error;
+    error = operation_error;
+    return false;
+}
+
+bool VoiceWakeService::ReconcileIdentityLocked(bool allow_initialization) {
+    if (!initialized_ || identity_recovery_required_ || service_stopping_) return false;
+    const auto clock = identity_clock_();
+    if (!runtime_identity_configured_ && !allow_initialization) {
+        bool changed = false;
+        const bool was_waiting = identity_waiting_clock_;
+        if (IsTemporaryExpiredLocked(identity_record_.active, clock)) {
+            VoiceIdentityRecord expired = identity_record_;
+            expired.active = expired.persistent;
+            std::string error;
+            if (SaveVoiceWakeIdentitySettings(expired, error) != VoiceIdentitySaveStatus::kSaved) {
+                FreezeIdentityLocked(error.empty() ? "failed to persist identity expiry" : error);
+                return false;
+            }
+            identity_record_ = expired;
+            identity_deadline_ = {};
+            changed = true;
+        }
+        identity_waiting_clock_ = identity_record_.active.mode == VoiceIdentityApplyMode::kTemporary &&
+            !clock.unix_valid;
+        runtime_identity_ = identity_waiting_clock_ ? identity_record_.persistent : identity_record_.active;
+        if (changed || was_waiting != identity_waiting_clock_ || voice_identity_status_ != "rejected") {
+            voice_identity_status_ = identity_waiting_clock_ ? "pending_clock" : "pending";
+            voice_identity_error_ = identity_waiting_clock_ ? "Unix clock is not synchronized" :
+                "voice identity runtime is not configured";
+        }
+        return true;
+    }
+    if (identity_record_.active.mode == VoiceIdentityApplyMode::kTemporary) {
+        if (IsTemporaryExpiredLocked(identity_record_.active, clock)) {
+            VoiceIdentityRecord expired = identity_record_;
+            expired.active = expired.persistent;
+            std::string error;
+            return ApplyIdentityRecordLocked(expired, "expired", error, true);
+        }
+        if (!clock.unix_valid) {
+            identity_waiting_clock_ = true;
+            if (!runtime_identity_configured_ ||
+                !VoiceIdentityConfigEquals(runtime_identity_, identity_record_.persistent)) {
+                const bool was_listening = listening_;
+                ++enable_generation_;
+                runtime_.StopListening();
+                listening_ = false;
+                std::string error;
+                if (!ConfigureIdentityLocked(identity_record_.persistent, error) ||
+                    (was_listening && !StartConfiguredRuntimeLocked())) {
+                    FreezeIdentityLocked(error.empty() ? "persistent identity fallback failed" : error);
+                    return false;
+                }
+            }
+            voice_identity_status_ = "pending_clock";
+            voice_identity_error_ = "Unix clock is not synchronized";
+            return true;
+        }
+    }
+    const bool was_waiting = identity_waiting_clock_;
+    identity_waiting_clock_ = false;
+    if (!runtime_identity_configured_ ||
+        !VoiceIdentityConfigEquals(runtime_identity_, identity_record_.active)) {
+        const bool previously_expired = identity_record_.last_accepted.mode == VoiceIdentityApplyMode::kTemporary &&
+            identity_record_.active.mode == VoiceIdentityApplyMode::kPersistent;
+        std::string error;
+        return ApplyIdentityRecordLocked(identity_record_, previously_expired ? "expired" : "applied", error);
+    }
+    if (was_waiting) {
+        voice_identity_status_ = "applied";
+        voice_identity_error_.clear();
+    }
+    return true;
+}
+
+void VoiceWakeService::RejectVoiceIdentity(const std::string& error) {
+    Init();
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (initialized_ && !identity_recovery_required_ && !service_stopping_) {
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+    }
+    xSemaphoreGive(mutex_);
+}
+
 bool VoiceWakeService::ApplyVoiceIdentity(const VoiceIdentityConfig& config, std::string& error) {
+    if (!Init()) { error = "voice identity service requires explicit recovery"; return false; }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const auto finish = [&](bool accepted) { xSemaphoreGive(mutex_); return accepted; };
+    if (!initialized_ || service_stopping_ || identity_recovery_required_) {
+        error = identity_recovery_required_ ? "voice identity requires explicit recovery" : "wake service is stopping";
+        return finish(false);
+    }
     VoiceIdentityConfig normalized;
     if (!NormalizeVoiceIdentityConfig(config, normalized, error)) {
         voice_identity_status_ = "rejected";
         voice_identity_error_ = error;
-        return false;
+        return finish(false);
     }
+    if (!ReconcileIdentityLocked(true)) {
+        error = voice_identity_error_;
+        return finish(false);
+    }
+    const auto& accepted = identity_record_.last_accepted;
+    if (normalized.revision <= accepted.revision) {
+        if (normalized.revision == accepted.revision && VoiceIdentityConfigEquals(normalized, accepted)) {
+            if (!identity_waiting_clock_) {
+                voice_identity_status_ = VoiceIdentityConfigEquals(identity_record_.active, accepted)
+                    ? "applied" : "expired";
+                voice_identity_error_.clear();
+            }
+            error.clear();
+            return finish(true);
+        }
+        error = normalized.revision < accepted.revision ? "voice identity revision is stale" :
+            "voice identity revision conflicts with the accepted request";
+        voice_identity_status_ = "rejected";
+        voice_identity_error_ = error;
+        return finish(false);
+    }
+    const auto clock = identity_clock_();
     if (normalized.mode == VoiceIdentityApplyMode::kTemporary &&
-        IsVoiceIdentityExpired(normalized, esp_timer_get_time() / 1000)) {
-        error = "temporary voice identity has expired";
-        voice_identity_status_ = "expired";
-        voice_identity_error_ = error;
-        return false;
-    }
-    if (normalized.revision < active_identity_.revision) {
-        error = "voice identity revision is stale";
+        (!clock.unix_valid || IsVoiceIdentityExpired(normalized, clock.unix_ms))) {
+        error = clock.unix_valid ? "temporary voice identity has expired" : "Unix clock is not synchronized";
         voice_identity_status_ = "rejected";
         voice_identity_error_ = error;
-        return false;
+        return finish(false);
     }
-
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const VoiceIdentityConfig previousPersistent = persistent_identity_;
-    const VoiceIdentityConfig previousActive = active_identity_;
-    const bool wasListening = listening_;
-    if (normalized.mode == VoiceIdentityApplyMode::kPersistent) {
-        persistent_identity_ = normalized;
-        active_identity_ = normalized;
-    } else {
-        active_identity_ = normalized;
-    }
-    if (!SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_)) {
-        persistent_identity_ = previousPersistent;
-        active_identity_ = previousActive;
-        xSemaphoreGive(mutex_);
-        error = "failed to persist voice identity";
-        voice_identity_status_ = "rejected";
-        voice_identity_error_ = error;
-        return false;
-    }
-    if (wasListening) {
-        runtime_.StopListening();
-        listening_ = false;
-    }
-    const bool configured = runtime_.ConfigureWakeWord(active_identity_);
-    const bool restarted = !wasListening || !enabled_ || StartRuntimeLocked();
-    if (!configured || !restarted) {
-        persistent_identity_ = previousPersistent;
-        active_identity_ = previousActive;
-        SaveVoiceWakeIdentitySettings(persistent_identity_, active_identity_);
-        runtime_.ConfigureWakeWord(active_identity_);
-        if (wasListening) StartRuntimeLocked();
-        xSemaphoreGive(mutex_);
-        error = runtime_.last_error();
-        if (error.empty()) error = "wake runtime rejected voice identity";
-        voice_identity_status_ = "rejected";
-        voice_identity_error_ = error;
-        return false;
-    }
-    xSemaphoreGive(mutex_);
-    voice_identity_status_ = "applied";
-    voice_identity_error_.clear();
-    return true;
+    VoiceIdentityRecord next = identity_record_;
+    if (normalized.mode == VoiceIdentityApplyMode::kPersistent) next.persistent = normalized;
+    next.active = normalized;
+    next.last_accepted = normalized;
+    const bool applied = ApplyIdentityRecordLocked(next, "applied", error);
+    return finish(applied);
 }
 
 }  // namespace rodakos

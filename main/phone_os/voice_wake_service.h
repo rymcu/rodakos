@@ -32,7 +32,16 @@ struct VoiceWakeState {
     VoiceIdentityConfig voice_identity;
     std::string voice_identity_status;
     std::string voice_identity_error;
+    uint32_t voice_identity_revision_watermark = 0;
+    bool voice_identity_active_confirmed = false;
 };
+
+struct VoiceIdentityClockSnapshot {
+    bool unix_valid = false;
+    int64_t unix_ms = 0;
+    int64_t monotonic_ms = 0;
+};
+using VoiceIdentityClock = std::function<VoiceIdentityClockSnapshot()>;
 
 class VoiceWakeRuntime {
 public:
@@ -47,6 +56,8 @@ public:
     virtual bool ConfigureWakeWord(const VoiceIdentityConfig& config) = 0;
     virtual const char* name() const = 0;
     virtual const char* last_error() const = 0;
+    // Concurrent runtimes override this to copy under their own state lock.
+    virtual std::string LastErrorSnapshot() const { return last_error(); }
 };
 
 class UnavailableVoiceWakeRuntime final : public VoiceWakeRuntime {
@@ -67,7 +78,8 @@ private:
 
 class VoiceWakeService {
 public:
-    VoiceWakeService(VoiceAssistantService& assistant, VoiceWakeRuntime& runtime);
+    VoiceWakeService(VoiceAssistantService& assistant, VoiceWakeRuntime& runtime,
+                     VoiceIdentityClock clock = {});
     ~VoiceWakeService();
 
     bool Init();
@@ -78,6 +90,7 @@ public:
     bool IsEnabled();
     VoiceWakeState GetState();
     bool ApplyVoiceIdentity(const VoiceIdentityConfig& config, std::string& error);
+    void RejectVoiceIdentity(const std::string& error);
 
     void NotifyWakeWordDetected(const std::string& wake_word);
 
@@ -92,8 +105,16 @@ private:
     void LogHealthIfDueLocked();
     void HandleWakeWordDetected(const std::string& wake_word, uint32_t enable_generation);
     bool StartRuntimeLocked();
+    bool StartConfiguredRuntimeLocked();
     void StopRuntimeLocked(const char* message);
     void SetStatusLocked(VoiceWakeStatus status, const char* message);
+    bool ConfigureIdentityLocked(const VoiceIdentityConfig& config, std::string& error);
+    bool ApplyIdentityRecordLocked(const VoiceIdentityRecord& next, const char* status,
+                                   std::string& error, bool expiry = false);
+    bool ReconcileIdentityLocked(bool allow_initialization = false);
+    void FreezeIdentityLocked(const std::string& error);
+    bool IsTemporaryExpiredLocked(const VoiceIdentityConfig& config,
+                                  const VoiceIdentityClockSnapshot& clock);
 
     VoiceAssistantService& assistant_;
     VoiceWakeRuntime& runtime_;
@@ -112,9 +133,20 @@ private:
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;
     std::string message_ = "Disabled";
     std::string last_wake_word_;
-    VoiceIdentityConfig persistent_identity_ = DefaultVoiceIdentityConfig();
-    VoiceIdentityConfig active_identity_ = DefaultVoiceIdentityConfig();
-    std::string voice_identity_status_ = "applied";
+    VoiceIdentityClock identity_clock_;
+    VoiceIdentityRecord identity_record_;
+    VoiceIdentityConfig runtime_identity_ = DefaultVoiceIdentityConfig();
+    bool runtime_identity_configured_ = false;
+    bool identity_recovery_required_ = false;
+    bool identity_waiting_clock_ = false;
+    struct IdentityDeadline {
+        bool armed = false;
+        uint32_t revision = 0;
+        int64_t expires_at_ms = 0;
+        int64_t monotonic_start_ms = 0;
+        int64_t remaining_ms = 0;
+    } identity_deadline_;
+    std::string voice_identity_status_ = "rejected";
     std::string voice_identity_error_;
 };
 

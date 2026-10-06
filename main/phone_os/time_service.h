@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 struct RodakTimeZone {
@@ -36,3 +37,4 @@ TimeSyncStatus TimeServiceGetSyncStatus();
 size_t TimeServiceFindTimeZoneIndex(const std::string& tz);
 size_t TimeServiceFindNtpServerIndex(const std::string& server);
 bool TimeServiceTimeIsValid();
+bool TimeServiceUnixTimeMs(int64_t& unix_ms);

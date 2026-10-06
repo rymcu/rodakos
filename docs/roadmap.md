@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. This stream-lifecycle and command-cache slice starts from `9940bea`.
+Updated: 2026-10-06. This voice-identity consistency slice starts from `a7cb1b0`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
 
@@ -58,6 +58,11 @@ firmware build does not change an existing hardware gate.
   [command contract](rodak-aiot-contract-v1.md#command-results-and-replay-boundary),
   [host target](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
   and [dated software evidence](ota-release-readiness.md#2026-10-06-stream-lifecycle-validation).
+- Voice identity now retains a separate accepted revision watermark, a single versioned NVS record,
+  Unix expiry with monotonic lifetime limits, and explicit runtime/storage recovery failure.
+  Pending or unconfirmed identities cannot enter the desktop Base Prompt; expiry reports are
+  emitted proactively. Disabled state reads preserve on-demand audio/model behavior. See
+  [identity contract](voice-identity-wake-word.md) for migration and evidence limits.
 
 ## Remaining acceptance and implementation work
 
@@ -68,7 +73,7 @@ firmware build does not change an existing hardware gate.
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
-| Voice identity | Unix expiry versus uptime, revision/status synchronization and high-water mark, atomic persistent/active record, explicit storage/runtime recovery failure | [Identity implementation limits](voice-identity-wake-word.md#shadow-contract) |
+| Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
 | Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |

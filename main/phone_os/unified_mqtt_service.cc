@@ -69,6 +69,80 @@ std::string EncodeJson(cJSON* root) {
     return result;
 }
 
+bool ParseVoiceIdentityDesired(const cJSON* source, VoiceIdentityConfig& config,
+                                std::string& error) {
+    if (!HasUniqueJsonKeys(source)) {
+        error = "voice identity must be an object with unique fields";
+        return false;
+    }
+    config = DefaultVoiceIdentityConfig();
+    for (const auto& field : {std::pair<const char*, std::string*>{"name", &config.name},
+            {"wakeWord", &config.wake_word}, {"wakeCommand", &config.wake_command}}) {
+        const auto* value = cJSON_GetObjectItemCaseSensitive(source, field.first);
+        if (value == nullptr) continue;
+        if (!cJSON_IsString(value)) {
+            error = "voice identity text fields must be strings";
+            return false;
+        }
+        *field.second = value->valuestring;
+    }
+    const auto* mode = cJSON_GetObjectItemCaseSensitive(source, "mode");
+    if (mode != nullptr) {
+        if (!cJSON_IsString(mode) || (std::strcmp(mode->valuestring, "persistent") != 0 &&
+                                      std::strcmp(mode->valuestring, "temporary") != 0)) {
+            error = "voice identity mode is invalid";
+            return false;
+        }
+        if (std::strcmp(mode->valuestring, "temporary") == 0)
+            config.mode = VoiceIdentityApplyMode::kTemporary;
+    }
+    const auto* revision = cJSON_GetObjectItemCaseSensitive(source, "revision");
+    if (revision != nullptr) {
+        if (!cJSON_IsNumber(revision) || !std::isfinite(revision->valuedouble) ||
+            revision->valuedouble < 1 || revision->valuedouble > 4294967295.0 ||
+            std::floor(revision->valuedouble) != revision->valuedouble) {
+            error = "voice identity revision must be a positive uint32 integer";
+            return false;
+        }
+        config.revision = static_cast<uint32_t>(revision->valuedouble);
+    }
+    const auto* expiry = cJSON_GetObjectItemCaseSensitive(source, "expiresAtMs");
+    if (expiry != nullptr) {
+        if (!cJSON_IsNumber(expiry) || !std::isfinite(expiry->valuedouble) ||
+            expiry->valuedouble < 0 || expiry->valuedouble > 9007199254740991.0 ||
+            std::floor(expiry->valuedouble) != expiry->valuedouble) {
+            error = "voice identity expiry must be a safe Unix millisecond integer";
+            return false;
+        }
+        config.expires_at_ms = static_cast<int64_t>(expiry->valuedouble);
+    }
+    VoiceIdentityConfig normalized;
+    if (!NormalizeVoiceIdentityConfig(config, normalized, error)) return false;
+    config = std::move(normalized);
+    return true;
+}
+
+cJSON* BuildVoiceIdentityReport(const VoiceWakeState& state) {
+    const auto& identity = state.voice_identity;
+    cJSON* report = cJSON_CreateObject();
+    cJSON_AddStringToObject(report, "name", identity.name.c_str());
+    cJSON_AddStringToObject(report, "wakeWord", identity.wake_word.c_str());
+    cJSON_AddStringToObject(report, "wakeCommand", identity.wake_command.c_str());
+    cJSON_AddStringToObject(report, "mode",
+        identity.mode == VoiceIdentityApplyMode::kTemporary ? "temporary" : "persistent");
+    cJSON_AddNumberToObject(report, "revision", identity.revision);
+    if (identity.expires_at_ms > 0)
+        cJSON_AddNumberToObject(report, "expiresAtMs", identity.expires_at_ms);
+    cJSON_AddNumberToObject(report, "revisionWatermark", state.voice_identity_revision_watermark);
+    cJSON_AddBoolToObject(report, "activeConfirmed", state.voice_identity_active_confirmed);
+    cJSON_AddStringToObject(report, "status", state.voice_identity_status.c_str());
+    cJSON_AddStringToObject(report, "runtime", state.runtime_name.c_str());
+    cJSON_AddStringToObject(report, "model", "multinet5q8_cn");
+    if (!state.voice_identity_error.empty())
+        cJSON_AddStringToObject(report, "error", state.voice_identity_error.c_str());
+    return report;
+}
+
 std::string BuildClientId(const std::string& device_key) {
     std::string suffix;
     suffix.reserve(device_key.size());
@@ -409,6 +483,7 @@ void UnifiedMqttService::Stop() {
     connecting_.store(false);
     reset_scheduled_.store(false);
     telemetry_pending_.store(false);
+    last_voice_identity_report_.clear();
     connected_pending_ = false;
     pending_credential_config_.reset();
     credential_restart_pending_ = false;
@@ -500,6 +575,7 @@ void UnifiedMqttService::WorkerLoop() {
             if (appearance_ != nullptr) appearance_->OnNetworkReady();
         }
         if (appearance_report_pending_.exchange(false) && connected_.load()) PublishShadowReport();
+        PublishChangedVoiceIdentity();
         if (appearance_ == nullptr || !appearance_->IsBusy()) {
             std::string deferred;
             { std::lock_guard<std::mutex> lock(mqtt_mutex_); deferred.swap(deferred_ota_payload_); }
@@ -1427,34 +1503,19 @@ void UnifiedMqttService::ApplyDesiredShadow(const std::string& payload,
                                 ? cJSON_GetObjectItemCaseSensitive(desired, "voice_identity")
                                 : nullptr;
     bool voice_identity_changed = false;
-    if (cJSON_IsObject(voice_identity) && voice_wake_ != nullptr) {
+    if (voice_identity != nullptr && voice_wake_ != nullptr) {
         VoiceIdentityConfig config;
-        const VoiceIdentityConfig defaults = DefaultVoiceIdentityConfig();
-        const cJSON* name = cJSON_GetObjectItemCaseSensitive(voice_identity, "name");
-        const cJSON* wake_word = cJSON_GetObjectItemCaseSensitive(voice_identity, "wakeWord");
-        const cJSON* wake_command = cJSON_GetObjectItemCaseSensitive(voice_identity, "wakeCommand");
-        const cJSON* mode = cJSON_GetObjectItemCaseSensitive(voice_identity, "mode");
-        const cJSON* revision = cJSON_GetObjectItemCaseSensitive(voice_identity, "revision");
-        const cJSON* expires_at_ms = cJSON_GetObjectItemCaseSensitive(voice_identity, "expiresAtMs");
-        config.name = cJSON_IsString(name) ? name->valuestring : defaults.name;
-        config.wake_word = cJSON_IsString(wake_word) ? wake_word->valuestring : defaults.wake_word;
-        config.wake_command = cJSON_IsString(wake_command) ? wake_command->valuestring : defaults.wake_command;
-        config.mode = cJSON_IsString(mode) && std::string(mode->valuestring) == "temporary"
-                          ? VoiceIdentityApplyMode::kTemporary
-                          : VoiceIdentityApplyMode::kPersistent;
-        config.revision = cJSON_IsNumber(revision) && revision->valueint > 0
-                              ? static_cast<uint32_t>(revision->valueint)
-                              : 1;
-        config.expires_at_ms = cJSON_IsNumber(expires_at_ms)
-                                   ? static_cast<int64_t>(expires_at_ms->valuedouble)
-                                   : 0;
         std::string error;
-        voice_identity_changed = voice_wake_->ApplyVoiceIdentity(config, error);
+        if (!ParseVoiceIdentityDesired(voice_identity, config, error)) {
+            voice_wake_->RejectVoiceIdentity(error);
+        } else {
+            voice_identity_changed = voice_wake_->ApplyVoiceIdentity(config, error);
+        }
         if (!voice_identity_changed) {
             ESP_LOGW(TAG, "Rejected desired voice identity: %s", error.c_str());
         }
     }
-    if (cJSON_IsNumber(volume) || cJSON_IsObject(light) || cJSON_IsObject(voice_identity) || cJSON_IsObject(appearance)) {
+    if (cJSON_IsNumber(volume) || cJSON_IsObject(light) || voice_identity != nullptr || cJSON_IsObject(appearance)) {
         PublishShadowReport();
     }
     cJSON_Delete(root);
@@ -1852,7 +1913,16 @@ void UnifiedMqttService::PublishTelemetry() {
              telemetry_queued);
 }
 
-void UnifiedMqttService::PublishShadowReport() {
+void UnifiedMqttService::PublishChangedVoiceIdentity() {
+    if (!started_.load() || !connected_.load() || voice_wake_ == nullptr) return;
+    const auto state = voice_wake_->GetState();
+    cJSON* report = BuildVoiceIdentityReport(state);
+    const std::string encoded = EncodeJson(report);
+    cJSON_Delete(report);
+    if (encoded != last_voice_identity_report_) PublishShadowReport(&state);
+}
+
+void UnifiedMqttService::PublishShadowReport(const VoiceWakeState* voice_state) {
     const esp_app_desc_t* app = esp_app_get_description();
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "firmware", app != nullptr ? app->version : "unknown");
@@ -1893,32 +1963,17 @@ void UnifiedMqttService::PublishShadowReport() {
     if (battery.charging_valid) {
         cJSON_AddBoolToObject(root, "charging", battery.charging);
     }
+    std::string identity_report;
     if (voice_wake_ != nullptr) {
-        const VoiceWakeState state = voice_wake_->GetState();
-        const VoiceIdentityConfig& identity = state.voice_identity;
-        cJSON* identity_json = cJSON_CreateObject();
-        cJSON_AddStringToObject(identity_json, "name", identity.name.c_str());
-        cJSON_AddStringToObject(identity_json, "wakeWord", identity.wake_word.c_str());
-        cJSON_AddStringToObject(identity_json, "wakeCommand", identity.wake_command.c_str());
-        cJSON_AddStringToObject(identity_json, "mode",
-                                identity.mode == VoiceIdentityApplyMode::kTemporary
-                                    ? "temporary"
-                                    : "persistent");
-        cJSON_AddNumberToObject(identity_json, "revision", identity.revision);
-        if (identity.expires_at_ms > 0) {
-            cJSON_AddNumberToObject(identity_json, "expiresAtMs", identity.expires_at_ms);
-        }
-        cJSON_AddStringToObject(identity_json, "status", state.voice_identity_status.c_str());
-        cJSON_AddStringToObject(identity_json, "runtime", state.runtime_name.c_str());
-        cJSON_AddStringToObject(identity_json, "model", "multinet5q8_cn");
-        if (!state.voice_identity_error.empty()) {
-            cJSON_AddStringToObject(identity_json, "error", state.voice_identity_error.c_str());
-        }
+        const VoiceWakeState state = voice_state != nullptr ? *voice_state : voice_wake_->GetState();
+        cJSON* identity_json = BuildVoiceIdentityReport(state);
+        identity_report = EncodeJson(identity_json);
         cJSON_AddItemToObject(root, "voice_identity", identity_json);
     }
     const std::string payload = EncodeJson(root);
     cJSON_Delete(root);
-    Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_shadow_report), payload);
+    if (Publish(CopyTopic(&DeviceCloudConfig::mqtt_topic_shadow_report), payload))
+        last_voice_identity_report_ = std::move(identity_report);
 }
 
 void UnifiedMqttService::SetAppearanceService(AppearanceService* appearance) {

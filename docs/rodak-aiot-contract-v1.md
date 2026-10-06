@@ -352,10 +352,14 @@ The shared `voice_identity` desired/reported object is:
 
 Persistent identities have no effective expiry. Temporary identities require a
 positive absolute Unix-millisecond `expiresAtMs`. RodakOS checks identity fields and reports
-`status`, `runtime`, `model`, and an optional `error` in the shadow. Current expiry-clock,
-revision locking, multi-key persistence and unchecked rollback gaps mean that these reports do
-not prove atomic application or recovery. See the
-[identity implementation limits](voice-identity-wake-word.md#shadow-contract).
+`status`, `runtime`, `model`, `revisionWatermark`, `activeConfirmed` and an optional `error` in the
+shadow. The highest accepted request is retained independently of the active identity, so temporary
+expiry does not lower the watermark or allow an old request to reactivate. Same-revision content
+conflicts are rejected. A bounded schema-1 NVS record holds the complete persistent/active/accepted
+snapshot, and uncertain writes or failed runtime recovery stop identity-driven wake listening.
+`pending`, `pending_clock` and `recovery_failed` do not claim an active confirmed identity. State
+changes are reported proactively; acoustic recognition and physical NVS power-loss acceptance remain
+separate. See [identity persistence and recovery](voice-identity-wake-word.md).
 
 ## 6. Realtime voice handoff
 

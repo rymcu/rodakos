@@ -56,6 +56,7 @@ public:
 
     const char* name() const override { return "esp-sr-multinet"; }
     const char* last_error() const override { return last_error_.c_str(); }
+    std::string LastErrorSnapshot() const override;
 
 private:
     enum class Mode {
@@ -69,6 +70,7 @@ private:
     static void WakeNotificationTaskEntry(void* arg);
 
     bool InitModelLocked();
+    void ReleaseWakeModelLocked();
     void ReleaseModelLocked();
     bool EnsureCaptureTaskLocked();
     bool EnsureWakeNotificationTaskLocked();
@@ -115,6 +117,7 @@ private:
     esp_mn_iface_t* multinet_ = nullptr;
     model_iface_data_t* multinet_data_ = nullptr;
     bool commands_allocated_ = false;
+    bool wake_model_ready_ = false;
     size_t wake_chunk_samples_ = 0;
     uint32_t wake_generation_ = 0;
     std::string last_error_;

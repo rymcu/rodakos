@@ -57,3 +57,8 @@ add_executable(rodakos_mqtt_command_service_tests mqtt_command_service_test.cc m
 target_link_libraries(rodakos_mqtt_command_service_tests PRIVATE mqtt_volume_host)
 add_test(NAME rodakos_mqtt_command_service COMMAND rodakos_mqtt_command_service_tests)
 set_tests_properties(rodakos_mqtt_command_service PROPERTIES TIMEOUT 40)
+
+add_executable(rodakos_mqtt_voice_identity_tests mqtt_voice_identity_test.cc "${APP_MODEL}/test_main.cc")
+target_link_libraries(rodakos_mqtt_voice_identity_tests PRIVATE mqtt_volume_host)
+add_test(NAME rodakos_mqtt_voice_identity COMMAND rodakos_mqtt_voice_identity_tests)
+set_tests_properties(rodakos_mqtt_voice_identity PROPERTIES TIMEOUT 40)

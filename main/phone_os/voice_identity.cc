@@ -17,7 +17,9 @@ std::string Trim(std::string value) {
 }
 
 bool HasControlCharacter(const std::string& value) {
-    return std::any_of(value.begin(), value.end(), [](unsigned char ch) { return ch < 0x20; });
+    return std::any_of(value.begin(), value.end(), [](unsigned char ch) {
+        return ch < 0x20 || ch == 0x7f;
+    });
 }
 
 }  // namespace
@@ -36,6 +38,7 @@ VoiceIdentityConfig DefaultVoiceIdentityConfig() {
 bool NormalizeVoiceIdentityConfig(const VoiceIdentityConfig& input,
                                   VoiceIdentityConfig& output,
                                   std::string& error) {
+    error.clear();
     output = input;
     output.name = Trim(output.name);
     output.wake_word = Trim(output.wake_word);
@@ -53,9 +56,16 @@ bool NormalizeVoiceIdentityConfig(const VoiceIdentityConfig& input,
         return false;
     }
     if (output.revision == 0) {
-        output.revision = 1;
+        error = "voice identity revision must be positive";
+        return false;
     }
-    if (output.mode == VoiceIdentityApplyMode::kTemporary && output.expires_at_ms <= 0) {
+    if (output.mode != VoiceIdentityApplyMode::kPersistent &&
+        output.mode != VoiceIdentityApplyMode::kTemporary) {
+        error = "voice identity mode is invalid";
+        return false;
+    }
+    if (output.mode == VoiceIdentityApplyMode::kTemporary &&
+        (output.expires_at_ms <= 0 || output.expires_at_ms > 9'007'199'254'740'991LL)) {
         error = "temporary voice identity requires expires_at";
         return false;
     }
@@ -70,6 +80,12 @@ bool IsVoiceIdentityExpired(const VoiceIdentityConfig& config, int64_t now_ms) {
         return false;
     }
     return config.expires_at_ms <= now_ms;
+}
+
+bool VoiceIdentityConfigEquals(const VoiceIdentityConfig& left, const VoiceIdentityConfig& right) {
+    return left.name == right.name && left.wake_word == right.wake_word &&
+           left.wake_command == right.wake_command && left.mode == right.mode &&
+           left.revision == right.revision && left.expires_at_ms == right.expires_at_ms;
 }
 
 }  // namespace rodakos

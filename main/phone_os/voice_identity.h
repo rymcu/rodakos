@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -20,6 +21,19 @@ struct VoiceIdentityConfig {
 };
 
 VoiceIdentityConfig DefaultVoiceIdentityConfig();
+struct VoiceIdentityRecord {
+    VoiceIdentityConfig persistent = DefaultVoiceIdentityConfig();
+    VoiceIdentityConfig active = DefaultVoiceIdentityConfig();
+    // Expiry restores active, but must not reopen an older accepted revision.
+    VoiceIdentityConfig last_accepted = DefaultVoiceIdentityConfig();
+};
+
+bool VoiceIdentityConfigEquals(const VoiceIdentityConfig& left, const VoiceIdentityConfig& right);
+bool EncodeVoiceIdentityRecord(const VoiceIdentityRecord& record, std::string& json,
+                               std::string& error);
+bool DecodeVoiceIdentityRecord(const std::string& json, VoiceIdentityRecord& record,
+                               std::string& error);
+constexpr size_t kVoiceIdentityRecordMaxBytes = 4096;
 bool NormalizeVoiceIdentityConfig(const VoiceIdentityConfig& input,
                                   VoiceIdentityConfig& output,
                                   std::string& error);

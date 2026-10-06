@@ -42,6 +42,7 @@ set(SOURCES
     "phone_os/time_service.cc"
     "phone_os/voice_audio_frontend.cc"
     "phone_os/voice_identity.cc"
+    "phone_os/voice_identity_record.cc"
     "phone_os/voice_aec_diagnostic_console.cc"
     "phone_os/voice_aec_diagnostic_capture.cc"
     "phone_os/voice_pcm_assembler.cc"

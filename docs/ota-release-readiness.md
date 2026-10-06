@@ -14,9 +14,9 @@ recorded signed package is `build/packages/ota/20261001-234748`; its main image 
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-builds recorded below. The latest slice is [stream lifecycle validation](#2026-10-06-stream-lifecycle-validation).
+builds recorded below. The latest slice is [voice identity validation](#2026-10-06-voice-identity-validation).
 
-The app-model suite now passes 266 tests in Debug and ASan/UBSan, including eighteen MQTT volume
+The MQTT-volume slice recorded 266 app-model tests in Debug and ASan/UBSan, including eighteen MQTT volume
 effect cases. Fourteen new tests instantiate the actual MQTT service and exercise callbacks,
 fragment/queue epochs, cancellation and SDK-task receipt publishing in both modes with leak
 detection; see [MQTT volume evidence](#2026-10-06-mqtt-volume-effect-validation).
@@ -49,6 +49,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | RGB light patches / lifecycle               | Real LightService, board adapter, MQTT callback/worker and receipts: atomic merge/commit, driver failures, 64-result eviction, authority versions and cancellation | Thirteen native driver and seventeen MQTT light regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
+| Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -320,6 +321,44 @@ and commits follow this software freeze; older dated tests above remain evidence
 No device, serial, NVS, flashing or packaging operation was performed. These software checks do
 not replace wireless reconnect/resource-contention, physical screen/input, acoustic, power-cut or
 eight-hour signed-OTA acceptance.
+
+## 2026-10-06 voice identity validation
+
+This unflashed slice starts from RodakOS `a7cb1b0` and Rodak `90f853e4`, plus the frozen identity
+consistency changes. A single bounded record replaces multi-key identity writes, retaining the
+last accepted request across expiry. Indeterminate storage or failed runtime recovery prevents
+ordinary updates from claiming success. The desktop allocates revisions and excludes unconfirmed
+identity candidates from its actual Base System Prompt.
+
+- Formal identity gate: 277 app-model, 8 MQTT parsing/reporting, 25 complete wake service,
+  6 complete audio frontend and 4 real MQTT/wake integration cases pass. Four desktop cross-repo
+  cases use the real Broker, C++ reports, persistence and prompt rendering; none is skipped.
+  Inputs and all six tested binaries have identical before/after hashes.
+- The app-model, wake-service, frontend and real integration targets also pass ASan/UBSan with
+  leak detection. The shared MQTT service also passes all 31 effect, 55 command and 8 identity
+  cases under sanitizers with leak detection. The frontend keeps the active AFE model catalog during wake-graph failure and
+  copies wake-service error strings under its lock. Other recorder consumers of the legacy
+  `last_error()` pointer API are outside this change.
+- Ordinary command gate 21/21 and MQTT volume/light gate 8/8 pass on this source. Desktop main
+  and preload type checks and the standard Electron build pass. Full desktop coverage with all
+  five C++ fixtures passes 487 files / 3,623 tests, with 3 files / 23 tests skipped in 631.48 seconds.
+  Statements: 69.47%; branches: 63.45%; functions: 66.93%; lines: 70.49%.
+- ESP-IDF 6.0.2 build passes. Main image: **6,983,280 bytes** within the 13,959,168-byte `ota_0`
+  slot; SHA-256 `b932cd9593c3709b90f4c7359211cbc0acd91904041f682feb218fc87f0f1fca`.
+  The configured key remains the local test public key and Home hardware-test population is OFF.
+  Generic IDF factory-partition flashing suggestions do not apply to the immutable Recovery layout.
+
+Identity-gate RodakOS source SHA-256:
+`3aa4e55d85b41acd0fc60972686abed878cb1e6e590bb6767a40a2a1a017f553`.
+Rodak stores the 77 changed source/config/test hashes in `.codex-temp/voice-identity-source-snapshot.json`,
+the five coverage fixtures in `voice-identity-coverage-fixtures.json`, firmware identity in
+`voice-identity-firmware.json`, and gate reports/logs under `.codex-temp/voice-identity-*`.
+Documentation and commits follow this software freeze. Reproduction is documented in Rodak
+`scripts/rodakos-voice-identity-conformance.md` and this repository's host-test READMEs.
+
+No packaging, flashing, serial or device NVS operation was performed. Real wake accuracy, physical
+clock synchronization, Flash power cuts, resource-pressure recovery, two-device isolation and the
+signed-OTA soak remain open. These are software configuration/reporting results, not acoustic proof.
 
 ## Build and package
 

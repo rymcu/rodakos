@@ -6,9 +6,10 @@ namespace rodakos {
 
 bool LoadVoiceWakeSettings(bool& enabled);
 bool SaveVoiceWakeSettings(bool enabled);
-bool LoadVoiceWakeIdentitySettings(VoiceIdentityConfig& persistent,
-                                   VoiceIdentityConfig& active);
-bool SaveVoiceWakeIdentitySettings(const VoiceIdentityConfig& persistent,
-                                   const VoiceIdentityConfig& active);
+enum class VoiceIdentitySaveStatus { kSaved, kUnchanged, kIndeterminate };
+
+bool LoadVoiceWakeIdentitySettings(VoiceIdentityRecord& record, std::string& error);
+VoiceIdentitySaveStatus SaveVoiceWakeIdentitySettings(const VoiceIdentityRecord& record,
+                                                     std::string& error);
 
 }  // namespace rodakos

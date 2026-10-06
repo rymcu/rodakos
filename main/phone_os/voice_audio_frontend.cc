@@ -121,6 +121,13 @@ bool VoiceAudioFrontend::Init() {
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (initialized_) {
+        if (!wake_model_ready_) {
+            ReleaseWakeModelLocked();
+            if (!InitModelLocked()) {
+                xSemaphoreGive(mutex_);
+                return false;
+            }
+        }
         xSemaphoreGive(mutex_);
         return true;
     }
@@ -239,8 +246,12 @@ bool VoiceAudioFrontend::StartListening(
         return false;
     }
 
+    std::string wake_word;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    wake_word = wake_identity_.wake_word;
+    xSemaphoreGive(mutex_);
     ESP_LOGI(TAG, "Always-on wake monitoring armed for %s on TDM slot %u (MIC2)",
-             wake_identity_.wake_word.c_str(), static_cast<unsigned>(kMainMicTdmSlot));
+             wake_word.c_str(), static_cast<unsigned>(kMainMicTdmSlot));
     return true;
 }
 
@@ -273,9 +284,9 @@ bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
     if (mutex_ == nullptr) return false;
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const VoiceIdentityConfig previous = wake_identity_;
     if (multinet_data_ == nullptr || multinet_ == nullptr) {
         wake_identity_ = normalized;
+        wake_model_ready_ = false;
         xSemaphoreGive(mutex_);
         return true;
     }
@@ -284,14 +295,16 @@ bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
                          esp_mn_commands_add(1, normalized.wake_command.c_str()) == ESP_OK &&
                          esp_mn_commands_update() == nullptr;
     if (!updated) {
-        esp_mn_commands_clear();
-        esp_mn_commands_add(1, previous.wake_command.c_str());
-        esp_mn_commands_update();
+        // A failed update may have partially changed the command graph. Do not
+        // treat the old model as usable; release it and require an explicit
+        // Configure/Init rebuild before listening or detection can resume.
+        ReleaseWakeModelLocked();
         SetErrorLocked("MultiNet rejected voice identity command");
         xSemaphoreGive(mutex_);
         return false;
     }
     wake_identity_ = normalized;
+    wake_model_ready_ = true;
     xSemaphoreGive(mutex_);
     ESP_LOGI(TAG, "MultiNet wake command updated: display=%s command=%s",
              normalized.wake_word.c_str(), normalized.wake_command.c_str());
@@ -628,66 +641,68 @@ void VoiceAudioFrontend::WakeNotificationTaskEntry(void* arg) {
 }
 
 bool VoiceAudioFrontend::InitModelLocked() {
-    if (multinet_data_ != nullptr) {
+    if (multinet_data_ != nullptr && wake_model_ready_) {
         return true;
     }
+    if (multinet_data_ != nullptr) {
+        ReleaseWakeModelLocked();
+    }
 
-    models_ = srmodel_load(rodakos_voice_models_start);
+    const bool retain_models = models_ != nullptr;
+    if (!retain_models) models_ = srmodel_load(rodakos_voice_models_start);
+    const auto fail = [this, retain_models]() {
+        if (retain_models) ReleaseWakeModelLocked();
+        else ReleaseModelLocked();
+        return false;
+    };
     if (models_ == nullptr) {
         SetErrorLocked("Embedded speech model unavailable");
-        return false;
+        return fail();
     }
     if (models_->num <= 0) {
         SetErrorLocked("Embedded speech model list is empty");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
 
     char* model_name = esp_srmodel_filter(models_, ESP_MN_PREFIX, "cn");
     if (model_name == nullptr) {
         SetErrorLocked("Chinese MultiNet model unavailable");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
 
     multinet_ = esp_mn_handle_from_name(model_name);
     if (multinet_ == nullptr) {
         SetErrorLocked("MultiNet runtime unavailable");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
 
     multinet_data_ = multinet_->create(model_name, kDetectionDurationMs);
     if (multinet_data_ == nullptr) {
         SetErrorLocked("MultiNet initialization failed");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
 
     multinet_->set_det_threshold(multinet_data_, kDetectionThreshold);
     if (esp_mn_commands_alloc(multinet_, multinet_data_) != ESP_OK) {
         SetErrorLocked("MultiNet command registry allocation failed");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
     commands_allocated_ = true;
     if (esp_mn_commands_add(1, wake_identity_.wake_command.c_str()) != ESP_OK) {
         SetErrorLocked("Wake command registration failed");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
     if (esp_mn_commands_update() != nullptr) {
         SetErrorLocked("Wake command is unsupported by the speech model");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
     wake_chunk_samples_ = static_cast<size_t>(multinet_->get_samp_chunksize(multinet_data_));
     if (wake_chunk_samples_ == 0) {
         SetErrorLocked("Invalid MultiNet audio chunk size");
-        ReleaseModelLocked();
-        return false;
+        return fail();
     }
 
+    wake_model_ready_ = true;
     return true;
 }
 
@@ -735,7 +750,7 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
     return true;
 }
 
-void VoiceAudioFrontend::ReleaseModelLocked() {
+void VoiceAudioFrontend::ReleaseWakeModelLocked() {
     if (multinet_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_data_);
     }
@@ -746,6 +761,11 @@ void VoiceAudioFrontend::ReleaseModelLocked() {
     multinet_data_ = nullptr;
     multinet_ = nullptr;
     wake_chunk_samples_ = 0;
+    wake_model_ready_ = false;
+}
+
+void VoiceAudioFrontend::ReleaseModelLocked() {
+    ReleaseWakeModelLocked();
     if (models_ != nullptr) {
         esp_srmodel_deinit(models_);
         models_ = nullptr;
@@ -1060,7 +1080,7 @@ void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
 void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (mode_ != Mode::kWakeOnly || generation != wake_generation_ ||
-        multinet_ == nullptr || multinet_data_ == nullptr) {
+        !wake_model_ready_ || multinet_ == nullptr || multinet_data_ == nullptr) {
         xSemaphoreGive(mutex_);
         return;
     }
@@ -1092,18 +1112,20 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
     }
 
     std::function<void(const std::string&)> callback;
+    std::string detected_wake_word;
     uint32_t wake_generation = 0;
     if (mode_ == Mode::kWakeOnly) {
         mode_ = Mode::kIdle;
         callback = on_wake_word_;
         on_wake_word_ = {};
         wake_generation = wake_generation_;
+        detected_wake_word = wake_identity_.wake_word;
     }
     xSemaphoreGive(mutex_);
 
     if (callback) {
         input_.CloseForOwner(kWakeAudioInputOwner);
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_identity_.wake_word.c_str());
+        ESP_LOGI(TAG, "Wake word detected: %s", detected_wake_word.c_str());
         TaskHandle_t notification_task = nullptr;
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool can_notify = wake_generation_ == wake_generation &&
@@ -1176,6 +1198,14 @@ void VoiceAudioFrontend::SetErrorLocked(const char* error) {
                       ? error
                       : "Voice audio frontend error";
     ESP_LOGW(TAG, "%s", last_error_.c_str());
+}
+
+std::string VoiceAudioFrontend::LastErrorSnapshot() const {
+    if (mutex_ == nullptr) return "Voice audio frontend error";
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const std::string snapshot = last_error_;
+    xSemaphoreGive(mutex_);
+    return snapshot;
 }
 
 }  // namespace rodakos

@@ -32,6 +32,7 @@ class AudioOutputService;
 class DeviceCloudConfigService;
 class OtaUpdateService;
 class VoiceWakeService;
+struct VoiceWakeState;
 class WebRtcCameraService;
 class WebRtcDisplayService;
 class AppearanceService;
@@ -144,7 +145,8 @@ private:
     void SubscribeTopics();
     bool PublishWithAck(const std::string& topic, const std::string& payload);
     void PublishTelemetry();
-    void PublishShadowReport();
+    void PublishShadowReport(const VoiceWakeState* voice_state = nullptr);
+    void PublishChangedVoiceIdentity();
     void ApplyDesiredShadow(const std::string& payload, uint32_t generation,
                             uint64_t connection_epoch);
     void HandlePcStatus(const std::string& payload);
@@ -160,6 +162,7 @@ private:
     BatteryStateProvider* battery_provider_ = nullptr;
     LightService* light_service_ = nullptr;
     VoiceWakeService* voice_wake_ = nullptr;
+    std::string last_voice_identity_report_;
     WebRtcCameraService* web_rtc_camera_service_ = nullptr;
     WebRtcDisplayService* web_rtc_display_service_ = nullptr;
     AppearanceService* appearance_ = nullptr;

@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (stream lifecycle and command-cache work starts from `9940bea`; current source and
+Last refreshed: 2026-10-06 (voice-identity consistency work starts from `a7cb1b0`; current source and
 validation identity are recorded in the linked roadmap).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
@@ -60,6 +60,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
   queued and successful completion evidence for app exercises. These host checks do not close the
   eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
+- Voice identity uses a bounded versioned record, an accepted revision watermark and explicit
+  runtime/storage recovery states. Temporary expiry uses Unix time plus a monotonic lifetime limit;
+  pending or failed recovery is never reported as a confirmed identity. Software and acoustic
+  evidence remain separate; see [identity and wake word](docs/voice-identity-wake-word.md).
 - Last recorded signed device package `20261001-234748`: 6,897,584-byte main image (about 6.58 MiB).
   It identifies the earlier COM3 appearance run, not subsequent local builds. The main application
   slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
