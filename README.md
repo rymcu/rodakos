@@ -277,6 +277,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
 - [Music scanning, playback errors and retry](docs/music-playback.md)
+- [Photos/Files scanning, image errors and retry](docs/media-browsing.md)
 - [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
 - [MQTT volume effects and software receipts](docs/mqtt-volume-effects.md)
 - [MQTT light patches and software receipts](docs/mqtt-light-effects.md)

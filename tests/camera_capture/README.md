@@ -6,12 +6,14 @@ the real frame snapshot/conversion/capture path calls a fake JPEG encoder. Board
 unique temporary host directory, and photo selection, exclusive creation, writing, flushing,
 closing and cleanup use real host filesystem operations.
 
-The 14 tests cover:
+The 16 tests cover:
 
 - Publishing `saved_path` and `last_saved_path` only after a successful save, including a blocked
   write where the candidate path must remain unpublished.
 - Missing frame/service/storage/directory, encoder open/process/empty output and input allocation
   failures, with an empty per-call result and a retry after recovery.
+- `FileServiceImpl::ListDirectory` clears stale entries and reports `ENODEV` when
+  unmounted, and preserves a real missing-directory `ENOENT` across adapter logging.
 - Short writes, flush and close failures, cleanup of failed newly created files, and preservation
   of the previous successful photo and its historical `last_saved_path`.
 - An external writer winning the exclusive-create race, preserving its file and selecting a new

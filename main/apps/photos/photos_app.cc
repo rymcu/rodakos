@@ -19,8 +19,16 @@
 
 namespace {
 constexpr const char* TAG = "PhotosApp";
-constexpr const char* kPhotosPath = "/DCIM";  // 标准相机目录
-constexpr const char* kRodakosPhotosPath = "/photos";
+const char* ScanStatusText(rodakos::ImageLibrary::ImageScanStatus status) {
+    using Status = rodakos::ImageLibrary::ImageScanStatus;
+    switch (status) {
+        case Status::kServiceUnavailable: return "File service unavailable";
+        case Status::kStorageUnavailable: return "SD card unavailable";
+        case Status::kDirectoryMissing: return "Photo folder not found";
+        case Status::kReadFailed: return "Could not read photos";
+        default: return "No supported photos";
+    }
+}
 
 // 网格布局常量
 constexpr int kGridCols = 3;
@@ -149,8 +157,9 @@ bool PhotosApp::OnCreate(PhoneAppContext& context) {
 
 void PhotosApp::OnDestroy() {
     if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_);
+        PhoneUiLock lock(*ui_, 0);
         if (lock.locked()) {
+            if (context_ != nullptr) lv_async_call_cancel(DeferReturnHome, context_);
             StopThumbnailTimer();
             ReleaseCurrentImage("destroy");
             ReleaseAllThumbnails();
@@ -163,13 +172,18 @@ void PhotosApp::OnDestroy() {
     grid_body_ = nullptr;
     grid_container_ = nullptr;
     status_label_ = nullptr;
+    refresh_button_ = nullptr;
     fullscreen_body_ = nullptr;
     photo_img_ = nullptr;
     filename_label_ = nullptr;
+    preview_retry_button_ = nullptr;
     current_image_.reset();
     thumbnail_items_.clear();
     context_ = nullptr;
     ui_ = nullptr;
+    photos_.clear();
+    current_view_ = ViewMode::kNone;
+    thumbnail_timer_failed_ = false;
 }
 
 void PhotosApp::StopThumbnailTimer() {
@@ -198,6 +212,7 @@ void PhotosApp::ReleaseCurrentImage(const char* reason) {
 
 void PhotosApp::ReleaseThumbnail(ThumbnailItem& item) {
     item.thumbnail_unavailable = false;
+    item.load_failed = false;
     if (item.thumbnail == nullptr) {
         return;
     }
@@ -278,10 +293,16 @@ void PhotosApp::UpdateVisibleThumbnails() {
             continue;
         }
 
-        auto thumbnail = rodakos::ImageLibrary::LoadThumbnail(
+        auto loaded = rodakos::ImageLibrary::LoadThumbnailDetailed(
             photos_[i].path, static_cast<int>(kThumbnailSize), static_cast<int>(kThumbnailSize));
+        auto thumbnail = std::move(loaded.image);
+        ++loaded_this_tick;
         if (thumbnail == nullptr) {
             item.thumbnail_unavailable = true;
+            if (loaded.status != rodakos::ImageLibrary::ImageLoadStatus::kUnsupported) {
+                item.load_failed = true;
+                lv_label_set_text_fmt(item.label, "%s\nPreview failed", photos_[i].filename.c_str());
+            }
             continue;
         }
 
@@ -290,6 +311,9 @@ void PhotosApp::UpdateVisibleThumbnails() {
         if (lv_image_decoder_get_info(source, &header) != LV_RESULT_OK ||
             header.w == 0 || header.h == 0) {
             item.thumbnail_unavailable = true;
+            item.load_failed = true;
+            if (source != nullptr) lv_image_cache_drop(source);
+            lv_label_set_text_fmt(item.label, "%s\nPreview failed", photos_[i].filename.c_str());
             continue;
         }
 
@@ -303,14 +327,16 @@ void PhotosApp::UpdateVisibleThumbnails() {
             lv_obj_center(item.image);
         } else {
             item.thumbnail_unavailable = true;
+            if (source != nullptr) lv_image_cache_drop(source);
             continue;
         }
 
         if (item.label != nullptr && lv_obj_is_valid(item.label)) {
             lv_obj_add_flag(item.label, LV_OBJ_FLAG_HIDDEN);
         }
-        loaded_this_tick++;
     }
+
+    UpdateGridStatus();
 
     if (!has_pending_visible && thumbnail_timer_ != nullptr) {
         lv_timer_pause(thumbnail_timer_);
@@ -319,40 +345,11 @@ void PhotosApp::UpdateVisibleThumbnails() {
 
 void PhotosApp::ScanPhotos() {
     photos_.clear();
-
-    auto* fs = context_->services().file_service();
-    if (fs == nullptr) {
-        ESP_LOGW(TAG, "File service not available");
-        return;
-    }
-    if (!fs->IsMounted() && !fs->Init()) {
-        ESP_LOGW(TAG, "SD card not available");
-        return;
-    }
-
-    std::vector<std::string> image_paths;
-    auto append_scanned_images = [&](const char* directory, int max_depth) {
-        if (!fs->Exists(directory)) {
-            return;
-        }
-        auto scanned = rodakos::ImageLibrary::ScanImagesWithFileService(fs, directory, max_depth);
-        for (auto& path : scanned) {
-            if (std::find(image_paths.begin(), image_paths.end(), path) == image_paths.end()) {
-                image_paths.push_back(std::move(path));
-            }
-        }
-    };
-
-    append_scanned_images(kRodakosPhotosPath, 3);
-    append_scanned_images(kPhotosPath, 3);
-
-    // 如果常用照片目录为空，扫描根目录
-    if (image_paths.empty()) {
-        image_paths = rodakos::ImageLibrary::ScanImagesWithFileService(fs, "/", 2);
-    }
-
-    // 转换为 PhotoEntry
-    for (const auto& path : image_paths) {
+    auto* fs = context_ != nullptr ? context_->services().file_service() : nullptr;
+    auto scan = rodakos::ImageLibrary::ScanPhotoLibrary(fs);
+    scan_status_ = scan.status;
+    if (scan_status_ != rodakos::ImageLibrary::ImageScanStatus::kReady) return;
+    for (const auto& path : scan.paths) {
         PhotoEntry entry;
         entry.path = path;
         entry.filename = rodakos::ImageLibrary::Basename(path);
@@ -361,6 +358,33 @@ void PhotosApp::ScanPhotos() {
     }
 
     ESP_LOGI(TAG, "Found %zu photos", photos_.size());
+}
+
+void PhotosApp::RefreshPhotos() {
+    StopThumbnailTimer();
+    ReleaseCurrentImage("refresh");
+    ReleaseAllThumbnails();
+    if (grid_body_ != nullptr) lv_obj_delete(grid_body_);
+    if (fullscreen_body_ != nullptr) lv_obj_delete(fullscreen_body_);
+    grid_body_ = grid_container_ = status_label_ = refresh_button_ = nullptr;
+    fullscreen_body_ = photo_img_ = filename_label_ = preview_retry_button_ = nullptr;
+    thumbnail_items_.clear();
+    thumbnail_timer_failed_ = false;
+    current_photo_index_ = 0;
+    current_view_ = ViewMode::kNone;
+    // Explicit scans remain synchronous; navigation cannot cancel an in-flight SD call.
+    ScanPhotos();
+    ShowGridView();
+}
+
+void PhotosApp::UpdateGridStatus() {
+    if (status_label_ == nullptr) return;
+    if (scan_status_ != rodakos::ImageLibrary::ImageScanStatus::kReady)
+        lv_label_set_text(status_label_, ScanStatusText(scan_status_));
+    else if (thumbnail_timer_failed_ || std::any_of(thumbnail_items_.begin(), thumbnail_items_.end(),
+                 [](const auto& item) { return item.load_failed; }))
+        lv_label_set_text(status_label_, "Preview failed - tap Retry");
+    else lv_label_set_text_fmt(status_label_, "%zu photos", photos_.size());
 }
 
 void PhotosApp::ShowFullScreen(size_t index) {
@@ -396,7 +420,8 @@ void PhotosApp::ShowFullScreen(size_t index) {
 
     // 使用 ImageLibrary 加载图片
     ReleaseCurrentImage("replace");
-    current_image_ = rodakos::ImageLibrary::LoadImageForDisplay(photo.path);
+    auto loaded = rodakos::ImageLibrary::LoadImageForDisplayDetailed(photo.path);
+    current_image_ = std::move(loaded.image);
     if (current_image_ != nullptr) {
         const void* image_source = current_image_->GetImageSource();
         lv_image_header_t header = {};
@@ -404,7 +429,7 @@ void PhotosApp::ShowFullScreen(size_t index) {
             header.w == 0 || header.h == 0) {
             ESP_LOGW(TAG, "Unsupported image: %s", photo.path.c_str());
             ReleaseCurrentImage("unsupported");
-            ShowImageLoadError(photo_img_, filename_label_, "Unsupported image");
+            ShowImageLoadError(photo_img_, filename_label_, "Could not load image");
             return;
         }
 
@@ -427,7 +452,7 @@ void PhotosApp::ShowFullScreen(size_t index) {
         lv_obj_align(photo_img_, LV_ALIGN_TOP_MID, 0, kPhotoAreaTop);
     } else {
         ESP_LOGW(TAG, "Failed to load image: %s", photo.path.c_str());
-        ShowImageLoadError(photo_img_, filename_label_, "Failed to load image");
+        ShowImageLoadError(photo_img_, filename_label_, rodakos::ImageLibrary::ImageLoadErrorText(loaded.status));
         return;
     }
 }
@@ -492,20 +517,32 @@ void PhotosApp::CreateGridView() {
     lv_obj_set_style_text_font(title_label, &phone_font_14, 0);
     lv_obj_align(title_label, LV_ALIGN_CENTER, 0, 0);
 
-    // 状态标签
-    status_label_ = lv_label_create(title_bar);
-    char status_text[32];
-    snprintf(status_text, sizeof(status_text), "%zu photos", photos_.size());
-    lv_label_set_text(status_label_, status_text);
+    auto* toolbar = lv_obj_create(grid_body_);
+    lv_obj_remove_style_all(toolbar);
+    lv_obj_set_size(toolbar, 292, 32);
+    lv_obj_align(toolbar, LV_ALIGN_TOP_MID, 0, 44);
+    status_label_ = lv_label_create(toolbar);
+    lv_obj_set_width(status_label_, 212);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(status_label_, rodakos_theme_text_secondary(), 0);
     lv_obj_set_style_text_font(status_label_, &phone_font_12, 0);
-    lv_obj_align(status_label_, LV_ALIGN_RIGHT_MID, -48, 0);
+    lv_obj_align(status_label_, LV_ALIGN_LEFT_MID, 0, 0);
+    refresh_button_ = lv_btn_create(toolbar);
+    lv_obj_set_size(refresh_button_, 72, 28);
+    lv_obj_align(refresh_button_, LV_ALIGN_RIGHT_MID, 0, 0);
+    auto* retry_label = lv_label_create(refresh_button_);
+    lv_label_set_text(retry_label, "Retry");
+    lv_obj_center(retry_label);
+    lv_obj_add_event_cb(refresh_button_, [](lv_event_t* event) {
+        static_cast<PhotosApp*>(lv_event_get_user_data(event))->RefreshPhotos();
+    }, LV_EVENT_CLICKED, this);
+    UpdateGridStatus();
 
     // 可滚动容器
     grid_container_ = lv_obj_create(grid_body_);
     lv_obj_remove_style_all(grid_container_);
-    lv_obj_set_size(grid_container_, 292, 196);
-    lv_obj_align(grid_container_, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_set_size(grid_container_, 292, 164);
+    lv_obj_align(grid_container_, LV_ALIGN_TOP_MID, 0, 76);
     lv_obj_set_style_pad_all(grid_container_, 4, 0);
     lv_obj_set_flex_flow(grid_container_, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(grid_container_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -545,7 +582,8 @@ void PhotosApp::CreateGridView() {
         auto* name_label = lv_label_create(btn);
         lv_label_set_text(name_label, photo.filename.c_str());
         lv_obj_set_width(name_label, kThumbnailSize - 8);
-        lv_label_set_long_mode(name_label, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(name_label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_height(name_label, 52);
         lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(name_label, rodakos_theme_text_primary(), 0);
         lv_obj_set_style_text_font(name_label, &phone_font_12, 0);
@@ -565,7 +603,9 @@ void PhotosApp::CreateGridView() {
     // 如果没有照片，显示提示
     if (photos_.empty()) {
         auto* empty_label = lv_label_create(grid_container_);
-        lv_label_set_text(empty_label, "No photos found\n\nInsert SD card with photos");
+        lv_label_set_text(empty_label, ScanStatusText(scan_status_));
+        lv_obj_set_width(empty_label, 276);
+        lv_label_set_long_mode(empty_label, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(empty_label, rodakos_theme_text_secondary(), 0);
         lv_obj_set_style_text_font(empty_label, &phone_font_14, 0);
@@ -574,8 +614,13 @@ void PhotosApp::CreateGridView() {
 
     if (!photos_.empty()) {
         thumbnail_timer_ = lv_timer_create(ThumbnailTimerCallback, kThumbnailTimerMs, this);
-        lv_timer_pause(thumbnail_timer_);
-        ScheduleThumbnailUpdate();
+        if (thumbnail_timer_ != nullptr) {
+            lv_timer_pause(thumbnail_timer_);
+            ScheduleThumbnailUpdate();
+        } else {
+            thumbnail_timer_failed_ = true;
+            UpdateGridStatus();
+        }
     }
 }
 
@@ -604,12 +649,18 @@ void PhotosApp::CreateFullScreenView() {
 
     filename_label_ = lv_label_create(top_bar);
     lv_label_set_text(filename_label_, "");
-    lv_obj_set_width(filename_label_, 236);
+    lv_obj_set_width(filename_label_, 212);
     lv_label_set_long_mode(filename_label_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(filename_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(filename_label_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(filename_label_, &phone_font_14, 0);
     lv_obj_align(filename_label_, LV_ALIGN_CENTER, 0, 0);
+    preview_retry_button_ = RodakosCreateHeaderIconButton(top_bar, FONT_AWESOME_ARROWS_ROTATE);
+    lv_obj_align(preview_retry_button_, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(preview_retry_button_, [](lv_event_t* event) {
+        auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(event));
+        self->ShowFullScreen(self->current_photo_index_);
+    }, LV_EVENT_CLICKED, this);
 
     // 照片显示区域放在顶部栏和底部按钮之间，避免图片盖住控件。
     photo_img_ = lv_image_create(fullscreen_body_);
@@ -687,7 +738,9 @@ void PhotosApp::NavigateBack() {
 
 void PhotosApp::NavigateHome() {
     ESP_LOGI(TAG, "Header home button returning home");
-    lv_async_call(DeferReturnHome, context_);
+    lv_async_call_cancel(DeferReturnHome, context_);
+    if (lv_async_call(DeferReturnHome, context_) != LV_RESULT_OK && ui_ != nullptr)
+        ui_->ShowToastUnlocked("Navigation unavailable");
 }
 
 void RegisterPhotosApp(PhoneAppRegistry& registry) {

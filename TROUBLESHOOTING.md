@@ -265,6 +265,12 @@ Checks:
 - FileService mounts the Board Manager `fs_sdcard` device on demand.
 - USB MSC mode uses the early-boot path in `main/usb_msc_mode.cc`.
 
+Photos/Files now show storage/service/read failures separately from a successfully empty
+list. Use the visible Retry after restoring storage; Files retries the displayed folder,
+and Back attempts its parent. Refresh failures discard the old list instead of allowing
+stale rows to open. Image failures remain visible with a retry path. See
+[media browsing](docs/media-browsing.md) for the synchronous I/O and hardware limits.
+
 ### Music reports unavailable or playback fails
 
 Music distinguishes an empty supported library from unavailable storage or a failed directory scan.

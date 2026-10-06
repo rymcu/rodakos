@@ -135,12 +135,15 @@ public:
         entries.clear();
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
+            errno = ENODEV;
             return false;
         }
 
         std::string full_path = GetFullPath(path);
         if (!ReadFileDirectory(full_path, entries)) {
-            ESP_LOGE(TAG, "Failed to read directory: %s (%s)", full_path.c_str(), std::strerror(errno));
+            const int error = errno;
+            ESP_LOGE(TAG, "Failed to read directory: %s (%s)", full_path.c_str(), std::strerror(error));
+            errno = error;
             return false;
         }
 

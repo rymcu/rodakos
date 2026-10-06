@@ -143,14 +143,17 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 
 - Home: phone desktop, status area, app grid, dock/page affordances.
 - Settings: WiFi, display/theme/brightness, USB disk mode, web/cloud file tools, time sync.
-- Photos: scans `/photos`, `/DCIM`, and fallback roots for images.
+- Photos: scans `/photos`, `/DCIM`, and fallback roots for images, with separate storage/read
+  failure and empty-library states, explicit retry and owned image/thumbnail cleanup.
 - Camera: opens camera service on demand, previews and captures to storage. Capture completion is
   published only after exclusive `WriteNewFile` creation, complete output, flush and close. The
   short FileService I/O lock protects the write; a UI teardown can revoke the shared result guard
   while an already admitted capture finishes independently. See [media save boundaries](media-save.md).
 - Clock: local display and network time sync entry points.
 - Calendar: local month navigation and current-day selection.
-- File Manager: browses and manages FileService-backed storage.
+- File Manager: browses FileService-backed storage, clears stale/partial lists after read failures
+  and retries the attempted folder or image. See [media browsing](media-browsing.md) for error
+  propagation and the synchronous I/O boundary.
 - Gyro: motion capability surface for gyroscope/accelerometer samples.
 - System Info: firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).

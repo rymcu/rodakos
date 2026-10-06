@@ -30,16 +30,26 @@ private:
         kInfo,
     };
 
+    enum class DirectoryStatus {
+        kReady,
+        kServiceUnavailable,
+        kStorageUnavailable,
+        kMissing,
+        kReadFailed,
+    };
+
     void CreateUi();
     void RebuildList();
     bool LoadDirectory(const std::string& path);
     void ShowListView();
     void ShowImagePreview(const rodakos::FileEntry& entry);
+    void ShowPreviewError(const char* message);
     void ShowFileInfo(const rodakos::FileEntry& entry);
     void NavigateBack();
     void NavigateHome();
     void RefreshDirectory();
     void ReleaseCurrentImage();
+    const char* DirectoryMessage() const;
 
     std::string ParentPath() const;
     std::string DisplayPath() const;
@@ -55,15 +65,18 @@ private:
     lv_obj_t* preview_body_ = nullptr;
     lv_obj_t* preview_image_ = nullptr;
     lv_obj_t* preview_title_label_ = nullptr;
+    lv_obj_t* preview_error_label_ = nullptr;
+    lv_obj_t* preview_retry_button_ = nullptr;
     lv_obj_t* info_body_ = nullptr;
     lv_obj_t* info_title_label_ = nullptr;
     lv_obj_t* info_detail_label_ = nullptr;
 
     std::shared_ptr<rodakos::LvglImage> current_image_;
     std::vector<rodakos::FileEntry> entries_;
+    rodakos::FileEntry preview_entry_{};
     std::string current_path_ = "/";
     ViewMode view_mode_ = ViewMode::kList;
-    bool storage_ready_ = false;
+    DirectoryStatus directory_status_ = DirectoryStatus::kServiceUnavailable;
 };
 
 void RegisterFileManagerApp(PhoneAppRegistry& registry);

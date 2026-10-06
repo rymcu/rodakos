@@ -45,6 +45,7 @@ private:
 class LvglFileImage : public LvglImage {
 public:
     explicit LvglFileImage(std::string lvgl_path);
+    ~LvglFileImage() override;
 
     const lv_image_dsc_t* GetImageDescriptor() const override { return nullptr; }
     const void* GetImageSource() const override { return lvgl_path_.c_str(); }
@@ -57,6 +58,25 @@ private:
  * @brief 图片库工具函数
  */
 namespace ImageLibrary {
+
+enum class ImageScanStatus { kReady, kServiceUnavailable, kStorageUnavailable, kDirectoryMissing, kReadFailed };
+struct ImageScanResult {
+    ImageScanStatus status = ImageScanStatus::kReady;
+    std::vector<std::string> paths;
+    std::string failed_path;
+};
+
+enum class ImageLoadStatus { kLoaded, kUnsupported, kReadFailed, kInsufficientMemory, kDecodeFailed };
+struct ImageLoadResult {
+    ImageLoadStatus status = ImageLoadStatus::kDecodeFailed;
+    std::shared_ptr<LvglImage> image;
+};
+
+ImageScanResult ScanImagesWithFileServiceDetailed(FileService* fs, const std::string& directory, int max_depth);
+ImageScanResult ScanPhotoLibrary(FileService* fs);
+ImageLoadResult LoadImageForDisplayDetailed(const std::string& path);
+ImageLoadResult LoadThumbnailDetailed(const std::string& path, int width, int height);
+const char* ImageLoadErrorText(ImageLoadStatus status);
 
 /**
  * @brief 获取文件名（不含路径）
