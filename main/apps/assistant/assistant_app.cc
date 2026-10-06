@@ -286,15 +286,23 @@ void AssistantApp::RefreshState() {
     }
     const bool active = assistant_state.phase == rodakos::VoiceAssistantPhase::kListening ||
                         assistant_state.phase == rodakos::VoiceAssistantPhase::kSpeaking;
-    const auto display_phase = assistant_state.phase == rodakos::VoiceAssistantPhase::kError &&
-                               diagnostic == rodakos::CloudDiagnosticCode::kReady
-                                   ? rodakos::VoiceAssistantPhase::kIdle : assistant_state.phase;
-    lv_label_set_text_fmt(assistant_status_label_, "Assistant - %s", PhaseText(display_phase));
+    const bool inactive = assistant_state.phase == rodakos::VoiceAssistantPhase::kIdle ||
+                          assistant_state.phase == rodakos::VoiceAssistantPhase::kError;
+    const auto wake_state = wake_ != nullptr ? wake_->GetState() : rodakos::VoiceWakeState{};
+    const bool wake_disabled = inactive && wake_ != nullptr && !wake_state.enabled &&
+                               diagnostic == rodakos::CloudDiagnosticCode::kReady;
+    const char* status = inactive
+        ? (wake_disabled ? "Disabled"
+           : diagnostic == rodakos::CloudDiagnosticCode::kReady ? "Ready"
+           : diagnostic == rodakos::CloudDiagnosticCode::kRefreshing ? "Preparing"
+                                                                    : "Needs attention")
+        : PhaseText(assistant_state.phase);
+    lv_label_set_text_fmt(assistant_status_label_, "Assistant - %s", status);
     lv_label_set_text(assistant_detail_label_, active ? "Voice session active"
+                              : wake_disabled ? "Wake disabled"
                               : rodakos::CloudDiagnosticTitle(diagnostic));
 
     if (wake_ != nullptr && wake_switch_ != nullptr) {
-        const auto wake_state = wake_->GetState();
         if (wake_state.enabled) {
             lv_obj_add_state(wake_switch_, LV_STATE_CHECKED);
         } else {
@@ -316,7 +324,8 @@ void AssistantApp::RefreshState() {
     }
 
     if (!active && runtime_detail_label_ != nullptr) {
-        lv_label_set_text(runtime_detail_label_, rodakos::CloudDiagnosticHint(diagnostic));
+        lv_label_set_text(runtime_detail_label_, wake_disabled ? "Enable wake to start."
+                                                              : rodakos::CloudDiagnosticHint(diagnostic));
     }
 }
 

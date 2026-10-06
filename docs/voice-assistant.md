@@ -43,6 +43,14 @@ diagnoses even within one millisecond; refresh, rejection and expiry each advanc
 messages and recovery hints are fixed text; server error bodies, tokens and device secrets are
 not displayed or included in failure logs.
 
+An idle or failed Assistant shows **Ready** only when the selected diagnosis is ready;
+credential preparation shows **Preparing**, and a remaining diagnosis shows **Needs attention**.
+Connecting, listening and speaking keep their actual interaction phase. These labels do not change
+the local wake switch or start a voice session. When wake is disabled and the inactive Assistant's
+diagnosis is otherwise ready, it shows **Disabled**, **Wake disabled** and **Enable wake to start.**
+Re-enabling wake restores the ready guidance. Credential, network and trust diagnoses still take
+priority over this disabled guidance.
+
 The bottom **Settings > Device Cloud** control opens the existing Settings app. Select its
 **连接与云服务** page to retry or repair provisioning. This is a two-step route, not a new provisioning
 surface. A bound device keeps its binding when its token or voice capability needs attention; the
@@ -51,6 +59,15 @@ credentials on an already bound legacy server are also retried without creating 
 request. Initial enrollment still uses the existing explicit pairing flow. Missing voice
 capability does not invalidate working MQTT credentials or the shared credential preparation used
 by Appearance. A later successful cloud refresh clears the Assistant's stale error presentation.
+
+Settings keeps task-start and completion-delivery failures in its own UI state. **Refresh could
+not start** means that no refresh worker started; **Refresh result unavailable** means the worker's
+result could not be delivered to the page, even if the cloud operation itself succeeded. Fixed
+guidance and an enabled retry control remain visible across page navigation and theme rebuilding,
+until another explicit retry is admitted. These failures stop automatic pairing polling and do not
+overwrite the shared cloud diagnosis or clear the binding. They do not establish that concurrent
+display, voice and TLS resource pressure has been resolved; that remains a separate hardware gate
+under [RodakOS #28](https://github.com/rymcu/rodakos/issues/28).
 
 Opening these pages does not open a voice WebSocket. Local wake still owns voice startup and
 cooperative cancellation; disabling wake or stopping a preparation cannot publish its late result

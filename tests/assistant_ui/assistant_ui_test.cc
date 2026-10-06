@@ -38,6 +38,8 @@ struct Fixture {
     bool destroyed = false;
     Fixture() {
         cloud_ui_test::Reset();
+        wake.state.enabled = true;
+        wake.state.status = rodakos::VoiceWakeStatus::kListening;
         services.SetVoiceAssistant(&assistant); services.SetVoiceWake(&wake);
         services.SetDeviceCloud(&cloud); services.SetWiFi(&wifi);
         ui.SetThemeName("dark");
@@ -53,12 +55,15 @@ RODAK_TEST("Assistant shows fixed cloud diagnosis and recovery guidance") {
                       rodakos::CloudDiagnosticCode::kCredentialsRejected,
                       rodakos::CloudDiagnosticCode::kCredentialsExpired,
                       rodakos::CloudDiagnosticCode::kRefreshFailed,
+                      rodakos::CloudDiagnosticCode::kNetworkUnavailable,
                       rodakos::CloudDiagnosticCode::kVoiceUnavailable,
                       rodakos::CloudDiagnosticCode::kTrustUnavailable}) {
         cloud_ui_test::state = {code, 100};
         f.assistant.state.message = "raw-secret-token-response";
         f.app.RefreshState();
         RODAK_CHECK(Label(lv_screen_active(), rodakos::CloudDiagnosticTitle(code)) != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Assistant - Ready") == nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Assistant - Needs attention") != nullptr);
         auto* hint = Label(lv_screen_active(), rodakos::CloudDiagnosticHint(code));
         RODAK_CHECK(hint != nullptr);
         lv_obj_update_layout(hint);
@@ -71,6 +76,100 @@ RODAK_TEST("Assistant shows fixed cloud diagnosis and recovery guidance") {
     }
     RODAK_CHECK_EQ(f.assistant.initializations, 1U);
     RODAK_CHECK_EQ(f.wake.changes, 0U);
+}
+
+RODAK_TEST("Assistant titles distinguish preparation and idle failures without hiding active phases") {
+    Fixture f;
+    for (auto phase : {rodakos::VoiceAssistantPhase::kIdle, rodakos::VoiceAssistantPhase::kError}) {
+        f.assistant.state.phase = phase;
+        for (auto code : {rodakos::CloudDiagnosticCode::kRefreshing,
+                          rodakos::CloudDiagnosticCode::kCredentialsRejected,
+                          rodakos::CloudDiagnosticCode::kReady}) {
+            cloud_ui_test::state = {code, 100, rodakos::NextCloudDiagnosticRevision()};
+            f.app.RefreshState();
+            auto* title = Label(lv_screen_active(), code == rodakos::CloudDiagnosticCode::kReady
+                ? "Assistant - Ready" : code == rodakos::CloudDiagnosticCode::kRefreshing
+                ? "Assistant - Preparing" : "Assistant - Needs attention");
+            RODAK_CHECK(title != nullptr);
+            lv_obj_update_layout(title);
+            lv_point_t text_size;
+            lv_text_get_size(&text_size, lv_label_get_text(title), lv_obj_get_style_text_font(title, 0),
+                             lv_obj_get_style_text_letter_space(title, 0),
+                             lv_obj_get_style_text_line_space(title, 0), LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            RODAK_CHECK(text_size.x <= lv_obj_get_content_width(title));
+        }
+    }
+    cloud_ui_test::state = {rodakos::CloudDiagnosticCode::kCredentialsRejected, 100,
+                            rodakos::NextCloudDiagnosticRevision()};
+    for (auto phase : {rodakos::VoiceAssistantPhase::kConnecting,
+                      rodakos::VoiceAssistantPhase::kListening,
+                      rodakos::VoiceAssistantPhase::kSpeaking}) {
+        f.assistant.state.phase = phase;
+        f.app.RefreshState();
+        RODAK_CHECK(Label(lv_screen_active(), phase == rodakos::VoiceAssistantPhase::kConnecting
+            ? "Assistant - Connecting" : phase == rodakos::VoiceAssistantPhase::kListening
+            ? "Assistant - Listening" : "Assistant - Speaking") != nullptr);
+    }
+    RODAK_CHECK_EQ(f.wake.changes, 0U);
+}
+
+RODAK_TEST("Disabled wake changes idle guidance while failures and active phases keep priority") {
+    Fixture f;
+    f.wake.state.enabled = false;
+    f.wake.state.status = rodakos::VoiceWakeStatus::kDisabled;
+    for (auto phase : {rodakos::VoiceAssistantPhase::kIdle, rodakos::VoiceAssistantPhase::kError}) {
+        f.assistant.state.phase = phase;
+        cloud_ui_test::state = {rodakos::CloudDiagnosticCode::kReady, 100,
+                                rodakos::NextCloudDiagnosticRevision()};
+        f.app.RefreshState();
+        RODAK_CHECK(Label(lv_screen_active(), "Assistant - Disabled") != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Wake disabled") != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Enable wake to start.") != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Ready for wake") == nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Say the wake word to start.") == nullptr);
+    }
+    for (auto code : {rodakos::CloudDiagnosticCode::kCredentialsRejected,
+                      rodakos::CloudDiagnosticCode::kNetworkUnavailable,
+                      rodakos::CloudDiagnosticCode::kTrustUnavailable}) {
+        cloud_ui_test::state = {code, 100, rodakos::NextCloudDiagnosticRevision()};
+        f.app.RefreshState();
+        RODAK_CHECK(Label(lv_screen_active(), "Assistant - Needs attention") != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), rodakos::CloudDiagnosticTitle(code)) != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), rodakos::CloudDiagnosticHint(code)) != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Enable wake to start.") == nullptr);
+    }
+    cloud_ui_test::state = {rodakos::CloudDiagnosticCode::kReady, 100,
+                            rodakos::NextCloudDiagnosticRevision()};
+    f.assistant.state.diagnostic = rodakos::CloudDiagnosticCode::kCredentialsRejected;
+    f.assistant.state.diagnostic_revision = rodakos::NextCloudDiagnosticRevision();
+    f.app.RefreshState();
+    RODAK_CHECK(Label(lv_screen_active(), "Credentials rejected") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "Enable wake to start.") == nullptr);
+    f.assistant.state.phase = rodakos::VoiceAssistantPhase::kIdle;
+    f.wifi.status = WiFiStatus::kDisconnected;
+    f.app.RefreshState();
+    RODAK_CHECK(Label(lv_screen_active(), "Server unreachable") != nullptr);
+    f.wifi.status = WiFiStatus::kConnected;
+    for (auto phase : {rodakos::VoiceAssistantPhase::kConnecting,
+                      rodakos::VoiceAssistantPhase::kListening,
+                      rodakos::VoiceAssistantPhase::kSpeaking}) {
+        f.assistant.state.phase = phase;
+        f.app.RefreshState();
+        RODAK_CHECK(Label(lv_screen_active(), phase == rodakos::VoiceAssistantPhase::kConnecting
+            ? "Assistant - Connecting" : phase == rodakos::VoiceAssistantPhase::kListening
+            ? "Assistant - Listening" : "Assistant - Speaking") != nullptr);
+        RODAK_CHECK(Label(lv_screen_active(), "Enable wake to start.") == nullptr);
+    }
+    f.assistant.state.phase = rodakos::VoiceAssistantPhase::kIdle;
+    f.wake.state.enabled = true;
+    f.wake.state.status = rodakos::VoiceWakeStatus::kListening;
+    f.app.RefreshState();
+    RODAK_CHECK(Label(lv_screen_active(), "Assistant - Ready") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "Ready for wake") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "Say the wake word to start.") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "Enable wake to start.") == nullptr);
+    RODAK_CHECK_EQ(f.wake.changes, 0U);
+    RODAK_CHECK(cloud_ui_test::state.code == rodakos::CloudDiagnosticCode::kReady);
 }
 
 RODAK_TEST("Assistant recovery control launches existing Settings only after the click") {

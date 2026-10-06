@@ -30,6 +30,7 @@ target_include_directories(assistant_ui_tests BEFORE PRIVATE
     "${RODAKOS_ROOT}/main" "${RODAKOS_ROOT}/components/rodakos_fonts/include")
 find_package(Threads REQUIRED)
 target_link_libraries(assistant_ui_tests PRIVATE lvgl Threads::Threads m)
+target_link_options(assistant_ui_tests PRIVATE -Wl,--wrap=lv_async_call)
 target_compile_options(assistant_ui_tests PRIVATE -Wall -Wextra -Wpedantic)
 set_source_files_properties(settings_cloud_ui_test.cc PROPERTIES COMPILE_OPTIONS -fno-access-control)
 add_test(NAME assistant_ui COMMAND assistant_ui_tests)

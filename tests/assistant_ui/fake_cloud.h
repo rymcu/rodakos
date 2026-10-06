@@ -8,9 +8,10 @@ inline rodakos::DeviceCloudConfig config;
 inline unsigned refreshes = 0;
 inline unsigned unbinds = 0;
 inline bool refresh_ok = true;
+inline bool reject_next_async_call = false;
 inline std::function<void()> on_refresh;
 inline void Reset() {
     state = {}; config = {}; refreshes = 0; unbinds = 0;
-    refresh_ok = true; on_refresh = {};
+    refresh_ok = true; reject_next_async_call = false; on_refresh = {};
 }
 }
