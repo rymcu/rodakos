@@ -24,12 +24,13 @@ firmware build does not change an existing hardware gate.
   request, followed by recovery to the genuine server. Additional 006 evidence
   covers a real 137/88 subnet round trip selected through USB WiFi configuration,
   retained binding/token, and two WSS silent connect/stop sessions on the 88 subnet;
-  see the [Rodak verification record](https://github.com/rymcu/rodak/blob/main/docs/trusted-network-verification.md).
+  see the [Rodak verification record](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
   This does not establish unknown-SSID roaming, automatic AP-loss recovery, speech
   or extended soak.
   Independent numeric-address probing, authority persistence, transport reuse and
   continued WiFi retry are now host-verified; their identified-package hardware gate
-  remains open. Package 007 failed its first USB NVS write gate; 008 adds diagnostics.
+  remains open. Package 007 failed its first USB NVS write gate; the diagnostic 008
+  passed the bounded USB/port/telemetry gate without reproducing that error.
   Compact authority v3 shares one trust object and retains v1/v2 read compatibility.
   Version-1-only 006 and version-2-only 007/008 cannot read newer records; recovery
   must preserve NVS using a package supporting the stored version. Damaged-trust recovery and
@@ -44,9 +45,9 @@ firmware build does not change an existing hardware gate.
   `rodak-realtime-voice/v1`, MQTT provisioning/credential refresh, and camera/display WebRTC peers.
 - Signed appearance packages have recorded COM3 revision 14 and next-boot trial evidence;
   see [appearance verification](appearance-verification.md). The last bounded strict COM3 pass is
-  development-signed `20261007-010516`, verified for trusted serial refresh, MQTTS,
+  development-signed `20261007-022059`, verified for trusted serial refresh, MQTTS,
   telemetry and bidirectional port recovery with retained binding; see
-  [trusted serial evidence](serial-provisioning.md#2026-10-07-trusted-network-gate).
+  [diagnostic package evidence](trusted-server-discovery.md#eighth-hardware-attempt-bounded-gate-passed).
 - Audio volume changes retain the previous service/UI cache if the codec API reports a failed write.
   A closed codec accepts configuration without opening hardware; the next open applies it and
   fails with cleanup if the initial API call fails. Voice MCP now exposes absolute/up/down tools

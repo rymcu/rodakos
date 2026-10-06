@@ -192,7 +192,7 @@ The numeric-route, redirect and continued WiFi-recovery changes are host-verifie
 their identified package still needs independent-address and AP-loss hardware
 acceptance. The dated 006 evidence below predates these changes. Additional 006
 cross-network, MQTTS-negative and WSS observations are tracked in Rodak's
-[network verification record](https://github.com/rymcu/rodak/blob/main/docs/trusted-network-verification.md).
+[network verification record](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 
 ```powershell
 wsl -d Debian -- cmake -S /mnt/d/workspace/rodakos/tests/server_trust `
@@ -206,9 +206,10 @@ after asynchronous setup returns. The release host runner includes both `server_
 and `serial_provisioning`. Build/package and COM3 evidence must identify the resulting
 signed firmware. Package 006 passed the bounded COM3 gate for trusted USB refresh,
 authenticated MQTT/telemetry and bidirectional SRV port recovery, as recorded below.
-Actual WiFi/subnet/address changes, WSS interaction, extended resource-pressure soak,
-independent A/AAAA probes and physical trust/power-loss recovery remain open. Earlier
-hotspot/serial evidence predates this feature and cannot close those gates.
+Later 006 subnet/WSS observations are linked above; 007 failure, 008 diagnosis and
+009's compact-record build are recorded separately below. Extended resource-pressure
+soak, identified-package independent address probes and physical trust/power-loss
+recovery remain separate gates. Earlier hotspot/serial evidence cannot close them.
 
 ### Signed build package
 
@@ -602,3 +603,43 @@ The retained ELF is `build/logs/trusted-network-nvs-eighth.elf`, SHA-256
 `640748619c9690391510e4430132c17861af83a76ec9b5f750d9f36307493c30`.
 Immutable Recovery, SDK configuration, dependencies, version and development signing
 are unchanged; the production app flavor still disables fault/Home test injection.
+
+### Eighth hardware attempt: bounded gate passed
+
+The 008 collector completed with exit code 0. Two trusted USB requests returned
+`not_needed`; the original device ID, token version 4 and bound state remained.
+HTTPS/MQTTS recovered through 9443/8883 → 9444/8884 → original ports, followed by
+a 60-second observation window. Wake remained healthy, fresh telemetry resumed,
+no allocation error occurred and the device had no recent thing-model warnings.
+Minimum free stacks were main 2640, serial 1696, MQTT worker 2852 and SDK MQTT
+2988 bytes.
+
+Evidence is Rodak's `.codex-temp/trusted-network-eighth-hardware.log` and
+`.codex-temp/trusted-network-hardware-serial-1791311102582.log`. No NVS failure was
+reproduced. Boot recovery had processed the previous serial pending marker and
+cleared WiFi before the new request, so the NVS layout was not the original failure
+instant. This pass does not identify 007's unlogged SDK error, resolve the independently
+reproduced contiguous-page weakness, or establish the compact-v3 hardware gate.
+
+### Compact-authority build
+
+Package `20261007-023218`, task `trusted-server-compact-authority-009`, was built
+from source `2af9ce5afd8652b97e8aafa644506b6a58bf4e0b`. ESP-IDF 6.0.2 and signed
+preserved-Recovery bundle checks passed. Only the separately owned host CI workflow
+and its documentation were uncommitted at packaging; firmware inputs matched that
+source commit. Full metadata is retained in `build/logs/trusted-network-compact-ninth.json`.
+
+| Artifact | Identity |
+| --- | --- |
+| Main image | 7,095,392 bytes; SHA-256 `54454d01c01bd9682572b78b0f37d65eff6a7cae34ca42bd24fb281b655a1b38` |
+| Merged image | SHA-256 `1a5f0d2c0cb078db375ca787ad408d952488f2f9fa5e02f7e742943b60b2b101` |
+| Retained ELF | `build/logs/trusted-network-compact-ninth.elf`; SHA-256 `7dee4ca8add14bfd7173ea15b341c5e16b377c193a11c29a0a73fd57069536e6` |
+
+SDK configuration, dependencies, immutable Recovery and development signing are
+unchanged. The production flavor disables Home population and fault injection.
+The 29 trust-service cases and six actual-SDK NVS cases passed Debug and
+ASan/UBSan/leak checks. Authority v3 keeps one shared pin while retaining strict
+v1/v2 reads and complete-record replacement. The package is a repair for the
+reproduced storage-capacity weakness; it still needs its own USB/NVS, route,
+AP-recovery and resource hardware evidence. Once v3 is written, recovery requires
+a v3-capable package with NVS preserved.

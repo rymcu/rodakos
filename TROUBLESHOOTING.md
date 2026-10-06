@@ -396,8 +396,12 @@ binding and does not justify unbinding or replacing its secret. See
 
 An unreadable or missing authority after the pin latch is set fails closed. Normal network
 retries cannot repair that record, and explicit physical recovery remains open; do not erase NVS
-or accept a new key as an automatic workaround. Independent A/AAAA candidate retries and actual
-cross-network/power-cut acceptance also remain open. The outage evidence below predates pinning.
+or accept a new key as an automatic workaround. Independent numeric address/port candidates are
+implemented and host-verified, including same-port failover; scoped/link-local IPv6 remains
+unsupported. Real subnet changes selected through USB WiFi configuration have separate 006
+evidence, while identified-package multi-address/AP-loss and physical power-cut gates remain
+open. Preserve NVS and use a reader supporting the stored authority version: 006 cannot read v2,
+and 007/008 cannot read compact v3. The outage evidence below predates pinning.
 
 As of 2026-09-28, TCP transport failures are counted independently from authentication rejection. After three consecutive TCP failures, the MQTT worker may refresh bootstrap configuration, with at least 60 seconds between TCP recovery attempts. Successful MQTT connection clears the failure count. Authentication rejection retains priority over TCP recovery.
 

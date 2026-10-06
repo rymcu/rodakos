@@ -90,8 +90,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   hardware evidence and remaining gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md#validation).
   Numeric-route/WiFi-recovery package `20261007-020911`, built from `8188e7e`, failed
-  its first USB NVS write gate. Package `20261007-022059` adds diagnostic logs;
-  it is not a storage repair. The compact v3 writer is being validated separately.
+  its first USB NVS write gate. Diagnostic package `20261007-022059` passed the
+  bounded USB/port/telemetry gate without reproducing the error; it is not a storage
+  repair. Compact-v3 package `20261007-023218` was built from `2af9ce5` with a
+  7,095,392-byte main image and still needs its own hardware acceptance.
   The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
