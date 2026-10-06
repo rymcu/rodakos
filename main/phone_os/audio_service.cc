@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <inttypes.h>
+#include <limits>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -20,6 +21,18 @@ constexpr size_t kPlaybackBufferSize = 4096;
 constexpr int kMp3ReadBufferSize = 16 * 1024;
 constexpr int kMp3RefillThreshold = 2 * MAINBUF_SIZE;
 constexpr uint32_t kTaskStackWords = 6144;
+
+class OperationLock {
+public:
+    explicit OperationLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+        if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    ~OperationLock() { if (mutex_) xSemaphoreGive(mutex_); }
+private:
+    SemaphoreHandle_t mutex_;
+};
+
+bool GetFileSize(FILE* fp, size_t& size);
 
 struct WavInfo {
     uint32_t sample_rate = 0;
@@ -42,6 +55,8 @@ uint32_t ReadLe32(const uint8_t* p) {
 }
 
 bool ReadWavHeader(FILE* fp, WavInfo& info) {
+    size_t file_size = 0;
+    if (!GetFileSize(fp, file_size)) return false;
     uint8_t header[12] = {};
     if (fread(header, 1, sizeof(header), fp) != sizeof(header)) {
         return false;
@@ -49,11 +64,18 @@ bool ReadWavHeader(FILE* fp, WavInfo& info) {
     if (std::memcmp(header, "RIFF", 4) != 0 || std::memcmp(header + 8, "WAVE", 4) != 0) {
         return false;
     }
+    const uint64_t riff_end = static_cast<uint64_t>(ReadLe32(header + 4)) + 8;
+    if (riff_end < sizeof(header) || riff_end > file_size ||
+        riff_end > static_cast<uint64_t>(std::numeric_limits<long>::max())) return false;
 
     bool found_fmt = false;
     bool found_data = false;
+    uint16_t block_align = 0;
+    uint32_t byte_rate = 0;
 
     while (!found_data) {
+        const long chunk_pos = ftell(fp);
+        if (chunk_pos < 0 || static_cast<uint64_t>(chunk_pos) + 8 > riff_end) return false;
         uint8_t chunk_header[8] = {};
         if (fread(chunk_header, 1, sizeof(chunk_header), fp) != sizeof(chunk_header)) {
             return false;
@@ -64,8 +86,11 @@ bool ReadWavHeader(FILE* fp, WavInfo& info) {
         if (chunk_data_pos < 0) {
             return false;
         }
+        const uint64_t next_pos = static_cast<uint64_t>(chunk_data_pos) + chunk_size + (chunk_size & 1U);
+        if (next_pos > riff_end) return false;
 
         if (std::memcmp(chunk_header, "fmt ", 4) == 0) {
+            if (found_fmt) return false;
             uint8_t fmt[16] = {};
             if (chunk_size < sizeof(fmt) || fread(fmt, 1, sizeof(fmt), fp) != sizeof(fmt)) {
                 return false;
@@ -73,6 +98,8 @@ bool ReadWavHeader(FILE* fp, WavInfo& info) {
             info.audio_format = ReadLe16(fmt);
             info.channels = ReadLe16(fmt + 2);
             info.sample_rate = ReadLe32(fmt + 4);
+            byte_rate = ReadLe32(fmt + 8);
+            block_align = ReadLe16(fmt + 12);
             info.bits_per_sample = ReadLe16(fmt + 14);
             found_fmt = true;
         } else if (std::memcmp(chunk_header, "data", 4) == 0) {
@@ -85,11 +112,7 @@ bool ReadWavHeader(FILE* fp, WavInfo& info) {
             break;
         }
 
-        long next_pos = chunk_data_pos + static_cast<long>(chunk_size);
-        if ((chunk_size & 1U) != 0) {
-            next_pos++;
-        }
-        if (fseek(fp, next_pos, SEEK_SET) != 0) {
+        if (fseek(fp, static_cast<long>(next_pos), SEEK_SET) != 0) {
             return false;
         }
     }
@@ -98,7 +121,11 @@ bool ReadWavHeader(FILE* fp, WavInfo& info) {
         return false;
     }
     if (info.audio_format != 1 || info.sample_rate == 0 ||
-        (info.channels != 1 && info.channels != 2) || info.bits_per_sample != 16) {
+        info.sample_rate > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        (info.channels != 1 && info.channels != 2) || info.bits_per_sample != 16 ||
+        block_align != info.channels * sizeof(int16_t) ||
+        static_cast<uint64_t>(info.sample_rate) * block_align != byte_rate ||
+        info.data_size == 0 || info.data_size % block_align != 0) {
         ESP_LOGW(TAG, "Unsupported WAV format: format=%u rate=%" PRIu32 " ch=%u bits=%u",
                  info.audio_format, info.sample_rate, info.channels, info.bits_per_sample);
         return false;
@@ -146,6 +173,75 @@ bool GetFileSize(FILE* fp, size_t& size) {
     return true;
 }
 
+bool ReadAudioBytesAt(FILE* fp, size_t offset, uint8_t* data, size_t count) {
+    return offset <= static_cast<size_t>(std::numeric_limits<long>::max()) &&
+        fseek(fp, static_cast<long>(offset), SEEK_SET) == 0 &&
+        fread(data, 1, count, fp) == count && !ferror(fp);
+}
+
+bool SkipId3v2(FILE* fp, size_t start, size_t end, size_t& next) {
+    uint8_t header[10]{};
+    if (end - start < sizeof(header) || !ReadAudioBytesAt(fp, start, header, sizeof(header)) ||
+        std::memcmp(header, "ID3", 3) != 0 || header[3] < 2 || header[3] > 4 || header[4] == 0xff ||
+        ((header[6] | header[7] | header[8] | header[9]) & 0x80) != 0) return false;
+    const uint32_t size = (static_cast<uint32_t>(header[6]) << 21) |
+        (static_cast<uint32_t>(header[7]) << 14) | (static_cast<uint32_t>(header[8]) << 7) | header[9];
+    const bool footer = header[3] == 4 && (header[5] & 0x10) != 0;
+    const uint64_t length = static_cast<uint64_t>(size) + 10 + (footer ? 10 : 0);
+    if (length > end - start) return false;
+    next = start + static_cast<size_t>(length);
+    if (footer) {
+        uint8_t trailer[10]{};
+        if (!ReadAudioBytesAt(fp, next - 10, trailer, sizeof(trailer)) ||
+            std::memcmp(trailer, "3DI", 3) != 0 || std::memcmp(trailer + 3, header + 3, 7) != 0) return false;
+    }
+    return true;
+}
+
+bool FindMp3AudioEnd(FILE* fp, size_t file_size, size_t& audio_end) {
+    audio_end = file_size;
+    // Remove bounded standard trailing tags before deciding whether EOF cut a
+    // frame short. Their contents are metadata, and may contain sync-like bytes.
+    while (audio_end != 0) {
+        uint8_t tag[32]{};
+        if (audio_end >= 128) {
+            if (!ReadAudioBytesAt(fp, audio_end - 128, tag, 3)) return false;
+            if (std::memcmp(tag, "TAG", 3) == 0) { audio_end -= 128; continue; }
+        }
+        if (audio_end >= 32) {
+            if (!ReadAudioBytesAt(fp, audio_end - 32, tag, 32)) return false;
+            if (std::memcmp(tag, "APETAGEX", 8) == 0) {
+                const uint32_t version = ReadLe32(tag + 8), size = ReadLe32(tag + 12);
+                const uint32_t flags = ReadLe32(tag + 20);
+                const bool has_header = (flags & 0x80000000U) != 0;
+                const uint64_t total = static_cast<uint64_t>(size) + (has_header ? 32 : 0);
+                if ((version != 1000 && version != 2000) || size < 32 || total > audio_end ||
+                    (flags & 0x20000000U) != 0) return false;
+                if (has_header && (!ReadAudioBytesAt(fp, audio_end - total, tag, 8) ||
+                    std::memcmp(tag, "APETAGEX", 8) != 0)) return false;
+                audio_end -= static_cast<size_t>(total);
+                continue;
+            }
+        }
+        if (audio_end >= 10) {
+            if (!ReadAudioBytesAt(fp, audio_end - 10, tag, 10)) return false;
+            if (std::memcmp(tag, "3DI", 3) == 0) {
+                if (((tag[6] | tag[7] | tag[8] | tag[9]) & 0x80) != 0) return false;
+                const uint32_t length = (static_cast<uint32_t>(tag[6]) << 21) |
+                    (static_cast<uint32_t>(tag[7]) << 14) | (static_cast<uint32_t>(tag[8]) << 7) | tag[9];
+                if (static_cast<uint64_t>(length) + 20 > audio_end) return false;
+                const size_t start = audio_end - length - 20;
+                size_t next = 0;
+                if (!SkipId3v2(fp, start, audio_end, next) || next != audio_end) return false;
+                audio_end = start;
+                continue;
+            }
+        }
+        break;
+    }
+    return fseek(fp, 0, SEEK_SET) == 0;
+}
+
 uint8_t* AllocateAudioBuffer(size_t size) {
     auto* buffer = static_cast<uint8_t*>(
         heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -176,10 +272,12 @@ uint16_t PeakAbs16(const uint8_t* data, size_t bytes) {
 AudioService::AudioService(AudioOutputService& output)
     : output_(output) {
     mutex_ = xSemaphoreCreateMutex();
+    operation_mutex_ = xSemaphoreCreateMutex();
 }
 
 AudioService::~AudioService() {
     Deinit();
+    if (operation_mutex_ != nullptr) vSemaphoreDelete(operation_mutex_);
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -187,7 +285,21 @@ AudioService::~AudioService() {
 }
 
 bool AudioService::Init() {
-    if (initialized_) {
+    OperationLock operation(operation_mutex_);
+    return InitLocked();
+}
+
+bool AudioService::IsReady() const {
+    if (mutex_ == nullptr) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool ready = initialized_;
+    xSemaphoreGive(mutex_);
+    return ready;
+}
+
+bool AudioService::InitLocked() {
+    if (mutex_ == nullptr || operation_mutex_ == nullptr) return false;
+    if (IsReady()) {
         return true;
     }
 
@@ -196,29 +308,38 @@ bool AudioService::Init() {
         return false;
     }
 
+    xSemaphoreTake(mutex_, portMAX_DELAY);
     initialized_ = true;
+    xSemaphoreGive(mutex_);
     SetState(AudioPlaybackStatus::kIdle, "Ready");
     ESP_LOGI(TAG, "Audio service initialized");
     return true;
 }
 
 void AudioService::Deinit() {
-    ReleasePlaybackHardware();
-
-    if (initialized_) {
+    OperationLock operation(operation_mutex_);
+    Stop();
+    // A timed release may fail while SD/codec I/O is in flight. Destruction must
+    // retain service state until that owner exits; never kill a task holding I/O.
+    while (HasPlaybackTask()) vTaskDelay(pdMS_TO_TICKS(10));
+    output_.CloseForOwner(kOutputOwner);
+    if (IsReady()) {
         output_.Deinit();
+        xSemaphoreTake(mutex_, portMAX_DELAY);
         initialized_ = false;
+        xSemaphoreGive(mutex_);
         SetState(AudioPlaybackStatus::kIdle, "Stopped");
         ESP_LOGI(TAG, "Audio service deinitialized");
     }
 }
 
 bool AudioService::PlayFile(const std::string& path, const std::string& title) {
+    OperationLock operation(operation_mutex_);
     if (!IsSupportedAudioFile(path)) {
         SetState(AudioPlaybackStatus::kError, "Unsupported audio file");
         return false;
     }
-    if (!Init()) {
+    if (!InitLocked()) {
         return false;
     }
 
@@ -234,6 +355,7 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
         pause_requested_ = false;
         playback_io_idle_ = false;
         playback_hardware_suspended_ = false;
+        playback_abort_error_ = false;
         state_ = {};
         state_.status = AudioPlaybackStatus::kLoading;
         state_.file_path = path;
@@ -275,6 +397,7 @@ void AudioService::Stop() {
 }
 
 bool AudioService::ReleasePlaybackHardware() {
+    OperationLock operation(operation_mutex_);
     Stop();
     if (!JoinPlaybackTask(1500)) {
         ESP_LOGW(TAG, "Timed out waiting to release playback hardware");
@@ -290,6 +413,7 @@ bool AudioService::ReleasePlaybackHardware() {
 }
 
 bool AudioService::SuspendPlaybackHardware() {
+    OperationLock operation(operation_mutex_);
     Pause();
 
     constexpr uint32_t kSuspendTimeoutMs = 1500;
@@ -337,6 +461,7 @@ void AudioService::Pause() {
 }
 
 void AudioService::Resume() {
+    OperationLock operation(operation_mutex_);
     if (mutex_ == nullptr) {
         return;
     }
@@ -347,7 +472,7 @@ void AudioService::Resume() {
     uint16_t channels = 0;
     uint16_t bits_per_sample = 0;
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    should_resume = state_.status == AudioPlaybackStatus::kPaused;
+    should_resume = playback_task_active_ && !stop_requested_ && state_.status == AudioPlaybackStatus::kPaused;
     reopen_output = should_resume && playback_hardware_suspended_;
     sample_rate = state_.sample_rate;
     channels = state_.channels;
@@ -360,11 +485,27 @@ void AudioService::Resume() {
     if (reopen_output &&
         (sample_rate == 0 || channels == 0 || bits_per_sample == 0 ||
          !output_.OpenForOwner(kOutputOwner, sample_rate, channels, bits_per_sample))) {
-        SetState(AudioPlaybackStatus::kError, "Cannot resume audio hardware");
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (stop_requested_ || !playback_task_active_) {
+            xSemaphoreGive(mutex_);
+            output_.CloseForOwner(kOutputOwner);
+            return;
+        }
+        playback_abort_error_ = true;
+        stop_requested_ = true;
+        pause_requested_ = false;
+        state_.status = AudioPlaybackStatus::kError;
+        state_.message = "Cannot resume audio hardware";
+        xSemaphoreGive(mutex_);
         return;
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (stop_requested_ || !playback_task_active_) {
+        xSemaphoreGive(mutex_);
+        if (reopen_output) output_.CloseForOwner(kOutputOwner);
+        return;
+    }
     playback_hardware_suspended_ = false;
     playback_io_idle_ = false;
     pause_requested_ = false;
@@ -424,6 +565,7 @@ void AudioService::PlaybackTask() {
     if (fp == nullptr) {
         ESP_LOGE(TAG, "Failed to open %s", path.c_str());
         SetState(AudioPlaybackStatus::kError, "Cannot open file");
+        FinishPlayback(false, false);
         ClearPlaybackTask();
         return;
     }
@@ -437,17 +579,7 @@ void AudioService::PlaybackTask() {
     }
     fclose(fp);
 
-    if (ok) {
-        if (stopped) {
-            SetState(AudioPlaybackStatus::kStopped, "Stopped");
-        } else {
-            SetState(AudioPlaybackStatus::kCompleted, "Completed");
-        }
-    } else if (stopped) {
-        SetState(AudioPlaybackStatus::kStopped, "Stopped");
-    } else {
-        SetGenericPlaybackErrorIfNeeded();
-    }
+    FinishPlayback(ok, stopped);
 
     ESP_LOGI(TAG, "Playback ended: %s", path.c_str());
     ClearPlaybackTask();
@@ -456,7 +588,7 @@ void AudioService::PlaybackTask() {
 bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped) {
     WavInfo wav = {};
     if (!ReadWavHeader(fp, wav)) {
-        SetState(AudioPlaybackStatus::kError, "Unsupported WAV");
+        SetState(AudioPlaybackStatus::kError, ferror(fp) ? "Cannot read WAV" : "Invalid or unsupported WAV");
         return false;
     }
 
@@ -509,10 +641,8 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         const size_t bytes_left = wav.data_size - played;
         const size_t to_read = std::min(bytes_left, kPlaybackBufferSize);
         const size_t bytes_read = fread(buffer, 1, to_read, fp);
-        if (bytes_read == 0) {
-            if (feof(fp)) {
-                break;
-            }
+        if (bytes_read != to_read || ferror(fp)) {
+            SetState(AudioPlaybackStatus::kError, ferror(fp) ? "Cannot read WAV" : "Truncated WAV data");
             failed = true;
             break;
         }
@@ -522,6 +652,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         }
 
         if (!output_.WriteForOwner(kOutputOwner, buffer, static_cast<int>(bytes_read))) {
+            SetState(AudioPlaybackStatus::kError, "Audio output failed");
             failed = true;
             break;
         }
@@ -543,9 +674,30 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
     return !failed;
 }
 
+void AudioService::FinishPlayback(bool ok, bool stopped) {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    // Publish the terminal result only after its output ownership is released.
+    // Stop can be admitted by the final write, after the loop's last poll.
+    if (!ok || stopped || stop_requested_ || playback_abort_error_) output_.CloseForOwner(kOutputOwner);
+    if (playback_abort_error_) {
+        state_.status = AudioPlaybackStatus::kError;
+    } else if (stopped || stop_requested_) {
+        state_.status = AudioPlaybackStatus::kStopped;
+        state_.message = "Stopped";
+    } else if (ok) {
+        state_.status = AudioPlaybackStatus::kCompleted;
+        state_.message = "Completed";
+    } else if (state_.status != AudioPlaybackStatus::kError || state_.message.empty()) {
+        state_.status = AudioPlaybackStatus::kError;
+        state_.message = "Playback failed";
+    }
+    xSemaphoreGive(mutex_);
+}
+
 bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped) {
     size_t file_size = 0;
-    if (!GetFileSize(fp, file_size) || fseek(fp, 0, SEEK_SET) != 0) {
+    size_t audio_end = 0;
+    if (!GetFileSize(fp, file_size) || !FindMp3AudioEnd(fp, file_size, audio_end)) {
         SetState(AudioPlaybackStatus::kError, "Cannot read MP3");
         return false;
     }
@@ -586,14 +738,17 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     bool eof_reached = false;
     bool failed = false;
     bool codec_ready = false;
+    bool force_refill = false;
+    size_t read_offset = 0;
+    MP3FrameInfo output_format = {};
     unsigned char* read_ptr = read_buffer;
     MP3FrameInfo frame_info = {};
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         state_.data_bytes = file_size;
-        state_.status = AudioPlaybackStatus::kLoading;
-        state_.message = "Loading MP3";
+        state_.status = pause_requested_ ? AudioPlaybackStatus::kPaused : AudioPlaybackStatus::kLoading;
+        state_.message = pause_requested_ ? "Paused" : "Loading MP3";
         xSemaphoreGive(mutex_);
     }
 
@@ -610,57 +765,142 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
             continue;
         }
 
-        if (bytes_left < kMp3RefillThreshold && !eof_reached) {
+        if ((bytes_left < kMp3RefillThreshold || force_refill) && !eof_reached) {
             std::memmove(read_buffer, read_ptr, static_cast<size_t>(bytes_left));
+            const size_t request = std::min(audio_end - read_offset,
+                static_cast<size_t>(kMp3ReadBufferSize - bytes_left));
             const size_t bytes_read = fread(read_buffer + bytes_left, 1,
-                                            kMp3ReadBufferSize - bytes_left, fp);
+                                            request, fp);
+            if (bytes_read != request || ferror(fp)) {
+                SetState(AudioPlaybackStatus::kError, ferror(fp) ? "Cannot read MP3" : "Truncated MP3 file");
+                failed = true;
+                break;
+            }
+            read_offset += bytes_read;
             if (bytes_read < static_cast<size_t>(kMp3ReadBufferSize - bytes_left)) {
                 std::memset(read_buffer + bytes_left + bytes_read, 0,
                             kMp3ReadBufferSize - bytes_left - bytes_read);
             }
             bytes_left += static_cast<int>(bytes_read);
             read_ptr = read_buffer;
-            if (bytes_read == 0) {
-                eof_reached = true;
-            }
+            eof_reached = read_offset == audio_end;
+            force_refill = false;
         }
 
         if (bytes_left <= 0) {
             break;
         }
 
+        if (bytes_left >= 3 && std::memcmp(read_ptr, "ID3", 3) == 0) {
+            size_t next = 0;
+            if (!SkipId3v2(fp, read_offset - static_cast<size_t>(bytes_left), audio_end, next) ||
+                fseek(fp, static_cast<long>(next), SEEK_SET) != 0) {
+                SetState(AudioPlaybackStatus::kError, "Invalid MP3 metadata");
+                failed = true;
+                break;
+            }
+            read_offset = next;
+            read_ptr = read_buffer;
+            bytes_left = 0;
+            eof_reached = read_offset == audio_end;
+            continue;
+        }
+
         const int offset = MP3FindSyncWord(read_ptr, bytes_left);
         if (offset < 0) {
             if (eof_reached) {
+                if (!std::all_of(read_ptr, read_ptr + bytes_left, [](unsigned char value) { return value == 0; })) {
+                    SetState(AudioPlaybackStatus::kError, "Invalid MP3 tail");
+                    failed = true;
+                }
                 break;
             }
-            bytes_left = 0;
-            read_ptr = read_buffer;
+            if (bytes_left == 1 && read_ptr[0] == 0xff) {
+                force_refill = true;
+                continue;
+            }
+            if (codec_ready) {
+                SetState(AudioPlaybackStatus::kError, "Invalid MP3 frame");
+                failed = true;
+                break;
+            }
+            // Preserve a possible sync prefix across a read-buffer boundary.
+            read_ptr += bytes_left - 1;
+            bytes_left = 1;
             continue;
+        }
+        if (codec_ready && offset != 0) {
+            SetState(AudioPlaybackStatus::kError, "Invalid MP3 frame boundary");
+            failed = true;
+            break;
         }
         read_ptr += offset;
         bytes_left -= offset;
 
+        auto* frame_start = read_ptr;
+        const int frame_bytes = bytes_left;
+        if (bytes_left < 4) {
+            if (eof_reached) {
+                SetState(AudioPlaybackStatus::kError, "Truncated MP3 frame");
+                failed = true;
+                break;
+            }
+            force_refill = true;
+            continue;
+        }
+        const unsigned version = (read_ptr[1] >> 3) & 3;
+        if (version == 1 || ((read_ptr[1] >> 1) & 3) != 1) {
+            SetState(AudioPlaybackStatus::kError, "Unsupported MP3 frame header");
+            failed = true;
+            break;
+        }
+        const bool mono = (read_ptr[3] >> 6) == 3;
+        const int side_info_bytes = version == 3 ? (mono ? 17 : 32) : (mono ? 9 : 17);
+        const int header_bytes = (read_ptr[1] & 1) != 0 ? 4 : 6;
+        // Helix reads CRC and side-info before testing bytesLeft for underflow.
+        // Only call it after those bytes actually exist in this buffer.
+        if (bytes_left < header_bytes + side_info_bytes) {
+            if (eof_reached) {
+                SetState(AudioPlaybackStatus::kError, "Truncated MP3 frame");
+                failed = true;
+                break;
+            }
+            force_refill = true;
+            continue;
+        }
         const int decode_ret = MP3Decode(decoder, &read_ptr, &bytes_left, pcm_buffer, 0);
         if (decode_ret != ERR_MP3_NONE) {
             if (decode_ret == ERR_MP3_INDATA_UNDERFLOW) {
-                if (eof_reached) {
+                if (eof_reached || frame_bytes == kMp3ReadBufferSize) {
+                    SetState(AudioPlaybackStatus::kError, "Truncated MP3 frame");
+                    failed = true;
                     break;
                 }
+                // Helix has already consumed the header and side-info on this
+                // error. Refill the original complete frame, not its payload.
+                read_ptr = frame_start;
+                bytes_left = frame_bytes;
+                force_refill = true;
                 continue;
             }
-            if (decode_ret == ERR_MP3_MAINDATA_UNDERFLOW) {
+            if (decode_ret == ERR_MP3_MAINDATA_UNDERFLOW && bytes_left >= 0 && bytes_left < frame_bytes) {
                 continue;
             }
             ESP_LOGW(TAG, "MP3 decode failed: %d", decode_ret);
+            SetState(AudioPlaybackStatus::kError, "MP3 decode failed");
             failed = true;
             break;
         }
 
         MP3GetLastFrameInfo(decoder, &frame_info);
-        if (frame_info.outputSamps <= 0 || frame_info.samprate <= 0 ||
-            frame_info.nChans <= 0 || frame_info.bitsPerSample != 16) {
-            continue;
+        if (bytes_left < 0 || bytes_left >= frame_bytes || frame_info.outputSamps <= 0 ||
+            frame_info.outputSamps > MAX_NCHAN * MAX_NGRAN * MAX_NSAMP || frame_info.samprate <= 0 ||
+            (frame_info.nChans != 1 && frame_info.nChans != 2) || frame_info.bitsPerSample != 16 ||
+            frame_info.outputSamps % frame_info.nChans != 0 ||
+            (codec_ready && (frame_info.samprate != output_format.samprate || frame_info.nChans != output_format.nChans))) {
+            SetState(AudioPlaybackStatus::kError, "Invalid MP3 output format");
+            failed = true;
+            break;
         }
 
         if (!codec_ready) {
@@ -673,6 +913,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
                 break;
             }
             codec_ready = true;
+            output_format = frame_info;
 
             if (mutex_ != nullptr) {
                 xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -690,6 +931,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
 
         const int output_bytes = frame_info.outputSamps * (frame_info.bitsPerSample / 8);
         if (!output_.WriteForOwner(kOutputOwner, pcm_buffer, output_bytes)) {
+            SetState(AudioPlaybackStatus::kError, "Audio output failed");
             failed = true;
             break;
         }
@@ -740,17 +982,6 @@ void AudioService::SetState(AudioPlaybackStatus status, const char* message) {
         state_.status = status;
         if (message != nullptr) {
             state_.message = message;
-        }
-        xSemaphoreGive(mutex_);
-    }
-}
-
-void AudioService::SetGenericPlaybackErrorIfNeeded() {
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (state_.status != AudioPlaybackStatus::kError || state_.message.empty()) {
-            state_.status = AudioPlaybackStatus::kError;
-            state_.message = "Playback failed";
         }
         xSemaphoreGive(mutex_);
     }

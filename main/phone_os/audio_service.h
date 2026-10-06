@@ -57,19 +57,20 @@ public:
     int volume() const;
 
     AudioPlaybackState GetState();
-    bool IsReady() const { return initialized_; }
+    bool IsReady() const;
     bool IsBusy();
 
     static bool IsSupportedAudioFile(const std::string& name);
 
 private:
+    bool InitLocked();
     static void PlaybackTaskEntry(void* arg);
     void PlaybackTask();
     bool PlayWavFile(FILE* fp, const std::string& path, bool& stopped);
     bool PlayMp3File(FILE* fp, const std::string& path, bool& stopped);
     bool ShouldStopOrPause(bool& should_pause);
     void SetState(AudioPlaybackStatus status, const char* message = nullptr);
-    void SetGenericPlaybackErrorIfNeeded();
+    void FinishPlayback(bool ok, bool stopped);
     void UpdateProgress(size_t bytes_played, size_t data_bytes);
     void MarkPlaybackTaskStarting();
     void StorePlaybackTaskHandle(TaskHandle_t task);
@@ -79,6 +80,7 @@ private:
 
     AudioOutputService& output_;
     SemaphoreHandle_t mutex_ = nullptr;
+    SemaphoreHandle_t operation_mutex_ = nullptr;
     TaskHandle_t playback_task_ = nullptr;
     bool playback_task_active_ = false;
     bool initialized_ = false;
@@ -86,6 +88,7 @@ private:
     bool pause_requested_ = false;
     bool playback_io_idle_ = false;
     bool playback_hardware_suspended_ = false;
+    bool playback_abort_error_ = false;
     AudioPlaybackState state_;
 };
 

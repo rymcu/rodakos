@@ -145,7 +145,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - File Manager: browses and manages FileService-backed storage.
 - Gyro: motion capability surface for gyroscope/accelerometer samples.
 - System Info: firmware, WiFi, memory, and storage status.
-- Music: scans `/music` and plays supported audio through the music/audio services.
+- Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
 - Assistant: configuration and status for the local "你好达克" monitor; interaction runs as a
   system service rather than an app-owned Talk/Stop session.

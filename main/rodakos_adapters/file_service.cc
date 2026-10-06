@@ -1,4 +1,5 @@
 #include "file_service.h"
+#include "rodakos_adapters/file_directory.h"
 
 #include <dev_fs_fat.h>
 #include <esp_board_manager.h>
@@ -6,10 +7,8 @@
 #include <esp_vfs_fat.h>
 #include <cerrno>
 #include <sys/stat.h>
-#include <dirent.h>
 #include <unistd.h>
 #include <cstring>
-#include <algorithm>
 #include <mutex>
 
 namespace rodakos {
@@ -129,54 +128,17 @@ public:
 
     bool ListDirectory(const std::string& path, std::vector<FileEntry>& entries) override {
         std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+        entries.clear();
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
             return false;
         }
 
         std::string full_path = GetFullPath(path);
-        DIR* dir = opendir(full_path.c_str());
-        if (dir == nullptr) {
-            ESP_LOGE(TAG, "Failed to open directory: %s (%s)", full_path.c_str(), std::strerror(errno));
+        if (!ReadFileDirectory(full_path, entries)) {
+            ESP_LOGE(TAG, "Failed to read directory: %s (%s)", full_path.c_str(), std::strerror(errno));
             return false;
         }
-
-        entries.clear();
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr) {
-            // Skip "." and ".."
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-                continue;
-            }
-
-            FileEntry entry;
-            entry.name = ent->d_name;
-            entry.path = full_path + "/" + ent->d_name;
-            entry.is_directory = false;
-
-            // Get file info
-            struct stat st;
-            if (stat(entry.path.c_str(), &st) == 0) {
-                entry.is_directory = S_ISDIR(st.st_mode);
-                entry.size = st.st_size;
-                entry.modified_time = st.st_mtime;
-            } else {
-                entry.size = 0;
-                entry.modified_time = 0;
-            }
-
-            entries.push_back(entry);
-        }
-
-        closedir(dir);
-
-        // Sort: directories first, then by name
-        std::sort(entries.begin(), entries.end(), [](const FileEntry& a, const FileEntry& b) {
-            if (a.is_directory != b.is_directory) {
-                return a.is_directory;
-            }
-            return a.name < b.name;
-        });
 
         ESP_LOGI(TAG, "Listed %zu entries in %s", entries.size(), full_path.c_str());
         return true;

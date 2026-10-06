@@ -11,7 +11,8 @@ fi
 export RODAKOS_IDF_PATH="$rodak_idf_source"
 mkdir -p "$rodak_checks"
 for rodak_suite in app_model home_ui ota_security codec_volume mqtt_event_patch mqtt_volume_service \
-    voice_wake_service voice_audio_frontend_identity voice_identity_integration; do
+    voice_wake_service voice_audio_frontend_identity voice_identity_integration \
+    file_directory audio_playback_service music_ui; do
     rodak_target="$rodak_checks/asan-$rodak_suite"
     rodak_suite_options=()
     if [[ "$rodak_suite" == mqtt_event_patch ]]; then

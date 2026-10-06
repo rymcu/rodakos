@@ -200,6 +200,8 @@ void MusicApp::ResetUiPointers() {
     track_count_label_ = nullptr;
     track_picker_ = nullptr;
     track_list_ = nullptr;
+    refresh_library_button_ = nullptr;
+    displayed_library_revision_ = 0;
 }
 
 void MusicApp::CreateUi() {
@@ -232,15 +234,16 @@ void MusicApp::CreateUi() {
     lv_obj_align(music_icon, LV_ALIGN_LEFT_MID, 14, 0);
 
     track_title_label_ = CreateText(now_card, "No track", &phone_font_18, rodakos_theme_text_primary());
-    lv_obj_set_width(track_title_label_, 160);
+    lv_obj_set_size(track_title_label_, 160, 24);
     lv_label_set_long_mode(track_title_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(track_title_label_, LV_ALIGN_TOP_LEFT, 50, 8);
+    lv_obj_align(track_title_label_, LV_ALIGN_TOP_LEFT, 50, 2);
 
     status_label_ = CreateText(now_card, "Load audio files", &phone_font_12,
                                rodakos_theme_text_secondary());
-    lv_obj_set_width(status_label_, 160);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 50, 35);
+    lv_obj_set_size(status_label_, 238, 30);
+    lv_obj_set_style_text_line_space(status_label_, 0, 0);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 50, 27);
 
     track_count_label_ = CreateText(now_card, "0 songs", &phone_font_12, rodakos_theme_text_tertiary());
     lv_obj_set_width(track_count_label_, 66);
@@ -390,11 +393,15 @@ void MusicApp::CreateUi() {
         auto* self = static_cast<MusicApp*>(lv_event_get_user_data(e));
         auto* slider = static_cast<lv_obj_t*>(lv_event_get_target(e));
         const int value = lv_slider_get_value(slider);
-        if (self->music_player_ != nullptr) {
-            self->music_player_->SetVolume(value);
-        }
+        const bool applied = self->music_player_ != nullptr &&
+                             self->music_player_->SetVolume(value);
+        const int actual = self->music_player_ != nullptr ? self->music_player_->volume() : 0;
+        lv_slider_set_value(slider, actual, LV_ANIM_OFF);
         if (self->volume_value_label_ != nullptr) {
-            lv_label_set_text_fmt(self->volume_value_label_, "%d%%", value);
+            lv_label_set_text_fmt(self->volume_value_label_, "%d%%", actual);
+        }
+        if (!applied && self->ui_ != nullptr) {
+            self->ui_->ShowToastUnlocked("Volume change failed");
         }
     }, LV_EVENT_VALUE_CHANGED, this);
 
@@ -434,10 +441,20 @@ void MusicApp::CreateUi() {
         static_cast<MusicApp*>(lv_event_get_user_data(e))->NavigateHome();
     }, this);
 
+    refresh_library_button_ = lv_btn_create(track_picker_);
+    lv_obj_set_size(refresh_library_button_, 300, 28);
+    lv_obj_set_pos(refresh_library_button_, 10, 45);
+    auto* refresh_label = CreateText(refresh_library_button_, "Refresh / Retry", &phone_font_12,
+                                      rodakos_theme_text_primary());
+    lv_obj_center(refresh_label);
+    lv_obj_add_event_cb(refresh_library_button_, [](lv_event_t* e) {
+        static_cast<MusicApp*>(lv_event_get_user_data(e))->RefreshLibrary();
+    }, LV_EVENT_CLICKED, this);
+
     track_list_ = lv_obj_create(track_picker_);
     lv_obj_remove_style_all(track_list_);
-    lv_obj_set_size(track_list_, 300, 192);
-    lv_obj_set_pos(track_list_, 10, 44);
+    lv_obj_set_size(track_list_, 300, 158);
+    lv_obj_set_pos(track_list_, 10, 78);
     lv_obj_set_flex_flow(track_list_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(track_list_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(track_list_, LV_DIR_VER);
@@ -460,9 +477,14 @@ void MusicApp::RebuildTrackList() {
 
     UpdateTrackCountLabel();
 
-    const auto tracks = music_player_ != nullptr ? music_player_->GetTracks() : std::vector<rodakos::MusicTrack>{};
+    const auto tracks = music_player_ != nullptr
+                            ? music_player_->GetTracks(&displayed_library_revision_)
+                            : std::vector<rodakos::MusicTrack>{};
     if (tracks.empty()) {
-        auto* empty = CreateText(track_list_, "No supported audio files", &phone_font_12,
+        const auto message = music_player_ != nullptr
+                                 ? music_player_->GetState().library_message
+                                 : std::string("Music service unavailable");
+        auto* empty = CreateText(track_list_, message.c_str(), &phone_font_12,
                                  rodakos_theme_text_tertiary());
         lv_obj_set_width(empty, 300);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
@@ -504,6 +526,26 @@ void MusicApp::RebuildTrackList() {
         }, LV_EVENT_CLICKED, this);
         lv_obj_set_user_data(row, reinterpret_cast<void*>(i));
     }
+}
+
+void MusicApp::RefreshLibrary() {
+    if (music_player_ == nullptr) {
+        ui_->ShowToastUnlocked("Music service unavailable");
+        return;
+    }
+    if (!music_player_->RequestLibraryScan()) {
+        ShowPlaybackError();
+    }
+    RefreshState();
+}
+
+void MusicApp::ShowPlaybackError() {
+    const auto state = music_player_ != nullptr ? music_player_->GetState() : rodakos::MusicPlayerState{};
+    const auto message = music_player_ == nullptr ? std::string("Music service unavailable") :
+                         !state.operation_error.empty() ? state.operation_error :
+                         state.audio.status == rodakos::AudioPlaybackStatus::kError ? state.audio.message :
+                         state.library_message;
+    ui_->ShowToastUnlocked(message.c_str());
 }
 
 void MusicApp::ShowTrackPicker() {
@@ -605,8 +647,8 @@ void MusicApp::PlayTrack(size_t index) {
     if (music_player_ == nullptr) {
         return;
     }
-    if (!music_player_->PlayTrack(index)) {
-        ui_->ShowToastUnlocked("Cannot play this file");
+    if (!music_player_->PlayTrack(index, displayed_library_revision_)) {
+        ShowPlaybackError();
     }
     RefreshState();
 }
@@ -616,7 +658,7 @@ void MusicApp::PlayPrevious() {
         return;
     }
     if (!music_player_->PlayPrevious()) {
-        ui_->ShowToastUnlocked("No tracks");
+        ShowPlaybackError();
     }
     RefreshState();
 }
@@ -626,7 +668,7 @@ void MusicApp::PlayNext() {
         return;
     }
     if (!music_player_->PlayNext()) {
-        ui_->ShowToastUnlocked("No tracks");
+        ShowPlaybackError();
     }
     RefreshState();
 }
@@ -636,7 +678,7 @@ void MusicApp::TogglePlayPause() {
         return;
     }
     if (!music_player_->TogglePlayPause()) {
-        ui_->ShowToastUnlocked("No tracks");
+        ShowPlaybackError();
     }
     RefreshState();
 }
@@ -649,7 +691,12 @@ void MusicApp::StopPlayback() {
 }
 
 void MusicApp::RefreshState() {
-    if (music_player_ == nullptr || track_title_label_ == nullptr) {
+    if (track_title_label_ == nullptr) {
+        return;
+    }
+    if (music_player_ == nullptr) {
+        lv_label_set_text(track_title_label_, "Unavailable");
+        lv_label_set_text(status_label_, "Music service unavailable");
         return;
     }
 
@@ -657,8 +704,21 @@ void MusicApp::RefreshState() {
 
     const auto player_state = music_player_->GetState();
     const auto& state = player_state.audio;
+    if (displayed_library_revision_ != player_state.library_revision) {
+        RebuildTrackList();
+    }
+    if (refresh_library_button_ != nullptr) {
+        if (player_state.library_status == rodakos::MusicLibraryStatus::kScanning) {
+            lv_obj_add_state(refresh_library_button_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_state(refresh_library_button_, LV_STATE_DISABLED);
+        }
+    }
 
-    if (!state.title.empty()) {
+    if (player_state.library_status != rodakos::MusicLibraryStatus::kReady &&
+        player_state.library_status != rodakos::MusicLibraryStatus::kScanning) {
+        lv_label_set_text(track_title_label_, "No track");
+    } else if (!state.title.empty()) {
         lv_label_set_text(track_title_label_, state.title.c_str());
     } else if (player_state.track_count == 0) {
         lv_label_set_text(track_title_label_, "No track");
@@ -669,7 +729,13 @@ void MusicApp::RefreshState() {
     }
 
     char status_text[96] = {};
-    if (state.sample_rate > 0) {
+    if (!player_state.operation_error.empty()) {
+        std::snprintf(status_text, sizeof(status_text), "%s", player_state.operation_error.c_str());
+    } else if (player_state.library_status != rodakos::MusicLibraryStatus::kReady) {
+        std::snprintf(status_text, sizeof(status_text), "%s", player_state.library_message.c_str());
+    } else if (state.status == rodakos::AudioPlaybackStatus::kError && !state.message.empty()) {
+        std::snprintf(status_text, sizeof(status_text), "%s", state.message.c_str());
+    } else if (state.sample_rate > 0) {
         std::snprintf(status_text, sizeof(status_text), "%s %d%%",
                       StatusText(state.status), state.progress_percent);
     } else if (!state.message.empty()) {

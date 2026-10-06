@@ -4,7 +4,7 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 
 ## Current Status
 
-Last refreshed: 2026-10-06 (voice-identity consistency work starts from `a7cb1b0`; current source and
+Last refreshed: 2026-10-06 (music scanning/playback work starts from `9bd388f`; current source and
 validation identity are recorded in the linked roadmap).
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 
@@ -239,6 +239,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
+- [Music scanning, playback errors and retry](docs/music-playback.md)
 - [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
 - [MQTT volume effects and software receipts](docs/mqtt-volume-effects.md)
 - [MQTT light patches and software receipts](docs/mqtt-light-effects.md)

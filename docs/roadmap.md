@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated: 2026-10-06. This voice-identity consistency slice starts from `a7cb1b0`.
+Updated: 2026-10-06. This music scanning/playback slice starts from `9bd388f`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
 
@@ -64,6 +64,11 @@ firmware build does not change an existing hardware gate.
   emitted proactively. Disabled state reads preserve on-demand audio/model behavior. See
   [identity contract](voice-identity-wake-word.md) for migration and evidence limits.
 
+- Music now separates library/storage failures from an empty library, provides worker-backed rescan,
+  and preserves asynchronous playback errors. WAV/MP3 parsing rejects premature completion, and
+  failed resume releases the paused worker for retry. See [music playback](music-playback.md) for
+  software boundaries and the still-open physical SD/audio gates.
+
 ## Remaining acceptance and implementation work
 
 | Area | Remaining work | Evidence / owner document |
@@ -75,7 +80,7 @@ firmware build does not change an existing hardware gate.
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
-| Media/storage | Large-file and low-memory SD runs; missing-card/unsupported-media/no-tracks/camera-unavailable empty/error states; Recorder preemption, resume and failure recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
+| Media/storage | Large-file and low-memory SD runs; physical Music retry/preemption/resume; remaining Photos/File Manager/Camera/Recorder empty/error states; Recorder final WAV header/flush/close failure and Camera completion-delivery recovery | [Architecture](architecture.md#service-notes), [troubleshooting](../TROUBLESHOOTING.md#audio-assistant-or-camera-unavailable) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
 | Ordinary commands | Hardware validation of stream revocation/cleanup, sustained reconnect and resource contention, remote input and ACK timing; recent-cache software tests do not establish persistence, unbounded deduplication or physical rollback | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |

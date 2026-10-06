@@ -260,6 +260,19 @@ Checks:
 - FileService mounts the Board Manager `fs_sdcard` device on demand.
 - USB MSC mode uses the early-boot path in `main/usb_msc_mode.cc`.
 
+### Music reports unavailable or playback fails
+
+Music distinguishes an empty supported library from unavailable storage or a failed directory scan.
+Use **Songs → Refresh / Retry** after inserting or repairing the SD card. Failed scans clear the
+old playable list; a retained filename is historical playback state, not proof that storage is
+available. The scan worker does not perform SD reads from the Refresh button's LVGL callback.
+
+WAV must contain complete 16-bit PCM mono/stereo frames with valid RIFF lengths. MP3 must contain
+complete decodable frames; accepted ID3/APE metadata is separated from audio. A loading request
+can still fail later, and Music displays the asynchronous error rather than a generic progress
+percentage. A failed hardware resume cancels the paused worker so a new play request can retry.
+See [music playback](docs/music-playback.md) for software tests and hardware limits.
+
 ## Out Of Memory Loading Images
 
 Checks:

@@ -30,6 +30,8 @@ private:
     void ResetUiPointers();
     void UpdateTrackCountLabel();
     void RebuildTrackList();
+    void RefreshLibrary();
+    void ShowPlaybackError();
     void ShowTrackPicker();
     void HideTrackPicker();
     void ShowVolumePanel();
@@ -65,6 +67,8 @@ private:
     lv_obj_t* track_count_label_ = nullptr;
     lv_obj_t* track_picker_ = nullptr;
     lv_obj_t* track_list_ = nullptr;
+    lv_obj_t* refresh_library_button_ = nullptr;
+    uint64_t displayed_library_revision_ = 0;
     lv_timer_t* refresh_timer_ = nullptr;
 };
 

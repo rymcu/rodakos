@@ -14,7 +14,7 @@ recorded signed package is `build/packages/ota/20261001-234748`; its main image 
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
 useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-builds recorded below. The latest slice is [voice identity validation](#2026-10-06-voice-identity-validation).
+builds recorded below. The latest slice is [music scanning/playback validation](#2026-10-06-music-scanning-and-playback-validation).
 
 The MQTT-volume slice recorded 266 app-model tests in Debug and ASan/UBSan, including eighteen MQTT volume
 effect cases. Fourteen new tests instantiate the actual MQTT service and exercise callbacks,
@@ -50,6 +50,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
+| Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
 | Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -359,6 +360,51 @@ Documentation and commits follow this software freeze. Reproduction is documente
 No packaging, flashing, serial or device NVS operation was performed. Real wake accuracy, physical
 clock synchronization, Flash power cuts, resource-pressure recovery, two-device isolation and the
 signed-OTA soak remain open. These are software configuration/reporting results, not acoustic proof.
+
+## 2026-10-06 music scanning and playback validation
+
+Source baseline: RodakOS `9bd388f` and Rodak `5ae4c52d`, plus the frozen music changes. Music
+separates library failures from an empty library, retries on its monitor worker, rejects stale
+song-list revisions and displays actual asynchronous playback errors. The production directory
+reader discards partial results; WAV/MP3 playback does not complete on early EOF or read failure.
+
+- 8 production directory-reader cases, 17 AudioService cases and 17 real-LVGL Music cases pass
+  in Debug and ASan/UBSan with leak checks. Audio tests compile the managed Helix decoder with
+  documented host arithmetic intrinsics, real files and threads; they do not substitute decoded
+  results. They include incomplete MP3 header/CRC/side-info at the allocation boundary and valid
+  frames crossing the input buffer. No sanitizer exclusions are used in that target.
+- The existing app-model suite passes all 277 cases in both modes. The desktop MCP gate passes
+  16 cross-repository cases; 8 unrelated cases are excluded by its `-t` filter. Source inputs and
+  the production MCP fixture hashes match before/after the gate. No desktop application source
+  changed, and the earlier full-coverage results retain their original baseline.
+- Software screenshots for empty library, unavailable card and playback failure were reviewed.
+  A long title no longer overlaps the error; two status lines fit inside the card. Host fake
+  fonts and the LVGL software display do not establish device typography, touch or readability.
+- ESP-IDF 6.0.2 build passes: main image **6,995,040 bytes**, below the 13,959,168-byte `ota_0`
+  slot. SHA-256: `0943f3c437963532914df72657a134145a9066a58bbb4475708d797a53a18e2e`.
+  `sdkconfig` and `dependencies.lock` are unchanged; Home hardware-test population is OFF and
+  the configured public key remains the local test key. No Recovery image or signed package
+  was generated. Generic IDF factory flashing suggestions do not apply to this partition layout.
+
+Rodak keeps 33 changed source/config/test hashes in `.codex-temp/music-source-snapshot.json`,
+nine test/fixture binary hashes in `music-test-binaries.json`, and the image identity in
+`music-firmware.json`. The gate report is `music-mcp-conformance.json`; logs are
+`music-file-directory-final.log`, `music-audio-playback.log`, `music-ui.log`, `music-app-model.log`,
+`music-mcp-conformance.log` and `music-idf-build.log`. The MCP input source digests are
+Rodak `a664dc99dbe72f90ca014b2a214ebe825df612a10ce475c2eaf791f561a41a8a` and
+RodakOS `00c1d73a40f4a0bad9d99d4c184f590876db4084ecafeb6eb3b06a9379dfd97e`.
+
+Reproduction and limitations: [music behavior](music-playback.md),
+[directory tests](../tests/file_directory/README.md),
+[audio tests](../tests/audio_playback_service/README.md), and
+[Music UI tests](../tests/music_ui/README.md). Shutdown waits for in-flight I/O and does not
+promise a time bound if a hardware driver never returns. Playback preference writes retain
+their existing persistence semantics; this change adds no remote media effect or MCP tool.
+
+No hardware, serial, flashing, packaging or device NVS operation was performed. Real SD-card
+removal/slow-card behavior, audio focus with Recorder/voice, audible output, resource exhaustion,
+NVS power cuts and signed-OTA soak remain open. Recorder final-save and Camera completion-delivery
+errors remain separate implementation work.
 
 ## Build and package
 
