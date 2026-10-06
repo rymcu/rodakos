@@ -125,6 +125,17 @@ SettingsStringWriteStatus Settings::WriteString(const std::string& key,
         commit_attempted_ = false;
         return SettingsStringWriteStatus::kOk;
     }
+    ESP_LOGE(TAG, "Write NVS string %s/%s failed: %s (bytes=%u)",
+             ns_.c_str(), key.c_str(), esp_err_to_name(err),
+             static_cast<unsigned>(value.size() + 1));
+    size_t stored_bytes = 0;
+    const esp_err_t read_error = nvs_get_str(handle_, key.c_str(), nullptr, &stored_bytes);
+    nvs_stats_t stats = {};
+    const esp_err_t stats_error = nvs_get_stats(nullptr, &stats);
+    ESP_LOGE(TAG, "NVS write diagnostic: size_read=%s stored_bytes=%u stats=%s used=%u free=%u available=%u",
+             esp_err_to_name(read_error), static_cast<unsigned>(stored_bytes),
+             esp_err_to_name(stats_error), static_cast<unsigned>(stats.used_entries),
+             static_cast<unsigned>(stats.free_entries), static_cast<unsigned>(stats.available_entries));
     return err == ESP_ERR_NVS_REMOVE_FAILED ? SettingsStringWriteStatus::kRemoveFailed
                                             : SettingsStringWriteStatus::kError;
 }
@@ -185,10 +196,13 @@ bool Settings::SetBool(const std::string& key, bool value) {
     if (!read_write_ || handle_ == 0 || !IsValidNvsName(key, "key")) {
         return false;
     }
-    if (nvs_set_u8(handle_, key.c_str(), value ? 1 : 0) == ESP_OK) {
+    const esp_err_t err = nvs_set_u8(handle_, key.c_str(), value ? 1 : 0);
+    if (err == ESP_OK) {
         dirty_ = true;
         commit_attempted_ = false;
         return true;
     }
+    ESP_LOGE(TAG, "Write NVS bool %s/%s failed: %s",
+             ns_.c_str(), key.c_str(), esp_err_to_name(err));
     return false;
 }
