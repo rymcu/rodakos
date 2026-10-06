@@ -514,3 +514,34 @@ timeouts without a TLS handshake and is explicitly excluded from the passing res
 This checks the HTTPS wrong-key/certificate branch only. It does not establish WSS
 or MQTTS negative cases, replay/expiry rejection, multiple-address probing, certificate
 rotation/revocation or physical trust recovery.
+
+### Numeric-route and WiFi recovery build
+
+Package `20261007-020911`, signing task `trusted-server-route-recovery-007`, was
+built after committing source `8188e7e22364ca9373cfb020ef834745cd80a609`, with no
+tracked changes at packaging time. ESP-IDF 6.0.2 `ninja -C build -j2` and the signed
+preserved-Recovery bundle checks both passed. This package adds numeric route
+authentication/persistence, transport reuse, the checked WebSocket redirect
+rejection and continued WiFi recovery with guarded STA/IP events. The production
+compile commands include the generated WebSocket client and route source.
+
+| Artifact | Identity |
+| --- | --- |
+| Main image | 7,093,088 bytes; SHA-256 `8e0beefcc725dc7b9651e27f1cf82ec0b4b38011ff18724c05c4f175e7cf704c` |
+| Merged image | SHA-256 `d077e6e2bebed5ed9e8c3befdb93b84a19e9394de7aff4ce269299b7697bb80e` |
+| Retained ELF | `build/logs/trusted-network-route-seventh.elf`; SHA-256 `bb1f7c91abc82f0af0bb736ee5e0333ea9089f8af89050e57585b8b6be44c699` |
+| Immutable Recovery | Reused from `20260930-231358`; SHA-256 `ffa412ebe30c714c691bba73c8ab6e4efcaaab14fce5229f595707a8a08f75fd` |
+
+Version remains `0.1.2-dev.1`, with development signing and the production app
+flavor; Home population and release fault injection are disabled. `sdkconfig`
+SHA-256 is `767b0e9a2a238a7e0557937c4b44ddaa940bcb5c1cab4775af37950b27f17077`,
+and `dependencies.lock` remains
+`62261e93cf1d9df629c38af9ce54eae6a1b34e1318a1c8455d098059027f19b9`.
+The package leaves 49% of the main slot and 87% of the Recovery partition free.
+
+The 26 trust cases, three MQTT targets, voice-identity integration, 22 production
+WiFi cases and WebSocket overlay checks passed their recorded host checks. This is
+build/software evidence only. Same-port multi-address recovery, preserved routes
+after reboot, real AP disappearance and the new package's resource margins still
+require their own hardware run. Once its authority v2 record is written, recover
+with a v2-capable package preserving NVS; do not use 006 as a network rollback.

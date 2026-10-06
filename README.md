@@ -88,6 +88,8 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   transport package `20261007-010516` has a 7,081,040-byte main image; its bounded
   hardware evidence and remaining gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md#validation).
+  Numeric-route/WiFi-recovery package `20261007-020911` was built from `8188e7e`
+  with a 7,093,088-byte main image; its new hardware gates remain open.
   The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
 
 ## Build
