@@ -2,8 +2,8 @@
 
 [固件工作流](../.github/workflows/firmware-build.yml) 独立于主机测试，在 PR、`main` push
 及手动触发时构建普通功能 flavor 的主应用和 Recovery，生成明确标记的开发签名包。
-它属于 [#26](https://github.com/rymcu/rodakos/issues/26) 的固件构建阶段；首次远端构建
-通过前，不能把已落盘的工作流当作已验证的构建门禁。
+它属于 [#26](https://github.com/rymcu/rodakos/issues/26) 的固件构建阶段；已通过的候选、
+远端运行及下载包复核见下文，仓库 required checks 与生产发布门禁仍独立。
 
 ## 固定输入与环境
 
@@ -119,3 +119,26 @@ overlay 实际编译来源检查通过，没有重新构建或修改这些产物
 6 个离线回归测试通过：官方 3.0.3 solver 在这组约束下仅保留 USB 1.5.0；版本、哈希、
 Registry、本地路径、组件删除、依赖边、直接依赖和 target 的 8 类变化仍被拒绝，原/新
 lock 与 diff 在失败时保留。新的云端完整构建仍需后续 Actions 成功证据。
+
+## 2026-10-07 完整构建与工件复核通过
+
+候选 `9a093c57b8f3026c2f9e1c5523e4d600181593b1` 的
+[Actions 37514192397](https://github.com/rymcu/rodakos/actions/runs/37514192397)
+最终成功，完成普通 flavor 主应用与 Recovery 冷构建，以及两个开发签名包的生成和验证。
+实际 IDF commit 和推荐 GCC 与本文固定输入一致；27 个 Registry 组件哈希、完整 30 条
+依赖图、Board Manager 生成/链接、四个 overlay、语音模型跨度、分区容量与普通 flavor
+门禁通过。下载的原/新 lock 仅 `manifest_hash` 不同，USB 保持 `1.5.0`。
+
+工件 `rodakos-development-firmware-9a093c57b8f3026c2f9e1c5523e4d600181593b1`：
+ID `11435973303`，48,823,592 字节；GitHub 报告的归档 SHA-256 为
+`63370d0bd560d54a632314fa18891074ba8afcdfba91b90a647b509dd3b515b9`。
+下载后，`development-baseline` 与 `development-refresh` 均再次通过本 CI 入口和原
+`ota_security.py verify-package` 的签名、flavor、哈希及 merged 区段检查；两个包的
+bootloader、分区表、otadata、Recovery 与公钥逐字节一致。
+
+主应用为 7,095,392 字节，SHA-256
+`588f2f1d29c9d9a675d0f48d7e6a17c1e1d5568134eb2e7d4d4042ff8020d07a`；
+Recovery 为 338,592 字节。同一候选的主机测试见
+[Actions 37514192380](https://github.com/rymcu/rodakos/actions/runs/37514192380)。
+这些包使用本次 CI 的临时开发信任根；未刷设备，不替代已安装 Recovery 的兼容性、
+生产密钥、实际掉电或长期实机验收。#26 的 PR 可见性与 required checks/保护规则仍开放。

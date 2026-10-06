@@ -2,7 +2,7 @@
 
 [RodakOS host checks](../.github/workflows/host-checks.yml) 在所有 Pull Request、
 `main` push 和手动触发时运行。这是 [#26](https://github.com/rymcu/rodakos/issues/26)
-的主机测试阶段；首次 GitHub 成功运行仍需记录具体候选 SHA 和 Actions 链接。
+的主机测试阶段；已验证的候选 SHA、Actions 与下载工件记录见下文。
 
 ## 环境与依赖
 
@@ -118,12 +118,27 @@ CI。artifact 内容和 PR 检查展示仍应随发布验收检查。
 与 WebSocket redirect。该历史 run 不包含随后新增的 authority v3 与真实 NVS Storage
 suite；新增入口仍需新提交上的 CI 结果。
 
+### 2026-10-07 当前候选与工件复核
+
+候选 `9a093c57b8f3026c2f9e1c5523e4d600181593b1` 的
+[Actions 37514192380](https://github.com/rymcu/rodakos/actions/runs/37514192380)
+已通过 Linux host 与 PowerShell 两个 job。下载日志中的源码和 IDF 身份匹配；29 个
+CMake 项目、41 个 CTest 目标、767 个 harness 用例及 52 个 Python 测试通过，C/C++
+开启 ASan/UBSan 与泄漏检查。其中 authority v3 的 `server_trust` 为 29 项、真实 SDK
+`server_trust_nvs_storage` 为 6 项，均为零失败。
+
+已下载复核工件 `rodakos-host-9a093c57b8f3026c2f9e1c5523e4d600181593b1`：
+ID `11436647432`，86,906 字节；GitHub 报告的归档 SHA-256 为
+`f9c6d0806371d42bd8b4eaebf20e72ac1160a0dbebde3cc073f7f7fa92d8e091`。
+同一候选的固件构建和开发包复核见 [固件 CI](firmware-ci.md#2026-10-07-完整构建与工件复核通过)。
+
 ## #26 仍开放的门禁
 
-主应用/Recovery 的独立 ESP-IDF job 已建立，具体输入校验、开发包边界及首轮 Registry
-地址修复见 [固件 CI](firmware-ci.md)；完整冷构建和开发包仍待成功的 Actions 证据。
+主应用/Recovery 的独立 ESP-IDF job 已通过上述候选的完整冷构建与开发包校验，具体输入
+门禁、开发包边界及修复记录见 [固件 CI](firmware-ci.md)。
 本页主机依赖校验只覆盖前述六个组件。
 
-PR 检查展示、artifact 验收及仓库套餐允许的 required checks/保护规则仍需确认。
+PR 检查展示及仓库套餐允许的 required checks/保护规则仍需确认；构建通过不代表
+这些仓库治理配置已经完成，也不建立生产发布或工件分发流程。
 主机测试成功不会关闭 [发布验收](ota-release-readiness.md) 中的真实掉电、设备资源耗尽、
 声学、跨网络和长期运行门禁。
