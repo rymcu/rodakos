@@ -1646,3 +1646,144 @@ closed windows. The repeated analysis rechecks 115 input hashes and reuses the p
 review without counting another run. Its SHA-256 is
 `65c3cebe56a786f06613f3d1eaa5d20c2c294be65464e9e26bc7698adce6da03`; seal SHA-256 is
 `27b64e4943ce2d5a71d256c72532e2b21df8a34f8e88c0891c4424b59b5ab556`.
+
+## 2026-10-08 AES DMA allocation cleanup 029
+
+Firmware source `83cab8021c265ed162d9bbf827b59299dbdfc546` fixes one confirmed
+ESP-IDF 6.0.2 allocation-failure path. In `esp_aes_process_dma_ext_ram`, a successful input
+bounce allocation followed by an unsuccessful output bounce allocation previously returned
+before freeing the input. The pinned overlay changes only that return to `ret = -1` followed
+by the existing cleanup. Original full-output zeroization, error logging, allocation caps,
+1,600-byte chunk limit and successful processing remain unchanged. The real CBC caller still
+releases its AES hardware lock. Neither the IDF installation nor managed sources are edited.
+Later documentation commits do not change this firmware/package source identity.
+
+This corrects a demonstrated ownership defect; it does not establish that the 027 Camera
+failure entered this branch. It also does not reduce normal simultaneous bounce-buffer
+requirements, prove sufficient internal/DMA margin or fix the separately observed Home
+enqueue failure below. See [the dependency correction](dependency-maintenance.md).
+
+Debug, Release and ASan/UBSan/leak each pass six focused CTests: four C groups with twelve
+invocations, complete-upstream-source failure/normal-parity controls, and six Python generator
+tests. The host compiles complete AES core/caller/common translation units and the real public
+context/API header. Tests enter the real CBC failure path, verify output zeroization, buffer
+release and lock/clock balance, then verify successful retry. Seven normal-path cases have
+identical output checks and allocation traces with and without the patch. SDK/RTOS/HAL are
+host dependencies; the predictable HAL byte transform is not AES known-answer or physical DMA
+validation. Only the intentionally leaking old-source negative subprocess disables leak
+detection; all positive and normal controls retain it. The negative requires exit 1 and the
+specific outstanding-allocation assertion, never a crash or sanitizer error.
+
+The generator rejects drift in nine pinned inputs and seven CMake target/source/chip variants.
+The local runner registers the target and passes its syntax check; no full-run or Actions result
+is inferred. Related Camera teardown checks pass 25 C scenarios in each Debug/ASan mode. Their
+first generator run rejects a dependency graph before reaching the intended duplicate-source
+negative check. Both later serial reruns pass all eleven Python tests. The first logs remain;
+the bytes read at failure were not saved, so the cause is unestablished and is not assigned to
+parallel execution. The initial harness compile failure and first genuine old-source red are
+also retained separately. Software verification SHA-256 is
+`5f8941265ce1376aac18475bd7405042ecad1a2903afa68801385d13f0d85f4b`.
+
+| Artifact | Identity |
+| --- | --- |
+| Firmware source | `83cab8021c265ed162d9bbf827b59299dbdfc546` |
+| Package / task | `20261008-040342` / `aes-dma-cleanup-029` |
+| Version / flavor | `0.1.2-dev.1` / normal production app flavor, original development signing root |
+| Main image | 7,139,584 B; SHA-256 `2795b7a660fa8c81c81cc4b46fb9e523c01002a3faa7fae441bafbf76fdd0d10` |
+| ZIP | SHA-256 `017fa4b0c20abc7c5ffa37d98afa7a04b343e0c8122532545eadbacb51774b1b` |
+| ELF | SHA-256 `ec71c9e09b5a385eda4048d352b5809711365036cfb9a934211d15b4b5da3dc5` |
+
+The committed IDF build passes. Freeze verification matches all fourteen changed source files
+to commit blobs after LF normalization, rehashes all 63 software-artifact paths, and links the
+unique generated AES translation unit through `tfpsacrypto` to the retained map/ELF symbol at
+`0x42277b64`. Independent signature/ZIP/merged-image checks pass; bootloader, partition table,
+OTA selector, Recovery and public key are byte-identical to 028 package `20261008-021356`.
+The normal app fits its `ota_0` partition. Final Camera/JPEG ELF checkers pass again; the
+536-byte diagnostic object is derived from this ELF at `0x3fca85e8`. The existing Recovery-name
+partition warning and the freeze script's first CRLF-parsing failure remain recorded; neither
+is rewritten as an application failure or hidden. Independent package-verification SHA-256 is
+`022dbc87b7bfa889f2d88868e2c1067d0a711040c70ad3b5ec4ad591b8594cd4`.
+
+The separately labelled **029 resource-concurrency experiment ran 028 source `6666a3e` and
+package `20261008-021356`**, before the AES package was installed. It combines a local native
+Camera preview with one remote Display peer; it is not two simultaneous remote video peers.
+Startup/exit order has four cells:
+
+| Startup / cleanup order | Bounded result |
+| --- | --- |
+| Local Camera first / Home first | Finite pass; 78.464 s after successful cleanup |
+| Display first / Display stop first | Finite pass; 79.377 s after successful cleanup |
+| Local Camera first / Display stop first | Finite pass; 60.193 s after successful cleanup |
+| Display first / Home first | `RODAK_APP_LAUNCH_RESULT {"queued":false}`; Camera remains running |
+
+The failed Home attempt leaves a saved Display image showing Camera/Ready. After Display
+stops, one separate Home retry succeeds and the native Camera close path completes. Preserve
+that recovery without counting it as a passed fourth cell. Existing logs do not distinguish
+the LVGL-lock deadline from `lv_async_call` failure, and do not establish OOM, AES failure or a
+specific lock owner. Two desktop exclusion windows reject the opposite remote-stream start
+while preserving the original session and decodable images; they do not exercise a firmware
+busy ACK or actual simultaneous remote peers. Across these windows, six correlated Stops are
+three `already_stopped` and three `stopped`, retained as distinct results.
+
+The closed captures preserve warnings/raw diagnostics and show no captured panic/reset/MQTT
+disconnect. The same-boot internal minimum remains 555 B. Switching-recovery final Main
+internal free/largest is 15,827/7,680 B and DMA 15,107/7,680 B; the separate exclusion window's
+final Main samples are 16,731/7,680 B and 15,715/7,680 B. Different sampling times and workloads
+do not form a leak test or demonstrate net recovery. Final device state retains bound/token4,
+MQTT online and uptime 5,675,116 ms. These are 028 observations, not 029 AES hardware results.
+The independent startup-order analysis rehashes 78 inputs; its SHA-256 is
+`2732f6417698fd9774a0c26c9a9ed9d1c70c5eb6d32fa71032bf8636c2571654`.
+See [the full cross-project startup-order record](https://github.com/rymcu/rodak/blob/master/docs/video-startup-order-verification.md).
+
+The guarded NVS-preserving flash writes the 7,139,584-byte main at `0x2a0000`, verifies its
+hash and passes Recovery/main/local OTA/Home boot gates. The closed cold-baseline capture
+contains 6,275 bytes spanning 70.039 seconds. Preserve its two warnings and trailing partial
+one-byte `I`; no missing suffix is invented. The original device ID, bound/tokenVersion=4 and
+MQTT online remain. This is a new 029 boot, separate from all preceding 028 observations.
+
+The separate normal-video capture is also closed: 56,677 bytes spanning 287.543 seconds, with
+contiguous received-byte coverage and nondecreasing host/device timestamps. One Camera and one
+Display smoke each show decoded 320×240 images at start and while playing. Both actual typed
+Stop results are `stopped`; the independent review correlates `sessionId`, `startCommandNo`,
+`commandNo` and `streamKind` to the unique original-connection serial ACKs. The saved two-Stop
+audit is complete for its requested range and both retain `physicalVerified=false`.
+
+| Stream | UI image removal | UI confirmation | Captured serial after Stop ACK | Snapshot after Stop ACK |
+| --- | ---: | ---: | ---: | ---: |
+| Camera | 71 ms | 1,340 ms | 61.272 s | 61.640 s |
+| Display | 25 ms | 1,354 ms | 60.163 s | 61.954 s |
+
+Post-Stop intervals use the serial receipt time of the queued original Stop ACK; UI latency
+and the later device snapshot have separate timing boundaries. Root and the independent
+reviewer inspect a nearly dark Camera image and a Home Display image. These establish observed
+decodability/content only, not motion continuity or camera image quality. Each stream has
+eighteen SDK Add records with no over-limit warning. This smoke has no complete browser
+candidate observer, so it does not claim one-to-one browser/SDK candidate correspondence.
+
+Retain **44 timestamped warning/error lines**: 27 in Camera and 17 in Display. No raw `E:RX`,
+panic, reset or MQTT-disconnect marker is captured in this normal-video window; this is not
+an error-free or general no-overflow claim. The boot-cumulative internal minimum is **547 B**.
+The final Main sample is internal free/largest **16,515/7,680 B**, DMA free/largest
+**14,419/7,680 B**. Do not compare this boot's minimum with 028's 555 B, infer a leak from
+different samples, or attribute a headroom improvement/regression to the cleanup patch.
+
+The final 2026-10-07 20:22:18 UTC snapshot has uptime **365,136 ms**, shadow version **1070**,
+original bound/tokenVersion=4 and MQTT online. At 20:23:03 UTC, the final UI has zero images
+and control disabled; that later UI observation does not extend the captured device window.
+All serial captures and observers are closed. The independent hardware review rehashes
+37 inputs; SHA-256 is
+`62bcf140725f17f1d7b8cfe1648c1d53fc9ef0bb5129f6efb4310f5e96621df4`.
+
+Normal smoke does not prove the AES allocation-failure branch was triggered on hardware;
+that branch is verified by the identified host fault injection and linked code. It also does
+not replace the earlier 028 fourth-cell Home failure or its separate single-retry recovery.
+Resource/concurrency recovery, arbitrary OOM, DMA/IRQ/cache-off behavior,
+camera quality, audio/TLS coexistence, production signing, power cuts and eight-hour soak remain
+open. Release remains **NO_GO**.
+
+Local evidence lives under Rodak `.codex-temp/aes-dma-cleanup-029/`, including
+`software-verification.json`, `package-evidence.json`, `package-independent-verification.json`,
+`frozen-029/` and `independent-hardware-review/analysis.json`. Package evidence SHA-256 is
+`b90cdf2ab9ec42b600335bf134fc6f2dc2fe8f0c0c89776a02b97bda5f940001`; package seal SHA-256 is
+`ad73f01dcf868d7a4cb7ea32600d9b13c964c37e89448d59d3f4dd744cd08e19`.
+The separate 028 startup-order windows remain under `.codex-temp/resource-concurrency-029/`.

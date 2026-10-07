@@ -6,7 +6,34 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
-028 source `6666a3e52e50ddab989019517f237b2633e7c168` is now installed as the original-root
+029 source `83cab8021c265ed162d9bbf827b59299dbdfc546` fixes one confirmed AES DMA
+allocation-failure cleanup defect through a pinned build overlay. If an input bounce buffer
+has been allocated and the output bounce allocation fails, existing cleanup now releases the
+input buffer while retaining output zeroization and the original error. Debug, Release and
+ASan/UBSan checks pass with an explicit complete-upstream-source red control and unchanged
+normal-path traces. The original-development-root package `20261008-040342` has passed
+source/signature/ZIP/immutable-image/final-ELF verification; its main image is 7,139,584 B.
+This does not reduce normal bounce-buffer peak demand or establish that 027 hit this branch.
+The guarded NVS-preserving deployment passes Recovery/main/OTA/Home and a closed 70.039-second
+cold baseline. Independent review seals one normal Camera and one normal Display smoke:
+320×240 images, two correlated `stopped` results and more than 60 seconds of captured serial
+after each Stop ACK. Camera is nearly dark; Display shows Home. Retain 44 warning/error lines;
+there is no captured panic/reset/MQTT disconnect or raw `E:RX` in this smoke. Original
+bound/token4 and MQTT online remain; the final UI has no image and control is disabled.
+The new boot's internal minimum is 547 B; final Main internal free/largest is 16,515/7,680 B
+and DMA 14,419/7,680 B. These bounded observations do not exercise the AES allocation-failure
+branch, prove sufficient headroom or compare with 028's 555 B across boots. See
+[029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029).
+
+The separately named 029 startup-order experiment still ran installed **028** firmware.
+Three local-Camera/remote-Display order combinations pass their finite checks; the fourth,
+Display-first/Home-first, returns `home queued:false` and leaves Camera running. A single
+Home retry succeeds after Display stops; it does not replace the failure. Two desktop remote
+stream exclusion checks pass without exercising simultaneous remote peers or firmware busy
+ACKs. The same-boot internal minimum remains 555 B. See the
+[startup-order record](https://github.com/rymcu/rodak/blob/master/docs/video-startup-order-verification.md).
+
+The preceding 028 source `6666a3e52e50ddab989019517f237b2633e7c168` was installed as the original-root
 package `20261008-021356`. It cooperatively parks the DVP worker before owner-side WithCaps
 deletion and moves only its 3,072 B stack payload to PSRAM. Targeted host/negative controls,
 IDF build, signature/source/final-ELF checks and the NVS-preserving Recovery/main/OTA/Home boot
@@ -262,7 +289,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 028 completes five Camera/five Display finite normal UI cycles with confirmed Stop and post-Stop observation; boot minimum 555 B, warnings and raw Camera RX records keep resource/quality gates open. 027 Display diagnostic capacity/beyond-ten-path evidence is complete within its scope, but its Camera AES/TLS failure and post-ioctl log stall remain separate failures. Preserve earlier Camera/credential/late-control history. Startup-order variants, arbitrary OOM, DMA/IRQ/cache-off behavior, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
+| Resource recovery | 029's AES cleanup is software/package verified; guarded boot, cold baseline and one normal Camera/Display smoke each have closed independent evidence, two `stopped` results and over 60 seconds after each Stop ACK. The AES failure branch remains unproven on hardware and normal peak demand is unchanged; the new boot minimum 547 B is separate from 028's 555 B. Earlier 028 passes five Camera/five Display finite cycles and three startup/exit-order cells, but Display-first/Home-first retains a Home enqueue failure despite a later single retry succeeding. Two desktop remote-stream exclusion checks pass within their software boundary. Warnings/raw Camera RX history, arbitrary OOM, DMA/IRQ/cache-off behavior, media/audio/TLS concurrency and eight-hour soak remain open. Preserve 027's independent Camera AES/TLS failure and post-ioctl log stall | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

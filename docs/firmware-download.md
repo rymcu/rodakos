@@ -235,10 +235,11 @@ After a successful build:
 - `build\rodakos.bin`
 - `build\rodakos.elf`
 
-The last recorded signed device package `20261001-234748` contains a 6,897,584-byte main image
-(about 6.58 MiB); see [appearance verification](appearance-verification.md). A later local build
-has its own size/hash and does not replace that device evidence. Record new build results in
-[OTA release readiness](ota-release-readiness.md). The main `ota_0` partition is 13.3125 MiB;
+Historical signed device package `20261001-234748` contains a 6,897,584-byte main image
+(about 6.58 MiB); see [appearance verification](appearance-verification.md). Current source,
+package identities and deployment evidence are recorded in
+[OTA release readiness](ota-release-readiness.md). A later local build has its own size/hash
+and does not replace an earlier device observation. The main `ota_0` partition is 13.3125 MiB;
 the independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash
