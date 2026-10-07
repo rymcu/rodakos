@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -44,11 +46,20 @@ public:
     std::string last_error() const;
 
 private:
+    struct EncodeMetrics;
+
     static void OnDisplayEvent(lv_event_t* event);
     static void JpegStreamTaskEntry(void* arg);
+    void AttachWithLvglLock();
+    void DetachWithLvglLock();
     void HandleDisplayEvent(lv_event_t* event);
     void JpegStreamTask();
-    void SetError(const std::string& error);
+    bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
+                    std::vector<uint8_t>& jpeg, EncodeMetrics* metrics);
+    bool EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
+                          uint32_t& sequence, int64_t& timestamp_us, EncodeMetrics* metrics,
+                          const char*& error);
+    void SetError(const char* error);
 
     lv_display_t* display_ = nullptr;
     bool event_attached_ = false;
@@ -64,14 +75,17 @@ private:
     bool jpeg_stream_running_ = false;
     bool jpeg_stream_stop_requested_ = false;
     uint8_t jpeg_stream_fps_ = 0;
-    JpegFrameCallback jpeg_stream_callback_;
+    uint64_t jpeg_stream_generation_ = 0;
+    uint64_t jpeg_stream_completed_generation_ = 0;
+    std::shared_ptr<JpegFrameCallback> jpeg_stream_callback_;
     int width_ = 0;
     int height_ = 0;
     std::vector<uint8_t> mirror_rgb565_;
     DisplayFrame latest_frame_;
     bool has_frame_ = false;
     uint32_t frame_count_ = 0;
-    std::string last_error_;
+    // 错误路径也可能没有可用堆空间；这里只保留静态诊断文本。
+    const char* last_error_ = "";
 };
 
 }  // namespace rodakos

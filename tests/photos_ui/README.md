@@ -7,15 +7,16 @@ Images are temporary host files read by the production C stdio path. Only the ES
 and allocator platform APIs are fakes: the small JPEG SOF fixture verifies loader/ownership
 behavior, not actual JPEG compression quality or the device decoder.
 
-The 23 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
+The 24 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
 strict recursive failure propagation, optional-album fallback, recursion limits and sorted format
 selection; visible error/retry and repaired thumbnail state; timer/Home scheduling failure;
 preview/back/rescan/destruction ownership; and actual PNG/BMP decode paths. BMP cases include
 24/32-bit direct pixels, RGB565 bitfields, invalid magic/offsets/dimensions, truncated pixel ranges,
 unsupported palette/compression, pixel-read failure, and same-path replacement with header caching
-enabled. PNG cases include valid decode, 24-byte header-only input, damaged IDAT, repeated
-failure/recovery and rendering after preflight closes. File seek/read/close and confirmed allocation
-failures retain separate statuses; unknown decode failures use general wording.
+enabled. PNG cases include one retained successful decode, 24-byte header-only input, damaged IDAT,
+repeated failure/recovery, rendering without a second decode, and deterministic LodePNG allocation
+error 83 classification. File seek/read/close and confirmed allocation failures retain separate
+statuses; unknown decode failures use general wording.
 
 The tests drive real LVGL Retry buttons and produce four `photos-*.ppm` frames in the build
 directory for layout inspection. Host font fixtures do not establish device glyph/icon coverage or
@@ -37,7 +38,8 @@ Scanning, retry, file reads and decode remain synchronous; navigation does not i
 in-flight SD/library call. Destroy waits for the LVGL lock before canceling callbacks and releasing
 image sources; no bounded teardown latency is claimed. BMP remains a filesystem source after
 validating its current headers and all pixel bytes, so later removal or modification of that file
-is outside this point-in-time load result. PNG preflight is an actual no-cache decode, but a later
-draw still needs decoder memory. Generic LVGL decode failures do not identify every OOM cause.
+is outside this point-in-time load result. A successful PNG load retains its decoded ARGB8888 draw
+buffer, so later drawing does not repeat LodePNG allocation; the retained pixels still consume
+memory until the image is released. Generic LVGL decode failures do not identify every OOM cause.
 No arbitrary LVGL/CLIB exhaustion, device SD, physical touch, hardware JPEG, NVS or firmware flash
 is exercised. These remain separate #28 acceptance gates.

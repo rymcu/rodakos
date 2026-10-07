@@ -13,8 +13,9 @@ recorded appearance-gate package is `build/packages/ota/20261001-234748`; its ma
 (about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
 appearance revision 14 adoption; exact hashes and live evidence are recorded in
 [appearance verification](appearance-verification.md). The earlier 2026-09-29 package remains
-useful as the signed-OTA host baseline. Neither package identifies the newer, unflashed local
-builds recorded below. The dated 2026-10-06 device refresh used development-signed package `20261006-225642`,
+useful as the signed-OTA host baseline. Neither older package identifies the latest
+development-signed media package recorded below. The dated 2026-10-06 device refresh used
+development-signed package `20261006-225642`,
 main image 7,015,312 bytes, validated on COM3 for serial proof auto-binding and same-URL binding
 preservation. Its hash, boot log and two provisioning rounds are recorded in
 [serial provisioning evidence](serial-provisioning.md#2026-10-06-hotspot-and-binding-proof-gate).
@@ -25,7 +26,9 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The preceding software-only slice is
+The latest media slice, including a bounded package-016 device run, is
+[media decode and display-allocation validation](#2026-10-07-media-decode-and-display-allocation-validation).
+The preceding Recorder/Camera work remains recorded in
 [Recorder/Camera save validation](#2026-10-06-media-save-validation).
 
 The MQTT-volume slice recorded 266 app-model tests in Debug and ASan/UBSan, including eighteen MQTT volume
@@ -41,6 +44,13 @@ correction passed 14 real-codec tests in both modes and 13 generator validation 
 The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
 5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
 with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
+The later media allocation slice reran 43 Home UI cases and passed 24 production `DisplayService`,
+24 Photos/ImageLibrary, and 8 valid plus 2 rejected-geometry LodePNG cases in Debug and ASan/UBSan
+with leak detection. The complete host runner passes 30 suites and 42 CTest cases plus Python groups
+of 17, 15, 8 and 12 cases. Its 7,108,752-byte firmware was packaged and flashed as development
+package 016. After a clean restart, `A3.PNG` displayed on five attempts while the display stream
+encoded all 34 attempted JPEG frames without abort, panic or reboot. This remains bounded evidence;
+one observed 229,376-byte largest PSRAM block was smaller than the next 230,400-byte RGB888 request.
 Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
 The added host cases reject missing/repeated device uptime and unterminated failure logs; they do
 not establish a hardware soak. `build/logs/release-readiness.json` records the
@@ -63,7 +73,8 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
 | Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
-| Other resource failures                     | Image buffer, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                                                       | Embedded validation pending                   |
+| Media PNG / display allocation | Production PNG load/ownership, checked LVGL LodePNG decode, display capture/JPEG worker allocation, callback and stop/recovery | Software suites pass; 016 displays A3 five times and records 34/34 JPEG encodes with no reboot, while resource/concurrency/soak remain open |
+| Other resource failures                     | Physical image/display coexistence, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                               | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
 | New Recovery deployment                     | COM13 read-only verification matches partition table but mismatches new Bootloader and Recovery                                          | Wired migration required                      |
@@ -476,6 +487,76 @@ No hardware, serial port, flashing, packaging or device NVS operation was perfor
 removal/slow-card behavior, camera/JPEG quality, codec and acoustic behavior, full LVGL exhaustion,
 power interruption and eight-hour signed-OTA soak remain open. No new remote media effect or MCP
 capability is introduced.
+
+## 2026-10-07 media decode and display-allocation validation
+
+Development package 013 reached the `A3.PNG` Retry action, but crash-ELF/termination review located
+the abort in the concurrent `DisplayService` JPEG path after an unhandled `std::bad_alloc`. That
+evidence did not identify the PNG as 16-bit and did not attribute the abort to PNG bit depth or the
+LodePNG decoder overlay. Package 013 did not produce a stable PNG result. Package 014 later identified
+the file as 69,200 bytes, 471 x 423, 8-bit color type 6 (RGBA); first open and two Retries all returned
+LodePNG error 83 / `Not enough image memory`. Display JPEG frames continued and the device did not
+abort, panic or reboot, so 014 fixed the fatal boundary without displaying the image.
+
+The checked LVGL 9.3.0 overlay validates the component lock and exact LF-normalized hashes of 11
+upstream files, then substitutes only the generated LodePNG source outside `managed_components/`.
+Package 015 adds an eligible non-interlaced RGBA8 path that unfilters and compacts in the decompression
+allocation and adopts it as the ARGB8888 draw buffer. `A3.PNG` then displayed on first open and both
+Retries, but the retained image exposed a separate display-stream problem: the old JPEG path could
+not sustain its frame copy, RGB888 input and frame-sized output scratch allocations together.
+
+Package 016 removes that 153,600-byte JPEG-worker frame copy. It allocates one 230,400-byte buffer,
+copies the RGB565 snapshot into it while holding the service lock, then expands RGB565 to RGB888
+backwards in place after releasing the lock. The output scratch is fixed at 100 KiB, matching the
+upstream 320 x 240 RGB888 example; output beyond that bound safely drops the frame and a newer frame
+can recover. The application-owned heap-caps peak falls from about 614,400 to 332,800 bytes. The real
+codec uses about another 46,080 bytes of PSRAM outside that application peak.
+
+The final software gate passes in Debug and ASan/UBSan with leak detection:
+
+| Target | Cases | Boundary |
+| --- | ---: | --- |
+| DisplayService | 24 | Production capture/JPEG worker, in-place conversion, 100 KiB bound, allocation failures, locks, callback/stop and recovery; hardware/codec/LVGL scheduling edges use explicit fakes |
+| Home UI | 43 | Existing real-LVGL Home and partial-flush display capture regression |
+| Photos / ImageLibrary | 24 | Production UI/loader, real LodePNG/BMP and retained ARGB8888 ownership; ESP JPEG remains a fake |
+| LodePNG overlay | 8 + 2 | Eight valid 8/16-bit, RGBA filter and Adam7 variants plus two geometry/stride rejections |
+
+The focused DisplayService target passes all 24 cases in both Debug and ASan/UBSan with leak
+detection. The complete release host runner passes 30 suites and 42 CTest cases, plus four Python
+groups of 17, 15, 8 and 12 cases. ESP-IDF 6.0.2 builds successfully.
+
+Historical package 015 used source `bf1bf248056a47e9a902b111f163afb60b0c2718` and directory
+`build/packages/ota/20261007-100828`, task `media-png-inplace-015`, version `0.1.2-dev.1`. Its main
+image is **7,108,624 bytes**, SHA-256
+`3cf1e0b8566cf8f40f5fb9b0fefe9be699c26fe69bd8faecd4fac2be908f9eaa`; package ZIP SHA-256 is
+`474d62301da21dbf94f10a9350d891852cfcedf35cf565d13824a4c03baf9b86`. A3 decoded successfully in
+190 ms on first open and 260/185 ms on two Retries. Once its ARGB8888 image was resident, repeated
+JPEG-stat windows reported 12 or 13 attempts with zero encoded and every attempt failed; only one
+frame encoded during an image-replacement gap. Package 015 therefore proves PNG display, but fails
+the concurrent display-stream result.
+
+Current source commit `dc2bff4d25b7b4637a010f600e68d4e3b90b0ccb` was packaged at
+`build/packages/ota/20261007-103517` as task `media-display-stream-016`, version `0.1.2-dev.1`.
+The manifest is a development-signed production flavor with Home test population and fault
+injection disabled. `build/rodakos.bin` is **7,108,752 bytes**, within the 13,959,168-byte `ota_0`
+slot; SHA-256 is `95ee90d27e97e39956e56f557e4d76c1ed1a4881df40315cc5bfb789151d0126`.
+The package ZIP SHA-256 is
+`97e48b12385c62fca24e3dd6bbbd7a61e38a22b00d832f098367030bc46b6c7c`. Recovery SHA-256 is
+`ffa412ebe30c714c691bba73c8ab6e4efcaaab14fce5229f595707a8a08f75fd`, unchanged from package 015.
+
+The identified COM3 device passed package verification, then received a non-Erase incremental flash
+that preserved NVS. Recovery → main, Home startup and local OTA confirmation passed. After a clean
+restart, five `A3.PNG` decodes completed successfully in 186, 180, 202, 191 and 184 ms. Screenshots
+confirmed the first open, two Retries and two additional pressure repetitions all displayed A3.
+Display JPEG statistics accumulated **34 attempts / 34 encoded / 0 failed**, with no abort, panic
+or reboot.
+
+This passes the targeted 013 abort, 014 error-83 and 015 display-stream regression sequence. It does
+not establish complete resource stability. With the PNG resident, PSRAM free was about 532 KiB and
+the largest block was usually 360-426 KiB, but one pre-replacement sample was 229,376 bytes, below
+the 230,400-byte RGB888 allocation. The retained PNG remains ARGB8888; this change does not add
+RGB565 retention. Keep arbitrary LVGL/CLIB OOM, SD failures, camera/voice/MQTT concurrency, resource
+return under broader operation and the eight-hour identified-build soak open.
 
 ## Build and package
 
