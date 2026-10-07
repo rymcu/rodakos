@@ -1,4 +1,5 @@
 #include "host_runtime.h"
+#include "diagnostics_support.h"
 #include "phone_os/battery_monitor.h"
 
 #include <algorithm>
@@ -54,6 +55,8 @@ std::mutex direct_mutex;
 std::condition_variable direct_changed;
 bool direct_paused = false;
 bool direct_entered = false;
+thread_local void (*before_depth_sample)(QueueHandle_t, void*) = nullptr;
+thread_local void* before_depth_context = nullptr;
 
 void FlushOutbox(HostMqttClient* client) {
     // 调用者持 SDK API 锁；断线期间保留 outbox，重连才再次出线。
@@ -161,12 +164,24 @@ QueueHandle_t xQueueCreate(unsigned capacity, unsigned) {
     queue->capacity = capacity;
     return queue;
 }
-int xQueueSend(QueueHandle_t queue, const void* item, TickType_t) {
+int xQueueSend(QueueHandle_t queue, const void* item, TickType_t wait) {
     std::lock_guard<std::mutex> lock(queue->mutex);
+    ++queue->send_attempts;
+    queue->last_send_wait = wait;
     if (queue->items.size() >= queue->capacity) return pdFALSE;
+    ++queue->send_accepted;
     queue->items.push_back({*static_cast<void* const*>(item), ++queued_sequence});
     queue->changed.notify_all();
     return pdTRUE;
+}
+UBaseType_t uxQueueMessagesWaiting(QueueHandle_t queue) {
+    if (before_depth_sample != nullptr) {
+        const auto callback = before_depth_sample;
+        before_depth_sample = nullptr;
+        callback(queue, before_depth_context);
+    }
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    return static_cast<UBaseType_t>(queue->items.size());
 }
 int xQueueReceive(QueueHandle_t queue, void* output, TickType_t wait) {
     thread_local uint64_t previous_sequence = 0;
@@ -349,6 +364,9 @@ BatterySnapshot BatteryMonitor::Read() { return {}; }
 
 namespace mqtt_host {
 void Reset() {
+    ResetDiagnosticLogs();
+    before_depth_sample = nullptr;
+    before_depth_context = nullptr;
     JoinWorkers();
     std::lock_guard<std::mutex> lock(state_mutex);
     clients.clear();
@@ -530,5 +548,14 @@ bool WaitUntil(const std::function<bool()>& predicate) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return predicate();
+}
+QueueSnapshot ReadQueue(QueueHandle_t queue) {
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    return {queue->capacity, queue->items.size(), queue->send_attempts,
+            queue->send_accepted, queue->last_send_wait};
+}
+void BeforeNextQueueDepthSample(void (*callback)(QueueHandle_t, void*), void* context) {
+    before_depth_sample = callback;
+    before_depth_context = context;
 }
 }

@@ -53,4 +53,13 @@ unsigned Restarts();
 void PauseDequeue(bool pause);
 bool WaitDequeued();
 bool WaitUntil(const std::function<bool()>& predicate);
+struct QueueSnapshot {
+    size_t capacity;
+    size_t depth;
+    size_t send_attempts;
+    size_t send_accepted;
+    TickType_t last_send_wait;
+};
+QueueSnapshot ReadQueue(QueueHandle_t queue);
+void BeforeNextQueueDepthSample(void (*callback)(QueueHandle_t, void*), void* context);
 }

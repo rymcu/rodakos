@@ -144,3 +144,32 @@ Stream hardware remains fake. Real LVGL input/controller tests live in
 and actual encoded ACK tests live in [`tests/display_control_ack_service`](../display_control_ack_service/README.md).
 These tests do not establish persistent or unbounded exactly-once execution, wireless WebRTC
 success, physical rollback or hardware acceptance.
+
+## MQTT drop diagnostics (024)
+
+`rodakos_mqtt_queue_diagnostics` adds 11 cases against the complete production
+`unified_mqtt_service.cc`. It fills the actual eight-slot host queue, rejects the ninth queued
+message, checks FIFO execution and recovery after draining, and records the real `ESP_LOGE/W`
+format arguments. A real dequeue between rejection and the depth sample verifies that
+`queue_depth_sample` is observational: the send result determines `queue_send_rejected`.
+
+The allocation case arms only scalar `operator new(size_t, const std::nothrow_t&)` on the
+synchronous final-fragment thread for exactly `sizeof(PendingMessage)`. Throwing/string and
+array allocation remain available. Fixed pointer watches observe actual deletion of the two
+assembled strings and, where allocated, the queued object. Each watch is consumed once so
+later address reuse cannot masquerade as release of the original owner. Tests also cover
+successful admission, Stop cleanup, connection epochs, the eight-publication count limit,
+the exact 128 KiB total payload budget, count-first precedence, and the separate 64 KiB
+single-payload limit. Synthetic topic/body markers must not appear in failure diagnostics.
+
+`rodakos_mqtt_diagnostic_negative_controls` compiles six isolated full-TU mutations: merged
+inbound reasons, allocation mislabeled as queue rejection, classification from sampled depth,
+false drop logging after successful admission, merged outbound reasons, and byte-first
+classification when both budgets are full. Each must fail its intended assertion without a
+sanitizer error. The generated source, build logs, result log and compiled source hashes are
+retained under `negative-controls/`; `production-sources.json` identifies the compiled service.
+`RODAK_MQTT_SERVICE_SOURCE` selects an isolated baseline/mutation only in this host target.
+
+The host heap values check that diagnostics query `MALLOC_CAP_DEFAULT`; they do not measure
+device free memory, fragmentation or allocation headroom. No production test switch, queue
+capacity, publication limit, zero-timeout behavior or stream lease is changed by this fixture.
