@@ -1,4 +1,6 @@
 #include "host_runtime.h"
+#include "../task_retirement/task_retirement_host.h"
+#include "phone_os/task-retirement.h"
 #include "dev_fs_fat.h"
 #include "esp_board_manager.h"
 #include "esp_jpeg_enc.h"
@@ -25,11 +27,11 @@
 
 namespace {
 constexpr int kCameraFd = 30000;
-std::mutex tasks_mutex, mappings_mutex;
-std::vector<std::unique_ptr<std::thread>> tasks;
+std::mutex mappings_mutex;
 std::set<void*> mappings;
-thread_local TaskHandle_t current_task = nullptr;
-thread_local bool is_preview_task = false;
+bool IsPreviewTask() {
+    return std::strcmp(retirement_host::CurrentTaskName(), "camera_preview") == 0;
+}
 constexpr size_t kPreviewFrameBytes = 2 * 2 * 2;
 std::mutex preview_allocations_mutex;
 std::array<void*, 32> preview_allocations{};
@@ -53,8 +55,8 @@ void ForgetPreviewAllocation(void* pointer) {
 
 bool RejectNew(size_t bytes) {
     std::lock_guard<std::mutex> lock(failure_mutex);
-    const auto thread = current_task == nullptr ? camera_host::AllocationThread::kCaller
-        : is_preview_task ? camera_host::AllocationThread::kPreview
+    const auto thread = !retirement_host::IsWorkerTask() ? camera_host::AllocationThread::kCaller
+        : IsPreviewTask() ? camera_host::AllocationThread::kPreview
                           : camera_host::AllocationThread::kJpeg;
     if (failure_count == 0 || (failure_bytes != SIZE_MAX && bytes != failure_bytes) ||
         thread != failure_thread) return false;
@@ -85,6 +87,8 @@ void ObserveLog(const char* format) {
 std::string collision_path;
 void Reset(const std::string& path) {
     ClearNewFailures();
+    retirement_host::Reset();
+    retirement_host::SetAutoStart(true);
     new_failures = dequeued_buffers = requeued_buffers = 0;
     mount_path = path;
     board_handle.mount_point = mount_path.c_str();
@@ -122,13 +126,13 @@ void FreeAligned(void* pointer) {
     if (pointer != nullptr) { --aligned_buffers; std::free(pointer); }
 }
 bool IsCameraConfigured() {
-    if (is_preview_task && preview_state_query_hook) preview_state_query_hook();
+    if (IsPreviewTask() && preview_state_query_hook) preview_state_query_hook();
     return true;
 }
 void JoinTasks() {
-    std::vector<std::unique_ptr<std::thread>> pending;
-    { std::lock_guard<std::mutex> lock(tasks_mutex); pending.swap(tasks); }
-    for (auto& thread : pending) if (thread->joinable()) thread->join();
+    // Test cleanup uses the same permanent-owner pump as the application.
+    rodakos::PumpTaskRetirements();
+    retirement_host::JoinTasks();
 }
 std::vector<uint8_t> EncodedBytes() { return {0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9}; }
 }
@@ -140,30 +144,6 @@ esp_err_t esp_board_manager_get_device_handle(const char*, void** handle) { *han
 int64_t esp_timer_get_time() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-BaseType_t xTaskCreateWithCaps(TaskFunction_t function, const char* name, uint32_t, void* argument,
-                             uint32_t, TaskHandle_t* handle, uint32_t) {
-    std::lock_guard<std::mutex> lock(tasks_mutex);
-    auto task = std::make_unique<std::thread>();
-    *handle = task.get();
-    const auto identity = *handle;
-    const bool preview = std::strcmp(name, "camera_preview") == 0;
-    *task = std::thread([=]() {
-        current_task = identity;
-        is_preview_task = preview;
-        function(argument);
-    });
-    tasks.push_back(std::move(task));
-    return pdPASS;
-}
-BaseType_t xTaskCreatePinnedToCoreWithCaps(TaskFunction_t function, const char* name, uint32_t stack,
-                                         void* argument, uint32_t priority, TaskHandle_t* handle,
-                                         int, uint32_t caps) {
-    return xTaskCreateWithCaps(function, name, stack, argument, priority, handle, caps);
-}
-TaskHandle_t xTaskGetCurrentTaskHandle() { return current_task; }
-void vTaskDelay(TickType_t ticks) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(std::max<TickType_t>(ticks, 1)));
 }
 
 jpeg_error_t jpeg_enc_open(const jpeg_enc_config_t* config, jpeg_enc_handle_t* encoder) {
@@ -193,7 +173,7 @@ void* __wrap__Znwm(size_t size) {
     void* pointer = __real__Znwm(size);
     // Track the fake device's RGB565 allocations made by the production preview
     // worker, including buffers retained by the service after the worker exits.
-    if (is_preview_task && size == kPreviewFrameBytes) {
+    if (IsPreviewTask() && size == kPreviewFrameBytes) {
         std::lock_guard<std::mutex> lock(preview_allocations_mutex);
         const auto free_slot = std::find(preview_allocations.begin(), preview_allocations.end(), nullptr);
         if (free_slot == preview_allocations.end()) std::abort();

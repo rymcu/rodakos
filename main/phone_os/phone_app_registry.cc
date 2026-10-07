@@ -23,6 +23,24 @@ std::string Normalize(std::string_view input) {
     }
     return out;
 }
+
+bool NormalizedEqual(std::string_view left, std::string_view right) {
+    auto next = [](std::string_view& text) -> int {
+        while (!text.empty()) {
+            const auto ch = static_cast<unsigned char>(text.front());
+            text.remove_prefix(1);
+            if (std::isalnum(ch)) return std::tolower(ch);
+            if (ch >= 0x80) return ch;
+        }
+        return -1;
+    };
+    for (;;) {
+        const int lhs = next(left);
+        const int rhs = next(right);
+        if (lhs != rhs) return false;
+        if (lhs == -1) return true;
+    }
+}
 }  // namespace
 
 void PhoneAppRegistry::Register(PhoneAppDescriptor descriptor) {
@@ -108,13 +126,12 @@ const PhoneAppDescriptor* PhoneAppRegistry::FindById(std::string_view id) const 
 }
 
 const PhoneAppDescriptor* PhoneAppRegistry::ResolveAlias(std::string_view text) const {
-    const std::string needle = Normalize(text);
     for (const auto& app : apps_) {
-        if (Normalize(app.id) == needle || Normalize(app.title) == needle) {
+        if (NormalizedEqual(app.id, text) || NormalizedEqual(app.title, text)) {
             return &app;
         }
         for (const auto& alias : app.aliases) {
-            if (Normalize(alias) == needle) {
+            if (NormalizedEqual(alias, text)) {
                 return &app;
             }
         }

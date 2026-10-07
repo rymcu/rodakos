@@ -53,6 +53,7 @@ lv_timer_t* __wrap_lv_timer_create(lv_timer_cb_t callback, uint32_t period, void
 }
 namespace {
 void Pump(uint32_t milliseconds = 130) {
+    std::lock_guard<std::recursive_timed_mutex> outer_lock(camera_test::ui_mutex);
     lv_test_wait(milliseconds);
     lv_obj_update_layout(lv_screen_active());
 }

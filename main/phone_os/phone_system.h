@@ -16,6 +16,7 @@ class PhoneUi;
 class PhoneSystem {
 public:
     PhoneSystem(PhoneUi& ui, PhoneServices& services);
+    ~PhoneSystem();
 
     void RegisterBuiltInApps();
     bool Start();

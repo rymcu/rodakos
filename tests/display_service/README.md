@@ -4,7 +4,7 @@
 不替换 RGB565 → RGB888 转换、`EncodeJpeg`、worker 或 Stop 路径。
 配置时将生产源码 SHA-256 写入构建目录 `production-sources.json`。
 
-30 个用例覆盖：
+33 个用例覆盖：
 
 - StartCapture 第一／第二份帧缓冲分配失败、初始刷新排队失败；失败后能取得锁并重新启动。
 - GetLatestFrame 复制失败清除调用方旧数据、释放锁并允许重试；没有新帧时不返回旧 JPEG。
@@ -23,6 +23,9 @@
   等待已进入 callback、持续分配失败时及时停止、callback 所有权及异步刷新注销。
 - callback 最后一个共享引用在 service mutex 外析构，析构重入 service 不会死锁；旧流 Stop
   仅等待其捕获的 generation，callback 析构同步启动替代流时不会错误等待新 task。
+- 030 将业务完成与完整任务返回分开：最后 callback 析构被阻塞时，晚到 Stop 和周期回收
+  均不得提前释放任务；两个外部 Stop 与回收并发只删除一次旧任务。拒绝 IDF 临时 cleanup
+  task 分配时，正常退出仍通过，且没有进入该申请路径。
 - 并发 StartCapture 只注册一次 LVGL event callback，注册与析构注销都持有 LVGL lock；
   `GetLatestFrame` 仍保留调用方深拷贝语义，`CaptureJpeg` 不再依赖该临时副本。
 - 真实 `EncodeJpeg` 通过生产 `screen_jpeg_allocation.cc` 包装四个 allocator 入口。
@@ -33,7 +36,10 @@
 
 主机边界：LVGL 使用最小的 flush 事件、display buffer 和异步排队替身；初始异步刷新仅
 检查排队与注销，不运行真实绘制树。FreeRTOS 使用真实 C++ 线程、条件变量和互斥语义，
-信号量保留二值通知行为。`portMAX_DELAY` 在测试中以 3 秒硬失败检测未释放锁，CTest
+信号量保留二值通知行为。030 复用 `tests/task_retirement` 的完整生产回收 TU 与 SHA 锁定的
+ESP-IDF 6.0.2 WithCaps 函数链；只有调度、跨核查询和底层分配为替身。外部删除在模拟所有核
+退出后 join 宿主 worker，才允许取出并释放 TCB/stack；不再使用空的 task-delete fake。
+`portMAX_DELAY` 在测试中以 3 秒硬失败检测未释放锁，CTest
 另设 30 秒进程时限。host runtime 还记录 event callback 注册／注销是否持有 LVGL lock。
 codec 替身接受实际转换输入，产生带输入标记的固定长度字节；这不是
 有效 JPEG，不证明 ESP 编码器的图像质量或内部工作区行为。
@@ -47,18 +53,26 @@ Linux 链接器包装四个 JPEG allocator 及全局 `operator new/new[]` 的入
 
 ```bash
 cmake -S tests/display_service -B "$HOME/.cache/rodakos-display-service-debug" \
-  -G Ninja -DCMAKE_BUILD_TYPE=Debug
+  -G Ninja -DCMAKE_BUILD_TYPE=Debug -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf
 cmake --build "$HOME/.cache/rodakos-display-service-debug" -j 2
 ctest --test-dir "$HOME/.cache/rodakos-display-service-debug" --output-on-failure
 
 cmake -S tests/display_service -B "$HOME/.cache/rodakos-display-service-asan" \
-  -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -G Ninja -DCMAKE_BUILD_TYPE=Debug -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf \
+  '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
   '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer'
 cmake --build "$HOME/.cache/rodakos-display-service-asan" -j 2
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 ctest --test-dir "$HOME/.cache/rodakos-display-service-asan" --output-on-failure
 ```
+
+第二个 CTest 编译完整服务负变体，分别移除精确 Join、错误追等 replacement，要求命中
+特定断言；编译失败、超时及 sanitizer 错误均不算检出。独立旧源对照可用
+`tests/display_control_ack_service/run_retirement_negative.py --suite display --baseline-only`
+及已封存的 `--baseline-root` 运行：目录必须含原始完整 TU/头文件及逐文件 SHA/字节数 manifest，
+脚本核对后才编译，预期失败仅接受真实 IDF cleanup-task 申请被拒的双标记和 SIGABRT。
+该故意失败对照与正常正向验收分开记录。
 
 这些测试不读取串口、NVS、真实 SD 或生产密钥，不证明 Photos/PNG 与屏幕并发时的
 实机容量、持续帧率或物理设备恢复。真实 LVGL partial-flush 镜像一致性仍由已有

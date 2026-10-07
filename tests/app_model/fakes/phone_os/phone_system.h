@@ -2,12 +2,16 @@
 
 #include "phone_os/phone_app_host.h"
 #include "phone_os/phone_shell.h"
+#include "phone_os/phone_app_registry.h"
+#include "phone_ui/phone_ui.h"
 
 #include <string>
 #include <string_view>
 
 class PhoneSystem {
 public:
+    PhoneUi& ui() { return ui_; }
+    PhoneAppRegistry& registry() { return registry_; }
     bool LaunchApp(std::string_view app_id) {
         ++launch_calls;
         launched_app_id.assign(app_id.data(), app_id.size());
@@ -84,4 +88,7 @@ public:
     int set_lock_on_boot_calls = 0;
     int set_control_center_gesture_calls = 0;
     mutable int get_app_host_state_calls = 0;
+private:
+    PhoneUi ui_;
+    PhoneAppRegistry registry_;
 };

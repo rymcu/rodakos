@@ -63,11 +63,16 @@ class CameraService {
 public:
     bool StartPreview() {
         ++starts;
+        if (start_gate) start_gate->Enter();
         running = start_ok;
         if (!start_ok) preview_error = "Camera device unavailable";
         return start_ok;
     }
-    void StopPreview() { ++stops; running = false; }
+    void StopPreview() {
+        ++stops;
+        if (stop_gate) stop_gate->Enter();
+        running = false;
+    }
     bool GetLatestFrame(CameraFrame& frame) {
         if (!running || !has_frame) return false;
         frame.width = 32;
@@ -109,6 +114,8 @@ public:
         for (auto& outcome : outcomes_) if (outcome.gate) outcome.gate->Release();
     }
     bool start_ok = true;
+    std::shared_ptr<camera_test::Gate> start_gate;
+    std::shared_ptr<camera_test::Gate> stop_gate;
     bool running = false;
     bool has_frame = true;
     uint32_t sequence = 1;

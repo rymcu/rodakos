@@ -166,6 +166,45 @@ An unknown identity or a request that cannot be queued returns
 successful queue returns `RODAK_APP_LAUNCH_COMPLETE` with `ok:false`. This is a
 physically local diagnostic/control path and does not grant new app privileges.
 
+### 030 bounded navigation admission
+
+`PhoneSystem::Start()` preallocates four pending requests in PSRAM and one
+30 ms LVGL timer before the serial launch callback is registered. Registration
+happens only after system startup succeeds. Alias lookup compares the finalized
+registry without allocating a normalized temporary string; the queue copies the
+canonical ID, so it does not borrow the serial input buffer. IDs longer than
+63 bytes or containing NUL are rejected.
+
+The producer no longer acquires the LVGL lock or allocates an `lv_async_call`
+request for each launch. A full, unavailable or closed queue returns `queued:false`
+without overwriting accepted work or automatically retrying. The timer dispatches
+at most one request per callback on the LVGL thread. Once a request is executing,
+its slot is available again: four pending requests may coexist with one executing
+request.
+
+`queued:true` is admission only. The 30 ms period is not a completion deadline:
+rendering, Camera Start/Stop, prior requests and app lifecycle callbacks can delay
+execution. Shutdown cancels pending requests with failed completion; an already
+executing request finishes independently. Recoverable failures are limited to
+factory/preallocation and `OnCreate` failures whose partial UI/timers are successfully
+destroyed. The host restores its transition guard with RAII. Unknown lifecycle
+exceptions or teardown failures abort to avoid continuing with dangling timer
+userdata; an admitted request may then have no completion line. Completion-notification
+exceptions are contained without replaying the request. Admission remains distinct
+from successful navigation.
+
+Camera Back/Home uses the same queue and reports rejection with a retry toast.
+Other apps and other asynchronous LVGL paths retain their existing implementation.
+The timer still uses real LVGL allocation at startup, including the configured
+malloc assertion; this change does not establish arbitrary UI OOM recovery.
+
+The 028 `home queued:false` hardware result remains a failure with a separate later
+recovery. Its original logs did not distinguish an LVGL-lock timeout from async
+enqueue failure. The 030 real-LVGL host cases validate the new admission path, not
+that historical root cause or a new device result. See
+[030 task retirement and navigation](task-retirement.md) and
+[navigation host coverage](../tests/navigation_ui/README.md).
+
 ## Transaction Rules
 
 1. Validate the complete request before changing NVS.

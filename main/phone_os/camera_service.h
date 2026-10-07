@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 
 #include "rodakos_adapters/camera_device.h"
+#include "task-retirement.h"
 
 namespace rodakos {
 
@@ -92,14 +93,11 @@ private:
     std::mutex lifecycle_mutex_;
     std::mutex capture_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;
-    TaskHandle_t preview_task_ = nullptr;
-    TaskHandle_t jpeg_stream_task_ = nullptr;
-    // Task creation can schedule the entry point before its output handle is
-    // written. Both workers wait for their handle publication.
-    bool preview_task_ready_ = false;
-    // xTaskCreateWithCaps can run the task before publishing its output
-    // handle. Keep the task parked until the handle is stored under mutex_.
-    bool jpeg_stream_task_ready_ = false;
+    TaskRetirementOwner task_owner_;
+    // Keep the latest generation after logical completion; a late Stop must
+    // still join its complete return. A new Start replaces only this reference.
+    TaskRetirementTicket preview_task_;
+    TaskRetirementTicket jpeg_stream_task_;
     bool preview_running_ = false;
     bool stop_requested_ = false;
     bool local_preview_lease_ = false;

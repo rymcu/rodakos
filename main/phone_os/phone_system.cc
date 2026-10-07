@@ -17,6 +17,12 @@ PhoneSystem::PhoneSystem(PhoneUi& ui, PhoneServices& services)
       settings_("rodakos", true),
       context_(ui_, navigation_, registry_, services_, settings_) {}
 
+PhoneSystem::~PhoneSystem() {
+    PhoneUiLock lock(ui_, 0);
+    navigation_.CloseDeferred();
+    host_.CloseCurrent();
+}
+
 void PhoneSystem::RegisterBuiltInApps() {
     RegisterRodakBuiltInApps(registry_);
 }
@@ -38,7 +44,15 @@ bool PhoneSystem::Start() {
         ESP_LOGE(TAG, "Home app is unavailable after registry finalization");
         return false;
     }
-    return host_.Launch(*home, context_);
+    if (!navigation_.InitializeDeferred()) {
+        ESP_LOGE(TAG, "Deferred navigation initialization failed");
+        return false;
+    }
+    if (!host_.Launch(*home, context_)) {
+        navigation_.CloseDeferred();
+        return false;
+    }
+    return true;
 }
 
 bool PhoneSystem::LaunchApp(std::string_view app_id) {

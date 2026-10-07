@@ -33,12 +33,19 @@ callback 与重启、SDP 内候选及 34 次含重复 trickle 调用保持字节
 
 资源回归从真实入口采集日志，验证 internal/DMA/PSRAM 的 free/largest、信令采样最低值和
 重启清零。观察器是无动态分配的 32 B（Xtensa ABI）；Camera/Display 静态对象各增加 32 B。
-诊断日志本身仍有运行成本，`stopped` 在 peer task 自删除前，不能证明任务/idle 存储已归还。
+诊断日志本身仍有运行成本，`stopped` 在 peer task 完整返回与外部回收前，不能单凭此日志
+证明任务存储已归还。
 旧 SDK 在 close 返回后的任意虚构回调不属于本测试保证；原异步 ACK/lease 隔离由既有用例覆盖。
 
 除原 5 个显示源码负变体外，`run_peer_config_negative.py` 为两个真实 TU 分别移除显式容量、
 移除信令采样，共 4 个负变体；每个必须完整编译并在指定断言失败。构建失败、超时、崩溃及
 sanitizer 报错均不算检出。每种构建的 3 CTest 分开记录 55 个正向、5 个既有负控、4 个新负控。
+
+030 再加 6 项退役回归，共 61 项正向：两个 peer 拒绝 IDF 临时 cleanup-task 申请时仍能退出；
+终态 callback 自 Stop 与局部 callback 析构阻塞；晚到 Stop 仍等待完整旧代；析构启动 replacement
+后旧 Stop 只等原实例；自主 SDK main-loop 失败只靠常驻 Pump 回收；双 Stop 与 Pump 并发只删除一次。
+新增第四个 CTest 为两个完整服务分别移除精确 Join、错误追等 replacement，共 4 个负变体。
+原有 ACK、lease、首帧和 SDK 串行边界保持独立验证。
 
 重试仅发送同一 peer instance 的 ACK，不重复设备动作，也不转移到重建的 peer。队首只有在
 SCTP 接受后出队；WOULD_BLOCK / NO_MEM 在后续主循环重试，其余错误或资源预算耗尽使用原
@@ -55,12 +62,16 @@ C++ reason 拷贝 / 入队；另将生产 RemoteInputController 的取消入口�
 在 Stop 第一次 `vTaskDelay` 时放行，让生产 `PeerTask` 观察停止请求并执行真实 `FinishStop`。
 除专门的泵浦回归外，正常运行中的 peer 主循环由此不自行消费 ACK；测试文件仅开放 private 可见性来调度真实
 flush、取出批次、占用发送锁和观测 Stop admission。生产翻译单元使用原始头文件单独编译。
+030 的 task API 复用 `tests/task_retirement`，实际编译生产回收 TU 与锁定 SHA 的 IDF WithCaps
+函数链。底层模拟外部 suspend、所有核收敛与 kernel delete；worker 宿主线程 join 后才允许
+取出、释放 TCB/stack。业务 logical cleanup、完整 body 返回和任务存储归还分别观测。
 所有线程在每个 fixture 结束时 join；显示捕获、JPEG、时钟、FreeRTOS 调度和 peer transport
 仍为 host 替身。此目标不证明 SCTP/WebRTC 出线、设备屏幕、LVGL 或物理输入行为。
 
 ```sh
 cmake -S tests/display_control_ack_service \
-  -B ~/.cache/rodakos-display-control-ack-service -G Ninja -DCMAKE_BUILD_TYPE=Debug
+  -B ~/.cache/rodakos-display-control-ack-service -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf
 cmake --build ~/.cache/rodakos-display-control-ack-service
 ctest --test-dir ~/.cache/rodakos-display-control-ack-service --output-on-failure
 ```
@@ -75,3 +86,8 @@ ASan/UBSan 检查可另设 build 目录并传入：
 
 运行时使用 `ASAN_OPTIONS=detect_leaks=1`。项目根目录含空格时请给路径加引号；Windows 可通过
 WSL Debian 执行上述命令，源码路径使用 `/mnt/d/workspace/rodakos/tests/display_control_ack_service`。
+
+已封存原始完整 peer TU/头文件的独立红例可运行
+`run_retirement_negative.py --suite peers --baseline-only --baseline-root <snapshot> --output <evidence>`。
+脚本先核对 manifest 的全部 SHA/字节数，原 self-delete 必须经真实 IDF 进入被拒的 cleanup-task
+申请，并以两个指定标记和 SIGABRT 结束；此故意失败不算正常 CTest 通过或硬件验证。

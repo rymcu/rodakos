@@ -52,13 +52,6 @@ struct CameraCapturePayload {
     uint64_t generation = 0;
 };
 
-void DeferReturnHome(void* user_data) {
-    auto* context = static_cast<PhoneAppContext*>(user_data);
-    if (context != nullptr) {
-        context->navigation().ReturnHome();
-    }
-}
-
 lv_obj_t* CreateCaptureButton(lv_obj_t* parent) {
     auto* button = lv_btn_create(parent);
     lv_obj_remove_style_all(button);
@@ -517,7 +510,10 @@ void CameraApp::NavigateBack() {
 }
 
 void CameraApp::NavigateHome() {
-    lv_async_call(DeferReturnHome, context_);
+    if (context_ != nullptr && !context_->navigation().RequestHome()) {
+        ESP_LOGW(TAG, "Home navigation queue is unavailable or full");
+        if (ui_ != nullptr) ui_->ShowToast("返回桌面失败，请重试");
+    }
 }
 
 void RegisterCameraApp(PhoneAppRegistry& registry) {

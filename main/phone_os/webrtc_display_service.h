@@ -16,6 +16,7 @@
 #include "esp_peer.h"
 #include "phone_os/display_control_ack_tracker.h"
 #include "phone_os/stream_lease.h"
+#include "phone_os/task-retirement.h"
 #include "phone_os/webrtc-peer-resources.h"
 
 namespace rodakos {
@@ -140,10 +141,13 @@ private:
     StateCallback state_callback_;
     ControlCallback control_callback_;
     esp_peer_handle_t peer_ = nullptr;
+    TaskRetirementOwner task_retirement_owner_;
+    TaskRetirementTicket peer_retirement_;
     TaskHandle_t peer_task_ = nullptr;
     // xTaskCreateWithCaps may schedule the task before publishing its output
     // handle. Keep the task parked until Start has stored the handle.
     bool peer_task_ready_ = false;
+    bool closing_ = false;
     bool stop_requested_ = false;
     esp_peer_state_t terminal_state_ = ESP_PEER_STATE_CLOSED;
     bool running_ = false;

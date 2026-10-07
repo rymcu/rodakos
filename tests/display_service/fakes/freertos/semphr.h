@@ -1,5 +1,5 @@
 #pragma once
-#include "FreeRTOS.h"
+#include "freertos/FreeRTOS.h"
 struct HostSemaphore;
 using SemaphoreHandle_t = HostSemaphore*;
 SemaphoreHandle_t xSemaphoreCreateMutex();

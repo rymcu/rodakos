@@ -4,10 +4,13 @@ project(rodakos_display_control_ack_service_tests LANGUAGES C CXX)
 enable_testing()
 find_package(Threads REQUIRED)
 get_filename_component(RODAKOS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(RODAK_TASK_RETIREMENT_BUILD_TESTS OFF)
+add_subdirectory("${RODAKOS_ROOT}/tests/task_retirement" "${CMAKE_CURRENT_BINARY_DIR}/task-retirement")
 set(service_source "${RODAKOS_ROOT}/main/phone_os/webrtc_display_service.cc")
 set(camera_source "${RODAKOS_ROOT}/main/phone_os/webrtc_camera_service.cc")
 set(RODAK_DISPLAY_NEGATIVE_SOURCE "" CACHE FILEPATH "Generated source for an isolated negative-control build")
 set(RODAK_CAMERA_NEGATIVE_SOURCE "" CACHE FILEPATH "Generated camera source for an isolated negative-control build")
+set(RODAK_SERVICE_BASELINE_INCLUDE "" CACHE PATH "Original peer header tree for an explicit old-source control")
 set(test_mode "complete-production-translation-unit")
 if(RODAK_DISPLAY_NEGATIVE_SOURCE)
     get_filename_component(service_source "${RODAK_DISPLAY_NEGATIVE_SOURCE}" ABSOLUTE)
@@ -24,6 +27,9 @@ if(RODAK_CAMERA_NEGATIVE_SOURCE)
     set(test_mode "complete-translation-unit-negative-control")
 endif()
 set(service_header "${RODAKOS_ROOT}/main/phone_os/webrtc_display_service.h")
+if(RODAK_SERVICE_BASELINE_INCLUDE)
+    set(service_header "${RODAK_SERVICE_BASELINE_INCLUDE}/phone_os/webrtc_display_service.h")
+endif()
 set(tracker_header "${RODAKOS_ROOT}/main/phone_os/display_control_ack_tracker.h")
 set(input_source "${RODAKOS_ROOT}/main/phone_os/remote_input_controller.cc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -34,9 +40,13 @@ file(SHA256 "${tracker_header}" tracker_sha)
 file(SHA256 "${input_source}" input_sha)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/production-sources.json"
     "{\n  \"mode\": \"${test_mode}\",\n  \"webrtc_display_service.cc\": \"${service_sha}\",\n  \"webrtc_display_service.h\": \"${header_sha}\",\n  \"display_control_ack_tracker.h\": \"${tracker_sha}\",\n  \"remote_input_controller.cc\": \"${input_sha}\"\n}\n")
+set(camera_header "${RODAKOS_ROOT}/main/phone_os/webrtc_camera_service.h")
+if(RODAK_SERVICE_BASELINE_INCLUDE)
+    set(camera_header "${RODAK_SERVICE_BASELINE_INCLUDE}/phone_os/webrtc_camera_service.h")
+endif()
 set(peer_sources
     "${camera_source}"
-    "${RODAKOS_ROOT}/main/phone_os/webrtc_camera_service.h"
+    "${camera_header}"
     "${RODAKOS_ROOT}/main/phone_os/webrtc-peer-config.h"
     "${RODAKOS_ROOT}/main/phone_os/webrtc-peer-resources.h"
     "${RODAKOS_ROOT}/components/esp_peer/include/esp_peer.h"
@@ -53,6 +63,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/peer-config-sources.json" "${peer_manife
 add_executable(rodakos_display_control_ack_service_tests
     display_control_ack_service_test.cc
     peer_config_test.cc
+    task_retirement_test.cc
     host_runtime.cc
     "${service_source}"
     "${camera_source}"
@@ -67,7 +78,12 @@ target_include_directories(rodakos_display_control_ack_service_tests PRIVATE
     "${RODAKOS_ROOT}/main"
     "${RODAKOS_ROOT}/components/esp_peer/include"
     "${RODAKOS_ROOT}/managed_components/espressif__cjson/cJSON")
-target_link_libraries(rodakos_display_control_ack_service_tests PRIVATE Threads::Threads)
+target_include_directories(rodakos_display_control_ack_service_tests BEFORE PRIVATE
+    "${RODAKOS_ROOT}/tests/task_retirement/fakes")
+if(RODAK_SERVICE_BASELINE_INCLUDE)
+    target_include_directories(rodakos_display_control_ack_service_tests BEFORE PRIVATE "${RODAK_SERVICE_BASELINE_INCLUDE}")
+endif()
+target_link_libraries(rodakos_display_control_ack_service_tests PRIVATE Threads::Threads rodakos_task_retirement_host)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(rodakos_display_control_ack_service_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -88,4 +104,12 @@ if(NOT RODAK_DISPLAY_NEGATIVE_SOURCE AND NOT RODAK_CAMERA_NEGATIVE_SOURCE)
         --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
         --link-flags=${CMAKE_EXE_LINKER_FLAGS})
     set_tests_properties(rodakos_peer_config_negative_controls PROPERTIES TIMEOUT 180)
+    set_tests_properties(rodakos_display_preopen_negative_controls rodakos_peer_config_negative_controls
+        PROPERTIES ENVIRONMENT "RODAKOS_IDF_PATH=${RODAKOS_IDF_PATH}")
+    add_test(NAME rodakos_peer_retirement_negative_controls
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_retirement_negative.py"
+        --suite peers --output "${CMAKE_CURRENT_BINARY_DIR}/retirement-negative-controls"
+        --idf-path "${RODAKOS_IDF_PATH}" --c-flags=${CMAKE_C_FLAGS}
+        --cxx-flags=${CMAKE_CXX_FLAGS} --link-flags=${CMAKE_EXE_LINKER_FLAGS})
+    set_tests_properties(rodakos_peer_retirement_negative_controls PROPERTIES TIMEOUT 400)
 endif()

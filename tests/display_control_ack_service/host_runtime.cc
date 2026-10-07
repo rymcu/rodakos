@@ -2,6 +2,8 @@
 #include "freertos/task.h"
 #include "esp_peer_default.h"
 #include "esp_heap_caps.h"
+#include "task_retirement_host.h"
+#include "phone_os/task-retirement.h"
 
 #include <chrono>
 #include <algorithm>
@@ -15,10 +17,6 @@
 #include <thread>
 
 namespace {
-struct Task {
-    std::thread thread;
-    bool ready = false;
-};
 struct Peer {
     esp_peer_cfg_t config{};
     bool closed = false;
@@ -26,11 +24,8 @@ struct Peer {
 };
 std::mutex host_mutex;
 std::condition_variable host_condition;
-std::vector<std::unique_ptr<Task>> tasks;
 std::vector<std::unique_ptr<Peer>> peers;
 std::vector<rodakos_test::display_host::SentFrame> sent_frames;
-thread_local Task* current_task = nullptr;
-thread_local char external_task;
 bool block_next_send = false;
 bool send_blocked = false;
 bool release_send = false;
@@ -42,11 +37,11 @@ std::atomic<int64_t> clock_offset_us{0};
 size_t main_loop_count = 0;
 size_t clock_reads = 0;
 std::atomic<int64_t> main_loop_cost_us{0};
+std::atomic<int> main_loop_result{ESP_PEER_ERR_NONE};
 std::atomic<int64_t> send_cost_us{0};
 int open_result = ESP_PEER_ERR_NONE;
 bool default_impl_available = true;
 int connection_result = ESP_PEER_ERR_NONE;
-bool task_creation_allowed = true;
 std::vector<rodakos_test::display_host::OpenAttempt> open_attempts;
 std::vector<rodakos_test::display_host::SentSignal> sent_signals;
 std::vector<std::string> captured_logs;
@@ -58,11 +53,26 @@ bool close_state_callback = false;
 
 namespace rodakos_test::display_host {
 void JoinTasks() {
-    for (const auto& task : tasks) if (task->thread.joinable()) task->thread.join();
-    tasks.clear();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (retirement_host::Snapshot().live_tasks != 0) {
+        rodakos::PumpTaskRetirements();
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::fputs("peer fixture left a live business task\n", stderr);
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    retirement_host::JoinTasks();
 }
 void Reset() {
     JoinTasks();
+    retirement_host::Reset();
+    retirement_host::SetAutoStart(false);
+    retirement_host::SetDelayHook([](TickType_t) {
+        // Preserve the fixture's deterministic peer-loop admission: an external
+        // Stop or explicit RunPeerTasks releases only tasks already created.
+        if (!retirement_host::IsWorkerTask()) retirement_host::RunTasks();
+    });
     std::lock_guard<std::mutex> lock(host_mutex);
     peers.clear();
     open_attempts.clear();
@@ -79,10 +89,11 @@ void Reset() {
     next_send_return = {};
     clock_offset_us = 0;
     main_loop_count = 0;
+    main_loop_result = ESP_PEER_ERR_NONE;
     clock_reads = 0;
     main_loop_cost_us = send_cost_us = 0;
     connection_result = ESP_PEER_ERR_NONE;
-    default_impl_available = task_creation_allowed = true;
+    default_impl_available = true;
 }
 esp_peer_handle_t LatestPeer() {
     std::lock_guard<std::mutex> lock(host_mutex);
@@ -184,12 +195,10 @@ void OnNextSendReturn(std::function<void()> callback) {
 void SetOpenResult(int result) { open_result = result; }
 void SetDefaultImplAvailable(bool available) { default_impl_available = available; }
 void SetConnectionResult(int result) { connection_result = result; }
-void SetTaskCreationAllowed(bool allowed) { task_creation_allowed = allowed; }
+void SetTaskCreationAllowed(bool allowed) { retirement_host::SetCreationAllowed(allowed); }
 void AdvanceTimeUs(int64_t delta) { clock_offset_us.fetch_add(delta); }
 void RunPeerTasks() {
-    std::lock_guard<std::mutex> lock(host_mutex);
-    for (const auto& task : tasks) task->ready = true;
-    host_condition.notify_all();
+    retirement_host::RunTasks();
 }
 bool WaitForMainLoops(size_t minimum) {
     std::unique_lock<std::mutex> lock(host_mutex);
@@ -205,6 +214,7 @@ bool WaitForClockReads(size_t minimum) {
     return host_condition.wait_for(lock, std::chrono::seconds(2), [&] { return clock_reads >= minimum; });
 }
 void SetMainLoopCostUs(int64_t value) { main_loop_cost_us = value; }
+void SetMainLoopResult(int result) { main_loop_result = result; }
 void SetSendCostUs(int64_t value) { send_cost_us = value; }
 std::vector<OpenAttempt> OpenAttempts() {
     std::lock_guard<std::mutex> lock(host_mutex);
@@ -246,41 +256,6 @@ size_t heap_caps_get_largest_free_block(unsigned caps) {
     return heap_values[(caps & MALLOC_CAP_INTERNAL) ? 1 : (caps & MALLOC_CAP_DMA) ? 3 : 5];
 }
 
-BaseType_t xTaskCreateWithCaps(void (*entry)(void*), const char*, size_t, void* arg,
-                              unsigned, TaskHandle_t* output, unsigned) {
-    if (!task_creation_allowed) return 0;
-    auto task = std::make_unique<Task>();
-    auto* raw = task.get();
-    {
-        std::lock_guard<std::mutex> lock(host_mutex);
-        tasks.push_back(std::move(task));
-    }
-    raw->thread = std::thread([raw, entry, arg] {
-        current_task = raw;
-        {
-            std::unique_lock<std::mutex> lock(host_mutex);
-            host_condition.wait(lock, [raw] { return raw->ready; });
-        }
-        entry(arg);
-        current_task = nullptr;
-    });
-    *output = raw;
-    return pdPASS;
-}
-TaskHandle_t xTaskGetCurrentTaskHandle() {
-    return current_task ? static_cast<void*>(current_task) : &external_task;
-}
-void vTaskDelay(TickType_t) {
-    // Stop waits here after closing the tracker. Let the real peer task observe
-    // that stop request and execute its production FinishStop path.
-    {
-        std::lock_guard<std::mutex> lock(host_mutex);
-        for (const auto& task : tasks) task->ready = true;
-        host_condition.notify_all();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-}
-void vTaskDeleteWithCaps(TaskHandle_t) {}
 int64_t esp_timer_get_time() {
     const int64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count() + clock_offset_us.load();
@@ -319,7 +294,7 @@ int esp_peer_main_loop(esp_peer_handle_t) {
     clock_offset_us.fetch_add(main_loop_cost_us.load());
     ++main_loop_count;
     host_condition.notify_all();
-    return ESP_PEER_ERR_NONE;
+    return main_loop_result.load();
 }
 int esp_peer_create_data_channel(esp_peer_handle_t, esp_peer_data_channel_cfg_t*) {
     return ESP_PEER_ERR_NONE;

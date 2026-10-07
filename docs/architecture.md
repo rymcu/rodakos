@@ -234,6 +234,54 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - WakeOnLanService creates a UDP socket only for a user-requested wake, requires active WiFi, and
   leaves device-list persistence to the Wake app's versioned `wol/devices` NVS document.
 
+### Video task retirement
+
+The five Camera Preview/JPEG, Display JPEG and Camera/Display peer task paths use
+`task-retirement.{h,cc}`. A bounded, lazily allocated PSRAM registry owns numeric
+owner/generation records. Each Start reserves a record before creating its WithCaps
+task; the common entry waits for handle publication before entering the service.
+Business cleanup and the complete return of callbacks/local destructors are separate
+states. Stop captures one exact generation and joins outside service locks, allowing
+a callback destructor to start a replacement without making the old Stop wait for it.
+Creation failure preserves the previous ticket; shutdown closes admission and drains
+all generations before releasing service state.
+
+The external reaper calls the pinned IDF WithCaps delete path, which suspends the
+worker, waits for all cores to leave it, then frees its TCB/stack. A periodic call in
+the permanent main loop also reclaims autonomous peer failures. It does not create
+an exit-time cleanup task or allocate a retirement record at exit. This is not a
+deadline, zero-cost or whole-device OOM guarantee. Three voice WithCaps self-delete
+paths remain outside this migration. See [030 software contract](task-retirement.md)
+for scope, complete-source host fixtures and the still-open hardware gates.
+
+### Deferred serial and Camera navigation
+
+`PhoneNavigation` owns one `DeferredNavigation` ring: four pending canonical IDs in
+PSRAM and a permanent 30 ms LVGL timer created during `PhoneSystem::Start()`. Serial
+launch registration follows successful startup. Serial `RequestLaunch` resolves
+aliases without a temporary normalized string and enqueues without taking the LVGL
+lock or allocating a per-request async object. Camera Back/Home uses `RequestHome`
+and shows a retry toast on rejection. Other apps and async paths are unchanged.
+
+The timer executes at most one request per callback. Admission is distinct from app
+completion, and the timer period is not a completion deadline. Shutdown revokes
+admission, cancels pending callbacks once and synchronizes with LVGL before app state
+is destroyed. The app host restores its transition flag with RAII and reports
+factory/preallocation or successfully cleaned partial `OnCreate` failures. Unknown
+lifecycle exceptions and teardown failures abort rather than continue with possibly
+dangling timer userdata. Completion-notification exceptions are isolated without
+replay. Startup timer allocation still has LVGL's configured malloc-assert boundary;
+arbitrary app rollback or UI OOM recovery is not established.
+
+`tests/navigation_ui` compiles the actual System, Navigation, Registry, Host,
+CameraApp and PhoneUi against real LVGL. Its 12 cases include three child-process
+marker/SIGABRT checks for unsafe lifecycle failures; current run identities and results
+are recorded in the test README and 030 contract.
+Camera hardware, audio focus, Shell and Home content remain fixtures. These cases
+do not establish the cause of the earlier 028 Home enqueue failure or a 030 device
+result. See [serial launch](serial-provisioning.md#030-bounded-navigation-admission)
+and [navigation host coverage](../tests/navigation_ui/README.md).
+
 ## Related Docs
 
 - [Firmware build and flash](firmware-download.md)
@@ -246,5 +294,6 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](voice-assistant.md)
 - [Serial provisioning](serial-provisioning.md)
+- [Video task retirement and deferred navigation](task-retirement.md)
 - [Rodak MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md)
 - [Troubleshooting](../TROUBLESHOOTING.md)

@@ -6,6 +6,7 @@
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_navigation.h"
+#include "phone_os/task-retirement.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/appearance_service.h"
 #include "phone_os/touch_pointer_state.h"
@@ -132,16 +133,7 @@ rodakos::RemoteInputController g_remote_inputs({
     .wake = WakeRemoteInput,
 });
 
-struct SerialLaunchRequest {
-    PhoneNavigation* navigation = nullptr;
-    std::string app_id;
-};
-
-void LaunchAppFromSerial(void* user_data) {
-    std::unique_ptr<SerialLaunchRequest> request(
-        static_cast<SerialLaunchRequest*>(user_data));
-    const bool launched = request != nullptr && request->navigation != nullptr &&
-                          request->navigation->Launch(request->app_id);
+void CompleteSerialLaunch(void*, bool launched) {
     std::fprintf(stdout, "RODAK_APP_LAUNCH_COMPLETE {\"ok\":%s}\n",
                  launched ? "true" : "false");
     std::fflush(stdout);
@@ -671,29 +663,14 @@ extern "C" void app_main(void) {
     });
 
     static PhoneSystem system(ui, services);
-    serial_provisioning_service.SetAppLaunchCallback([](const std::string& requested_id) {
-        const auto* descriptor = system.registry().ResolveAlias(requested_id);
-        if (descriptor == nullptr) {
-            return false;
-        }
-        auto* request = new SerialLaunchRequest{&system.navigation(), descriptor->id};
-        if (!lvgl_port_lock(1000)) {
-            delete request;
-            return false;
-        }
-        const lv_result_t result = lv_async_call(LaunchAppFromSerial, request);
-        lvgl_port_unlock();
-        if (result != LV_RESULT_OK) {
-            delete request;
-            return false;
-        }
-        return true;
-    });
     if (!system.Start()) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         boot_animation.Stop();
         return;
     }
+    serial_provisioning_service.SetAppLaunchCallback([](const std::string& requested_id) {
+        return system.navigation().RequestLaunch(requested_id, CompleteSerialLaunch);
+    });
 
     g_remote_navigation = &system.navigation();
     unified_mqtt_service.SetWebRtcDisplayControlCallback(HandleRemoteControlPayload);
@@ -767,6 +744,7 @@ extern "C" void app_main(void) {
     uint32_t appearance_retry_ticks = 0;
     uint32_t main_health_ticks = 0;
     while (true) {
+        rodakos::PumpTaskRetirements();
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
             appearance_service.ReleaseBootAssets();

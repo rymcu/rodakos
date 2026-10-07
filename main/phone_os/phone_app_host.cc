@@ -4,9 +4,27 @@
 #include "phone_ui/phone_ui.h"
 
 #include <esp_log.h>
+#include <cstdlib>
 
 namespace {
 constexpr const char* TAG = "PhoneAppHost";
+class TransitionGuard {
+public:
+    explicit TransitionGuard(bool& active) : active_(active) { active_ = true; }
+    ~TransitionGuard() { active_ = false; }
+private:
+    bool& active_;
+};
+void DestroyApp(PhoneApp& app) noexcept {
+    try {
+        app.OnDestroy();
+    } catch (...) {
+        // Continuing would let unique_ptr destroy an owner of live LVGL timer
+        // userdata. An incomplete teardown is not a recoverable launch failure.
+        ESP_LOGE(TAG, "App teardown threw; cannot safely resume navigation");
+        std::abort();
+    }
+}
 }
 
 bool PhoneAppHost::RefreshThemeIfNeeded(PhoneApp& app,
@@ -29,7 +47,7 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
         return false;
     }
 
-    transition_in_progress_ = true;
+    TransitionGuard transition(transition_in_progress_);
     ESP_LOGI(TAG, "Launching app: %s", descriptor.id.c_str());
     const bool launched = [&]() {
         if (current_ != nullptr && current_app_id_ == descriptor.id &&
@@ -41,7 +59,6 @@ bool PhoneAppHost::Launch(const PhoneAppDescriptor& descriptor, PhoneAppContext&
 
         return CreateAndReplace(descriptor, context);
     }();
-    transition_in_progress_ = false;
     return launched;
 }
 
@@ -63,10 +80,9 @@ bool PhoneAppHost::RecreateCurrent(const PhoneAppDescriptor& descriptor, PhoneAp
         return false;
     }
 
-    transition_in_progress_ = true;
+    TransitionGuard transition(transition_in_progress_);
     ESP_LOGI(TAG, "Recreating current app: %s", descriptor.id.c_str());
     const bool recreated = CreateAndReplace(descriptor, context);
-    transition_in_progress_ = false;
     return recreated;
 }
 
@@ -74,17 +90,15 @@ bool PhoneAppHost::HandleHomeRequest() {
     if (transition_in_progress_ || current_ == nullptr) {
         return false;
     }
-    transition_in_progress_ = true;
+    TransitionGuard transition(transition_in_progress_);
     const bool handled = current_->OnHomeRequested();
-    transition_in_progress_ = false;
     return handled;
 }
 
 bool PhoneAppHost::HandleBackRequest() {
     if (transition_in_progress_ || current_ == nullptr) return false;
-    transition_in_progress_ = true;
+    TransitionGuard transition(transition_in_progress_);
     const bool handled = current_->OnBackRequested();
-    transition_in_progress_ = false;
     return handled;
 }
 
@@ -95,14 +109,30 @@ bool PhoneAppHost::CreateAndReplace(const PhoneAppDescriptor& descriptor,
         return false;
     }
 
-    std::unique_ptr<PhoneApp> next = descriptor.create();
+    std::unique_ptr<PhoneApp> next;
+    std::string next_app_id;
+    try {
+        next_app_id = descriptor.id;
+        next = descriptor.create();
+    } catch (...) {
+        ESP_LOGE(TAG, "App factory failed: %s", descriptor.id.c_str());
+        return false;
+    }
     if (!next) {
         ESP_LOGE(TAG, "App %s factory returned null", descriptor.id.c_str());
         return false;
     }
 
-    if (!next->OnCreate(context)) {
-        next->OnDestroy();
+    bool created = false;
+    try {
+        created = next->OnCreate(context);
+    } catch (...) {
+        DestroyApp(*next);
+        ESP_LOGE(TAG, "App creation threw: %s", descriptor.id.c_str());
+        return false;
+    }
+    if (!created) {
+        DestroyApp(*next);
         ESP_LOGE(TAG, "App %s OnCreate failed; keeping current app", descriptor.id.c_str());
         return false;
     }
@@ -110,7 +140,7 @@ bool PhoneAppHost::CreateAndReplace(const PhoneAppDescriptor& descriptor,
     context.ui().ResetInputState();
     DestroyCurrent();
     current_ = std::move(next);
-    current_app_id_ = descriptor.id;
+    current_app_id_ = std::move(next_app_id);
     current_capabilities_ = descriptor.capabilities;
     current_theme_revision_ = context.ui().theme_revision();
     current_->OnResume();
@@ -132,9 +162,8 @@ void PhoneAppHost::CloseCurrent() {
     if (transition_in_progress_) {
         return;
     }
-    transition_in_progress_ = true;
+    TransitionGuard transition(transition_in_progress_);
     DestroyCurrent();
-    transition_in_progress_ = false;
 }
 
 void PhoneAppHost::DestroyCurrent() {
@@ -145,8 +174,13 @@ void PhoneAppHost::DestroyCurrent() {
         return;
     }
     ESP_LOGI(TAG, "Closing app: %s", current_app_id_.c_str());
-    current_->OnPause();
-    current_->OnDestroy();
+    try {
+        current_->OnPause();
+    } catch (...) {
+        ESP_LOGE(TAG, "App pause threw during teardown");
+        std::abort();
+    }
+    DestroyApp(*current_);
     current_.reset();
     current_app_id_.clear();
     current_capabilities_ = PhoneCapability::kNone;

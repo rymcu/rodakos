@@ -29,6 +29,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   power-cut gates are recorded in
   [trusted server discovery](docs/trusted-server-discovery.md).
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
+- Five video workers now retire through an external owner after their complete body and local
+  destructors return, avoiding IDF's exit-time cleanup-task creation. Serial app launch and Camera
+  Home use a bounded precreated queue. Local software/build checks pass; the 030 device gates and
+  three remaining voice self-delete paths stay open. See [task retirement](docs/task-retirement.md).
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next

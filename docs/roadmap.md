@@ -6,6 +6,14 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
+030 software now moves five video workers to bounded, generation-owned external WithCaps
+retirement and replaces serial/Camera Home async admission with a precreated four-request
+PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,
+real-LVGL navigation tests and ESP-IDF 6.0.2 build pass. Three voice WithCaps self-delete
+paths remain; the 028 Home rejection's actual cause is still unproven. This is not yet a
+030 package or hardware result: installed firmware remains the following 029 baseline.
+See [task retirement and deferred navigation](task-retirement.md).
+
 029 source `83cab8021c265ed162d9bbf827b59299dbdfc546` fixes one confirmed AES DMA
 allocation-failure cleanup defect through a pinned build overlay. If an input bounce buffer
 has been allocated and the output bounce allocation fails, existing cleanup now releases the

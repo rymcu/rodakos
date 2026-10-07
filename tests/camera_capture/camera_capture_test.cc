@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "host_runtime.h"
+#include "../task_retirement/task_retirement_host.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/task-retirement.h"
 #include "rodakos_adapters/file_service.h"
 
 #include <array>
@@ -684,4 +686,283 @@ RODAK_TEST("camera JPEG worker snapshot OOM drops attempts then recovers with re
     RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
     RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
     RODAK_CHECK(f.camera->GetState().preview_running);
+}
+
+RODAK_TEST("camera WithCaps workers reclaim their buffers without exit allocation or cleanup tasks") {
+    Fixture f; f.Preview();
+    std::atomic<unsigned> delivered{0};
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) { ++delivered; }));
+    RODAK_CHECK(WaitFor([&] { return delivered > 0; }));
+    retirement_host::RejectCleanupTask(true);
+    const auto before = retirement_host::Snapshot();
+    f.camera->StopJpegStream();
+    f.camera->StopPreview();
+    const auto after = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(after.task_deletes - before.task_deletes, 2u);
+    RODAK_CHECK_EQ(after.live_tasks, 0u);
+    RODAK_CHECK_EQ(after.live_task_buffers, 0u);
+    RODAK_CHECK_EQ(after.allocation_calls, before.allocation_calls);
+    RODAK_CHECK_EQ(after.cleanup_create_attempts, 0u);
+}
+
+RODAK_TEST("camera task creation failures cancel reserved generations and permit retry") {
+    Fixture f;
+    retirement_host::SetCreationAllowed(false);
+    RODAK_CHECK_FALSE(f.camera->StartPreview(2, 2));
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+    retirement_host::SetCreationAllowed(true);
+    f.Preview();
+    retirement_host::SetCreationAllowed(false);
+    RODAK_CHECK_FALSE(f.camera->StartJpegStream(30, [](Bytes&&, uint32_t, int64_t) {}));
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    retirement_host::SetCreationAllowed(true);
+    RODAK_CHECK(f.camera->StartJpegStream(30, [](Bytes&&, uint32_t, int64_t) {}));
+    f.camera->StopJpegStream();
+    f.camera->StopPreview();
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+namespace {
+std::atomic<unsigned> publication_hook_calls{0};
+std::atomic<bool> preview_entered_before_publication{false};
+void ObservePreviewPublication(TaskHandle_t) {
+    ++publication_hook_calls;
+    preview_entered_before_publication = camera_host::dequeued_buffers != 0;
+}
+}
+
+RODAK_TEST("camera preview scheduled inside real WithCaps creation waits for handle publication") {
+    Fixture f;
+    publication_hook_calls = 0;
+    preview_entered_before_publication = false;
+    retirement_host::SetBeforeCreateReturnsHook(ObservePreviewPublication);
+    f.Preview();
+    retirement_host::SetBeforeCreateReturnsHook(nullptr);
+    f.camera->StopPreview();
+    RODAK_CHECK_EQ(publication_hook_calls.load(), 1u);
+    RODAK_CHECK_FALSE(preview_entered_before_publication.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+RODAK_TEST("concurrent camera JPEG Stop callers wait for one generation and reclaim once") {
+    Fixture f; f.Preview();
+    retirement_host::Gate callback;
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) {
+        callback.Enter();
+    }));
+    const bool entered = callback.Wait();
+    auto first = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    auto second = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool first_waited = first.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    const bool second_waited = second.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    callback.Release();
+    first.get();
+    second.get();
+    RODAK_CHECK(entered);
+    RODAK_CHECK(first_waited);
+    RODAK_CHECK(second_waited);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 1u);
+}
+
+RODAK_TEST("camera JPEG callback self Stop returns and permanent owner pump reclaims autonomously") {
+    Fixture f; f.Preview();
+    std::atomic<bool> returned{false};
+    const auto before = retirement_host::Snapshot();
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) {
+        f.camera->StopJpegStream();
+        returned = true;
+    }));
+    RODAK_CHECK(WaitFor([&] { return returned.load(); }));
+    // No external Stop/Start/Join is used to make autonomous retirement happen.
+    RODAK_CHECK(WaitFor([&] {
+        PumpTaskRetirements();
+        return retirement_host::Snapshot().task_deletes == before.task_deletes + 1;
+    }));
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().cleanup_create_attempts, 0u);
+}
+
+RODAK_TEST("camera autonomous preview failure is reclaimed by the permanent owner pump") {
+    Fixture f; f.Preview();
+    camera_host::fail_dequeue = true;
+    RODAK_CHECK(WaitFor([&] { return !f.camera->GetState().preview_running; }));
+    RODAK_CHECK(WaitFor([] {
+        PumpTaskRetirements();
+        return retirement_host::Snapshot().live_tasks == 0;
+    }));
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+}
+
+RODAK_TEST("camera JPEG callback destruction can start a replacement without extending old Stop") {
+    Fixture f; f.Preview();
+    retirement_host::Gate old_callback, replacement_callback;
+    std::atomic<bool> replaced{false};
+    struct Restart {
+        CameraService* service;
+        retirement_host::Gate* replacement;
+        std::atomic<bool>* replaced;
+        ~Restart() {
+            *replaced = service->StartJpegStream(30, [gate = replacement](Bytes&&, uint32_t, int64_t) {
+                gate->Enter();
+            });
+        }
+    };
+    auto capture = std::make_shared<Restart>();
+    capture->service = f.camera.get();
+    capture->replacement = &replacement_callback;
+    capture->replaced = &replaced;
+    RODAK_CHECK(f.camera->StartJpegStream(30, [capture, &old_callback](Bytes&&, uint32_t, int64_t) {
+        old_callback.Enter();
+    }));
+    capture.reset();
+    const bool entered = old_callback.Wait();
+    auto old_stop = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool waited = old_stop.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    old_callback.Release();
+    const bool replacement_entered = replacement_callback.Wait();
+    const bool old_completed = old_stop.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    replacement_callback.Release();
+    old_stop.get();
+    f.camera->StopJpegStream();
+    RODAK_CHECK(entered);
+    RODAK_CHECK(waited);
+    RODAK_CHECK(replaced.load());
+    RODAK_CHECK(replacement_entered);
+    RODAK_CHECK(old_completed);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("camera late JPEG Stop still waits for the final callback capture destructor") {
+    Fixture f; f.Preview();
+    retirement_host::Gate destructor;
+    struct Capture {
+        retirement_host::Gate* gate;
+        ~Capture() { gate->Enter(); }
+    };
+    auto capture = std::make_shared<Capture>();
+    capture->gate = &destructor;
+    std::atomic<bool> delivered{false};
+    RODAK_CHECK(f.camera->StartJpegStream(30, [capture, &delivered](Bytes&&, uint32_t, int64_t) {
+        delivered = true;
+    }));
+    capture.reset();
+    RODAK_CHECK(WaitFor([&] { return delivered.load(); }));
+    auto first = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool destructor_entered = destructor.Wait();
+    // Logical completion is already visible here. The retained most recent
+    // ticket must still join the old worker's unfinished local destructor.
+    auto late = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool first_waited = first.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    const bool late_waited = late.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    const auto before_release = retirement_host::Snapshot().task_deletes;
+    destructor.Release();
+    first.get();
+    late.get();
+    RODAK_CHECK(destructor_entered);
+    RODAK_CHECK(first_waited);
+    RODAK_CHECK(late_waited);
+    RODAK_CHECK_EQ(before_release, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+}
+
+RODAK_TEST("camera preview self Stop can reenter while an external Stop joins the same worker") {
+    Fixture f; f.Preview();
+    std::atomic<bool> self_stop_returned{false};
+    camera_host::preview_state_query_hook = [&] {
+        f.camera->StopPreview();
+        self_stop_returned = true;
+    };
+    f.camera->StopPreview();
+    camera_host::preview_state_query_hook = {};
+    RODAK_CHECK(self_stop_returned.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+RODAK_TEST("camera destruction closes admission before releasing callback captures") {
+    Fixture f; f.Preview();
+    std::atomic<bool> rejected{false}, preview_rejected{false};
+    struct Restart {
+        CameraService* service;
+        std::atomic<bool>* rejected;
+        std::atomic<bool>* preview_rejected;
+        ~Restart() {
+            *rejected = !service->StartJpegStream(30, [](Bytes&&, uint32_t, int64_t) {});
+            // The old preview still runs here and already owns this lease;
+            // Close must reject even the otherwise successful fast path.
+            *preview_rejected = !service->StartPreview(2, 2);
+        }
+    };
+    auto capture = std::make_shared<Restart>();
+    capture->service = f.camera.get();
+    capture->rejected = &rejected;
+    capture->preview_rejected = &preview_rejected;
+    RODAK_CHECK(f.camera->StartJpegStream(30, [capture](Bytes&&, uint32_t, int64_t) {}));
+    capture.reset();
+    f.camera.reset();
+    RODAK_CHECK(rejected.load());
+    RODAK_CHECK(preview_rejected.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+RODAK_TEST("failed camera replacement creation preserves the unfinished previous generation for late Stop") {
+    Fixture f; f.Preview();
+    retirement_host::Gate destructor;
+    std::atomic<bool> rejected{false};
+    struct Capture {
+        CameraService* service;
+        retirement_host::Gate* gate;
+        std::atomic<bool>* rejected;
+        ~Capture() {
+            retirement_host::SetCreationAllowed(false);
+            *rejected = !service->StartJpegStream(30, [](Bytes&&, uint32_t, int64_t) {});
+            retirement_host::SetCreationAllowed(true);
+            gate->Enter();
+        }
+    };
+    auto capture = std::make_shared<Capture>();
+    capture->service = f.camera.get();
+    capture->gate = &destructor;
+    capture->rejected = &rejected;
+    RODAK_CHECK(f.camera->StartJpegStream(30, [capture](Bytes&&, uint32_t, int64_t) {}));
+    capture.reset();
+    auto first = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool entered = destructor.Wait();
+    auto late = std::async(std::launch::async, [&] { f.camera->StopJpegStream(); });
+    const bool waited = late.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    destructor.Release();
+    first.get();
+    late.get();
+    RODAK_CHECK(entered);
+    RODAK_CHECK(rejected.load());
+    RODAK_CHECK(waited);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 2u);
+}
+
+RODAK_TEST("failed preview replacement preserves the old task until real IDF core convergence") {
+    Fixture f; f.Preview();
+    retirement_host::Gate old_core;
+    retirement_host::HoldCoreAfterSuspend(&old_core);
+    camera_host::fail_dequeue = true;
+    const bool exited_body = old_core.Wait();
+    camera_host::fail_dequeue = false;
+    retirement_host::SetCreationAllowed(false);
+    const bool rejected = !f.camera->StartPreview(2, 2);
+    retirement_host::SetCreationAllowed(true);
+    auto late = std::async(std::launch::async, [&] { f.camera->StopPreview(); });
+    const bool waited = late.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    const auto deleted_before_convergence = retirement_host::Snapshot().task_deletes;
+    old_core.Release();
+    late.get();
+    retirement_host::HoldCoreAfterSuspend(nullptr);
+    RODAK_CHECK(exited_body);
+    RODAK_CHECK(rejected);
+    RODAK_CHECK(waited);
+    RODAK_CHECK_EQ(deleted_before_convergence, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
 }

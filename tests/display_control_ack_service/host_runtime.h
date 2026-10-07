@@ -67,5 +67,6 @@ bool WaitForMainLoops(size_t minimum);
 size_t ClockReads();
 bool WaitForClockReads(size_t minimum);
 void SetMainLoopCostUs(int64_t value);
+void SetMainLoopResult(int result);
 void SetSendCostUs(int64_t value);
 }

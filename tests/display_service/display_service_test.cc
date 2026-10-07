@@ -3,6 +3,8 @@
 #include "host_heap.h"
 #include "esp_heap_caps.h"
 #include "phone_os/display_service.h"
+#include "phone_os/task-retirement.h"
+#include "task_retirement_host.h"
 
 #include <array>
 #include <atomic>
@@ -574,6 +576,84 @@ RODAK_TEST("Stop waits only for its old generation when callback destruction sta
     RODAK_CHECK(replacement_was_attempted);
     RODAK_CHECK(replacement_started.load());
     RODAK_CHECK(old_stop_completed);
+}
+RODAK_TEST("retirement waits for late callback destruction before freeing display task") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    retirement_host::Gate destructor;
+    auto token = std::shared_ptr<int>(new int(1), [&](int* value) {
+        delete value;
+        destructor.Enter();
+    });
+    Service::JpegFrameCallback callback = [&, token](auto&&, auto, auto) {
+        fixture.service.StopJpegStream();
+    };
+    token.reset();
+    RODAK_CHECK(fixture.service.StartJpegStream(5, std::move(callback)));
+    const bool destructor_entered = destructor.Wait();
+    std::atomic<bool> returned{false};
+    std::thread stopping([&] { fixture.service.StopJpegStream(); returned = true; });
+    std::this_thread::sleep_for(30ms);
+    rodakos::PumpTaskRetirements();
+    const bool returned_early = returned.load();
+    const size_t deleted_early = retirement_host::Snapshot().task_deletes;
+    destructor.Release();
+    stopping.join();
+    host::JoinTasks();
+    RODAK_CHECK(destructor_entered);
+    RODAK_CHECK_FALSE(returned_early);
+    RODAK_CHECK_EQ(deleted_early, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+RODAK_TEST("retirement display exits without allocating an IDF cleanup task") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    retirement_host::RejectCleanupTask(true);
+    RODAK_CHECK(fixture.service.StartJpegStream(5, [](auto&&, auto, auto) {}));
+    fixture.service.StopJpegStream();
+    host::JoinTasks();
+    const auto tasks = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(tasks.cleanup_create_attempts, 0u);
+    RODAK_CHECK_EQ(tasks.task_deletes, 1u);
+    RODAK_CHECK_EQ(tasks.live_tasks, 0u);
+    RODAK_CHECK_EQ(tasks.live_task_buffers, 0u);
+}
+RODAK_TEST("retirement display concurrent Stop and pump reclaim exactly once") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    retirement_host::Gate destructor;
+    auto token = std::shared_ptr<int>(new int(1), [&](int* value) {
+        delete value;
+        destructor.Enter();
+    });
+    Service::JpegFrameCallback callback = [&, token](auto&&, auto, auto) {
+        fixture.service.StopJpegStream();
+    };
+    token.reset();
+    RODAK_CHECK(fixture.service.StartJpegStream(5, std::move(callback)));
+    const bool entered = destructor.Wait();
+    std::atomic<size_t> joined{0};
+    std::thread first([&] { fixture.service.StopJpegStream(); ++joined; });
+    std::thread second([&] { fixture.service.StopJpegStream(); ++joined; });
+    std::thread pump([&] {
+        while (joined.load() != 2) {
+            rodakos::PumpTaskRetirements();
+            std::this_thread::sleep_for(1ms);
+        }
+    });
+    destructor.Release();
+    first.join();
+    second.join();
+    pump.join();
+    host::JoinTasks();
+    RODAK_CHECK(entered);
+    RODAK_CHECK_EQ(joined.load(), 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
 }
 RODAK_TEST("external Stop waits for an admitted callback then prevents later callbacks") {
     Fixture fixture;

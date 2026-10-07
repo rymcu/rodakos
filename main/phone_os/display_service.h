@@ -13,6 +13,8 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 
+#include "phone_os/task-retirement.h"
+
 namespace rodakos {
 
 struct DisplayFrame {
@@ -65,18 +67,19 @@ private:
     bool event_attached_ = false;
     mutable std::mutex lifecycle_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;
+    TaskRetirementOwner task_retirement_owner_;
+    TaskRetirementTicket jpeg_stream_retirement_;
     TaskHandle_t jpeg_stream_task_ = nullptr;
     // 完整 LVGL 帧发布后立即唤醒 JPEG worker。按目标 FPS 轮询最多会增加一
     // 个帧间隔的延迟，页面切换后容易短暂显示旧桌面。
     SemaphoreHandle_t frame_ready_semaphore_ = nullptr;
     bool jpeg_stream_task_ready_ = false;
+    bool closing_ = false;
     bool capture_running_ = false;
     bool frame_pending_ = false;
     bool jpeg_stream_running_ = false;
     bool jpeg_stream_stop_requested_ = false;
     uint8_t jpeg_stream_fps_ = 0;
-    uint64_t jpeg_stream_generation_ = 0;
-    uint64_t jpeg_stream_completed_generation_ = 0;
     std::shared_ptr<JpegFrameCallback> jpeg_stream_callback_;
     int width_ = 0;
     int height_ = 0;

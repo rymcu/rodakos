@@ -294,7 +294,15 @@ DisplayService::DisplayService(lv_display_t* display) : display_(display) {
 }
 
 DisplayService::~DisplayService() {
+    if (mutex_ != nullptr) {
+        SemaphoreLock lock(mutex_);
+        closing_ = true;
+        task_retirement_owner_.Close();
+    } else {
+        task_retirement_owner_.Close();
+    }
     StopJpegStream();
+    task_retirement_owner_.Drain();
     StopCapture();
     {
         std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
@@ -358,6 +366,10 @@ bool DisplayService::StartCapture(int width, int height) {
     if (mutex_ == nullptr) return false;
     try {
         SemaphoreLock lock(mutex_);
+        if (closing_) {
+            last_error_ = "Display service is closing";
+            return false;
+        }
         if (capture_running_) return true;
         const size_t frame_size = static_cast<size_t>(width) * height * 2;
         // 两份缓冲都可用后再发布，分配失败不能留下半初始化的镜像。
@@ -458,9 +470,10 @@ bool DisplayService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
     std::shared_ptr<JpegFrameCallback> callback_to_release;
     {
         SemaphoreLock lock(mutex_);
-        if (!capture_running_ || jpeg_stream_running_) {
-            last_error_ = !capture_running_ ? "Display capture is not running"
-                                            : "Display JPEG stream is already running";
+        if (closing_ || !capture_running_ || jpeg_stream_running_) {
+            last_error_ = closing_ ? "Display service is closing"
+                : !capture_running_ ? "Display capture is not running"
+                                    : "Display JPEG stream is already running";
             return false;
         }
         // worker 只复制共享所有权；逐帧复制 std::function 也可能在持锁时抛 bad_alloc。
@@ -474,17 +487,26 @@ bool DisplayService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
         jpeg_stream_stop_requested_ = false;
         jpeg_stream_running_ = true;
         jpeg_stream_task_ready_ = false;
+        auto previous_retirement = std::move(jpeg_stream_retirement_);
+        jpeg_stream_retirement_ = ReserveTaskRetirement(
+            task_retirement_owner_, JpegStreamTaskEntry, this);
         TaskHandle_t task = nullptr;
-        if (xTaskCreateWithCaps(JpegStreamTaskEntry, "display_jpeg", kTaskStackSize, this, 3,
-                                &task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        const BaseType_t result = jpeg_stream_retirement_
+            ? xTaskCreateWithCaps(TaskRetirementEntry, "display_jpeg", kTaskStackSize,
+                                  TaskRetirementContext(jpeg_stream_retirement_), 3,
+                                  &task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+            : pdFAIL;
+        if (result != pdPASS) {
+            if (jpeg_stream_retirement_) CancelTaskRetirement(jpeg_stream_retirement_);
+            jpeg_stream_retirement_ = std::move(previous_retirement);
             jpeg_stream_running_ = false;
             jpeg_stream_fps_ = 0;
             callback_to_release = std::move(jpeg_stream_callback_);
             last_error_ = "Failed to start display JPEG stream task";
         } else {
             jpeg_stream_task_ = task;
-            ++jpeg_stream_generation_;
             jpeg_stream_task_ready_ = true;
+            PublishTaskRetirement(jpeg_stream_retirement_, task);
             started = true;
         }
     }
@@ -493,21 +515,16 @@ bool DisplayService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
 
 void DisplayService::StopJpegStream() {
     if (mutex_ == nullptr) return;
-    TaskHandle_t task = nullptr;
-    uint64_t generation = 0;
+    TaskRetirementTicket retirement;
     {
         SemaphoreLock lock(mutex_);
-        task = jpeg_stream_task_;
-        generation = jpeg_stream_generation_;
+        retirement = jpeg_stream_retirement_;
         jpeg_stream_stop_requested_ = true;
     }
     if (frame_ready_semaphore_ != nullptr) xSemaphoreGive(frame_ready_semaphore_);
-    if (task == nullptr || task == xTaskGetCurrentTaskHandle()) return;
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-        SemaphoreLock lock(mutex_);
-        if (jpeg_stream_completed_generation_ >= generation) break;
-    }
+    // Keep the captured generation even if its callback destructor starts a
+    // replacement. Business completion precedes that destructor and is not join.
+    retirement.Join();
 }
 
 void DisplayService::OnDisplayEvent(lv_event_t* event) {
@@ -559,16 +576,13 @@ void DisplayService::HandleDisplayEvent(lv_event_t* event) {
 void DisplayService::JpegStreamTaskEntry(void* arg) {
     auto* service = static_cast<DisplayService*>(arg);
     if (service != nullptr) service->JpegStreamTask();
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void DisplayService::JpegStreamTask() {
-    uint64_t stream_generation = 0;
     while (true) {
         {
             SemaphoreLock lock(mutex_);
             if (jpeg_stream_task_ready_) {
-                stream_generation = jpeg_stream_generation_;
                 break;
             }
         }
@@ -701,8 +715,6 @@ void DisplayService::JpegStreamTask() {
         callback_to_release = std::move(jpeg_stream_callback_);
         jpeg_stream_task_ = nullptr;
         jpeg_stream_task_ready_ = false;
-        jpeg_stream_completed_generation_ =
-            std::max(jpeg_stream_completed_generation_, stream_generation);
     }
 }
 

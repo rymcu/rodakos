@@ -15,3 +15,9 @@ private:
     uint32_t theme_revision_ = 0;
     int input_reset_count_ = 0;
 };
+
+class PhoneUiLock {
+public:
+    explicit PhoneUiLock(PhoneUi&, int = 1000) {}
+    bool locked() const { return true; }
+};

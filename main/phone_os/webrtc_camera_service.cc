@@ -29,7 +29,15 @@ constexpr int64_t kDataSendRetryTimeoutUs = 100000;
 WebRtcCameraService::WebRtcCameraService(CameraService* camera_service)
     : camera_service_(camera_service) {}
 
-WebRtcCameraService::~WebRtcCameraService() { Stop(); }
+WebRtcCameraService::~WebRtcCameraService() {
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        closing_ = true;
+        task_retirement_owner_.Close();
+    }
+    Stop();
+    task_retirement_owner_.Drain();
+}
 
 bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signaling,
                                 StateCallback on_state) {
@@ -39,7 +47,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
     }
 
     std::unique_lock<std::recursive_mutex> lock(mutex_);
-    if (running_ || peer_task_ != nullptr) {
+    if (closing_ || running_ || peer_task_ != nullptr) {
         return false;
     }
 
@@ -124,11 +132,15 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
     // handle. Publish the handle only after creation, and let PeerTask wait
     // for that publication before it can execute terminal cleanup.
     peer_task_ready_ = false;
+    auto previous_retirement = std::move(peer_retirement_);
+    peer_retirement_ = ReserveTaskRetirement(task_retirement_owner_, PeerTaskEntry, this);
     TaskHandle_t created_peer_task = nullptr;
-    const BaseType_t task_ret = xTaskCreateWithCaps(
-        PeerTaskEntry, "webrtc_peer", 8192, this, 4, &created_peer_task,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const BaseType_t task_ret = peer_retirement_ ? xTaskCreateWithCaps(
+        TaskRetirementEntry, "webrtc_peer", 8192, TaskRetirementContext(peer_retirement_),
+        4, &created_peer_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : pdFAIL;
     if (task_ret != pdPASS) {
+        if (peer_retirement_) CancelTaskRetirement(peer_retirement_);
+        peer_retirement_ = std::move(previous_retirement);
         ESP_LOGE(TAG, "Failed to create peer task: internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
@@ -145,6 +157,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
     }
     peer_task_ = created_peer_task;
     peer_task_ready_ = true;
+    PublishTaskRetirement(peer_retirement_, created_peer_task);
 
     if (!camera_service_->StartJpegStream(
             normalized.fps,
@@ -160,33 +173,24 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
 }
 
 void WebRtcCameraService::Stop() {
-    TaskHandle_t task = nullptr;
+    TaskRetirementTicket retirement;
+    bool needs_cleanup = false;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
-        if (!running_ && peer_ == nullptr) {
-            return;
-        }
-        if (!stop_requested_) {
+        retirement = peer_retirement_;
+        needs_cleanup = running_ || peer_ != nullptr;
+        if (needs_cleanup && !stop_requested_) {
             terminal_state_ = ESP_PEER_STATE_CLOSED;
             stop_requested_ = true;
         }
-        task = peer_task_;
     }
-
-    if (task == xTaskGetCurrentTaskHandle()) {
+    if (retirement) {
+        // The native cleanup flag precedes callback destruction. Wait for the
+        // captured generation's complete return, including all local owners.
+        retirement.Join();
         return;
     }
-    if (task != nullptr) {
-        // The peer task owns cleanup after leaving esp_peer_main_loop. Waiting
-        // here also keeps callbacks from running against a destroyed service.
-        while (true) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            std::lock_guard<std::recursive_mutex> lock(mutex_);
-            if (peer_task_ == nullptr) break;
-        }
-        return;
-    }
-    FinishStop();
+    if (needs_cleanup) FinishStop();
 }
 
 void WebRtcCameraService::RequestStop(esp_peer_state_t state) {
@@ -227,7 +231,7 @@ void WebRtcCameraService::FinishStop() {
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         running_ = false;
-        // The peer task has not deleted itself yet; this is native cleanup only.
+        // The retirement trampoline has not joined yet; this is native cleanup only.
         peer_resources_.Log(TAG, "stopped");
         // Publish only after resources are released. Keeping the service lock
         // prevents a new Start from racing its predecessor's terminal callback.
@@ -358,7 +362,6 @@ void WebRtcCameraService::PeerTaskEntry(void* arg) {
     if (service != nullptr) {
         service->PeerTask();
     }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void WebRtcCameraService::PeerTask() {

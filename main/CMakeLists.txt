@@ -28,6 +28,8 @@ set(SOURCES
     "phone_os/phone_app_registry.cc"
     "phone_os/phone_app_host.cc"
     "phone_os/phone_navigation.cc"
+    "phone_os/deferred_navigation.cc"
+    "phone_os/task-retirement.cc"
     "phone_os/phone_system.cc"
     "phone_os/phone_shell.cc"
     "phone_os/audio_focus_service.cc"

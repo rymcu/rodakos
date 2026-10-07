@@ -5,6 +5,8 @@
 #include "esp_lvgl_port.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "task_retirement_host.h"
+#include "phone_os/task-retirement.h"
 
 #include <algorithm>
 #include <array>
@@ -28,13 +30,11 @@ struct HostSemaphore {
 namespace {
 using Clock = std::chrono::steady_clock;
 using rodakos_test::display_service_host::Resources;
-struct Task { std::thread thread; };
 struct Allocation { void* pointer = nullptr; size_t bytes = 0; unsigned caps = 0; };
 struct HostEncoder { void* parts[3]; };
 struct Async { void (*callback)(void*) = nullptr; void* data = nullptr; };
 std::mutex host_mutex;
 std::recursive_timed_mutex ui_mutex;
-std::vector<std::unique_ptr<Task>> tasks;
 std::array<Allocation, 32> allocations;
 std::array<Async, 16> async_calls;
 std::array<int64_t, 128> new_failure_times{}, process_times{};
@@ -45,11 +45,9 @@ size_t new_nth = 0, new_count = 0;
 bool new_worker_only = false;
 size_t heap_size = 0, heap_count = 0;
 bool heap_after_open = false;
-bool fail_open = false, fail_process = false, allow_tasks = true, allow_async = true;
+bool fail_open = false, fail_process = false, allow_async = true;
 bool throw_process = false, reject_codec_external = false;
 size_t encoded_size = 4096;
-thread_local Task* current_task = nullptr;
-thread_local char external_task;
 thread_local size_t ui_lock_depth = 0;
 
 int64_t Now() {
@@ -61,7 +59,7 @@ bool RejectNew(size_t bytes) {
     if (expected == 0 || (expected != bytes && expected != SIZE_MAX)) return false;
     std::lock_guard<std::mutex> lock(host_mutex);
     if ((new_size.load() != bytes && new_size.load() != SIZE_MAX) || new_count == 0 ||
-        (new_worker_only && current_task == nullptr)) return false;
+        (new_worker_only && !retirement_host::IsWorkerTask())) return false;
     if (new_nth > 1) { --new_nth; return false; }
     --new_count;
     ++resources.new_failures;
@@ -86,11 +84,21 @@ extern "C" void* __wrap__Znam(size_t bytes) {
 
 namespace rodakos_test::display_service_host {
 void JoinTasks() {
-    for (const auto& task : tasks) if (task->thread.joinable()) task->thread.join();
-    tasks.clear();
+    const auto deadline = Clock::now() + std::chrono::seconds(3);
+    while (retirement_host::Snapshot().live_tasks != 0) {
+        rodakos::PumpTaskRetirements();
+        if (Clock::now() >= deadline) {
+            std::fputs("display fixture left a live business task\n", stderr);
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    retirement_host::JoinTasks();
 }
 void Reset() {
     JoinTasks();
+    retirement_host::Reset();
+    retirement_host::SetAutoStart(true);
     std::lock_guard<std::mutex> lock(host_mutex);
     if (resources.buffers || resources.encoders) {
         std::fputs("previous test leaked encoder or heap-caps resources\n", stderr);
@@ -103,7 +111,7 @@ void Reset() {
     new_worker_only = heap_after_open = fail_open = fail_process = false;
     throw_process = reject_codec_external = false;
     encoded_size = 4096;
-    allow_tasks = allow_async = true;
+    allow_async = true;
     async_calls = {};
 }
 void FailNew(size_t bytes, size_t nth, size_t count, bool worker_only) {
@@ -131,7 +139,7 @@ void FailEncoderProcess(bool fail) { std::lock_guard<std::mutex> lock(host_mutex
 void ThrowEncoderProcess(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); throw_process = fail; }
 void RejectCodecExternal(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); reject_codec_external = fail; }
 void SetEncodedSize(size_t bytes) { std::lock_guard<std::mutex> lock(host_mutex); encoded_size = bytes; }
-void AllowTaskCreation(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_tasks = allow; }
+void AllowTaskCreation(bool allow) { retirement_host::SetCreationAllowed(allow); }
 void AllowAsync(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_async = allow; }
 Resources Snapshot() { std::lock_guard<std::mutex> lock(host_mutex); return resources; }
 std::vector<int64_t> NewFailureTimes() {
@@ -191,23 +199,6 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t semaphore) {
     return pdTRUE;
 }
 void vSemaphoreDelete(SemaphoreHandle_t semaphore) { delete semaphore; }
-BaseType_t xTaskCreateWithCaps(void (*entry)(void*), const char*, uint32_t, void* arg,
-                             uint32_t, TaskHandle_t* output, uint32_t) {
-    if (!allow_tasks) return pdFAIL;
-    auto task = std::make_unique<Task>();
-    auto* raw = task.get();
-    tasks.push_back(std::move(task));
-    *output = raw;
-    raw->thread = std::thread([raw, entry, arg] {
-        current_task = raw;
-        entry(arg);
-        current_task = nullptr;
-    });
-    return pdPASS;
-}
-TaskHandle_t xTaskGetCurrentTaskHandle() { return current_task ? static_cast<void*>(current_task) : &external_task; }
-void vTaskDelay(TickType_t ticks) { std::this_thread::sleep_for(std::chrono::milliseconds(ticks)); }
-void vTaskDeleteWithCaps(TaskHandle_t) {}
 int64_t esp_timer_get_time() { return Now(); }
 
 void* heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned caps) {
