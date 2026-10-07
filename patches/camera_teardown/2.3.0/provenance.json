@@ -1,0 +1,73 @@
+{
+  "purpose": "Boot-local bounded Camera STREAMOFF diagnostics; no lifecycle or timeout changes",
+  "idf_version": "6.0.2",
+  "idf_commit": "7101770dc6db2667b3c477cc31365dd1acd6db4e",
+  "project_manifest_sha256_lf": "01ea966fba1cc7f99c5c982d7108eec18f5e4f27cd31e44037591eb4e55a444f",
+  "lock_graph_sha256_canonical_json": "d5192f21b9566ec7ff4a4b083e93444e1a3ff2ec722a9d244c9e4a8262140523",
+  "lock_graph_ignored_top_level_keys": [
+    "manifest_hash"
+  ],
+  "diagnostics_header_sha256_lf": "96ccef2faa920e8d608f0caf16ddeff9cf10a473de04377aeb017f8816bf860d",
+  "components": {
+    "esp_video": {
+      "version": "2.3.0",
+      "repository": "git://github.com/espressif/esp-video-components.git",
+      "repository_commit": "58d4c6eea08f0f78a2beff27aa4e0155efd74b55",
+      "repository_path": "esp_video",
+      "component_hash": "2391b4f34230cb1eeea23a0cb1920ae762bb9f0252d4947fe981154530519198",
+      "license": "ESPRESSIF MIT",
+      "source_hashes_lf": {
+        "src/device/esp_video_device_common.c": "443dbba9ca77026c4fdf1e66a49279d61eaea1ce5d18dd763114c9a05e7821d1",
+        "CMakeLists.txt": "01729ed70635ac789851f7da0d8be59e1fd739836f1596f1d404bc95ddd8ac85",
+        "idf_component.yml": "a74bb51e1b72df43fd3784a685161c935bb64961680a1ee3a268da20a30262d5",
+        "private_include/esp_video_device_common.h": "7ef3f3b9aaa3494495e197e3ede041505ef8aa10599fc21ad5c86bb544cccf6e",
+        "private_include/esp_video_internal.h": "134c14ec9f99bc7df82a94f4d71f4cdb5c1dd7c15d13a46f5b03ed3e426b067f",
+        "private_include/esp_video.h": "ec2a3e75c51b63d01acbe48a5c2d7aa0d24ee4617dcbabbe8f0fccdfbdbe9d00",
+        "private_include/esp_video_cam.h": "44ce183a7779406943524867ec08a139353b5d4a71a9c4f85d88c5ed14a3fe2e",
+        "include/esp_video_ioctl.h": "054fba728c69cf9a44a084118874f30c279ac6c49c1d4289457ec68c3cf5b520",
+        "include/esp_video_caps.h": "d60277f8f98936446d3832e77c7541bec4510644796bd335ec72cad92ce61a1b"
+      }
+    },
+    "esp_cam_sensor": {
+      "version": "2.3.0",
+      "repository": "git://github.com/espressif/esp-video-components.git",
+      "repository_commit": "58d4c6eea08f0f78a2beff27aa4e0155efd74b55",
+      "repository_path": "esp_cam_sensor",
+      "component_hash": "4ed9e34055a7ac5d6c60552c21dfa470deaadb7eda8040d157c5f3314de8d2fd",
+      "license": "Apache-2.0",
+      "source_hashes_lf": {
+        "src/driver_dvp/esp_cam_ctlr_dvp_cam.c": "ce89109eefdef420a3a59197f4b4bc4d951ed69853752cb41d73e173b1b849a4",
+        "CMakeLists.txt": "175398da7cf9f329feb56be8fce0154d90391086b8eea2a882251105221ab308",
+        "idf_component.yml": "fc810019f86c58d06524c9c6f6bf83d269c85f05c96ec658062fd3b7282423b3",
+        "include/esp_cam_ctlr_dvp_ext.h": "2f14be9c0e70fef8051e529bb1a8c338666114d812565dbfb05a087fa95d9e3c",
+        "include/esp_cam_sensor.h": "988fff3367e499620266d3bb66ffb77dda015ff6c59bdcab7470614862c43054",
+        "include/esp_cam_sensor_types.h": "38d3f3024affb0b23e538bb36612a9338cb5e60c656ad7155f7644470daca15d"
+      }
+    }
+  },
+  "idf_source_hashes_lf": {
+    "components/esp_driver_cam/esp_cam_ctlr.c": "8c13dd39aa6145c5cc59f4e1095354264e837b2394aa441126d136d04d5673a0",
+    "components/esp_driver_cam/include/esp_cam_ctlr.h": "d91744466889495c9421115cfbc18335269586567a6c1639463981e9189c2d90",
+    "components/esp_driver_cam/include/esp_cam_ctlr_types.h": "b7d2c3105fb50940ef90d8e67237917eebdcf60382a89fcfc49975c54e49064b",
+    "components/esp_driver_cam/interface/esp_cam_ctlr_interface.h": "5737897ba049cbe68cea1c23e0e14ca6b4247495363c1649eb6572d44a1ba422",
+    "components/esp_driver_dma/src/gdma.c": "8f1a14074d5828a0fc7d7b09668526b8663817102b2848efe13b69f86ea62500",
+    "components/esp_driver_dma/include/esp_private/gdma.h": "609b9b0892960110c9ba081b6a65847c111d42f3ee432e1d206d196d980f4080",
+    "components/esp_driver_gpio/src/gpio.c": "83d65ecd4693e92711712fdba92ba4fa99062194ad13e09c77b2a44c2f63c423",
+    "components/esp_driver_gpio/include/driver/gpio.h": "84d31bac03388b7d9c95c90980d759239641503391ada15f6975a1c9b71f46b2",
+    "components/freertos/FreeRTOS-Kernel/tasks.c": "193c3d8379acc847097632da8e6d4dd2ee0bf8e069d78979d68dd26b653d48df",
+    "components/freertos/FreeRTOS-Kernel/queue.c": "6794db86ab086372ea2789d043d83e0b1efd0534a0c0deb5d28cffb342feaa0e",
+    "components/freertos/FreeRTOS-Kernel/include/freertos/FreeRTOS.h": "5c727c88c4e1853ed55c6d994097f2282148395f9c875d3e5c7d28d8ffc09f38",
+    "components/freertos/FreeRTOS-Kernel/include/freertos/task.h": "8b908b964d2c87377838762478253eec04312b985e6bb680bacd3f03ab253897",
+    "components/freertos/FreeRTOS-Kernel/include/freertos/queue.h": "55d69a2a06167b9775e64cc5a5cbf0335e9b49ca961e50ca563b262f3208c3c2",
+    "components/freertos/FreeRTOS-Kernel/portable/xtensa/include/freertos/portmacro.h": "7a62b39c80f119d2c06dc7eee4dae4d4b4c68581f832b8b8b052345b5d6d2366",
+    "components/esp_hw_support/include/esp_cpu.h": "40b72f6788041208571ee9893c5955808460c00ab561da0226fffc9cf75a024d",
+    "components/xtensa/include/xt_utils.h": "f2be1bf0903103ee4fbebd4d52f0d5222ac2438b73dc21de50efe85a6b591360",
+    "components/esp_common/include/esp_check.h": "08536e94c6adc60fc1bd54961298a373d5fb3ee5cbcd172203f297d8194c379d",
+    "components/esp_common/include/esp_idf_version.h": "d240bb67f8ed6491cf90ec1bd90888efd65cf7c21c1eb22fe9414543af9a8e73",
+    "components/esp_common/include/esp_attr.h": "c116bc43b94d7e3eba11a91e0114a02e5c8f0912d3190c4a1409cf8bfb30a18f",
+    "components/esp_hal_cam/cam_hal.c": "9706c54f9bdb4975526e11974a4ea404bdb259b63b98ee682cae05c36aa384f4",
+    "components/esp_hal_cam/include/hal/cam_hal.h": "3a072715d0342e3ffedae6356a1ae386345217d31e456eb2a3da99aa2746f764",
+    "components/esp_hal_cam/esp32s3/include/hal/cam_ll.h": "ee8e206c504e6e6b04a3dad939b2e90e2677444ca1a1d00cc36dbbc8e31119b2",
+    "tools/cmake/version.cmake": "1b9ff21383a4313665dd3636ad223c4fb90a37457156482a823c361f3de2dd34"
+  }
+}

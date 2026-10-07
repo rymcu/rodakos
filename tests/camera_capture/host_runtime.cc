@@ -76,6 +76,12 @@ std::atomic<size_t> preview_frame_bytes{0};
 std::atomic<unsigned> new_failures{0}, aligned_buffers{0}, dequeued_buffers{0}, requeued_buffers{0};
 std::function<void()> write_hook;
 std::function<void()> preview_state_query_hook;
+std::function<void()> streamoff_hook;
+std::function<void(const char*)> log_hook;
+std::atomic<int> streamoff_result{0};
+void ObserveLog(const char* format) {
+    if (log_hook) log_hook(format);
+}
 std::string collision_path;
 void Reset(const std::string& path) {
     ClearNewFailures();
@@ -89,6 +95,9 @@ void Reset(const std::string& path) {
     pause_frames = frames_paused = false;
     write_hook = {};
     preview_state_query_hook = {};
+    streamoff_hook = {};
+    log_hook = {};
+    streamoff_result = 0;
     collision_path.clear();
 }
 void FailNew(size_t bytes, size_t nth, size_t count, AllocationThread thread) {
@@ -233,7 +242,10 @@ int __wrap_close(int fd) { return fd == kCameraFd ? 0 : __real_close(fd); }
 int __wrap_ioctl(int fd, unsigned long request, ...) {
     va_list args; va_start(args, request); void* argument = va_arg(args, void*); va_end(args);
     if (fd != kCameraFd) return __real_ioctl(fd, request, argument);
-    if (request == VIDIOC_QUERYCAP) {
+    if (request == VIDIOC_STREAMOFF) {
+        if (camera_host::streamoff_hook) camera_host::streamoff_hook();
+        return camera_host::streamoff_result.load();
+    } else if (request == VIDIOC_QUERYCAP) {
         static_cast<v4l2_capability*>(argument)->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
     } else if (request == VIDIOC_S_FMT) {
         auto* format = static_cast<v4l2_format*>(argument);

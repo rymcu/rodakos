@@ -58,6 +58,14 @@ jobs:
             components/esp_event
             components/tcp_transport
             components/esp_common/include
+            components/esp_driver_cam
+            components/esp_driver_dma
+            components/esp_driver_gpio
+            components/esp_hal_cam
+            components/esp_hw_support/include
+            components/xtensa/include
+            components/freertos/FreeRTOS-Kernel
+            tools/cmake
             components/nvs_flash/src
             components/nvs_flash/include
             components/nvs_flash/private_include

@@ -71,6 +71,7 @@ jobs:
             build/rodakos.map
             build/screen-jpeg-preflight.json
             build/screen-jpeg-linked.json
+            build/camera-teardown-linked.json
             recovery/build/rodakos_recovery.elf
             recovery/build/rodakos_recovery.map
           if-no-files-found: warn

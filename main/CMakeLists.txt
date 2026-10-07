@@ -39,6 +39,7 @@ set(SOURCES
     "phone_os/motion_service.cc"
     "phone_os/button_binding_service.cc"
     "phone_os/camera_service.cc"
+    "phone_os/camera-teardown-diagnostics.cc"
     "phone_os/webrtc_camera_service.cc"
     "phone_os/display_service.cc"
     "phone_os/screen_jpeg_allocation.cc"
