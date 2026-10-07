@@ -11,7 +11,8 @@
 
 ```sh
 cmake -S tests/voice_identity_integration \
-  -B ~/.cache/rodakos-voice-identity-integration -G Ninja -DCMAKE_BUILD_TYPE=Debug
+  -B ~/.cache/rodakos-voice-identity-integration -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf
 cmake --build ~/.cache/rodakos-voice-identity-integration
 ctest --test-dir ~/.cache/rodakos-voice-identity-integration --output-on-failure
 ```
@@ -36,3 +37,10 @@ Node 的当前时间，避免固定过期日期使未来执行的测试失效。
 NVS 驱动、RTOS、唤醒 runtime/assistant 和网络 SDK 是 host 替身。此目标验证生产状态逻辑
 与软件报告的完整路径，不证明 Flash 掉电原子性、实际 ESP-SR 命中、PCM/麦克风或无线时序。
 原 `tests/mqtt_volume_service` 的 identity 目标只验证严格 JSON 和报告发布，不能替代此联接。
+
+supervisor 的 WithCaps 生命周期复用 `tests/task_retirement` 中真实 IDF 6.0.2 源和完整生产
+回收实现。此目标显式启用 `RODAK_IDENTITY_WITH_RETIREMENT`：统一 FreeRTOS 类型与
+semaphore 定义，同时给既有普通 MQTT worker 的 create/delay/delete 保留独立符号。
+默认 MQTT 测试不启用该宏；没有复制 SDK 或把 TaskRetirement API 替换为成功空操作。
+独立 wake 生命周期、跨核等待和旧源 SIGABRT 负控见
+[`tests/voice_wake_service`](../voice_wake_service/README.md)。

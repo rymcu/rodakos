@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/task-retirement.h"
 #include "phone_os/voice_assistant_state.h"
 #include "phone_os/voice_assistant_reconnect_coordinator.h"
 #include "phone_os/voice_assistant_transport.h"
@@ -63,7 +64,7 @@ private:
     void FinishTransportFailure(const VoiceTransportFailure& failure, uint32_t expected_generation);
     void CompleteInteractionCleanupLocked(uint32_t generation);
     void CompleteStartAttempt(TaskHandle_t task);
-    void WaitForCleanupComplete();
+    void WaitForCleanupComplete(uint32_t generation);
     void ReleaseFocusIfNeeded(uint32_t token, bool should_release);
     bool OpenTransportForInteraction(VoiceAssistantTrigger trigger,
                                      const std::string& wake_word,
@@ -73,7 +74,6 @@ private:
     void StopRecorderIfNeeded(bool should_stop);
     static void IoTaskEntry(void* arg);
     bool StartIoTask();
-    void WaitForIoTaskStop();
     void IoTask();
     void HandleInbound(VoiceInboundEvent&& event);
     void ProcessInbound(VoiceInboundEvent&& event);
@@ -96,6 +96,8 @@ private:
     VoiceVolumeMcp volume_mcp_;
     std::unique_ptr<VoiceAssistantAudioCodec> audio_codec_;
     SemaphoreHandle_t mutex_ = nullptr;
+    TaskRetirementOwner io_retirement_owner_;
+    TaskRetirementTicket io_retirement_;
     TaskHandle_t io_task_ = nullptr;
     bool io_running_ = false;
     int64_t playback_deadline_us_ = 0;
@@ -104,6 +106,7 @@ private:
     size_t inbound_event_bytes_ = 0;
     bool initialized_ = false;
     bool deinitializing_ = false;
+    uint32_t deinitialization_generation_ = 0;
     bool focus_active_ = false;
     bool transport_active_ = false;
     bool recorder_active_ = false;

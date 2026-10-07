@@ -2,6 +2,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <mutex>
+#include "host_runtime.h"
 
 using SemaphoreHandle_t = std::mutex*;
 inline SemaphoreHandle_t xSemaphoreCreateMutex() { return new std::mutex; }
@@ -11,6 +12,7 @@ inline BaseType_t xSemaphoreTake(SemaphoreHandle_t semaphore, TickType_t) {
 }
 inline BaseType_t xSemaphoreGive(SemaphoreHandle_t semaphore) {
     semaphore->unlock();
+    rodakos_test::AfterSemaphoreGive();
     return pdTRUE;
 }
 inline void vSemaphoreDelete(SemaphoreHandle_t semaphore) { delete semaphore; }

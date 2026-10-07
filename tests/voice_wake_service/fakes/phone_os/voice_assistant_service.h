@@ -26,7 +26,11 @@ public:
         if (hook) hook();
         return snapshot;
     }
-    void StopInteraction() { std::lock_guard<std::mutex> lock(mutex); state = {}; ++stops; }
+    void StopInteraction() {
+        std::function<void()> hook;
+        { std::lock_guard<std::mutex> lock(mutex); state = {}; ++stops; hook = stop_hook; }
+        if (hook) hook();
+    }
     void StopInteractionIfCurrent(uint32_t) { StopInteraction(); }
     bool InterruptSpeaking() { std::lock_guard<std::mutex> lock(mutex); ++interrupts; return true; }
     bool StartInteraction(VoiceAssistantTrigger, const std::string&, const std::function<bool()>& admit,
@@ -39,6 +43,7 @@ public:
     std::mutex mutex;
     VoiceAssistantState state;
     std::function<void()> get_state_hook;
+    std::function<void()> stop_hook;
     unsigned starts = 0;
     unsigned stops = 0;
     unsigned interrupts = 0;

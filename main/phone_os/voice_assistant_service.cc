@@ -174,7 +174,9 @@ VoiceAssistantService::VoiceAssistantService(AudioFocusService& audio_focus,
 }
 
 VoiceAssistantService::~VoiceAssistantService() {
+    io_retirement_owner_.Close();
     Deinit();
+    io_retirement_owner_.Drain();
     transport_.SetMcpEndpointAvailable(false);
     transport_.SetInboundHandler({});
     if (mutex_ != nullptr) {
@@ -189,7 +191,7 @@ bool VoiceAssistantService::Init() {
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (deinitializing_) {
+    if (deinitializing_ || io_retirement_owner_.IsClosed()) {
         xSemaphoreGive(mutex_);
         return false;
     }
@@ -210,10 +212,12 @@ void VoiceAssistantService::Deinit() {
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (deinitializing_) {
+        const uint32_t pending_generation = deinitialization_generation_;
         xSemaphoreGive(mutex_);
         while (true) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
-            const bool complete = !deinitializing_;
+            const bool complete = !deinitializing_ ||
+                                  deinitialization_generation_ != pending_generation;
             xSemaphoreGive(mutex_);
             if (complete) {
                 return;
@@ -222,6 +226,7 @@ void VoiceAssistantService::Deinit() {
         }
     }
     deinitializing_ = true;
+    deinitialization_generation_ = NextRealtimeVoiceGeneration(deinitialization_generation_);
     xSemaphoreGive(mutex_);
 
     StopInteraction();
@@ -253,6 +258,10 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     bool already_active = false;
     bool interaction_busy = true;
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (io_retirement_owner_.IsClosed()) {
+        xSemaphoreGive(mutex_);
+        return false;
+    }
     if (!deinitializing_ && !initialized_) {
         recorder_.Init();
         initialized_ = true;
@@ -658,19 +667,23 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     bool should_stop_recorder = false;
     bool called_from_io_task = false;
     bool called_from_start_task = false;
+    TaskRetirementTicket retirement;
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (expected_generation != 0 && interaction_generation_ != expected_generation) {
         xSemaphoreGive(mutex_);
         return;
     }
+    retirement = io_retirement_;
     if (stopping_) {
+        const uint32_t pending_cleanup_generation = cleanup_generation_;
         const bool same_cleanup_task = cleanup_task_ == current_task;
         const bool called_from_io_task = io_task_ != nullptr && io_task_ == current_task;
         const bool called_from_start_task = start_in_progress_ && start_task_ == current_task;
         xSemaphoreGive(mutex_);
         if (!same_cleanup_task && !called_from_io_task && !called_from_start_task) {
-            WaitForCleanupComplete();
+            WaitForCleanupComplete(pending_cleanup_generation);
+            retirement.Join();
         }
         return;
     }
@@ -726,9 +739,7 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     // in OpenAudioChannel.
     transport_.CloseAudioChannel();
     transport_.WaitForAudioChannelClosed();
-    if (!called_from_io_task) {
-        WaitForIoTaskStop();
-    }
+    retirement.Join();
     reconnect_coordinator_.Cancel(cancelled_interaction_generation);
 
     audio_output_.CloseForOwner(kFocusOwner);
@@ -749,7 +760,7 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     }
     xSemaphoreGive(mutex_);
     if (!called_from_io_task && !called_from_start_task) {
-        WaitForCleanupComplete();
+        WaitForCleanupComplete(cleanup_generation);
     }
 }
 
@@ -784,13 +795,13 @@ void VoiceAssistantService::CompleteStartAttempt(TaskHandle_t task) {
     xSemaphoreGive(mutex_);
 }
 
-void VoiceAssistantService::WaitForCleanupComplete() {
+void VoiceAssistantService::WaitForCleanupComplete(uint32_t generation) {
     if (mutex_ == nullptr) {
         return;
     }
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool complete = !stopping_;
+        const bool complete = !stopping_ || cleanup_generation_ != generation;
         xSemaphoreGive(mutex_);
         if (complete) {
             return;
@@ -891,7 +902,7 @@ bool VoiceAssistantService::StartIoTask() {
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (!initialized_ || deinitializing_ || stopping_ ||
+    if (!initialized_ || deinitializing_ || stopping_ || io_retirement_owner_.IsClosed() ||
         phase_ != VoiceAssistantPhase::kConnecting) {
         xSemaphoreGive(mutex_);
         return false;
@@ -903,16 +914,24 @@ bool VoiceAssistantService::StartIoTask() {
         return true;
     }
 
+    const TaskRetirementTicket previous_retirement = io_retirement_;
+    io_retirement_ = ReserveTaskRetirement(io_retirement_owner_, IoTaskEntry, this);
+    TaskHandle_t created_task = nullptr;
+
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t created = FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreatePinnedToCoreWithCaps(
-        IoTaskEntry, "assistant_io", kIoTaskStackBytes, this,
-        kIoTaskPriority, &io_task_, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const BaseType_t created = !io_retirement_ || FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreatePinnedToCoreWithCaps(
+        TaskRetirementEntry, "assistant_io", kIoTaskStackBytes,
+        TaskRetirementContext(io_retirement_), kIoTaskPriority, &created_task, 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t created = FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreateWithCaps(
-        IoTaskEntry, "assistant_io", kIoTaskStackBytes, this,
-        kIoTaskPriority, &io_task_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const BaseType_t created = !io_retirement_ || FailResource(ResourceFailure::kVoiceTask) ? pdFAIL : xTaskCreateWithCaps(
+        TaskRetirementEntry, "assistant_io", kIoTaskStackBytes,
+        TaskRetirementContext(io_retirement_), kIoTaskPriority, &created_task,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (created != pdPASS) {
+        CancelTaskRetirement(io_retirement_);
+        io_retirement_ = previous_retirement;
         const unsigned internal_free = static_cast<unsigned>(
             heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         const unsigned internal_largest = static_cast<unsigned>(
@@ -931,6 +950,8 @@ bool VoiceAssistantService::StartIoTask() {
         xSemaphoreGive(mutex_);
         return false;
     }
+    io_task_ = created_task;
+    PublishTaskRetirement(io_retirement_, created_task);
     ESP_LOGI(TAG,
              "Assistant I/O task ready in PSRAM: internal_free=%u largest=%u",
              static_cast<unsigned>(
@@ -939,21 +960,6 @@ bool VoiceAssistantService::StartIoTask() {
                  heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
     xSemaphoreGive(mutex_);
     return true;
-}
-
-void VoiceAssistantService::WaitForIoTaskStop() {
-    if (mutex_ == nullptr) {
-        return;
-    }
-    while (true) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stopped = io_task_ == nullptr;
-        xSemaphoreGive(mutex_);
-        if (stopped) {
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
 }
 
 void VoiceAssistantService::IoTask() {
@@ -1047,7 +1053,6 @@ void VoiceAssistantService::IoTask() {
         CompleteInteractionCleanupLocked(cleanup_generation_);
     }
     xSemaphoreGive(mutex_);
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void VoiceAssistantService::HandleInbound(VoiceInboundEvent&& event) {

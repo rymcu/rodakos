@@ -19,6 +19,7 @@ struct Resources {
     size_t cross_core_queries = 0;
     size_t yields = 0;
     size_t external_suspends = 0;
+    size_t dynamic_tasks_created = 0;
 };
 
 class Gate {
@@ -38,6 +39,9 @@ void SetAutoStart(bool enabled);
 void RunTasks();
 void JoinTasks();
 void SetCreationAllowed(bool allowed);
+// Opt in only for fixtures that also exercise ordinary internal-stack tasks.
+// Their deletion is modeled at a blocked notification or final park boundary.
+void SetDynamicTasksAllowed(bool allowed);
 void SetDelayHook(void (*hook)(TickType_t));
 bool IsWorkerTask();
 const char* CurrentTaskName();

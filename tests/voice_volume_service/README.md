@@ -5,7 +5,9 @@ MCP dispatcher, reconnect coordinator and output/codec adapter. It drives `Start
 `StopInteraction` and the transport's installed inbound callback. It does not copy lifecycle
 guards or add a test-only production friend.
 
-Host fakes supply FreeRTOS mutex/task APIs using C++ mutexes and threads, a silent recorder,
+The task runtime links `tests/task_retirement`: the complete pinned ESP-IDF 6.0.2 WithCaps
+creation/deletion chain and production retirement registry, with host scheduler/allocator/core fakes.
+The old no-op self-delete headers have been removed. Other host fakes supply mutexes, a silent recorder,
 transport callbacks and response capture, audio focus, Opus and board/codec APIs. Tests can park
 the worker at a fake scheduler delay to place a request in the real queue before Stop. They also
 inject initialize synchronously from channel opening to exercise the actual startup window.
@@ -18,7 +20,8 @@ delayed-callback cases still exercise the service guard after transport extracti
 ```powershell
 wsl -d Debian -- bash -lc '
   cmake -S /mnt/d/workspace/rodakos/tests/voice_volume_service \
-        -B ~/.cache/rodakos-voice-volume-service -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+        -B ~/.cache/rodakos-voice-volume-service -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+        -DRODAKOS_IDF_PATH=/mnt/c/esp/v6.0.2/esp-idf &&
   cmake --build ~/.cache/rodakos-voice-volume-service &&
   ctest --test-dir ~/.cache/rodakos-voice-volume-service --output-on-failure
 '
@@ -43,3 +46,36 @@ preparation without publishing its late failure into the next interaction.
 Passing this target establishes software lifecycle behavior with controlled host dependencies.
 It does not validate real FreeRTOS scheduling, WebSocket close latency, I2C, ADC/DAC, or audible
 speaker output. Wire details are in [the volume contract](../../docs/voice-volume-mcp.md).
+
+## 031 assistant I/O retirement
+
+24 cases retain the original 12 service/envelope regressions and add 12 retirement cases:
+no IDF exit cleanup-task allocation; task scheduling before publication; Stop after the native
+handle clears but before the complete body returns; failed replacement preserving the prior
+ticket; autonomous session-end reaping; concurrent Stops/Pump; Deinit then Init/Start;
+old cleanup and Deinit waiters not following a later generation; destructor admission closure;
+an outdated interaction Stop leaving the new session running; and a stopping-branch waiter joining
+only its old ticket after a replacement is active.
+
+The semaphore-release hook delays the real worker after native state becomes idle. It does not
+set private service fields or emulate retirement. Resource assertions occur before fixture sweep.
+Host stack watermarks and heap samples are fixed placeholders, not device measurements.
+Same-task recursive `Deinit` through recorder/transport/focus callbacks remains unsupported;
+generation-bound external waiters do not establish arbitrary service re-entrancy.
+
+`run_retirement_controls.py` compiles six complete-TU mutations and, with `--baseline-root`,
+one unchanged old `.cc/.h` pair. It requires identified assertions or the real IDF cleanup-create
+failure markers plus SIGABRT. Build failure, timeout or unrelated sanitizer errors are failures.
+No C++ exception is used to simulate task deletion or unwind the old body.
+
+```sh
+python3 tests/voice_volume_service/run_retirement_controls.py \
+  --idf-path /mnt/c/esp/v6.0.2/esp-idf \
+  --output /path/to/new-controls-directory \
+  --baseline-root /path/to/frozen-old-source
+```
+
+The optional baseline directory must contain `manifest.json` with its fixed `sourceCommit` and
+`files` entries (`bytes`/`sha256`) for `phone_os/voice_assistant_service.cc` and `.h`.
+Debug, independent ASan/UBSan/leak and the explicit negative subprocesses are recorded separately;
+this target does not exercise real WebSocket timing, DMA/audio, hardware OOM or production release.

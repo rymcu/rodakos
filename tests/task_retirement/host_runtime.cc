@@ -29,6 +29,9 @@ struct Task {
     bool kernel_complete = false;
     bool core_current = true;
     bool delete_claimed = false;
+    bool dynamic = false;
+    bool notification_wait = false;
+    uint32_t notifications = 0;
 };
 struct Allocation { void* pointer = nullptr; size_t bytes = 0; bool pool = false; };
 std::mutex state_mutex;
@@ -36,6 +39,7 @@ std::vector<std::unique_ptr<Task>> tasks;
 std::array<Allocation, 128> allocations{};
 retirement_host::Resources resources;
 bool auto_start = true, creation_allowed = true, reject_cleanup = true;
+bool dynamic_tasks_allowed = false;
 bool fail_allocation = false;
 void (*delay_hook)(TickType_t) = nullptr;
 void (*before_create_returns)(TaskHandle_t) = nullptr;
@@ -118,6 +122,7 @@ void Reset() {
     resources.pool_caps = pool_caps;
     tasks.clear();
     auto_start = creation_allowed = reject_cleanup = true;
+    dynamic_tasks_allowed = false;
     fail_allocation = false;
     delay_hook = nullptr;
     before_create_returns = nullptr;
@@ -127,6 +132,7 @@ void Reset() {
 }
 void SetAutoStart(bool enabled) { std::lock_guard<std::mutex> lock(state_mutex); auto_start = enabled; }
 void SetCreationAllowed(bool allowed) { std::lock_guard<std::mutex> lock(state_mutex); creation_allowed = allowed; }
+void SetDynamicTasksAllowed(bool allowed) { std::lock_guard<std::mutex> lock(state_mutex); dynamic_tasks_allowed = allowed; }
 void SetDelayHook(void (*hook)(TickType_t)) { std::lock_guard<std::mutex> lock(state_mutex); delay_hook = hook; }
 void SetBeforeCreateReturnsHook(void (*hook)(TaskHandle_t)) {
     std::lock_guard<std::mutex> lock(state_mutex); before_create_returns = hook;
@@ -233,17 +239,101 @@ BaseType_t xTaskCreateWithCaps(TaskFunction_t entry, const char* name,
     return xTaskCreatePinnedToCoreWithCaps(entry, name, depth, context, priority,
                                          output, tskNO_AFFINITY, caps);
 }
-BaseType_t xTaskCreatePinnedToCore(TaskFunction_t, const char* name,
-    configSTACK_DEPTH_TYPE, void*, UBaseType_t, TaskHandle_t*, BaseType_t) {
-    std::lock_guard<std::mutex> lock(state_mutex);
-    if (std::strcmp(name, "prvTaskDeleteWithCapsTask") == 0) {
-        ++resources.cleanup_create_attempts;
-        std::fprintf(stderr, "EXPECTED_IDF_CLEANUP_CREATE_REJECTED name=%s\n", name);
-        std::fflush(stderr);
-        if (reject_cleanup) return pdFAIL;
+BaseType_t xTaskCreatePinnedToCore(TaskFunction_t entry, const char* name,
+    configSTACK_DEPTH_TYPE depth, void* context, UBaseType_t priority,
+    TaskHandle_t* output, BaseType_t core) {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (std::strcmp(name, "prvTaskDeleteWithCapsTask") == 0) {
+            ++resources.cleanup_create_attempts;
+            std::fprintf(stderr, "EXPECTED_IDF_CLEANUP_CREATE_REJECTED name=%s\n", name);
+            std::fflush(stderr);
+            if (reject_cleanup) return pdFAIL;
+            Fail("cleanup task must remain rejected in retirement fixture");
+        }
+        Check(dynamic_tasks_allowed, "unexpected dynamic task creation in retirement fixture");
+        if (!creation_allowed) return pdFAIL;
     }
-    Fail("unexpected dynamic task creation in retirement fixture");
+    auto* stack = static_cast<StackType_t*>(Allocate(depth, false, 1));
+    auto* tcb = static_cast<StaticTask_t*>(Allocate(sizeof(StaticTask_t), false, 1));
+    if (!stack || !tcb) { Free(stack); Free(tcb); return pdFAIL; }
+    Task* task;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        auto next = std::make_unique<Task>();
+        task = next.get();
+        task->name = name;
+        task->stack = stack;
+        task->tcb = tcb;
+        task->priority = priority;
+        task->core = core == tskNO_AFFINITY ? 0 : core;
+        task->released = auto_start;
+        task->dynamic = true;
+        tasks.push_back(std::move(next));
+        ++resources.tasks_created;
+        ++resources.dynamic_tasks_created;
+        ++resources.live_tasks;
+    }
+    task->thread = std::thread([task, entry, context] {
+        current_task = task;
+        bool deleted;
+        {
+            std::unique_lock<std::mutex> lock(task->mutex);
+            task->condition.wait(lock, [&] { return task->released || task->deleted; });
+            deleted = task->deleted;
+            if (!deleted) task->entered = true;
+            task->condition.notify_all();
+        }
+        if (deleted) return;
+        entry(context);
+        Fail("dynamic task entry returned instead of parking");
+    });
+    *output = task;
+    return pdPASS;
 }
+BaseType_t xTaskCreate(TaskFunction_t entry, const char* name, configSTACK_DEPTH_TYPE depth,
+    void* context, UBaseType_t priority, TaskHandle_t* output) {
+    return xTaskCreatePinnedToCore(entry, name, depth, context, priority, output, tskNO_AFFINITY);
+}
+eTaskState eTaskGetState(TaskHandle_t handle) {
+    auto* task = static_cast<Task*>(handle);
+    Check(task != nullptr, "state query requires a worker");
+    std::lock_guard<std::mutex> lock(task->mutex);
+    if (task->deleted) return eDeleted;
+    if (task->parked) return eSuspended;
+    if (task->notification_wait) return eBlocked;
+    return task->entered ? eRunning : eReady;
+}
+BaseType_t xTaskNotifyGive(TaskHandle_t handle) {
+    auto* task = static_cast<Task*>(handle);
+    Check(task != nullptr, "notification requires a worker");
+    std::lock_guard<std::mutex> lock(task->mutex);
+    Check(!task->deleted, "notification of deleted task");
+    ++task->notifications;
+    task->condition.notify_all();
+    return pdPASS;
+}
+uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t ticks) {
+    Check(current_task != nullptr, "notification wait requires a worker");
+    uint32_t count;
+    bool deleted;
+    {
+        std::unique_lock<std::mutex> lock(current_task->mutex);
+        current_task->notification_wait = true;
+        current_task->condition.notify_all();
+        const auto ready = [] { return current_task->notifications || current_task->deleted; };
+        if (ticks == portMAX_DELAY) current_task->condition.wait(lock, ready);
+        else current_task->condition.wait_for(lock, std::chrono::milliseconds(ticks), ready);
+        current_task->notification_wait = false;
+        deleted = current_task->deleted;
+        count = current_task->notifications;
+        if (count) current_task->notifications = clear ? 0 : count - 1;
+    }
+    if (deleted) pthread_exit(nullptr);
+    return count;
+}
+// No real ESP stack is sampled by a host thread.
+UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 4096; }
 TaskHandle_t xTaskGetCurrentTaskHandle() {
     return current_task ? static_cast<void*>(current_task) : &external_task;
 }
@@ -303,8 +393,14 @@ void vTaskDelete(TaskHandle_t handle) {
     { std::lock_guard<std::mutex> lock(state_mutex); hook = before_delete; }
     if (hook) hook(handle);
     {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        Check(task->parked && !task->core_current, "delete before worker core convergence");
+        std::unique_lock<std::mutex> lock(task->mutex);
+        if (task->dynamic) {
+            Check(task->condition.wait_for(lock, std::chrono::seconds(3), [&] {
+                return !task->entered || task->parked || task->notification_wait;
+            }), "dynamic delete requires a blocked or parked worker");
+        } else {
+            Check(task->parked && !task->core_current, "delete before worker core convergence");
+        }
         Check(!task->deleted, "duplicate task delete");
         task->deleted = true;
         task->condition.notify_all();
@@ -313,6 +409,12 @@ void vTaskDelete(TaskHandle_t handle) {
     // before the real WithCaps function can retrieve and free its stack/TCB.
     // Exactly one retirement claimer owns this join; JoinTasks only observes.
     task->thread.join();
+    if (task->dynamic) {
+        Free(task->stack);
+        Free(task->tcb);
+        task->stack = nullptr;
+        task->tcb = nullptr;
+    }
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         task->kernel_complete = true;

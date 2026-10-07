@@ -31,6 +31,13 @@ ctest --test-dir /tmp/rodakos-task-retirement --output-on-failure
 仅生产 retirement TU 与 pin IDF TU 的 heap 边界通过编译宏映射为专用账本函数，
 不覆盖 Camera/Display 现有图像与编码内存注入。
 
+031 的语音前端 fixture 可显式 `SetDynamicTasksAllowed(true)` 来运行普通内部栈
+`wake_notify`。普通任务采用 host 线程和独立 stack/TCB 账本，只支持尚未进入业务、
+通知阻塞或最终 park 时外部删除；不模拟对任意运行中业务的强制删除。通知计数、
+清空/递减、超时与删除唤醒有专门回归。普通 API 是模型，真实 WithCaps 创建/删除函数
+仍来自已 pin 的 IDF 源码，cleanup task 拒绝仍优先处理。host stack watermark 返回固定
+占位值，不能作为设备栈余量证据。
+
 验证边界：host 模型替换底层 scheduler、临界区、core-current 查询和 allocator；
 真实 WithCaps 函数体没有改写。模拟 worker 在 suspend 边界停驻，外部删除必须先看到
 core-current 收敛。host 线程最终由 `pthread_exit` 收尾，RAII 断言发生在此之前；底层

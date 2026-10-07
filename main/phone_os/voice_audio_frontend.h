@@ -4,6 +4,7 @@
 #include "phone_os/voice_pcm_assembler.h"
 #include "phone_os/voice_aec_diagnostic_capture.h"
 #include "phone_os/voice_wake_service.h"
+#include "phone_os/task-retirement.h"
 
 #include <cstdint>
 #include <deque>
@@ -91,6 +92,8 @@ private:
     SemaphoreHandle_t lifecycle_mutex_ = nullptr;
     bool deinitializing_ = false;
     mutable SemaphoreHandle_t mutex_ = nullptr;
+    TaskRetirementOwner capture_retirement_owner_;
+    TaskRetirementTicket capture_retirement_ticket_;
     TaskHandle_t task_ = nullptr;
     TaskHandle_t wake_notification_task_ = nullptr;
     bool wake_notification_stopping_ = false;

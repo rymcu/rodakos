@@ -2,6 +2,7 @@
 
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_identity.h"
+#include "phone_os/task-retirement.h"
 
 #include <cstdint>
 #include <functional>
@@ -100,7 +101,8 @@ private:
     bool LoadSettingsLocked();
     bool SaveSettings(bool enabled);
     void EnsureSupervisorTaskLocked();
-    void WaitForSupervisorStop();
+    void StopService(bool deinitialize);
+    void FinishStopOperation(uint64_t epoch, bool supervisor_joined);
     void SupervisorTick();
     void LogHealthIfDueLocked();
     void HandleWakeWordDetected(const std::string& wake_word, uint32_t enable_generation);
@@ -120,7 +122,12 @@ private:
     VoiceWakeRuntime& runtime_;
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
+    bool destroying_ = false;
     bool service_stopping_ = false;
+    bool deinit_pending_ = false;
+    uint64_t stop_epoch_ = 0;
+    uint64_t completed_stop_epoch_ = 0;
+    TaskHandle_t stop_owner_ = nullptr;
     bool task_running_ = false;
     bool enabled_ = false;
     bool listening_ = false;
@@ -130,6 +137,8 @@ private:
     TickType_t assistant_active_since_ticks_ = 0;
     TickType_t last_health_log_ticks_ = 0;
     TaskHandle_t task_ = nullptr;
+    TaskRetirementOwner retirement_owner_;
+    TaskRetirementTicket supervisor_ticket_;
     VoiceWakeStatus status_ = VoiceWakeStatus::kDisabled;
     std::string message_ = "Disabled";
     std::string last_wake_word_;

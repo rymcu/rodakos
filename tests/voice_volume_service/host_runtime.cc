@@ -1,45 +1,22 @@
 #include "host_runtime.h"
+#include "task_retirement_host.h"
 
 #include <freertos/task.h>
 #include <chrono>
 #include <condition_variable>
-#include <memory>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 namespace {
-struct HostTask { std::thread thread; };
-thread_local HostTask* current_task = nullptr;
-thread_local int external_task_identity = 0;
-std::vector<std::unique_ptr<HostTask>> tasks;
 std::mutex pause_mutex;
 std::condition_variable pause_condition;
 bool paused = false;
 unsigned parked = 0;
-}
-
-TaskHandle_t xTaskGetCurrentTaskHandle() {
-    return current_task != nullptr ? static_cast<void*>(current_task)
-                                  : static_cast<void*>(&external_task_identity);
-}
-
-BaseType_t xTaskCreate(TaskFunction_t entry, const char*, uint32_t, void* argument,
-                       UBaseType_t, TaskHandle_t* handle) {
-    auto task = std::make_unique<HostTask>();
-    HostTask* identity = task.get();
-    *handle = identity;
-    task->thread = std::thread([entry, argument, identity]() {
-        current_task = identity;
-        entry(argument);
-        current_task = nullptr;
-    });
-    tasks.push_back(std::move(task));
-    return pdPASS;
-}
-
-void vTaskDelay(TickType_t ticks) {
-    if (current_task != nullptr) {
+std::mutex hook_mutex;
+std::function<void()> after_give;
+thread_local bool inside_give_hook = false;
+void DelayHook(TickType_t) {
+    if (retirement_host::IsWorkerTask()) {
         std::unique_lock<std::mutex> lock(pause_mutex);
         if (paused) {
             ++parked;
@@ -48,10 +25,15 @@ void vTaskDelay(TickType_t ticks) {
             --parked;
         }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(ticks == 0 ? 1 : ticks));
+}
 }
 
 namespace rodakos_test {
+void ResetWorkers() {
+    retirement_host::Reset();
+    retirement_host::SetDelayHook(DelayHook);
+    SetAfterSemaphoreGiveHook({});
+}
 bool PauseWorkers() {
     std::unique_lock<std::mutex> lock(pause_mutex);
     paused = true;
@@ -64,9 +46,20 @@ void ResumeWorkers() {
 }
 void JoinWorkers() {
     ResumeWorkers();
-    for (auto& task : tasks) {
-        if (task->thread.joinable()) task->thread.join();
+    retirement_host::JoinTasks();
+}
+void SetAfterSemaphoreGiveHook(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    after_give = std::move(hook);
+}
+void AfterSemaphoreGive() {
+    if (inside_give_hook) return;
+    std::function<void()> callback;
+    { std::lock_guard<std::mutex> lock(hook_mutex); callback = after_give; }
+    if (callback) {
+        inside_give_hook = true;
+        callback();
+        inside_give_hook = false;
     }
-    tasks.clear();
 }
 }

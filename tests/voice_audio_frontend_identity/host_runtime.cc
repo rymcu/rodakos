@@ -5,6 +5,7 @@
 #include "esp_mn_models.h"
 #include "esp_mn_speech_commands.h"
 #include "freertos/task.h"
+#include "task_retirement_host.h"
 
 #include <algorithm>
 #include <chrono>
@@ -25,13 +26,8 @@ size_t model_create_count = 0;
 size_t model_destroy_count = 0;
 std::string registered_command;
 
-struct HostTask {
-    std::thread thread;
-    bool suspended = false;
-};
-thread_local HostTask* current_task = nullptr;
-thread_local char external_task;
-std::vector<HostTask*> task_registry;
+size_t supplied_audio_reads = 0;
+size_t afe_feed_count = 0;
 
 model_iface_data_t model_data;
 esp_mn_results_t results{};
@@ -59,22 +55,10 @@ esp_mn_iface_t iface{&Create, &Destroy, &SetThreshold, &GetChunk, &Detect, &GetR
 }
 
 namespace rodakos_test::voice_frontend {
-void CleanupCompletedTasks() {
-    std::lock_guard<std::mutex> lock(state_mutex);
-    auto it = task_registry.begin();
-    while (it != task_registry.end()) {
-        HostTask* task = *it;
-        if (task->suspended) {
-            if (task->thread.joinable()) task->thread.join();
-            delete task;
-            it = task_registry.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
 void Reset() {
-    CleanupCompletedTasks();
+    retirement_host::Reset();
+    retirement_host::SetDynamicTasksAllowed(true);
+    ResetAllocationObserver();
     std::lock_guard<std::mutex> lock(state_mutex);
     command_update_succeeds = true;
     command_clear_succeeds = true;
@@ -86,19 +70,9 @@ void Reset() {
     model_destroy_count = 0;
     registered_command.clear();
     results = {};
+    supplied_audio_reads = afe_feed_count = 0;
 }
-struct CleanupAtExit {
-    ~CleanupAtExit() {
-        CleanupCompletedTasks();
-        std::lock_guard<std::mutex> lock(state_mutex);
-        for (HostTask* task : task_registry) {
-            if (task->thread.joinable()) task->thread.join();
-            delete task;
-        }
-        task_registry.clear();
-    }
-};
-CleanupAtExit cleanup_at_exit;
+
 void SetCommandUpdateResult(bool succeeds) {
     std::lock_guard<std::mutex> lock(state_mutex);
     command_update_succeeds = succeeds;
@@ -135,6 +109,14 @@ size_t ModelDestroyCount() {
     return model_destroy_count;
 }
 const std::string& RegisteredCommand() { return registered_command; }
+void SupplyAudioReads(size_t count) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    supplied_audio_reads = count;
+}
+size_t AfeFeedCount() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return afe_feed_count;
+}
 }
 
 namespace rodakos {
@@ -149,7 +131,13 @@ bool AudioCodecInput::SetGain(int) { return true; }
 bool AudioCodecInput::OpenForOwner(const char*, int, uint32_t, uint16_t, uint16_t, int,
                                    uint16_t, InputGainProfile) { return true; }
 void AudioCodecInput::CloseForOwner(const char*) {}
-bool AudioCodecInput::ReadForOwner(const char*, void*, int) { return false; }
+bool AudioCodecInput::ReadForOwner(const char*, void* output, int bytes) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    if (supplied_audio_reads == 0) return false;
+    --supplied_audio_reads;
+    std::fill_n(static_cast<int16_t*>(output), bytes / sizeof(int16_t), int16_t{250});
+    return true;
+}
 bool AudioCodecInput::IsOpen() const { return false; }
 }
 
@@ -192,64 +180,11 @@ const esp_afe_sr_iface_t* esp_afe_handle_from_config(afe_config_t*) {
         [](esp_afe_sr_data_t*) { return 320; },
         [](esp_afe_sr_data_t*) { return 2; },
         [](esp_afe_sr_data_t* data) { delete data; },
-        [](esp_afe_sr_data_t*, int16_t*) {},
+        [](esp_afe_sr_data_t*, int16_t* buffer) {
+            rodakos_test::voice_frontend::ObserveAfeFeedBuffer(buffer);
+            std::lock_guard<std::mutex> lock(state_mutex);
+            ++afe_feed_count;
+        },
         [](esp_afe_sr_data_t*, TickType_t) -> afe_fetch_result_t* { return nullptr; }};
     return &afe;
 }
-TaskHandle_t xTaskGetCurrentTaskHandle() {
-    return current_task != nullptr ? static_cast<TaskHandle_t>(current_task)
-                                   : static_cast<TaskHandle_t>(&external_task);
-}
-BaseType_t StartTask(TaskFunction_t entry, void* argument, TaskHandle_t* output) {
-    auto* task = new HostTask;
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        task_registry.push_back(task);
-    }
-    *output = task;
-    task->thread = std::thread([task, entry, argument] {
-        current_task = task;
-        entry(argument);
-        task->suspended = true;
-        current_task = nullptr;
-    });
-    return pdPASS;
-}
-BaseType_t xTaskCreate(TaskFunction_t, const char*, uint32_t, void*, UBaseType_t, TaskHandle_t* output) {
-    auto* task = new HostTask;
-    task->suspended = true;
-    *output = task;
-    return pdPASS;
-}
-BaseType_t xTaskCreateWithCaps(TaskFunction_t entry, const char*, uint32_t, void* argument,
-                               UBaseType_t, TaskHandle_t* output, uint32_t) {
-    return StartTask(entry, argument, output);
-}
-BaseType_t xTaskCreatePinnedToCoreWithCaps(TaskFunction_t entry, const char*, uint32_t,
-                                           void* argument, UBaseType_t, TaskHandle_t* output,
-                                           BaseType_t, uint32_t) {
-    return StartTask(entry, argument, output);
-}
-void vTaskDelay(TickType_t) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
-void vTaskDelete(TaskHandle_t handle) {
-    auto* task = static_cast<HostTask*>(handle);
-    if (task == nullptr || task == current_task) return;
-    if (task->thread.joinable()) task->thread.join();
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        auto it = std::find(task_registry.begin(), task_registry.end(), task);
-        if (it != task_registry.end()) task_registry.erase(it);
-    }
-    delete task;
-}
-void vTaskDeleteWithCaps(TaskHandle_t handle) { vTaskDelete(handle); }
-void vTaskSuspend(TaskHandle_t) {
-    if (current_task != nullptr) current_task->suspended = true;
-}
-eTaskState eTaskGetState(TaskHandle_t handle) {
-    auto* task = static_cast<HostTask*>(handle);
-    return task == nullptr || task->suspended ? eSuspended : eRunning;
-}
-void xTaskNotifyGive(TaskHandle_t) {}
-uint32_t ulTaskNotifyTake(BaseType_t, TickType_t) { return 1; }
-UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t) { return 8192; }

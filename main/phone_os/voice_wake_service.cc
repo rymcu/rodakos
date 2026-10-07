@@ -4,6 +4,7 @@
 #include "phone_os/time_service.h"
 
 #include <utility>
+#include <cstdlib>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -74,7 +75,15 @@ VoiceWakeService::VoiceWakeService(VoiceAssistantService& assistant, VoiceWakeRu
 }
 
 VoiceWakeService::~VoiceWakeService() {
+    retirement_owner_.Close();
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (supervisor_ticket_.IsCurrentTask()) std::abort();
+        destroying_ = true;
+        xSemaphoreGive(mutex_);
+    }
     Deinit();
+    retirement_owner_.Drain();
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
         mutex_ = nullptr;
@@ -87,7 +96,7 @@ bool VoiceWakeService::Init() {
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (service_stopping_) {
+    if (service_stopping_ || destroying_) {
         xSemaphoreGive(mutex_);
         return false;
     }
@@ -111,41 +120,7 @@ bool VoiceWakeService::Init() {
 }
 
 void VoiceWakeService::Deinit() {
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (service_stopping_) {
-            xSemaphoreGive(mutex_);
-            while (true) {
-                xSemaphoreTake(mutex_, portMAX_DELAY);
-                const bool complete = !service_stopping_;
-                xSemaphoreGive(mutex_);
-                if (complete) {
-                    Deinit();
-                    return;
-                }
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-        }
-        service_stopping_ = true;
-        ++enable_generation_;
-        initialized_ = false;
-        task_running_ = false;
-        StopRuntimeLocked(enabled_ ? "Stopped" : "Disabled");
-        xSemaphoreGive(mutex_);
-    }
-    WaitForSupervisorStop();
-
-    assistant_.StopInteraction();
-    runtime_.Deinit();
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        runtime_identity_configured_ = false;
-        identity_recovery_required_ = false;
-        identity_waiting_clock_ = false;
-        identity_deadline_ = {};
-        service_stopping_ = false;
-        xSemaphoreGive(mutex_);
-    }
+    StopService(true);
 }
 
 bool VoiceWakeService::Start() {
@@ -165,7 +140,7 @@ bool VoiceWakeService::Start() {
             SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
             started = task_running_ && ReconcileIdentityLocked();
         } else {
-            started = StartRuntimeLocked();
+            started = task_running_ && StartRuntimeLocked();
         }
     }
     xSemaphoreGive(mutex_);
@@ -173,25 +148,80 @@ bool VoiceWakeService::Start() {
 }
 
 void VoiceWakeService::Stop() {
-    if (mutex_ == nullptr) {
-        return;
-    }
+    StopService(false);
+}
 
+void VoiceWakeService::StopService(bool deinitialize) {
+    if (mutex_ == nullptr) return;
+    TaskRetirementTicket ticket;
+    const auto caller = xTaskGetCurrentTaskHandle();
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    ticket = supervisor_ticket_;
+    if (deinitialize) {
+        deinit_pending_ = true;
+        initialized_ = false;
+    }
+    task_running_ = false;
     if (service_stopping_) {
+        const auto epoch = stop_epoch_;
+        const bool reentrant = stop_owner_ == caller || ticket.IsCurrentTask();
         xSemaphoreGive(mutex_);
-        return;
+        if (reentrant) return;
+        ticket.Join();
+        // A later Start/Stop may already exist when this waiter is scheduled.
+        // Its completion still belongs only to the operation captured above.
+        for (;;) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool complete = completed_stop_epoch_ >= epoch;
+            xSemaphoreGive(mutex_);
+            if (complete) return;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
     service_stopping_ = true;
+    stop_owner_ = caller;
+    const auto epoch = ++stop_epoch_;
     ++enable_generation_;
     task_running_ = false;
     StopRuntimeLocked(enabled_ ? "Stopped" : "Disabled");
     xSemaphoreGive(mutex_);
-    WaitForSupervisorStop();
+
+    ticket.Join();
     assistant_.StopInteraction();
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    service_stopping_ = false;
-    xSemaphoreGive(mutex_);
+    FinishStopOperation(epoch, true);
+}
+
+void VoiceWakeService::FinishStopOperation(uint64_t epoch, bool supervisor_joined) {
+    bool deinitialized = false;
+    for (;;) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        // Disabling normally keeps the supervisor. A concurrent Stop/Deinit
+        // can upgrade that operation before this completion is published.
+        if (!task_running_ && !supervisor_joined) {
+            const auto ticket = supervisor_ticket_;
+            xSemaphoreGive(mutex_);
+            ticket.Join();
+            supervisor_joined = true;
+            continue;
+        }
+        if (!deinit_pending_ || deinitialized) {
+            deinit_pending_ = false;
+            completed_stop_epoch_ = epoch;
+            stop_owner_ = nullptr;
+            service_stopping_ = false;
+            xSemaphoreGive(mutex_);
+            return;
+        }
+        xSemaphoreGive(mutex_);
+        runtime_.Deinit();
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        runtime_identity_configured_ = false;
+        identity_recovery_required_ = false;
+        identity_waiting_clock_ = false;
+        identity_deadline_ = {};
+        xSemaphoreGive(mutex_);
+        deinitialized = true;
+    }
 }
 
 bool VoiceWakeService::SetEnabled(bool enabled) {
@@ -200,6 +230,7 @@ bool VoiceWakeService::SetEnabled(bool enabled) {
     }
 
     bool active = false;
+    uint64_t stop_epoch = 0;
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (service_stopping_ || !initialized_) {
         xSemaphoreGive(mutex_);
@@ -219,18 +250,18 @@ bool VoiceWakeService::SetEnabled(bool enabled) {
     enabled_ = enabled;
     if (!enabled_) {
         service_stopping_ = true;
+        stop_owner_ = xTaskGetCurrentTaskHandle();
+        stop_epoch = ++stop_epoch_;
         StopRuntimeLocked("Disabled");
         SetStatusLocked(VoiceWakeStatus::kDisabled, "Disabled");
     } else {
         EnsureSupervisorTaskLocked();
-        active = StartRuntimeLocked();
+        active = task_running_ && StartRuntimeLocked();
     }
     xSemaphoreGive(mutex_);
     if (!enabled) {
         assistant_.StopInteraction();
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        service_stopping_ = false;
-        xSemaphoreGive(mutex_);
+        FinishStopOperation(stop_epoch, false);
     }
     ESP_LOGI(TAG, "Wake listener %s", enabled ? "enabled" : "disabled");
     return !enabled || active;
@@ -408,7 +439,6 @@ void VoiceWakeService::SupervisorTask(void* arg) {
         self->task_ = nullptr;
         xSemaphoreGive(self->mutex_);
     }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 bool VoiceWakeService::LoadSettingsLocked() {
@@ -436,37 +466,36 @@ void VoiceWakeService::EnsureSupervisorTaskLocked() {
         return;
     }
 
+    const auto previous = supervisor_ticket_;
+    auto ticket = ReserveTaskRetirement(retirement_owner_, SupervisorTask, this);
+    if (!ticket) {
+        task_running_ = false;
+        SetStatusLocked(VoiceWakeStatus::kError, "Wake supervisor failed");
+        return;
+    }
+    supervisor_ticket_ = ticket;
     task_running_ = true;
     last_health_log_ticks_ = 0;
+    TaskHandle_t created = nullptr;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     const BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
-        SupervisorTask, "voice_wake", 4096, this, 2, &task_, 0,
+        TaskRetirementEntry, "voice_wake", 4096, TaskRetirementContext(ticket), 2, &created, 0,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
     const BaseType_t ret = xTaskCreateWithCaps(
-        SupervisorTask, "voice_wake", 4096, this, 2, &task_,
+        TaskRetirementEntry, "voice_wake", 4096, TaskRetirementContext(ticket), 2, &created,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
-    if (ret != pdPASS) {
+    if (ret != pdPASS || created == nullptr) {
+        CancelTaskRetirement(ticket);
+        supervisor_ticket_ = previous;
         task_ = nullptr;
         task_running_ = false;
         SetStatusLocked(VoiceWakeStatus::kError, "Wake supervisor failed");
         ESP_LOGW(TAG, "Failed to start wake supervisor task");
-    }
-}
-
-void VoiceWakeService::WaitForSupervisorStop() {
-    if (mutex_ == nullptr) {
-        return;
-    }
-    while (true) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stopped = task_ == nullptr;
-        xSemaphoreGive(mutex_);
-        if (stopped) {
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
+    } else {
+        task_ = created;
+        PublishTaskRetirement(ticket, created);
     }
 }
 

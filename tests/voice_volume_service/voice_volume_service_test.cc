@@ -1,5 +1,7 @@
 #include "host_runtime.h"
 #include "test_framework.h"
+#include "task_retirement_host.h"
+#include "phone_os/task-retirement.h"
 #include "phone_os/audio_output_service.h"
 #include "phone_os/realtime_voice_contract.h"
 #include "phone_os/voice_assistant_service.h"
@@ -60,13 +62,14 @@ const cJSON* Receipt(const Json& value) {
 class Recorder final : public rodakos::VoiceRecorderService {
 public:
     bool Init() override { return true; }
-    void Deinit() override { running = false; }
+    void Deinit() override { running = false; if (on_deinit) on_deinit(); }
     bool Start(const rodakos::VoiceRecorderConfig&) override { running = true; return true; }
     void Stop() override { running = false; }
     bool IsRunning() const override { return running; }
     bool PopFrame(rodakos::VoicePcmFrame&) override { return false; }
     const char* name() const override { return "host-recorder"; }
     const char* last_error() const override { return "host recorder error"; }
+    std::function<void()> on_deinit;
 private:
     std::atomic<bool> running{false};
 };
@@ -95,6 +98,7 @@ public:
         return !can_continue || can_continue();
     }
     void CloseAudioChannel() override {
+        if (on_close) on_close();
         open = false;
         std::lock_guard<std::mutex> lock(mutex);
         session_gate.Clear();
@@ -182,6 +186,12 @@ public:
         open = false;
         Deliver(std::move(event));
     }
+    void EndSession() {
+        VoiceInboundEvent event;
+        event.type = VoiceInboundEventType::kSessionFinished;
+        event.transport_generation = generation;
+        Deliver(std::move(event));
+    }
     size_t ResponseCount() {
         std::lock_guard<std::mutex> lock(mutex);
         return responses.size();
@@ -207,6 +217,7 @@ public:
     std::atomic<bool> mcp_available{false};
     std::function<void()> on_open;
     std::function<void()> on_prepare;
+    std::function<void()> on_close;
     bool prepare_ok = true;
     unsigned prepare_calls = 0;
     rodakos::VoiceTransportFailure failure;
@@ -235,8 +246,9 @@ private:
 };
 
 struct Fixture {
-    Fixture() { fake_codec::Reset(); }
+    Fixture() { fake_codec::Reset(); rodakos_test::ResetWorkers(); }
     ~Fixture() {
+        rodakos_test::SetAfterSemaphoreGiveHook({});
         rodakos_test::ResumeWorkers();
         service.StopInteraction();
         rodakos_test::JoinWorkers();
@@ -499,4 +511,305 @@ RODAK_TEST("Voice service round trips typed RPC IDs and receipts through canonic
     RODAK_CHECK_EQ(std::string(Get(text_receipt, "effectId")->valuestring), "service-effect");
     RODAK_CHECK_EQ(Get(text_receipt, "configurationRevision")->valueint, 1);
     RODAK_CHECK_EQ(f.output.volume(), 70);
+}
+
+RODAK_TEST("retirement assistant exits without allocating an IDF cleanup task") {
+    Fixture f;
+    f.StartInitialized();
+    const auto before = retirement_host::Snapshot();
+    std::cout << "ASSISTANT_IO_STARTED_REAL_SERVICE" << std::endl;
+    f.service.StopInteraction();
+    const auto after = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(after.cleanup_create_attempts, 0u);
+    RODAK_CHECK_EQ(after.live_tasks, 0u);
+    RODAK_CHECK_EQ(after.live_task_buffers, 0u);
+    RODAK_CHECK_EQ(after.task_deletes, 1u);
+    RODAK_CHECK_EQ(after.allocation_calls, before.allocation_calls);
+}
+
+namespace {
+std::atomic<bool> publication_observed{false};
+void ObserveUnpublishedAssistant(TaskHandle_t) { publication_observed = true; }
+
+void ParkAfterNativeIdle(Fixture& f, retirement_host::Gate& gate,
+                         std::atomic<bool>& armed) {
+    rodakos_test::SetAfterSemaphoreGiveHook([&] {
+        if (!retirement_host::IsWorkerTask() || !armed.load()) return;
+        const auto state = f.service.GetState();
+        if (state.phase == rodakos::VoiceAssistantPhase::kIdle && !state.stopping &&
+            armed.exchange(false)) gate.Enter();
+    });
+}
+}
+
+RODAK_TEST("retirement assistant publishes before the scheduled worker enters its body") {
+    Fixture f;
+    publication_observed = false;
+    retirement_host::SetBeforeCreateReturnsHook(ObserveUnpublishedAssistant);
+    const bool started = f.Start();
+    retirement_host::SetBeforeCreateReturnsHook(nullptr);
+    f.service.StopInteraction();
+    RODAK_CHECK(started);
+    RODAK_CHECK(publication_observed.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+}
+
+RODAK_TEST("retirement assistant late idle Stop waits for the complete old body") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate tail;
+    std::atomic<bool> armed{true}, returned{false};
+    ParkAfterNativeIdle(f, tail, armed);
+    f.transport.EndSession();
+    const bool reached = tail.Wait();
+    std::thread stopper([&] { f.service.StopInteraction(); returned = true; });
+    std::this_thread::sleep_for(40ms);
+    const bool returned_early = returned.load();
+    const size_t deleted_early = retirement_host::Snapshot().task_deletes;
+    tail.Release();
+    stopper.join();
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    RODAK_CHECK(reached);
+    RODAK_CHECK_FALSE(returned_early);
+    RODAK_CHECK_EQ(deleted_early, 0u);
+    RODAK_CHECK(returned.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+}
+
+RODAK_TEST("retirement assistant failed replacement preserves the previous ticket") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate tail;
+    std::atomic<bool> armed{true}, returned{false}, accepted{true};
+    ParkAfterNativeIdle(f, tail, armed);
+    f.transport.EndSession();
+    const bool reached = tail.Wait();
+    retirement_host::SetCreationAllowed(false);
+    std::thread starter([&] { accepted = f.Start(); returned = true; });
+    std::this_thread::sleep_for(40ms);
+    const bool returned_early = returned.load();
+    retirement_host::SetCreationAllowed(true);
+    tail.Release();
+    starter.join();
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    const auto reclaimed = retirement_host::Snapshot();
+    const bool retried = f.Start();
+    f.service.StopInteraction();
+    RODAK_CHECK(reached);
+    RODAK_CHECK_FALSE(accepted.load());
+    RODAK_CHECK_FALSE(returned_early);
+    RODAK_CHECK_EQ(reclaimed.task_deletes, 1u);
+    RODAK_CHECK_EQ(reclaimed.live_task_buffers, 0u);
+    RODAK_CHECK(retried);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("retirement assistant autonomous session end is reaped without external Stop") {
+    Fixture f;
+    f.StartInitialized();
+    f.transport.EndSession();
+    const bool idle = WaitUntil([&] {
+        const auto state = f.service.GetState();
+        return state.phase == rodakos::VoiceAssistantPhase::kIdle && !state.stopping;
+    });
+    const bool reclaimed = WaitUntil([&] {
+        rodakos::PumpTaskRetirements();
+        return retirement_host::Snapshot().task_deletes == 1;
+    });
+    RODAK_CHECK(idle);
+    RODAK_CHECK(reclaimed);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().cleanup_create_attempts, 0u);
+}
+
+RODAK_TEST("retirement assistant concurrent Stops and pump reclaim one old task") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate tail;
+    std::atomic<bool> armed{true}, first_done{false}, second_done{false}, pump_running{true};
+    ParkAfterNativeIdle(f, tail, armed);
+    f.transport.EndSession();
+    const bool reached = tail.Wait();
+    std::thread first([&] { f.service.StopInteraction(); first_done = true; });
+    const bool stopping = WaitUntil([&] { return f.service.GetState().stopping; });
+    std::thread second([&] { f.service.StopInteraction(); second_done = true; });
+    std::thread pump([&] {
+        while (pump_running) { rodakos::PumpTaskRetirements(); std::this_thread::sleep_for(1ms); }
+    });
+    std::this_thread::sleep_for(40ms);
+    const bool returned_early = first_done || second_done;
+    tail.Release();
+    first.join();
+    second.join();
+    pump_running = false;
+    pump.join();
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    RODAK_CHECK(reached && stopping);
+    RODAK_CHECK_FALSE(returned_early);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+RODAK_TEST("retirement assistant Deinit preserves later Init and Start admission") {
+    Fixture f;
+    f.StartInitialized();
+    f.service.Deinit();
+    const auto first = retirement_host::Snapshot();
+    RODAK_CHECK_FALSE(f.service.GetState().initialized);
+    const bool initialized = f.service.Init();
+    const bool restarted = f.Start();
+    f.service.Deinit();
+    RODAK_CHECK_EQ(first.live_tasks, 0u);
+    RODAK_CHECK_EQ(first.live_task_buffers, 0u);
+    RODAK_CHECK(initialized && restarted);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("retirement assistant cleanup waiter does not follow a replacement cleanup") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate replacement_close;
+    std::atomic<TaskHandle_t> first_identity{nullptr};
+    std::atomic<bool> replaced{false}, first_done{false}, replacement_started{false};
+    std::thread replacement_stopper;
+    rodakos_test::SetAfterSemaphoreGiveHook([&] {
+        if (retirement_host::IsWorkerTask() ||
+            xTaskGetCurrentTaskHandle() != first_identity.load() || replaced.load()) return;
+        const auto state = f.service.GetState();
+        if (state.phase != rodakos::VoiceAssistantPhase::kIdle || state.stopping ||
+            replaced.exchange(true)) return;
+        replacement_started = f.Start();
+        f.transport.on_close = [&] { replacement_close.Enter(); };
+        replacement_stopper = std::thread([&] { f.service.StopInteraction(); });
+        replacement_close.Wait();
+    });
+    std::thread first([&] {
+        first_identity = xTaskGetCurrentTaskHandle();
+        f.service.StopInteraction();
+        first_done = true;
+    });
+    const bool reached = replacement_close.Wait();
+    const bool old_only = WaitUntil([&] { return first_done.load(); });
+    replacement_close.Release();
+    first.join();
+    if (replacement_stopper.joinable()) replacement_stopper.join();
+    f.transport.on_close = {};
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    RODAK_CHECK(reached && replacement_started);
+    RODAK_CHECK(old_only);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("retirement assistant Deinit waiter stays with its captured generation") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate first_recorder, waiter_admitted, replacement_recorder;
+    std::atomic<TaskHandle_t> waiter_identity{nullptr};
+    std::atomic<bool> waiter_armed{true}, waiter_done{false};
+    f.recorder.on_deinit = [&] { first_recorder.Enter(); };
+    std::thread first([&] { f.service.Deinit(); });
+    const bool first_reached = first_recorder.Wait();
+    rodakos_test::SetAfterSemaphoreGiveHook([&] {
+        if (xTaskGetCurrentTaskHandle() == waiter_identity.load() &&
+            waiter_armed.exchange(false)) waiter_admitted.Enter();
+    });
+    std::thread waiter([&] {
+        waiter_identity = xTaskGetCurrentTaskHandle();
+        f.service.Deinit();
+        waiter_done = true;
+    });
+    const bool waiter_reached = waiter_admitted.Wait();
+    first_recorder.Release();
+    first.join();
+    const bool initialized = f.service.Init();
+    const bool restarted = f.Start();
+    f.recorder.on_deinit = [&] { replacement_recorder.Enter(); };
+    std::thread replacement([&] { f.service.Deinit(); });
+    const bool replacement_reached = replacement_recorder.Wait();
+    waiter_admitted.Release();
+    const bool old_only = WaitUntil([&] { return waiter_done.load(); });
+    replacement_recorder.Release();
+    replacement.join();
+    waiter.join();
+    f.recorder.on_deinit = {};
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    RODAK_CHECK(first_reached && waiter_reached && initialized && restarted && replacement_reached);
+    RODAK_CHECK(old_only);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("retirement assistant destructor closes admission before Deinit completes") {
+    Fixture f;
+    auto service = std::make_unique<rodakos::VoiceAssistantService>(
+        f.focus, f.transport, f.recorder, f.output);
+    auto* active = service.get();
+    const bool started = active->StartInteraction(rodakos::VoiceAssistantTrigger::kWakeWord);
+    std::atomic<bool> recorder_deinitialized{false}, admission_checked{false}, accepted{false};
+    f.recorder.on_deinit = [&] { recorder_deinitialized = true; };
+    rodakos_test::SetAfterSemaphoreGiveHook([&] {
+        if (retirement_host::IsWorkerTask() || !recorder_deinitialized || admission_checked.exchange(true)) return;
+        accepted = active->StartInteraction(rodakos::VoiceAssistantTrigger::kWakeWord);
+        if (accepted) active->StopInteraction();
+    });
+    service.reset();
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    f.recorder.on_deinit = {};
+    RODAK_CHECK(started);
+    RODAK_CHECK(admission_checked.load());
+    RODAK_CHECK_FALSE(accepted.load());
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 0u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+}
+
+RODAK_TEST("retirement assistant stale generation Stop does not wait for the replacement") {
+    Fixture f;
+    uint32_t first_generation = 0, second_generation = 0;
+    RODAK_CHECK(f.service.StartInteraction(rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &first_generation));
+    f.service.StopInteraction();
+    RODAK_CHECK(f.service.StartInteraction(rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &second_generation));
+    f.service.StopInteractionIfCurrent(first_generation);
+    const auto state = f.service.GetState();
+    const auto before = retirement_host::Snapshot();
+    f.service.StopInteractionIfCurrent(second_generation);
+    RODAK_CHECK(first_generation != second_generation);
+    RODAK_CHECK(state.transport_active && !state.stopping);
+    RODAK_CHECK_EQ(before.live_tasks, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+}
+
+RODAK_TEST("retirement assistant stopping waiter joins only its captured old task") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate self_cleanup, waiter_admitted;
+    std::atomic<TaskHandle_t> waiter_identity{nullptr};
+    std::atomic<bool> replacement_attempted{false}, replacement_started{false}, waiter_done{false}, admitted{false};
+    f.transport.on_close = [&] {
+        if (retirement_host::IsWorkerTask()) self_cleanup.Enter();
+    };
+    f.transport.EndSession();
+    const bool reached = self_cleanup.Wait();
+    rodakos_test::SetAfterSemaphoreGiveHook([&] {
+        if (retirement_host::IsWorkerTask() ||
+            xTaskGetCurrentTaskHandle() != waiter_identity.load() || replacement_attempted.load()) return;
+        const auto state = f.service.GetState();
+        if (state.stopping && !admitted.exchange(true)) waiter_admitted.Enter();
+        if (state.phase == rodakos::VoiceAssistantPhase::kIdle && !state.stopping &&
+            !replacement_attempted.exchange(true)) replacement_started = f.Start();
+    });
+    std::thread waiter([&] {
+        waiter_identity = xTaskGetCurrentTaskHandle();
+        f.service.StopInteraction();
+        waiter_done = true;
+    });
+    const bool waiter_reached = waiter_admitted.Wait();
+    self_cleanup.Release();
+    waiter_admitted.Release();
+    const bool old_only = WaitUntil([&] { return waiter_done.load(); });
+    f.service.StopInteraction();
+    waiter.join();
+    f.transport.on_close = {};
+    rodakos_test::SetAfterSemaphoreGiveHook({});
+    RODAK_CHECK(reached && waiter_reached && replacement_started);
+    RODAK_CHECK(old_only);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
 }

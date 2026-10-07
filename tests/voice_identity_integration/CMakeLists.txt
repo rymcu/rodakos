@@ -7,6 +7,8 @@ get_filename_component(ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(MQTT "${ROOT}/tests/mqtt_volume_service")
 set(MAIN "${ROOT}/main")
 set(WAKE "${ROOT}/tests/voice_wake_service")
+set(RODAK_TASK_RETIREMENT_BUILD_TESTS OFF)
+add_subdirectory("${ROOT}/tests/task_retirement" "${CMAKE_CURRENT_BINARY_DIR}/task-retirement")
 
 add_library(voice_identity_integration_host STATIC
     "${MQTT}/host_runtime.cc"
@@ -30,13 +32,15 @@ add_library(voice_identity_integration_host STATIC
     "${MAIN}/rodakos_adapters/board_device_adapter.cc"
     "${MAIN}/rodakos_adapters/audio_codec_output.cc")
 target_include_directories(voice_identity_integration_host BEFORE PUBLIC
+    "${ROOT}/tests/task_retirement/fakes"
     "${WAKE}/fakes" "${MQTT}/fakes" "${MQTT}"
     "${ROOT}/tests/light_service/fakes" "${ROOT}/tests/light_service"
     "${ROOT}/tests/app_model/fakes" "${ROOT}/tests/app_model"
     "${ROOT}/managed_components/espressif__cjson/cJSON"
     "${MAIN}" "${ROOT}/components/rodak_ota_state/include")
 target_compile_features(voice_identity_integration_host PUBLIC cxx_std_20)
-target_link_libraries(voice_identity_integration_host PUBLIC Threads::Threads ${MBEDCRYPTO_LIBRARY})
+target_compile_definitions(voice_identity_integration_host PUBLIC RODAK_IDENTITY_WITH_RETIREMENT=1 CONFIG_SOC_CPU_CORES_NUM=2)
+target_link_libraries(voice_identity_integration_host PUBLIC Threads::Threads ${MBEDCRYPTO_LIBRARY} rodakos_task_retirement_host)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(voice_identity_integration_host PRIVATE -Wall -Wextra -Wpedantic)
 endif()

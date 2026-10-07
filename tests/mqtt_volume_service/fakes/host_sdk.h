@@ -30,6 +30,18 @@ inline int esp_event_handler_instance_register(esp_event_base_t, int, esp_event_
 }
 inline int esp_event_handler_instance_unregister(esp_event_base_t, int, void*) { return ESP_OK; }
 
+#ifdef RODAK_IDENTITY_WITH_RETIREMENT
+// Only the real wake/MQTT integration fixture opts in. Keep the ordinary MQTT
+// worker model under distinct symbols; WithCaps uses the real IDF host fixture.
+#include "../../task_retirement/fakes/freertos/FreeRTOS.h"
+#include "../../task_retirement/fakes/freertos/task.h"
+int mqtt_host_task_create(TaskFunction_t, const char*, uint32_t, void*, uint32_t, TaskHandle_t*);
+void mqtt_host_task_delay(TickType_t);
+inline void mqtt_host_task_delete(TaskHandle_t) {}
+#define xTaskCreate mqtt_host_task_create
+#define vTaskDelay mqtt_host_task_delay
+#define vTaskDelete mqtt_host_task_delete
+#else
 using BaseType_t = int;
 using UBaseType_t = unsigned;
 using StackType_t = uint32_t;
@@ -46,6 +58,7 @@ int xTaskCreate(TaskFunction_t, const char*, uint32_t, void*, uint32_t, TaskHand
 void vTaskDelay(TickType_t ticks);
 inline void vTaskDelete(TaskHandle_t) {}
 inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t) { return 4096; }
+#endif
 inline TickType_t xTaskGetTickCount() {
     return static_cast<TickType_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());

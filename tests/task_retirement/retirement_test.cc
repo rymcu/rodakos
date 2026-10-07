@@ -264,6 +264,44 @@ void PoolFailure() {
     Check(snapshot.pool_allocations == 1 && snapshot.pool_caps == 6, "bounded pool explicitly uses PSRAM and 8BIT");
     CheckReclaimed();
 }
+void NotificationEntry(void* argument) {
+    auto& completed = *static_cast<std::atomic<unsigned>*>(argument);
+    Check(ulTaskNotifyTake(pdFALSE, portMAX_DELAY) == 2, "notification count returned before decrement");
+    Check(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1, "notification clear consumes remaining count");
+    Check(ulTaskNotifyTake(pdTRUE, 1) == 0, "notification timeout returns zero");
+    completed = 1;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    Fail("deleted notification worker resumed business");
+}
+void OrdinaryPark(void*) { vTaskSuspend(nullptr); Fail("deleted parked task resumed"); }
+void OrdinaryTasks() {
+    retirement_host::SetDynamicTasksAllowed(true);
+    retirement_host::SetAutoStart(false);
+    std::atomic<unsigned> completed{0};
+    TaskHandle_t notified = nullptr;
+    Check(xTaskCreate(NotificationEntry, "notify", 1024, &completed, 1, &notified) == pdPASS,
+          "ordinary internal task created");
+    xTaskNotifyGive(notified);
+    xTaskNotifyGive(notified);
+    retirement_host::RunTasks();
+    Await([&] { return completed == 1 && eTaskGetState(notified) == eBlocked; },
+          "ordinary task reaches empty notification wait");
+    vTaskDelete(notified);
+
+    retirement_host::SetAutoStart(true);
+    TaskHandle_t parked = nullptr;
+    Check(xTaskCreate(OrdinaryPark, "park", 1024, nullptr, 1, &parked) == pdPASS, "park task created");
+    Await([&] { return eTaskGetState(parked) == eSuspended; }, "ordinary task parks before delete");
+    vTaskDelete(parked);
+
+    retirement_host::SetAutoStart(false);
+    TaskHandle_t unstarted = nullptr;
+    Check(xTaskCreate(NotificationEntry, "unstarted", 1024, &completed, 1, &unstarted) == pdPASS,
+          "unstarted task created");
+    vTaskDelete(unstarted);
+    Check(retirement_host::Snapshot().dynamic_tasks_created == 3, "ordinary allocations tracked separately");
+    CheckReclaimed(3);
+}
 void LegacyEntry(void*) {
     struct Local {
         ~Local() { std::fputs("UNEXPECTED_LEGACY_LOCAL_DESTRUCTOR\n", stderr); }
@@ -295,6 +333,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(scenario, "core")) Core();
     else if (!std::strcmp(scenario, "self_join")) SelfJoin();
     else if (!std::strcmp(scenario, "pool_failure")) PoolFailure();
+    else if (!std::strcmp(scenario, "ordinary_tasks")) OrdinaryTasks();
     else if (!std::strcmp(scenario, "legacy_self_delete")) Legacy();
     else return 2;
     std::printf("PASS %s\n", scenario);

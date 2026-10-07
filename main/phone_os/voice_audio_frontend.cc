@@ -81,7 +81,9 @@ VoiceAudioFrontend::VoiceAudioFrontend(AudioCodecInput& input) : input_(input) {
 }
 
 VoiceAudioFrontend::~VoiceAudioFrontend() {
+    capture_retirement_owner_.Close();
     Deinit();
+    capture_retirement_owner_.Drain();
     TaskHandle_t wake_notification_task = nullptr;
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -117,7 +119,7 @@ bool VoiceAudioFrontend::Init() {
         return false;
     }
     LifecycleLock lifecycle(lifecycle_mutex_);
-    if (deinitializing_) return false;
+    if (deinitializing_ || capture_retirement_owner_.IsClosed()) return false;
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (initialized_) {
@@ -170,6 +172,7 @@ void VoiceAudioFrontend::Deinit() {
     ClearAecDiagnosticCapture();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     task_running_ = false;
+    const auto capture_retirement = capture_retirement_ticket_;
     ++wake_generation_;
     mode_ = Mode::kIdle;
     on_wake_word_ = {};
@@ -185,15 +188,7 @@ void VoiceAudioFrontend::Deinit() {
     input_.CloseForOwner(kWakeAudioInputOwner);
     input_.CloseForOwner(kConversationAudioInputOwner);
 
-    while (true) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stopped = task_ == nullptr;
-        xSemaphoreGive(mutex_);
-        if (stopped) {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+    capture_retirement.Join();
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     input_open_ = false;
@@ -778,22 +773,37 @@ bool VoiceAudioFrontend::EnsureCaptureTaskLocked() {
         return true;
     }
 
+    const auto previous_retirement = capture_retirement_ticket_;
+    auto retirement = ReserveTaskRetirement(
+        capture_retirement_owner_, CaptureTaskEntry, this);
+    if (!retirement) {
+        SetErrorLocked("Voice capture task retirement unavailable");
+        return false;
+    }
+    capture_retirement_ticket_ = retirement;
     task_running_ = true;
+    TaskHandle_t created_task = nullptr;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_, 0,
+        TaskRetirementEntry, "voice_frontend", 8192, TaskRetirementContext(retirement),
+        4, &created_task, 0,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
     const BaseType_t created = xTaskCreateWithCaps(
-        CaptureTaskEntry, "voice_frontend", 8192, this, 4, &task_,
+        TaskRetirementEntry, "voice_frontend", 8192, TaskRetirementContext(retirement),
+        4, &created_task,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (created != pdPASS) {
+        CancelTaskRetirement(retirement);
+        capture_retirement_ticket_ = previous_retirement;
         task_running_ = false;
         task_ = nullptr;
         SetErrorLocked("Voice capture task creation failed");
         return false;
     }
+    task_ = created_task;
+    PublishTaskRetirement(retirement, created_task);
     return true;
 }
 
@@ -975,7 +985,6 @@ void VoiceAudioFrontend::CaptureTask() {
     input_open_ = false;
     task_ = nullptr;
     xSemaphoreGive(mutex_);
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void VoiceAudioFrontend::StopAfe() {

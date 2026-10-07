@@ -3,6 +3,7 @@
 #include "phone_os/voice_wake_settings.h"
 #include "phone_os/time_service.h"
 #include "settings.h"
+#include "task_retirement_host.h"
 
 #include <atomic>
 #include <chrono>
@@ -10,6 +11,7 @@
 #include <deque>
 #include <future>
 #include <thread>
+#include <cstring>
 
 namespace wake_host {
 void JoinTasks();
@@ -104,6 +106,7 @@ struct Fixture {
     VoiceIdentityClockSnapshot clock{true, kUnix, 1000};
     std::unique_ptr<VoiceWakeService> service;
     Fixture(bool enabled = true, VoiceIdentityRecord record = {}) {
+        retirement_host::Reset();
         wake_host::ResetStore();
         StoreRecord(record, enabled);
         service = std::make_unique<VoiceWakeService>(assistant, runtime, [&]() {
@@ -117,6 +120,29 @@ struct Fixture {
     }
     bool Apply(VoiceIdentityConfig config) { std::string error; return service->ApplyVoiceIdentity(config, error); }
 };
+
+bool Await(const std::function<bool()>& predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!predicate()) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+void CheckReclaimed(size_t count = 1) {
+    retirement_host::JoinTasks();
+    const auto state = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(state.task_deletes, count);
+    RODAK_CHECK_EQ(state.live_tasks, 0u);
+    RODAK_CHECK_EQ(state.live_task_buffers, 0u);
+    RODAK_CHECK_EQ(state.cleanup_create_attempts, 0u);
+}
+retirement_host::Gate* external_delay = nullptr;
+void HoldExternalDelay(TickType_t ticks) {
+    if (!retirement_host::IsWorkerTask() && ticks == 10 && external_delay) external_delay->Enter();
+}
+std::atomic<bool> publication_seen{false};
+void ObserveBeforeCreateReturns(TaskHandle_t) { publication_seen = true; }
 }
 
 RODAK_TEST("identity Init and GetState do not load a disabled wake runtime") {
@@ -511,4 +537,190 @@ RODAK_TEST("service reads owned runtime error snapshots while errors change conc
     RODAK_CHECK(valid_snapshots);
     RODAK_CHECK(f.runtime.snapshot_error_reads.load() >= 25u);
     RODAK_CHECK_EQ(f.runtime.legacy_error_reads.load(), 0u);
+}
+
+RODAK_TEST("wake retirement reclaims the complete supervisor without allocating on Stop") {
+    Fixture f;
+    f.Start();
+    const auto allocations = retirement_host::Snapshot().allocation_calls;
+    f.service->Stop();
+    RODAK_CHECK_EQ(retirement_host::Snapshot().allocation_calls, allocations);
+    CheckReclaimed();
+    f.service->Stop();
+    CheckReclaimed();
+}
+
+RODAK_TEST("wake retirement handles create before publish and normal Deinit restart") {
+    Fixture f;
+    publication_seen = false;
+    retirement_host::SetBeforeCreateReturnsHook(ObserveBeforeCreateReturns);
+    f.Start();
+    RODAK_CHECK(publication_seen.load());
+    f.service->Deinit();
+    CheckReclaimed();
+    RODAK_CHECK_EQ(f.runtime.deinit_calls.load(), 1u);
+    retirement_host::SetBeforeCreateReturnsHook(nullptr);
+    f.Start();
+    f.service->Deinit();
+    CheckReclaimed(2);
+}
+
+RODAK_TEST("wake retirement creation failure cancels admission and permits retry") {
+    Fixture f;
+    retirement_host::SetCreationAllowed(false);
+    RODAK_CHECK_FALSE(f.service->Start());
+    CheckReclaimed(0);
+    retirement_host::SetCreationAllowed(true);
+    retirement_host::FailNextAllocation();
+    RODAK_CHECK_FALSE(f.service->Start());
+    CheckReclaimed(0);
+    f.Start();
+    f.service->Stop();
+    CheckReclaimed();
+}
+
+RODAK_TEST("disabled wake keeps its supervisor to expire identity in the background") {
+    Fixture f;
+    f.Start();
+    RODAK_CHECK(f.Apply(Config(2, true)));
+    RODAK_CHECK(f.service->SetEnabled(false));
+    f.Time(true, kUnix + 6000, 7000);
+    RODAK_CHECK(Await([] { return Stored().active.revision == 1; }));
+    const auto state = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(state.live_tasks, 1u);
+    RODAK_CHECK_EQ(state.task_deletes, 0u);
+    f.service->Stop();
+    CheckReclaimed();
+}
+
+RODAK_TEST("wake simultaneous Stop callers wait through cross core retirement") {
+    Fixture f;
+    retirement_host::Gate core;
+    retirement_host::HoldCoreAfterSuspend(&core);
+    f.Start();
+    auto first = std::async(std::launch::async, [&] { f.service->Stop(); });
+    RODAK_CHECK(core.Wait());
+    auto second = std::async(std::launch::async, [&] { f.service->Stop(); });
+    const bool first_waits = first.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    const bool second_waits = second.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    const auto held = retirement_host::Snapshot();
+    core.Release();
+    first.get(); second.get();
+    RODAK_CHECK(first_waits && second_waits);
+    RODAK_CHECK_EQ(held.task_deletes, 0u);
+    CheckReclaimed();
+}
+
+RODAK_TEST("wake disable coordinator accepts concurrent Stop and Deinit upgrades") {
+    for (bool deinit : {false, true}) {
+        Fixture f;
+        f.Start();
+        retirement_host::Gate callback;
+        { std::lock_guard<std::mutex> lock(f.assistant.mutex);
+          f.assistant.stop_hook = [&] { callback.Enter(); }; }
+        auto disable = std::async(std::launch::async, [&] { return f.service->SetEnabled(false); });
+        RODAK_CHECK(callback.Wait());
+        auto stop = std::async(std::launch::async, [&] {
+            if (deinit) f.service->Deinit(); else f.service->Stop();
+        });
+        // The upgrade has stopped the old worker while disable still owns completion.
+        RODAK_CHECK(Await([] { return retirement_host::Snapshot().task_deletes == 1; }));
+        const bool waits = stop.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+        callback.Release();
+        RODAK_CHECK(disable.get()); stop.get();
+        RODAK_CHECK(waits);
+        RODAK_CHECK_EQ(f.runtime.deinit_calls.load(), deinit ? 1u : 0u);
+        { std::lock_guard<std::mutex> lock(f.assistant.mutex); f.assistant.stop_hook = {}; }
+        CheckReclaimed();
+        f.Start();
+        f.service->Stop();
+        CheckReclaimed(2);
+    }
+}
+
+RODAK_TEST("wake completed Stop waiter does not follow a replacement generation") {
+    for (bool deinit : {false, true}) {
+    Fixture f;
+    f.Start();
+    retirement_host::Gate callback, waiter;
+    std::atomic<unsigned> callbacks{0};
+    { std::lock_guard<std::mutex> lock(f.assistant.mutex);
+      f.assistant.stop_hook = [&] { if (++callbacks == 1) callback.Enter(); }; }
+    auto first = std::async(std::launch::async, [&] { f.service->Stop(); });
+    RODAK_CHECK(callback.Wait());
+    external_delay = &waiter;
+    retirement_host::SetDelayHook(HoldExternalDelay);
+    auto second = std::async(std::launch::async, [&] {
+        if (deinit) f.service->Deinit(); else f.service->Stop();
+    });
+    RODAK_CHECK(waiter.Wait());
+    callback.Release(); first.get();
+    f.Start();
+    retirement_host::SetDelayHook(nullptr);
+    waiter.Release(); second.get(); external_delay = nullptr;
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 1u);
+    RODAK_CHECK(f.service->GetState().listening);
+    RODAK_CHECK_EQ(f.runtime.deinit_calls.load(), deinit ? 1u : 0u);
+    f.service->Stop();
+    CheckReclaimed(2);
+    }
+}
+
+RODAK_TEST("wake worker Stop reentry does not deadlock an external coordinator") {
+    Fixture f;
+    retirement_host::Gate callback;
+    std::atomic<bool> reentered{false};
+    retirement_host::SetAutoStart(false);
+    { std::lock_guard<std::mutex> lock(f.assistant.mutex);
+      f.assistant.state.phase = VoiceAssistantPhase::kError;
+      f.assistant.stop_hook = [&] {
+          if (!retirement_host::IsWorkerTask()) return;
+          callback.Enter(); f.service->Stop(); reentered = true;
+      }; }
+    f.Start(); retirement_host::RunTasks();
+    RODAK_CHECK(callback.Wait());
+    auto stop = std::async(std::launch::async, [&] { f.service->Stop(); });
+    RODAK_CHECK(Await([&] { return f.runtime.stop_calls.load() > 0; }));
+    callback.Release(); stop.get();
+    RODAK_CHECK(reentered.load());
+    CheckReclaimed();
+}
+
+RODAK_TEST("wake self Stop prevents resurrection and failed replacement retains old retirement") {
+    Fixture f;
+    retirement_host::Gate core;
+    retirement_host::HoldCoreAfterSuspend(&core);
+    retirement_host::SetAutoStart(false);
+    std::atomic<bool> self_stopped{false}, restart_rejected{false};
+    { std::lock_guard<std::mutex> lock(f.assistant.mutex);
+      f.assistant.state.phase = VoiceAssistantPhase::kError;
+      f.assistant.stop_hook = [&] {
+          if (!retirement_host::IsWorkerTask() || self_stopped.exchange(true)) return;
+          f.service->Stop(); restart_rejected = !f.service->Start();
+      }; }
+    f.Start(); retirement_host::RunTasks();
+    RODAK_CHECK(core.Wait());
+    RODAK_CHECK(restart_rejected.load());
+    retirement_host::SetCreationAllowed(false);
+    RODAK_CHECK_FALSE(f.service->Start());
+    auto late = std::async(std::launch::async, [&] { f.service->Stop(); });
+    const bool waits = late.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    core.Release(); late.get();
+    RODAK_CHECK(waits);
+    CheckReclaimed();
+}
+
+RODAK_TEST("wake destructor closes admission and drains full supervisor retirement") {
+    Fixture f;
+    f.Start();
+    retirement_host::Gate core;
+    retirement_host::HoldCoreAfterSuspend(&core);
+    auto destroy = std::async(std::launch::async, [&] { f.service.reset(); });
+    RODAK_CHECK(core.Wait());
+    const bool waits = destroy.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    const auto held = retirement_host::Snapshot();
+    core.Release(); destroy.get();
+    RODAK_CHECK(waits);
+    RODAK_CHECK_EQ(held.live_tasks, 1u);
+    CheckReclaimed();
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "freertos/FreeRTOS.h"
+typedef enum { eRunning, eReady, eBlocked, eSuspended, eDeleted, eInvalid } eTaskState;
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,6 +12,12 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t, const char*, configST
     void*, UBaseType_t, StackType_t*, StaticTask_t*, BaseType_t);
 BaseType_t xTaskCreatePinnedToCore(TaskFunction_t, const char*, configSTACK_DEPTH_TYPE,
     void*, UBaseType_t, TaskHandle_t*, BaseType_t);
+BaseType_t xTaskCreate(TaskFunction_t, const char*, configSTACK_DEPTH_TYPE,
+    void*, UBaseType_t, TaskHandle_t*);
+eTaskState eTaskGetState(TaskHandle_t);
+BaseType_t xTaskNotifyGive(TaskHandle_t);
+uint32_t ulTaskNotifyTake(BaseType_t, TickType_t);
+UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t);
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
 TaskHandle_t xTaskGetCurrentTaskHandleForCore(BaseType_t);
 BaseType_t xTaskGetStaticBuffers(TaskHandle_t, StackType_t**, StaticTask_t**);
