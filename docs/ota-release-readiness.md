@@ -26,7 +26,9 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest media slice, including a bounded package-016 device run, is
+The latest media slice, including a bounded package-017 device run, is
+[Camera exit and PNG allocation validation](#2026-10-07-camera-exit-and-png-allocation-validation).
+The 013–016 progression remains in
 [media decode and display-allocation validation](#2026-10-07-media-decode-and-display-allocation-validation).
 The preceding Recorder/Camera work remains recorded in
 [Recorder/Camera save validation](#2026-10-06-media-save-validation).
@@ -44,13 +46,17 @@ correction passed 14 real-codec tests in both modes and 13 generator validation 
 The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
 5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
 with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
-The later media allocation slice reran 43 Home UI cases and passed 24 production `DisplayService`,
-24 Photos/ImageLibrary, and 8 valid plus 2 rejected-geometry LodePNG cases in Debug and ASan/UBSan
-with leak detection. The complete host runner passes 30 suites and 42 CTest cases plus Python groups
-of 17, 15, 8 and 12 cases. Its 7,108,752-byte firmware was packaged and flashed as development
-package 016. After a clean restart, `A3.PNG` displayed on five attempts while the display stream
-encoded all 34 attempted JPEG frames without abort, panic or reboot. This remains bounded evidence;
-one observed 229,376-byte largest PSRAM block was smaller than the next 230,400-byte RGB888 request.
+The media allocation slice has 43 Home UI, 24 production `DisplayService`, 24 Photos/ImageLibrary,
+21 Camera/FileService, and 11 valid plus 2 rejected-geometry LodePNG cases in Debug and ASan/UBSan
+with leak detection. The complete 017 host runner passes 30 suites and 42 CTest cases plus Python
+groups of 17, 15, 8 and 12 cases; key source hashes are unchanged before and after the run.
+Its 7,108,864-byte firmware was packaged and flashed as development package 017. Two actual Camera
+previews were followed by four successful A3 decodes. Screen-first Camera startup still failed DMA
+allocation twice, and one successful device decode followed a desktop control timeout. The observed
+131-byte historical minimum internal heap and final 7,680-byte largest block do not establish
+sufficient headroom; the latter is below the 8 KiB soak threshold. Package 016's
+clean-restart five PNG displays and 34/34 JPEG encodes remain accepted for their recorded window;
+they do not replace these newer failure observations or the outstanding resource/soak gates.
 Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
 The added host cases reject missing/repeated device uptime and unterminated failure logs; they do
 not establish a hardware soak. `build/logs/release-readiness.json` records the
@@ -73,7 +79,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
 | Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
-| Media PNG / display allocation | Production PNG load/ownership, checked LVGL LodePNG decode, display capture/JPEG worker allocation, callback and stop/recovery | Software suites pass; 016 displays A3 five times and records 34/34 JPEG encodes with no reboot, while resource/concurrency/soak remain open |
+| Media PNG / display allocation | Production PNG ownership, checked LodePNG inflate headroom, Camera final-frame release and stop publication, display capture/JPEG allocation | Software suites pass; 017 records four successful A3 decodes after two actual Camera previews. Screen-first DMA failures, a Retry control timeout, broader OOM/concurrency and soak remain open |
 | Other resource failures                     | Physical image/display coexistence, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                               | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -512,18 +518,20 @@ upstream 320 x 240 RGB888 example; output beyond that bound safely drops the fra
 can recover. The application-owned heap-caps peak falls from about 614,400 to 332,800 bytes. The real
 codec uses about another 46,080 bytes of PSRAM outside that application peak.
 
-The final software gate passes in Debug and ASan/UBSan with leak detection:
+The current focused software gate, including the 017 extensions described below, passes in Debug
+and ASan/UBSan with leak detection:
 
 | Target | Cases | Boundary |
 | --- | ---: | --- |
 | DisplayService | 24 | Production capture/JPEG worker, in-place conversion, 100 KiB bound, allocation failures, locks, callback/stop and recovery; hardware/codec/LVGL scheduling edges use explicit fakes |
 | Home UI | 43 | Existing real-LVGL Home and partial-flush display capture regression |
 | Photos / ImageLibrary | 24 | Production UI/loader, real LodePNG/BMP and retained ARGB8888 ownership; ESP JPEG remains a fake |
-| LodePNG overlay | 8 + 2 | Eight valid 8/16-bit, RGBA filter and Adam7 variants plus two geometry/stride rejections |
+| Camera / FileService | 21 | Production service/adapter; final-owner and unexpected-stop frame release, concurrent snapshots and stop publication; V4L2/JPEG/board dependencies are fakes |
+| LodePNG overlay | 11 + 2 | Eleven valid 8/16-bit, RGBA filter and Adam7 variants including synthetic 471 x 423 RGBA8; two geometry/stride rejections, allocation-budget and three OOM/retry scenarios |
 
-The focused DisplayService target passes all 24 cases in both Debug and ASan/UBSan with leak
-detection. The complete release host runner passes 30 suites and 42 CTest cases, plus four Python
-groups of 17, 15, 8 and 12 cases. ESP-IDF 6.0.2 builds successfully.
+The 016 focused DisplayService target passed all 24 cases in both Debug and ASan/UBSan with leak
+detection. Its complete release host runner passed 30 suites and 42 CTest cases, plus four Python
+groups of 17, 15, 8 and 12 cases. ESP-IDF 6.0.2 built successfully. The separate 017 run is recorded below.
 
 Historical package 015 used source `bf1bf248056a47e9a902b111f163afb60b0c2718` and directory
 `build/packages/ota/20261007-100828`, task `media-png-inplace-015`, version `0.1.2-dev.1`. Its main
@@ -535,7 +543,7 @@ JPEG-stat windows reported 12 or 13 attempts with zero encoded and every attempt
 frame encoded during an image-replacement gap. Package 015 therefore proves PNG display, but fails
 the concurrent display-stream result.
 
-Current source commit `dc2bff4d25b7b4637a010f600e68d4e3b90b0ccb` was packaged at
+Historical source commit `dc2bff4d25b7b4637a010f600e68d4e3b90b0ccb` was packaged at
 `build/packages/ota/20261007-103517` as task `media-display-stream-016`, version `0.1.2-dev.1`.
 The manifest is a development-signed production flavor with Home test population and fault
 injection disabled. `build/rodakos.bin` is **7,108,752 bytes**, within the 13,959,168-byte `ota_0`
@@ -557,6 +565,79 @@ the largest block was usually 360-426 KiB, but one pre-replacement sample was 22
 the 230,400-byte RGB888 allocation. The retained PNG remains ARGB8888; this change does not add
 RGB565 retention. Keep arbitrary LVGL/CLIB OOM, SD failures, camera/voice/MQTT concurrency, resource
 return under broader operation and the eight-hour identified-build soak open.
+
+## 2026-10-07 Camera exit and PNG allocation validation
+
+Source `860752e44474625fdbcd589b71e47b36374f4d21` fixes two independent memory-lifetime and
+allocation boundaries. CameraService now frees its last RGB565 frame and clears `has_frame` when
+the final local/remote preview owner stops, or when dequeue failure ends the worker. A surviving
+owner retains preview access, and caller-owned frame snapshots remain valid. The worker publishes
+its stopped handle only after its final service-state read and log, so Stop/destruction cannot race
+that tail access. This does not claim that the real camera driver or IDF task cleanup can recover
+from every low-memory condition.
+
+The source-checked LodePNG overlay reserves 260 spare bytes with the known decompressed size,
+matching the reviewed Huffman loop's requirement even after its end symbol. A 471 x 423 RGBA8
+image has 797,355 bytes of filtered scanlines; the former exact-size reserve could still grow by
+about 50% to 1,196,213 bytes at the end of inflation. The corrected request is 797,615 bytes, with
+checked additions and error 83 on reserve failure. Unknown-size and custom-zlib paths are unchanged;
+the PNG still owns an ARGB8888 draw buffer.
+
+The Camera target passes 21 tests in Debug and ASan/UBSan with leak detection. The old production
+source fails six updated cases; a mutation using vector `clear()` without releasing capacity also
+fails six. LodePNG passes 11 valid variants and two geometry rejections, plus IDAT, inflate-reserve
+and adopted-descriptor failure/recovery checks. Under a 1,081,344-byte contiguous allocation budget,
+the old reserve really requests 1,196,213 bytes and returns error 83; the corrected decoder succeeds
+with a largest request of 797,615 bytes and releases all tracked allocations. The synthetic PNG is
+9,673 bytes; its 818,804-byte peak allocation ledger is not a physical peak measurement for the
+69,200-byte A3 file. The complete release host runner separately passes **30 suites / 42 CTest**
+and **17 + 15 + 8 + 12 = 52 Python** cases; key source hashes match before and after the run.
+
+ESP-IDF 6.0.2 built the ordinary development-signed package at
+`build/packages/ota/20261007-112648`, task `media-camera-png-recovery-017`, version `0.1.2-dev.1`.
+The main image is **7,108,864 bytes**, SHA-256
+`507eab226775a848afef1b4df3657b7d02f80d8d812b7a0597844ac052497175`;
+package ZIP SHA-256 is
+`3db39d56efcb388c71baa12493cde68c6de07b60dc9d0ca48dba37fb027a60eb`.
+VerifyOnly and the non-Erase incremental flash preserved NVS, followed by successful
+Recovery → main → Home and local OTA confirmation. Immutable assets match 016, including the
+development Recovery/root; production-key migration was not performed. The original device ID,
+bound state and tokenVersion=4 remain unchanged.
+
+The first 017 attempts started Camera while screen sharing was already active. Both failed DVP DMA
+allocation; the largest DMA blocks before the attempts were **6,656 / 4,352 bytes**. An A3 decode
+that then succeeded in 185 ms followed a camera that had not actually started, so it is excluded
+from the successful Camera-to-Photos result.
+
+After stopping screen sharing, Camera really started. Screen sharing was reopened during the
+preview, which ran for **32.304 seconds / 467 frames** before exit. A3 first open and two Retries
+then decoded in **201 / 203 / 191 ms**, with device logs confirming display. The last Retry produced
+a desktop control timeout before the eventual successful decode; this is not an all-ACK pass.
+A second actual Camera run, again starting Camera before screen sharing, lasted **21.960 seconds /
+332 frames**; after exit, A3 decoded and displayed again in **185 ms**. These are four successful
+decodes after two genuine Camera previews, separate from the earlier failed-start path.
+
+The same-board 016 comparison ran Camera for **24 seconds / 327 frames** before A3 returned
+error 83; after stopping, PSRAM free/largest was **2,411,168 / 1,081,344 bytes**. The first completed
+017 cycle's MQTT sample reported **2,561,940 / 1,507,328 bytes**. Both 017 cycles ended back at Home
+with screen sharing and remote control stopped. Recorded periodic JPEG totals were **106 attempts /
+106 encoded / 0 failed**; these are periodic sums, not a complete per-frame ledger. The continuous
+capture contains no abort, panic or reboot.
+
+The final two MQTT health samples reported PSRAM free **2,558,664 / 2,557,636 bytes**, largest
+**1,507,328 bytes**; internal free **24,971 / 24,935 bytes**, largest **7,680 bytes**, and MQTT worker
+minimum free stack **2,828 bytes**. The final voice health showed enabled=1 / listening=1, historical
+internal minimum **131 bytes** and PSRAM minimum **418,800 bytes**. The internal minimum had been
+235 bytes after the first cycle and fell further in the second; the final 7,680-byte largest block
+also remains below the soak's 8 KiB threshold. These windows do not prove sufficient headroom,
+absence of leaks or long-term stability. Final desktop state retained the original ID / bound /
+tokenVersion=4, with MQTT connected and voice inactive. COM3 was released. Evidence is in Rodak
+`.codex-temp/camera-resource-017/serial.log`, `result.json` and `device-final.json`.
+
+Keep screen-first DMA/resource admission, late input and ACK/timeout handling, arbitrary OOM,
+broader Camera/media/voice/TLS concurrency, long-term resource return, real SD/slow-card behavior,
+physical touch/acoustics, actual power cuts and the eight-hour release soak open. This targeted
+Camera-exit/PNG improvement does not change the production-release **NO_GO** decision.
 
 ## Build and package
 
