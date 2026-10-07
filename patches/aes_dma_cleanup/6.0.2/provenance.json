@@ -1,0 +1,19 @@
+{
+  "idf_version": "6.0.2",
+  "target": "esp32s3",
+  "cmake_target": "tfpsacrypto",
+  "source": "components/mbedtls/port/aes/dma/esp_aes_dma_core.c",
+  "correction": "Release the already allocated input bounce buffer if the output bounce allocation fails; preserve -1 and original output zeroization.",
+  "idf_source_hashes_lf": {
+    "components/mbedtls/port/aes/dma/esp_aes_dma_core.c": "2dc004905a2ebe0125f28c04efd39aa228296d861e8c63d65d06c6aa32716c3a",
+    "components/mbedtls/port/aes/esp_aes.c": "8820d4b3fc7b3ab3d413a0d3f61b9677e0ff3176532e0063e05f5d613e64b31f",
+    "components/mbedtls/port/aes/esp_aes_common.c": "8e256f728cd577fd9dea03ab312c6f020671a4231406698dbbb0fb2d8b6f5574",
+    "components/mbedtls/port/aes/include/esp_aes_internal.h": "47708e6634d05c72335d344be1f76aec3693f79ca8b01a8655e18b833798086c",
+    "components/mbedtls/port/aes/dma/include/esp_aes_dma_priv.h": "0fe4c73fa4b908b9960f88d85e9951d113892dabf555b9f824d5bf5ec4516d51",
+    "components/mbedtls/port/include/aes/esp_aes.h": "68155801571554bce74d3715f1109898ece421df455e3cf0905d01145673eebb",
+    "components/mbedtls/CMakeLists.txt": "129255f0e27e6a0d960a143bfa367f2434640a34b0e233585a4315a83eb69e30",
+    "components/esp_common/include/esp_idf_version.h": "d240bb67f8ed6491cf90ec1bd90888efd65cf7c21c1eb22fe9414543af9a8e73",
+    "components/soc/esp32s3/include/soc/soc_caps.h": "31ad4334809b5eeff04627189b7794d15c8e04497865895d916016b5364fa320"
+  },
+  "generated_sha256_lf": "dfbfe9ddf7a67b5b3cbcac7d595b5d9b0c51e5ba2e4f28b1cfe5832ae1b5c443"
+}

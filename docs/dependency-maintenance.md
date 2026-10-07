@@ -248,6 +248,42 @@ Host tests, failure mutations and audit details are in
 DMA/PSRAM recovery, TLS concurrency and task-stack headroom require separately
 identified hardware evidence in [media browsing](media-browsing.md).
 
+## AES DMA 分配失败清理补丁
+
+ESP-IDF 6.0.2 的 AES DMA 路径在输入需要搬入 DMA 缓冲区、输出需要对齐缓冲区时，
+先申请 input bounce buffer，再申请 output bounce buffer。第二次申请失败后，原代码
+清零输出并直接返回 `-1`，遗漏已经申请的 input buffer。项目补丁将该分支改为返回
+相同错误并进入现有 cleanup，释放已申请的缓冲区。输出清零、外层硬件锁与时钟释放、
+正常分块处理和分配能力保持原有行为；没有扩大 DMA 配额或修改 1600 字节分块上限。
+
+来源及生成合同记录于
+[`patches/aes_dma_cleanup/6.0.2/provenance.json`](../patches/aes_dma_cleanup/6.0.2/provenance.json)。
+[`tools/prepare_aes_dma_cleanup_patch.py`](../tools/prepare_aes_dma_cleanup_patch.py)
+先核对九个 ESP-IDF 文件的 LF 归一化 SHA-256，包括完整 AES 源文件、相关接口头、
+版本头、ESP32-S3 能力头和 mbedTLS CMake 配置，再核对唯一变换位置及生成结果摘要。
+生成文件位于 `<build>/rodak_patches/aes_dma_cleanup/esp_aes_dma_core.c`；生成器拒绝
+写入 ESP-IDF 安装目录或 `managed_components/`。
+
+[`cmake/aes_dma_cleanup_patch.cmake`](../cmake/aes_dma_cleanup_patch.cmake)
+在依赖解析后，仅替换 `tfpsacrypto` 静态库内的一份原始 AES DMA 源文件。配置必须为
+ESP32-S3，目标名称、输出名称、非导入静态库属性及唯一源文件匹配均需通过检查。
+源或来源记录变化触发重新配置，缺失的生成文件由构建规则恢复；未审核的来源或目标
+结构使配置失败。其余 AES 源文件、头文件和编译设置继续由原目标提供。
+
+[`tests/aes_dma_cleanup`](../tests/aes_dma_cleanup/README.md) 编译三个完整生产翻译单元：
+`esp_aes_dma_core.c`、`esp_aes.c` 和 `esp_aes_common.c`，使用真实公共 AES context/API 头。
+Debug、Release 和 ASan/UBSan 各通过六项 CTest，包括原源泄漏负控、正常路径差分、
+分配失败清理和生成器校验；统一 host 入口已登记该目标。原源负控必须以明确的未释放
+分配断言失败，只有这个故意泄漏的子进程关闭 leak detection；修复正例和正常路径
+保留 leak 检查。SDK 分配器、地址分类、缓存、RTOS 和 HAL 由 host fake 提供，
+HAL 字节变换只核对数据流和边界，不属于真实 AES 算法或硬件 DMA 验证。
+
+这项修复尚不证明固件已部署，也不解释历史实机故障的具体分支或锁 owner。目标固件
+编译与链接、真实低内存恢复、DMA 峰值、并发和持续运行仍需独立证据；host 分配账本
+不能换算成设备资源预算。升级 ESP-IDF 时应重新审核分配失败与调用方清理语义、来源
+文件及目标归属，再更新摘要并重跑测试与固件构建。只有审核过的上游版本保留同等
+清理语义后才能移除补丁，并应保留回归测试。
+
 ## Camera teardown diagnostics
 
 The checked `esp_video` / `esp_cam_sensor` 2.3.0 overlay records stop and extended-DVP
