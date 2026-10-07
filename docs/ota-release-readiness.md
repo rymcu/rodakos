@@ -1014,20 +1014,130 @@ are detected. Eight isolated cold-downloaded components pass content hashes with
 the lock or project manifest. The original run identity records the pre-commit HEAD; separate
 source/manifest checks tie the tested code to `dc847b2`, without rewriting that earlier identity.
 
-COM3 `VerifyOnly` matches the installed Bootloader, partition table and Recovery digests.
-It enters ROM/stub and resets the device, but does not write Flash. **022 is not flashed**;
-the device still runs 021. The separate 07:07:57 UTC server snapshot has fresh 07:07:46 UTC
-MQTT state, original device ID, bound/tokenVersion=4 and inactive voice connection.
-This confirms post-verification connectivity, not 022 boot or Camera fault acceptance.
+COM3 `VerifyOnly` first matched the installed Bootloader, partition table and Recovery
+digests. The subsequent NVS-preserving 022 flash exits 0 in `flash-022.log`, with
+Recovery → main, OTA confirmation and Home boot verified. The device ran the frozen
+022 ELF above in these windows; no NVS erase, unbind or credential rotation occurred.
 
-Live JTAG capture remains pending: Windows MI02 lacks its interface GUID and OpenOCD init
-cannot open it. The official candidate driver and bounded repair script are prepared, but
-the current process is not elevated and kernel-policy validation of that candidate failed.
-No installation, target halt or live DRAM/PC read has passed. Do not repeat a silent Camera
-exit as evidence until the observation path works. Debugger halt changes watchdog state;
-resume does not restore a normal watchdog evidence window.
+The earlier missing-MI02-GUID/OpenOCD-init failure is historical. Administrator installation
+of the official candidate succeeds (PnPUtil exit 0, MI02 `oem26.inf`, debug GUID enabled),
+while MI00/COM3 retains usbser. Authenticode/catalog membership validation passed, but the
+recorded `/kp` check still exits 1; successful installation must not be relabelled as WHQL
+or kernel-policy validation. OpenOCD requires the exact uppercase serial
+`44:1B:F6:C3:B4:30`. Its capability probe on 021 exits 0 after reading both cores and fixed
+DRAM; a controlled reset then restores Home/OTA confirmation and fresh MQTT. This establishes
+access capability, not disturbance-free recovery. See `driver-capability-result.json` and
+`driver-review/repair-20261007-075245.json`.
 
-Frozen positive artifacts, package/immutable comparison, raw build/VerifyOnly logs and
-offline diagnostics are in Rodak `.codex-temp/resource-window-022/`. No NVS erase,
-unbind or credential rotation occurred. **NO_GO** remains for Camera teardown, resource
-recovery, late control, static first frame, audio/TLS/media concurrency and eight-hour soak.
+The hardware windows are separate:
+
+- **First window:** Camera runs **28.300 s / 380 frames** before Camera→Photos. Serial
+  confirms STREAMOFF, fd close, device release and worker-stop completion. Only afterward
+  does JTAG read **24 committed records, 0 pending and 0 drops**, including IOCTL_RETURNED,
+  BEFORE_LOG and AFTER_LOG. Two new post-read halts occur at CPU1 **0x420045D0** and CPU0
+  **0x422EBE91**. Offline symbolization of the frozen ELF identifies the cache-error panic
+  busy-wait branch and the `ESP_SEMIHOSTING_SYS_PANIC_REASON` breakpoint. Serial then becomes
+  silent and screen sharing disconnects. Final `running` samples do not establish healthy
+  recovery; the first panic's specific trigger is not proven. The original failed
+  `decoded.json` is retained; `decoded-fixed.json` accepts the real multiline registers but
+  explicitly reports `health_after_resume=not_established_by_decoder`.
+- **Second window:** an RTS reset attempt has **0-byte serial/timing logs**. It is not a
+  Camera run or another fault reproduction. The subsequent `recovery-reset-esptool.log`
+  records standard USB ROM/stub connection, flash-ID query and reset, without Flash writes.
+- **Third window:** a separate recovered boot has **no JTAG attach**. Camera runs
+  **88.744 s / 1,171 frames** and exits through STREAMOFF and subsequent cleanup normally.
+  After screen stop and the Home command, serial data continues for **147.311 s**. This is
+  the exact difference between the Home host timestamp in `actions.jsonl` and the last byte
+  timestamp in `serial-timing.jsonl`, not an eight-hour soak. Main, Touch, Voice and MQTT
+  health plus new PC-status messages continue. The 08:30:42 UTC server snapshot records new
+  08:30:31 UTC MQTT state, the original ID/bound/tokenVersion=4 and inactive voice connection.
+  Late MQTT health has internal free/largest **33,787 / 14,336 B** and PSRAM free/largest
+  **2,555,596 / 1,605,632 B**; this boot's historical internal minimum is **107 B**.
+
+022 changes observation only, not driver teardown lifetime. Two normal exits do not erase
+021's **127.583-second** STREAMOFF stall/reset, establish its root cause, or prove resource
+sufficiency. The first window's post-capture panic is debugger-perturbed evidence, not a
+reproduction of that pre-existing stall. Normal windows are no longer repeatedly attached.
+Debugger halt modifies watchdog state, and this OpenOCD version's poll can process a
+semihosting breakpoint and resume internally. A future observer should reject any new
+post-capture halt as successful recovery and avoid additional per-core resume attempts;
+that alone does not prove the first panic can be prevented.
+
+Evidence is in Rodak `.codex-temp/resource-window-022/`: frozen artifacts, package/immutable
+comparison, driver/flash/reset records and the three windows. `first-window/jtag-resume-audit.{md,json}`
+records exact PC/ELF/source identities without changing raw or the old observer. The multiline
+decoder repair has **28 offline decoder tests + 5 Tcl mocks**, separately counted from hardware.
+At the end of 022, **NO_GO** remains for Camera teardown, resource recovery, late control,
+static first frame, audio/TLS/media concurrency and eight-hour soak. The subsequent 023
+section records the bounded static first-frame fix without closing the other gates.
+
+## 2026-10-07 Static screen first-frame validation 023
+
+Source `8238a5022724f1562c22bae6c3669717ab988a4b`, development package
+`20261007-164049`, task `media-static-first-frame-023`, version `0.1.2-dev.1`:
+
+- Main: **7,128,192 B**, SHA-256 `02bbe03e6a74d57035f6971e237a47dd4414416d0ae506112a9c23bf313bd2d4`.
+- ZIP SHA-256: `1fdcea8783da8a375fde8d727e28ccb2ae5a5b18ba8998692f3997a04a7a9695`.
+- Frozen ELF SHA-256: `3f141a42e08b0a9eb5ceb17579b79f4c0fca2d883ffa3e7b26247f972d6e48a4`.
+- All five immutable assets and the original development signing root match 022. Production
+  flavor retains disabled Home-test/fault flags. `flash-023.log` exits 0, preserves NVS and
+  verifies Recovery/main/OTA-confirmation/Home; original ID, bound state and tokenVersion=4 remain.
+
+The change retains one latest pending compact JPEG before the video data channel opens.
+It moves ownership, replaces old pending storage and returns capacity before Stop publishes
+completion. One JPEG can now reside during the handshake and overlap another encode; this
+is not a zero-memory-cost claim. MQTT supplies the same actual stream lease to WebRTC and
+control. Null/revoked leases fail Start; each video fragment/retry and the ACK after JSON
+encoding checks the original peer/stream/lease immediately before SDK entry. An already
+admitted SDK call may complete. Input authorization, timeout, ordering and cancellation
+rules are not relaxed, and video open does not enable remote input.
+
+Directed checks compile the complete production WebRTC TU: **45/45** cases pass in Debug
+and ASan/UBSan/leak, including real vector deletion/capacity, replacement, no-new-frame and
+in-flight Stop/Start. Each build detects **5/5** source-negative controls: old preopen drop,
+retained `clear()` capacity, missing video/ACK final lease checks and an ACK check incorrectly
+moved before encoding. The MQTT suites pass **104 cases**.
+
+The complete local 023 host regression passes **37 unique suites / 92 CTests / zero failures**:
+33 release suites and three extras ran anew; the ACK suite reuses the same-source final
+directed ASan records for its two CTests, without double-counting. Positive suites use
+ASan/UBSan/leak. Python checks total **107** (52 standalone and 55 within CTest), with
+**21 CI-helper cases** counted separately. All four JPEG allocator Debug negative controls
+are detected. LF hashes for 12 related production/test files match commit `8238a502`.
+Initial missing-PyYAML/component-manager logs are retained; temporary Linux dependencies
+were installed and only the helper/negative tail reran, without changing production code
+or repeating completed suites. Counts and source identities are recorded in
+`host-checks/summary.json` and `host-checks/source-verification.json`. These software checks
+do not establish remote delivery or rendering.
+
+Hardware uses the same static Photos page and a configured **2.5 s offer delay**:
+
+| Identified window | Device transport | Browser evidence |
+| --- | --- | --- |
+| 022 baseline | rx=1, sent=0, drop=1 | Both video/control channels open, zero JPEG messages, existing 15 s first-frame timeout, no image |
+| First 023 Start | rx=1, sent=1, drop=0 | One 13,094-byte message, 39.9 ms after video open; 13,089-byte JPEG plus 5-byte header; actual 320×240 render |
+| 023 Stop then fresh Start | rx=1, sent=1, drop=0 | One same-length message, 77.0 ms after the new video open; actual 320×240 render again |
+
+Normal Stop separates the sessions, no extra source frame is needed, remote control remains
+off and there is no JTAG attach. Browser event/image records and saved pixel/page images
+provide delivery/render evidence beyond SDK counters. These two latencies are observations,
+not a general network bound or another Camera/A3 decode test.
+
+After final screen stop/Home, serial continues for **323.086 s**, with no detected reset/panic
+markers. Late Main health reports internal free/largest **20,875 / 8,192 B** and DMA
+free/largest **16,507 / 8,192 B**; Voice health reports PSRAM free/largest
+**2,565,444 / 2,490,368 B** and this boot's historical internal minimum **2,311 B**.
+Main/MQTT/Wake minimum free stacks are **2,640 / 2,860 / 2,424 B**. These separate samples
+are not a controlled heap comparison with 022, which had prior Camera use. The final
+08:52:19 UTC server snapshot has fresh 08:52:15 UTC MQTT state, original bound/tokenVersion=4
+and inactive voice. Screen sharing is stopped, control disabled, browser hooks restored and
+COM3 released.
+
+The 023 serial log still contains **15** `MQTT message dropped: worker queue full or allocation failed` messages;
+the combined error does not distinguish queue pressure from allocation failure. The bounded
+static first-frame regression passes, while Camera teardown root cause, late control,
+arbitrary resource pressure, audio/TLS/media concurrency and eight-hour soak remain **NO_GO**.
+
+Evidence: Rodak `.codex-temp/resource-window-023/` contains `package-evidence.json`,
+`directed-test-evidence.json`, `hardware-result.json`, flash/build records,
+`baseline-static-022/`, and `static-023/` with its independent `restart/` browser records.

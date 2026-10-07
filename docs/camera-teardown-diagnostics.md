@@ -52,10 +52,24 @@ RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host �
 ESP32-S3 OpenOCD halt 会改变 watchdog 状态，普通 resume 不保证恢复它；调试干预后的
 窗口不能用于证明 watchdog 或长稳健康。恢复与后续观测必须另开窗口。
 
-当前 Windows MI02 虽显示 WINUSB/PnP 正常，却未注册 DeviceInterfaceGUID，OpenOCD
-在 init 阶段返回 `LIBUSB_ERROR_NOT_FOUND`，尚未取得设备 DRAM/PC。只读诊断和官方
-MI02 驱动候选修复已准备，安装需要管理员权限；没有据此推断设备 eFuse、panic 或死锁。
-设备仍运行 021，022 的真实故障分段尚未取得。
+Windows MI02 缺少 DeviceInterfaceGUID 的接入问题已通过管理员安装官方驱动修复，
+MI00/COM3 保留原 usbser。OpenOCD 需精确匹配大写 serial `44:1B:F6:C3:B4:30`；
+双核与固定 DRAM 读取能力检查已通过。历史 `/kp` 校验仍为 exit 1，驱动安装成功不代表
+WHQL 或 kernel-policy 校验通过。
+
+022 保 NVS 刷写后，两轮 Camera 分别运行 28.300 秒 / 380 帧和 88.744 秒 / 1,171 帧，
+均正常退出。首轮关闭后才进行 JTAG，读到 24 committed / 0 pending / 0 drop；读取后
+的新 halt 却落在 cache-error panic 与 semihosting panic 断点，随后串口静默、屏幕断开。
+最终两核 running 与离线 decoder 成功均不证明健康恢复，首次 panic 的具体触发原因仍未确定。
+后续独立复位窗口未连接 JTAG，Camera 正常退出后回 Home，串口继续输出 147.311 秒。
+两轮正常退出不能覆盖 021 的 127.583 秒 STREAMOFF 停滞，也未取得该原始故障的阶段记录。
+
+同版 OpenOCD 的一次 SMP resume 会恢复其他已停核心；poll 还可能处理 semihosting 并
+自动恢复。后续 observer 应避免额外逐核 resume，并将采集后的任何新 halt 视为恢复未成立；
+仅删掉一次 resume 不能承诺无扰动。原 observer/raw 保留不变，详见
+[022 取证记录](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)。
+当前设备为 023，其[静态首帧定向通过](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)
+没有修改 Camera 释放生命周期，也不关闭这里的根因调查。
 
 软件验证分别覆盖记录发布协议、真实 C 驱动函数的原语义与漂移拒绝，以及生产
 CameraService 在 ioctl 内和返回后日志处受控阻塞的区别。它们不关闭 Camera 退出、
