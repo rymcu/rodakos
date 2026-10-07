@@ -16,6 +16,7 @@
 #include "esp_peer.h"
 #include "phone_os/display_control_ack_tracker.h"
 #include "phone_os/stream_lease.h"
+#include "phone_os/webrtc-peer-resources.h"
 
 namespace rodakos {
 
@@ -134,6 +135,7 @@ private:
     // main_loop and may create a data channel.
     std::recursive_mutex peer_api_mutex_;
     Config config_{};
+    WebRtcPeerResources peer_resources_{};
     SignalingCallback signaling_callback_;
     StateCallback state_callback_;
     ControlCallback control_callback_;

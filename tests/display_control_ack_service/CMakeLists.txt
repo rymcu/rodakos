@@ -5,12 +5,21 @@ enable_testing()
 find_package(Threads REQUIRED)
 get_filename_component(RODAKOS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(service_source "${RODAKOS_ROOT}/main/phone_os/webrtc_display_service.cc")
+set(camera_source "${RODAKOS_ROOT}/main/phone_os/webrtc_camera_service.cc")
 set(RODAK_DISPLAY_NEGATIVE_SOURCE "" CACHE FILEPATH "Generated source for an isolated negative-control build")
+set(RODAK_CAMERA_NEGATIVE_SOURCE "" CACHE FILEPATH "Generated camera source for an isolated negative-control build")
 set(test_mode "complete-production-translation-unit")
 if(RODAK_DISPLAY_NEGATIVE_SOURCE)
     get_filename_component(service_source "${RODAK_DISPLAY_NEGATIVE_SOURCE}" ABSOLUTE)
     if(NOT EXISTS "${service_source}")
         message(FATAL_ERROR "Negative-control source does not exist")
+    endif()
+    set(test_mode "complete-translation-unit-negative-control")
+endif()
+if(RODAK_CAMERA_NEGATIVE_SOURCE)
+    get_filename_component(camera_source "${RODAK_CAMERA_NEGATIVE_SOURCE}" ABSOLUTE)
+    if(NOT EXISTS "${camera_source}")
+        message(FATAL_ERROR "Negative-control camera source does not exist")
     endif()
     set(test_mode "complete-translation-unit-negative-control")
 endif()
@@ -25,11 +34,28 @@ file(SHA256 "${tracker_header}" tracker_sha)
 file(SHA256 "${input_source}" input_sha)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/production-sources.json"
     "{\n  \"mode\": \"${test_mode}\",\n  \"webrtc_display_service.cc\": \"${service_sha}\",\n  \"webrtc_display_service.h\": \"${header_sha}\",\n  \"display_control_ack_tracker.h\": \"${tracker_sha}\",\n  \"remote_input_controller.cc\": \"${input_sha}\"\n}\n")
+set(peer_sources
+    "${camera_source}"
+    "${RODAKOS_ROOT}/main/phone_os/webrtc_camera_service.h"
+    "${RODAKOS_ROOT}/main/phone_os/webrtc-peer-config.h"
+    "${RODAKOS_ROOT}/main/phone_os/webrtc-peer-resources.h"
+    "${RODAKOS_ROOT}/components/esp_peer/include/esp_peer.h"
+    "${RODAKOS_ROOT}/components/esp_peer/include/esp_peer_default.h")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${peer_sources})
+set(peer_manifest "{\n  \"mode\": \"${test_mode}\"")
+foreach(peer_source IN LISTS peer_sources)
+    file(SHA256 "${peer_source}" peer_sha)
+    get_filename_component(peer_name "${peer_source}" NAME)
+    string(APPEND peer_manifest ",\n  \"${peer_name}\": \"${peer_sha}\"")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/peer-config-sources.json" "${peer_manifest}\n}\n")
 
 add_executable(rodakos_display_control_ack_service_tests
     display_control_ack_service_test.cc
+    peer_config_test.cc
     host_runtime.cc
     "${service_source}"
+    "${camera_source}"
     "${input_source}"
     "${RODAKOS_ROOT}/managed_components/espressif__cjson/cJSON/cJSON.c"
     test_main.cc)
@@ -48,7 +74,7 @@ endif()
 add_test(NAME rodakos_display_control_ack_service
     COMMAND rodakos_display_control_ack_service_tests)
 set_tests_properties(rodakos_display_control_ack_service PROPERTIES TIMEOUT 40)
-if(NOT RODAK_DISPLAY_NEGATIVE_SOURCE)
+if(NOT RODAK_DISPLAY_NEGATIVE_SOURCE AND NOT RODAK_CAMERA_NEGATIVE_SOURCE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME rodakos_display_preopen_negative_controls
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_negative.py"
@@ -56,4 +82,10 @@ if(NOT RODAK_DISPLAY_NEGATIVE_SOURCE)
         --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
         --link-flags=${CMAKE_EXE_LINKER_FLAGS})
     set_tests_properties(rodakos_display_preopen_negative_controls PROPERTIES TIMEOUT 180)
+    add_test(NAME rodakos_peer_config_negative_controls
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_peer_config_negative.py"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/peer-config-negative-controls"
+        --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
+        --link-flags=${CMAKE_EXE_LINKER_FLAGS})
+    set_tests_properties(rodakos_peer_config_negative_controls PROPERTIES TIMEOUT 180)
 endif()

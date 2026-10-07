@@ -21,11 +21,6 @@ constexpr uint8_t kChunkSequenceMask = 0x7f;
 constexpr size_t kChunkHeaderSize = 5;
 constexpr uint16_t kDefaultChunkSize = 10000;
 constexpr size_t kMaxChunkSize = 60000;
-constexpr uint32_t kDataChannelCacheSize = 400 * 1024;
-// Keep the peer loop responsive while the JPEG worker waits for SCTP cache
-// capacity. A long agent timeout can hold peer_api_mutex_ for hundreds of
-// milliseconds and make the first camera frame miss its send window.
-constexpr uint32_t kPeerAgentRecvTimeoutMs = 50;
 constexpr uint32_t kPeerLoopDelayMs = 10;
 constexpr uint32_t kDataSendRetryDelayMs = 2;
 constexpr int64_t kDataSendRetryTimeoutUs = 100000;
@@ -65,10 +60,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
         return false;
     }
 
-    esp_peer_default_cfg_t default_cfg{};
-    default_cfg.agent_recv_timeout = kPeerAgentRecvTimeoutMs;
-    default_cfg.data_ch_cfg.send_cache_size = kDataChannelCacheSize;
-    default_cfg.data_ch_cfg.recv_cache_size = kDataChannelCacheSize;
+    auto default_cfg = MakeWebRtcPeerDefaultConfig();
 
     esp_peer_cfg_t peer_cfg{};
     peer_cfg.role = normalized.role;
@@ -96,7 +88,9 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
         peer_ = nullptr;
         return false;
     }
+    peer_resources_.Begin(TAG);
     const int open_ret = esp_peer_open(&peer_cfg, ops, &peer_);
+    peer_resources_.Log(TAG, open_ret == ESP_PEER_ERR_NONE ? "open-after" : "open-failed", open_ret);
     if (open_ret != ESP_PEER_ERR_NONE) {
         ESP_LOGE(TAG, "esp_peer_open failed: %d internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
                  open_ret,
@@ -108,6 +102,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
         signaling_callback_ = {};
         state_callback_ = {};
         peer_ = nullptr;
+        peer_resources_.Log(TAG, "start-failed-cleanup", open_ret);
         return false;
     }
 
@@ -121,6 +116,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
         camera_service_->StopPreview(CameraService::PreviewOwner::kRemote);
         signaling_callback_ = {};
         state_callback_ = {};
+        peer_resources_.Log(TAG, "start-failed-cleanup", connection_ret);
         return false;
     }
 
@@ -144,6 +140,7 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
         camera_service_->StopPreview(CameraService::PreviewOwner::kRemote);
         signaling_callback_ = {};
         state_callback_ = {};
+        peer_resources_.Log(TAG, "start-failed-cleanup", ESP_PEER_ERR_NO_MEM);
         return false;
     }
     peer_task_ = created_peer_task;
@@ -230,6 +227,8 @@ void WebRtcCameraService::FinishStop() {
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         running_ = false;
+        // The peer task has not deleted itself yet; this is native cleanup only.
+        peer_resources_.Log(TAG, "stopped");
         // Publish only after resources are released. Keeping the service lock
         // prevents a new Start from racing its predecessor's terminal callback.
         if (callback) {
@@ -266,7 +265,12 @@ bool WebRtcCameraService::HandleRemoteMessage(esp_peer_msg_type_t type, const ui
     text.push_back(0);
     message.data = text.data();
     message.size = static_cast<int>(size);
-    return esp_peer_send_msg(peer, &message) == ESP_PEER_ERR_NONE;
+    const int result = esp_peer_send_msg(peer, &message);
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        peer_resources_.Signal(TAG, type, result);
+    }
+    return result == ESP_PEER_ERR_NONE;
 }
 
 bool WebRtcCameraService::IsRunning() const {
@@ -291,6 +295,10 @@ int WebRtcCameraService::OnPeerState(esp_peer_state_t state, void* ctx) {
             return ESP_PEER_ERR_NONE;
         }
         if (state == ESP_PEER_STATE_DATA_CHANNEL_CONNECTED) {
+            {
+                std::lock_guard<std::recursive_mutex> lock(service->mutex_);
+                service->peer_resources_.Log(TAG, "connected");
+            }
             esp_peer_handle_t peer = nullptr;
             std::lock_guard<std::recursive_mutex> api_lock(service->peer_api_mutex_);
             {

@@ -1,11 +1,32 @@
 #pragma once
 #include "esp_peer.h"
+#include "esp_peer_default.h"
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <string>
 #include <vector>
 
 namespace rodakos_test::display_host {
+struct OpenAttempt {
+    esp_peer_cfg_t config{};
+    esp_peer_default_cfg_t defaults{};
+    bool default_abi_valid = false;
+};
+struct SentSignal {
+    esp_peer_handle_t peer;
+    esp_peer_msg_type_t type;
+    std::string payload;
+    bool nul_terminated;
+};
+std::vector<OpenAttempt> OpenAttempts();
+std::vector<SentSignal> SentSignals();
+void SetSignalResult(int result);
+void SetCloseStateCallback(bool enabled);
+void SetLogCapture(bool enabled);
+std::vector<std::string> CapturedLogs();
+void SetHeapValues(const std::array<size_t, 6>& values);
+void CaptureLog(const char* tag, const char* format, ...);
 struct SentFrame {
     esp_peer_handle_t peer;
     uint16_t stream_id;

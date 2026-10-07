@@ -1,11 +1,15 @@
 #include "host_runtime.h"
 #include "freertos/task.h"
 #include "esp_peer_default.h"
+#include "esp_heap_caps.h"
 
 #include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -43,6 +47,13 @@ int open_result = ESP_PEER_ERR_NONE;
 bool default_impl_available = true;
 int connection_result = ESP_PEER_ERR_NONE;
 bool task_creation_allowed = true;
+std::vector<rodakos_test::display_host::OpenAttempt> open_attempts;
+std::vector<rodakos_test::display_host::SentSignal> sent_signals;
+std::vector<std::string> captured_logs;
+std::atomic<bool> capture_logs{false};
+std::array<size_t, 6> heap_values{1048576, 1048576, 1048576, 1048576, 1048576, 1048576};
+int signal_result = ESP_PEER_ERR_NONE;
+bool close_state_callback = false;
 }
 
 namespace rodakos_test::display_host {
@@ -54,6 +65,13 @@ void Reset() {
     JoinTasks();
     std::lock_guard<std::mutex> lock(host_mutex);
     peers.clear();
+    open_attempts.clear();
+    sent_signals.clear();
+    captured_logs.clear();
+    capture_logs = false;
+    heap_values.fill(1048576);
+    signal_result = ESP_PEER_ERR_NONE;
+    close_state_callback = false;
     sent_frames.clear();
     block_next_send = send_blocked = release_send = close_overlap = false;
     cleanup_entered = false;
@@ -188,6 +206,44 @@ bool WaitForClockReads(size_t minimum) {
 }
 void SetMainLoopCostUs(int64_t value) { main_loop_cost_us = value; }
 void SetSendCostUs(int64_t value) { send_cost_us = value; }
+std::vector<OpenAttempt> OpenAttempts() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return open_attempts;
+}
+std::vector<SentSignal> SentSignals() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return sent_signals;
+}
+void SetSignalResult(int result) { signal_result = result; }
+void SetCloseStateCallback(bool enabled) { close_state_callback = enabled; }
+void SetLogCapture(bool enabled) { capture_logs = enabled; }
+std::vector<std::string> CapturedLogs() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return captured_logs;
+}
+void SetHeapValues(const std::array<size_t, 6>& values) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    heap_values = values;
+}
+void CaptureLog(const char* tag, const char* format, ...) {
+    if (!capture_logs) return;
+    char buffer[1536];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    std::lock_guard<std::mutex> lock(host_mutex);
+    captured_logs.push_back(std::string(tag) + ": " + buffer);
+}
+}
+
+size_t heap_caps_get_free_size(unsigned caps) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return heap_values[(caps & MALLOC_CAP_INTERNAL) ? 0 : (caps & MALLOC_CAP_DMA) ? 2 : 4];
+}
+size_t heap_caps_get_largest_free_block(unsigned caps) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return heap_values[(caps & MALLOC_CAP_INTERNAL) ? 1 : (caps & MALLOC_CAP_DMA) ? 3 : 5];
 }
 
 BaseType_t xTaskCreateWithCaps(void (*entry)(void*), const char*, size_t, void* arg,
@@ -241,6 +297,15 @@ const esp_peer_ops_t* esp_peer_get_default_impl() {
 }
 int esp_peer_open(esp_peer_cfg_t* config, const esp_peer_ops_t*, esp_peer_handle_t* output) {
     std::lock_guard<std::mutex> lock(host_mutex);
+    rodakos_test::display_host::OpenAttempt attempt;
+    attempt.config = *config;
+    attempt.config.extra_cfg = nullptr;
+    attempt.default_abi_valid = config->extra_cfg != nullptr &&
+                                config->extra_size == sizeof(esp_peer_default_cfg_t);
+    if (attempt.default_abi_valid) {
+        std::memcpy(&attempt.defaults, config->extra_cfg, sizeof(attempt.defaults));
+    }
+    open_attempts.push_back(attempt);
     if (open_result != ESP_PEER_ERR_NONE) return open_result;
     auto peer = std::make_unique<Peer>();
     peer->config = *config;
@@ -259,7 +324,13 @@ int esp_peer_main_loop(esp_peer_handle_t) {
 int esp_peer_create_data_channel(esp_peer_handle_t, esp_peer_data_channel_cfg_t*) {
     return ESP_PEER_ERR_NONE;
 }
-int esp_peer_send_msg(esp_peer_handle_t, esp_peer_msg_t*) { return ESP_PEER_ERR_NONE; }
+int esp_peer_send_msg(esp_peer_handle_t peer, esp_peer_msg_t* message) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    sent_signals.push_back({peer, message->type,
+        std::string(reinterpret_cast<const char*>(message->data), message->size),
+        message->data[message->size] == 0});
+    return signal_result;
+}
 int esp_peer_send_data(esp_peer_handle_t handle, esp_peer_data_frame_t* frame) {
     std::unique_lock<std::mutex> lock(host_mutex);
     auto* peer = static_cast<Peer*>(handle);
@@ -288,10 +359,13 @@ int esp_peer_send_data(esp_peer_handle_t handle, esp_peer_data_frame_t* frame) {
     return result;
 }
 int esp_peer_close(esp_peer_handle_t handle) {
-    std::lock_guard<std::mutex> lock(host_mutex);
     auto* peer = static_cast<Peer*>(handle);
-    close_overlap = close_overlap || peer->sending;
-    peer->closed = true;
+    {
+        std::lock_guard<std::mutex> lock(host_mutex);
+        close_overlap = close_overlap || peer->sending;
+        peer->closed = true;
+    }
+    if (close_state_callback) peer->config.on_state(ESP_PEER_STATE_CLOSED, peer->config.ctx);
     return ESP_PEER_ERR_NONE;
 }
 }

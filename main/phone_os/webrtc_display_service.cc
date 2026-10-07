@@ -23,11 +23,6 @@ constexpr uint8_t kChunkSequenceMask = 0x7f;
 constexpr size_t kChunkHeaderSize = 5;
 constexpr uint16_t kDefaultChunkSize = 20000;
 constexpr size_t kMaxChunkSize = 60000;
-constexpr uint32_t kDataChannelCacheSize = 400 * 1024;
-// esp_peer_main_loop 在 peer_api_mutex_ 内等待 agent_recv_timeout；过大的
-// 默认值会让 JPEG worker 每个分片都等待半秒，即使 SCTP 没有 WOULD_BLOCK。
-// 50ms 仍给 MQTT/ICE agent 留出批量收包窗口，同时让发送锁快速周转。
-constexpr uint32_t kPeerAgentRecvTimeoutMs = 50;
 constexpr uint32_t kPeerLoopDelayMs = 10;
 constexpr uint32_t kDataSendRetryDelayMs = 2;
 // 视频通道是 latest-only：拥塞时尽快丢弃当前 JPEG，让下一张最新帧
@@ -170,10 +165,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         return false;
     }
 
-    esp_peer_default_cfg_t default_cfg{};
-    default_cfg.agent_recv_timeout = kPeerAgentRecvTimeoutMs;
-    default_cfg.data_ch_cfg.send_cache_size = kDataChannelCacheSize;
-    default_cfg.data_ch_cfg.recv_cache_size = kDataChannelCacheSize;
+    auto default_cfg = MakeWebRtcPeerDefaultConfig();
 
     esp_peer_cfg_t peer_cfg{};
     peer_cfg.role = normalized.role;
@@ -205,7 +197,9 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         config_.stream_lease.reset();
         return false;
     }
+    peer_resources_.Begin(TAG);
     const int open_ret = esp_peer_open(&peer_cfg, ops, &peer_);
+    peer_resources_.Log(TAG, open_ret == ESP_PEER_ERR_NONE ? "open-after" : "open-failed", open_ret);
     if (open_ret != ESP_PEER_ERR_NONE) {
         ESP_LOGE(TAG, "esp_peer_open failed: %d internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
                  open_ret,
@@ -220,6 +214,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         control_acks_->Close();
         peer_ = nullptr;
         config_.stream_lease.reset();
+        peer_resources_.Log(TAG, "start-failed-cleanup", open_ret);
         return false;
     }
 
@@ -236,6 +231,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         control_callback_ = {};
         control_acks_->Close();
         config_.stream_lease.reset();
+        peer_resources_.Log(TAG, "start-failed-cleanup", connection_ret);
         return false;
     }
 
@@ -262,6 +258,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         control_callback_ = {};
         control_acks_->Close();
         config_.stream_lease.reset();
+        peer_resources_.Log(TAG, "start-failed-cleanup", ESP_PEER_ERR_NO_MEM);
         return false;
     }
     peer_task_ = created_peer_task;
@@ -371,6 +368,8 @@ void WebRtcDisplayService::FinishStop() {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         running_ = false;
         config_.stream_lease.reset();
+        // The peer task has not deleted itself yet; this is native cleanup only.
+        peer_resources_.Log(TAG, "stopped");
         // Publish only after resources are released. Keeping the service lock
         // prevents a new Start from racing its predecessor's terminal callback.
         if (callback) {
@@ -407,7 +406,12 @@ bool WebRtcDisplayService::HandleRemoteMessage(esp_peer_msg_type_t type, const u
     text.push_back(0);
     message.data = text.data();
     message.size = static_cast<int>(size);
-    return esp_peer_send_msg(peer, &message) == ESP_PEER_ERR_NONE;
+    const int result = esp_peer_send_msg(peer, &message);
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        peer_resources_.Signal(TAG, type, result);
+    }
+    return result == ESP_PEER_ERR_NONE;
 }
 
 bool WebRtcDisplayService::IsRunning() const {
@@ -432,6 +436,10 @@ int WebRtcDisplayService::OnPeerState(esp_peer_state_t state, void* ctx) {
             return ESP_PEER_ERR_NONE;
         }
         if (state == ESP_PEER_STATE_DATA_CHANNEL_CONNECTED) {
+            {
+                std::lock_guard<std::recursive_mutex> lock(service->mutex_);
+                service->peer_resources_.Log(TAG, "connected");
+            }
             esp_peer_handle_t peer = nullptr;
             std::lock_guard<std::recursive_mutex> api_lock(service->peer_api_mutex_);
             {

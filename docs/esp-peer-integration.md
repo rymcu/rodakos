@@ -44,6 +44,33 @@ CONFIG_MBEDTLS_X509_CREATE_C=y
 
 信令编码注意：Mbed TLS Base64 编码目标容量必须为 `4 * ceil(n / 3) + 1`，最后一字节供终止符使用；容量只分配编码长度会使所有非空 SDP/ICE 返回 `BUFFER_TOO_SMALL`。MQTT 解码后的 SDP 送入 `esp_peer_send_msg` 前也必须补终止符，`message.size` 保持文本长度。
 
+## 027 显式 candidate 容量与资源采样
+
+Camera/Display 统一使用 `webrtc-peer-config.h`，通过 SDK 公开 `extra_cfg` 显式传入
+`max_candidates=32`。原 50 ms agent timeout、400 KiB 双 DataChannel cache、可靠有序通道、
+Stop 锁与任务清理不变，也不启用 IPv6/TCP 或改写、丢弃候选。零值在当前 ESP32-S3 库中
+实际表示 10，与头文件所写默认 16 不同；此结论来自固定库反汇编与 DWARF，未改 vendor
+二进制。库 SHA-256 为 `6b2f3856b9a1639b0480c011688c070c132b6399e9863a74d20d20a271dc7da3`。
+
+目标 ABI 的 SDK 配置大小仍为 68 B、max_candidates 偏移 55。容量 10→32 使每 peer 的两张
+candidate 表、pair 表与排序表合计增加 5,984 B；pair 上限仍 64。排序表增加的 176 B 优先
+占 internal，其余大表优先 PSRAM 但可能 fallback，不代表 internal/DMA 余量不变。
+
+`peer_resources` 在 open 前/后/失败、启动失败清理后、SDP/candidate SDK 调用返回、连接及
+native Stop 清理后采样 internal/DMA/PSRAM 的 free/largest。每次信令更新该次 Start 的
+`sampled_min_*`；SDP 及第 1/10/18/32/33 次 candidate 调用打印检查点，最终 Stop 保留累计
+调用数与采样最低值。`generation` 仅为该 service 的诊断代次，`candidate_calls` 包含重复与
+失败调用，均不替代 MQTT 实例身份或 SDK admission；没有新增基于调用次数的拒绝或成功判断。
+采样点最低值不是连续峰值或启动以来的最低内存。日志在原 service 锁保护下执行，有观察
+成本；Stop 样本在 peer task 自删除前，后续静默窗口仍须独立采集。
+
+固定观察器无新 heap 容器；Xtensa 实测为 32 B，Camera 对象 80→112 B，Display 对象
+1,144→1,176 B，两静态 service payload 合计 +64 B，不能等同于完整链接 BSS/堆净差。
+软件证据由[完整双 TU host 目标](../tests/display_control_ack_service/README.md)提供；fake
+只验证配置传递、失败清理、候选原文转发和诊断边界，不证明真实 SDK 容量、DMA 归还或物理
+结果。026 的低内存、candidate overlimit、Camera STREAMOFF 与发布 NO_GO 不因配置修改
+自动关闭；027 具名包与独立实机验收另行记录。
+
 ## 2026-10-06 软件生命周期补充
 
 流实例绑定 MQTT generation/epoch 和不复用 nonce；Start/Stop/远程信令串行化，断线先撤销，
