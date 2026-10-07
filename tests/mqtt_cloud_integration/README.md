@@ -22,7 +22,11 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   ctest --test-dir /tmp/rodakos-mqtt-cloud --output-on-failure
 ```
 
-两个 CTest 分别运行正向集成和负变体。构建目录的 `production-sources.json`
+三个 CTest 分别运行正向集成、凭据负变体和头文件隔离回归。头文件回归把实际两套 fixture
+复制到独立路径并设置相同时间戳，真实 GCC 编译 MQTT-first / HTTP-first 两种顺序；
+第三个用例还原旧的相同 `#pragma once` 转发头，仅接受两条指定 HTTP 类型声明错误。
+该预期编译失败及 include trace 单独保存在 `header-isolation-negative/`，不混入成功测试日志。
+构建目录的 `production-sources.json`
 记录实际编译的 MQTT、Cloud 及 policy 源文件哈希；`negative-controls/`
 保存变体、编译日志、指定断言与结果。发布 host runner 和 CI 均执行本目标。
 
