@@ -147,6 +147,10 @@ jobs:
             host-check-results/asan-display_control_ack_service/negative-controls/*/result.log
             host-check-results/asan-display_control_ack_service/negative-controls/*/webrtc_display_service.cc
             host-check-results/asan-display_control_ack_service/negative-controls/*/build-*.log
+            host-check-results/asan-mqtt_volume_service/negative-controls/negative-results.json
+            host-check-results/asan-mqtt_volume_service/negative-controls/*/result.log
+            host-check-results/asan-mqtt_volume_service/negative-controls/*/unified_mqtt_service.cc
+            host-check-results/asan-mqtt_volume_service/negative-controls/*/build-*.log
           if-no-files-found: warn
           retention-days: 14
 
