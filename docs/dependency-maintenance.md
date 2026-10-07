@@ -24,6 +24,12 @@ conversion to compact ARGB8888 output. For non-interlaced RGBA8 input with match
 instead unfilters and compacts in the decompression allocation, then adopts that allocation as the
 LVGL draw buffer. Normal and Adam7 inputs remain supported.
 
+The predicted inflate reserve also includes the pinned Huffman loop's 260-byte spare requirement,
+which is checked even after its end symbol. Without this spare capacity, the valid 471 x 423 RGBA8
+host fixture grows from 797,355 to 1,196,213 bytes near completion. The overlay reserves 797,615
+bytes once, checks both size additions for overflow, and returns error 83 immediately if that
+reserve fails. It does not change pixel format or narrow the supported PNG variants.
+
 This reviewed decoder defect is separate from the package-013 `A3.PNG` incident. The recorded Retry
 abort terminated in the `DisplayService` JPEG path on `std::bad_alloc`. The package-014 hardware
 rerun later established that `A3.PNG` is a 69,200-byte, 471 x 423, 8-bit color-type-6 (RGBA) image.
@@ -44,19 +50,29 @@ upstream files:
 
 `tools/prepare_lodepng_patch.py` verifies that exact file set and every digest, the project's 9.3.0
 manifest pin, the lock version, registry source and component hash, and the resolved
-`.component_hash`. It also requires one exact allocation boundary and one exact dimension-check
-boundary before generating output. `cmake/lodepng_patch.cmake` writes
+`.component_hash`. It also requires exact allocation, dimension-check and inflate-reserve
+boundaries, including the Huffman loop's 260-byte requirement, before generating output.
+`cmake/lodepng_patch.cmake` writes
 `<build>/rodak_patches/lvgl/lodepng.c` and replaces exactly one LodePNG source on the resolved LVGL
 target. Managed component files, the remaining LVGL sources, headers and compile settings are not
 modified. Missing output is regenerated; any version, source-set, digest or target-layout drift
 stops configuration instead of compiling an unchecked fallback.
 
-The focused software evidence passes in Debug and ASan/UBSan with leak detection: 8 valid PNG
+The focused software evidence passes in Debug and ASan/UBSan with leak detection: 11 valid PNG
 variants plus 2 geometry rejections in `tests/lodepng_decode`, 24 production Photos/ImageLibrary
 cases, 43 existing Home/LVGL cases, and 24 production `DisplayService` allocation/lifecycle cases.
 The last suite covers the package-013 abort boundary and the package-016 allocation layout, but is
 not a decoder-provenance test. The complete release host runner passes 30 suites and 42 CTest cases,
 plus four Python groups of 17, 15, 8 and 12 cases. ESP-IDF 6.0.2 also builds successfully.
+
+The new 471 x 423 synthetic fixture also exercises the production decoder with a 1,081,344-byte
+maximum allocation request and three independent rejection points: IDAT aggregation, inflate
+reserve and the adopted-buffer descriptor. Each rejection returns 83, releases every tracked
+allocation, and recovers on the next decode with exact pixels. Restoring only the old reserve
+logic in the generated build source is a negative control: it requests 1,196,213 bytes and fails
+the same ceiling. The corrected maximum request is 797,615 bytes. Its 818,804-byte decoder-ledger
+peak belongs to the 9,673-byte synthetic PNG; it excludes caller-owned input and other services,
+and must not be reused as a peak measurement for the real 69,200-byte A3 image or hardware.
 
 `DisplayService` no longer allocates a 153,600-byte JPEG-worker `DisplayFrame` copy. It allocates one
 230,400-byte buffer, copies the RGB565 snapshot into its first 153,600 bytes while holding the

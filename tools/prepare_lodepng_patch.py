@@ -50,6 +50,20 @@ def prepare(component, lock, manifest, output):
         require(hashlib.sha256(content).hexdigest() == digest, "Unreviewed LVGL source: " + path)
         sources[path] = content.decode()
     source = sources["src/libs/lodepng/lodepng.c"]
+    reserve = """            /*reserve the memory to avoid intermediate reallocations*/
+            ucvector_resize(&v, *outsize + expected_size);
+            v.size = *outsize;"""
+    require(source.count(reserve) == 1, "Unexpected inflate reserve boundary")
+    require(source.count("""    const size_t reserved_size =
+        260; /* must be at least 258 for max length, and a few extra for adding a few extra literals */""") == 1,
+            "Unexpected Huffman reserve requirement")
+    source = source.replace(reserve, """            /* RodakOS: Huffman inflation checks for 260 spare bytes even after
+               the end symbol. Reserving only the predicted pixels would grow
+               the allocation by about 50% at the end of a valid image. */
+            size_t reserve_size;
+            if(lodepng_addofl(*outsize, expected_size, &reserve_size) ||
+               lodepng_addofl(reserve_size, 260, &reserve_size)) return 92;
+            if(!ucvector_reserve(&v, reserve_size)) return 83; /*alloc fail*/""")
     original = """    if(!state->error) {
         lv_draw_buf_t * decoded = lv_draw_buf_create_ex(image_cache_draw_buf_handlers, *w, *h, LV_COLOR_FORMAT_ARGB8888, 4 * *w);
         if(decoded) {

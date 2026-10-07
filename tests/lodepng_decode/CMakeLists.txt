@@ -16,9 +16,11 @@ add_custom_command(OUTPUT "${fixtures}/manifest.json"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixtures.py" "${fixtures}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixtures.py" VERBATIM)
 add_custom_target(lodepng_fixtures DEPENDS "${fixtures}/manifest.json")
-add_executable(lodepng_decode_tests lodepng_decode_test.c)
+add_executable(lodepng_decode_tests lodepng_decode_test.c allocation_probe.c)
 add_dependencies(lodepng_decode_tests lodepng_fixtures)
 target_link_libraries(lodepng_decode_tests PRIVATE lvgl)
 target_compile_options(lodepng_decode_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_link_options(lodepng_decode_tests PRIVATE
+    -Wl,--wrap=lv_malloc_core -Wl,--wrap=lv_realloc_core -Wl,--wrap=lv_free_core)
 add_test(NAME lodepng_decode COMMAND lodepng_decode_tests "${fixtures}")
 set_tests_properties(lodepng_decode PROPERTIES TIMEOUT 30)
