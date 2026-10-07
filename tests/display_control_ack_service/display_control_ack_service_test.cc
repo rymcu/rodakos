@@ -21,14 +21,47 @@
 #include <thread>
 #include <vector>
 
-namespace { thread_local bool reject_cpp_allocations = false; }
+namespace {
+thread_local bool reject_cpp_allocations = false;
+thread_local bool watch_cpp_allocations = false;
+struct AllocationWatch {
+    std::atomic<void*> live{nullptr};
+    void* address = nullptr;
+    size_t bytes = 0;
+    std::atomic<size_t> releases{0};
+};
+AllocationWatch allocation_watches[4];
+size_t allocation_watch_count = 0;
+void ObserveAllocation(void* value, size_t size) {
+    if (!watch_cpp_allocations) return;
+    if (allocation_watch_count >= 4) std::abort();
+    auto& watch = allocation_watches[allocation_watch_count++];
+    watch.address = value;
+    watch.bytes = size;
+    watch.releases.store(0);
+    watch.live.store(value);
+}
+void ObserveRelease(void* value) {
+    if (value == nullptr) return;
+    for (auto& watch : allocation_watches) {
+        void* expected = value;
+        if (watch.live.compare_exchange_strong(expected, nullptr)) {
+            watch.releases.fetch_add(1);
+            break;
+        }
+    }
+}
+}
 void* operator new(size_t size) {
     if (reject_cpp_allocations) throw std::bad_alloc();
-    if (auto* value = std::malloc(size == 0 ? 1 : size)) return value;
+    if (auto* value = std::malloc(size == 0 ? 1 : size)) {
+        ObserveAllocation(value, size);
+        return value;
+    }
     throw std::bad_alloc();
 }
-void operator delete(void* value) noexcept { std::free(value); }
-void operator delete(void* value, size_t) noexcept { std::free(value); }
+void operator delete(void* value) noexcept { ObserveRelease(value); std::free(value); }
+void operator delete(void* value, size_t) noexcept { ObserveRelease(value); std::free(value); }
 
 // Only expose scheduling seams in this test TU. The production translation
 // unit is separately compiled, unchanged, with its original private header.
@@ -46,6 +79,9 @@ public:
     Service service{&display};
     std::vector<Service::ControlReply> replies;
     Service::ControlCallback input_handler;
+    rodakos::StreamLeasePtr lease;
+    std::weak_ptr<rodakos::StreamLease> last_candidate;
+    uint64_t next_lease_nonce = 0;
     esp_peer_handle_t peer = nullptr;
     uint16_t stream_id = 0;
 
@@ -56,11 +92,16 @@ public:
         host::JoinTasks();
     }
     bool TryStart(uint16_t stream = 11) {
-        if (!service.Start({}, [](auto, auto&&) {}, {},
+        Service::Config config;
+        auto candidate = std::make_shared<rodakos::StreamLease>(1, 1, ++next_lease_nonce, "host-display");
+        last_candidate = candidate;
+        config.stream_lease = candidate;
+        if (!service.Start(config, [](auto, auto&&) {}, {},
                 [this](const std::string& payload, Service::ControlReply reply) {
                     if (input_handler) input_handler(payload, std::move(reply));
                     else if (!payload.empty()) replies.push_back(std::move(reply));
                 })) return false;
+        lease = std::move(candidate);
         peer = host::LatestPeer();
         stream_id = stream;
         host::OpenControlChannel(peer, stream_id);
@@ -130,10 +171,67 @@ struct JsonAllocationFailure {
     }
     ~JsonAllocationFailure() { cJSON_InitHooks(nullptr); }
 };
+rodakos::StreamLeasePtr revoke_during_json;
+size_t json_revocation_allocations = 0;
+void* RevokeDuringJsonAllocation(size_t size) {
+    ++json_revocation_allocations;
+    if (revoke_during_json) revoke_during_json->Revoke();
+    return std::malloc(size);
+}
+struct JsonLeaseRevocation {
+    explicit JsonLeaseRevocation(rodakos::StreamLeasePtr lease) {
+        revoke_during_json = std::move(lease);
+        json_revocation_allocations = 0;
+        cJSON_Hooks hooks{RevokeDuringJsonAllocation, std::free};
+        cJSON_InitHooks(&hooks);
+    }
+    ~JsonLeaseRevocation() {
+        cJSON_InitHooks(nullptr);
+        revoke_during_json.reset();
+    }
+};
 struct CppAllocationFailure {
     CppAllocationFailure() { reject_cpp_allocations = true; }
     ~CppAllocationFailure() { reject_cpp_allocations = false; }
 };
+void ResetAllocationWatches() {
+    for (auto& watch : allocation_watches) {
+        RODAK_CHECK_EQ(watch.live.load(), nullptr);
+        watch.address = nullptr;
+        watch.bytes = 0;
+        watch.releases.store(0);
+    }
+    allocation_watch_count = 0;
+}
+struct WatchCppAllocation {
+    WatchCppAllocation() { watch_cpp_allocations = true; }
+    ~WatchCppAllocation() { watch_cpp_allocations = false; }
+};
+void PrintAllocationEvidence(const char* scenario) {
+    for (size_t index = 0; index < allocation_watch_count; ++index) {
+        const auto& watch = allocation_watches[index];
+        std::cout << "JPEG allocation evidence: case=" << scenario << " index=" << index
+                  << " pointer=" << watch.address << " bytes=" << watch.bytes
+                  << " releases=" << watch.releases.load()
+                  << " live=" << (watch.live.load() != nullptr) << '\n';
+    }
+}
+void CheckVideo(const host::SentFrame& frame, esp_peer_handle_t peer, uint16_t stream,
+                const std::vector<uint8_t>& bytes, int result = ESP_PEER_ERR_NONE) {
+    RODAK_CHECK_EQ(frame.peer, peer);
+    RODAK_CHECK_EQ(frame.stream_id, stream);
+    RODAK_CHECK_EQ(frame.type, ESP_PEER_DATA_CHANNEL_DATA);
+    RODAK_CHECK(frame.returned);
+    RODAK_CHECK_EQ(frame.result, result);
+    RODAK_CHECK_EQ(frame.payload.size(), bytes.size() + 5u);
+    RODAK_CHECK_EQ(static_cast<uint8_t>(frame.payload[0]), 0x80u);
+    const uint32_t size = (static_cast<uint32_t>(static_cast<uint8_t>(frame.payload[1])) << 24) |
+                         (static_cast<uint32_t>(static_cast<uint8_t>(frame.payload[2])) << 16) |
+                         (static_cast<uint32_t>(static_cast<uint8_t>(frame.payload[3])) << 8) |
+                         static_cast<uint8_t>(frame.payload[4]);
+    RODAK_CHECK_EQ(size, bytes.size());
+    RODAK_CHECK_EQ(frame.payload.substr(5), std::string(bytes.begin(), bytes.end()));
+}
 }
 
 RODAK_TEST("display ACK encodes the actual admitted reply and control peer") {
@@ -459,10 +557,9 @@ RODAK_TEST("display ACK enqueue OOM fails closed without escaping the input call
 RODAK_TEST("cancelled real input ACK allocation failure closes the original peer") {
     for (bool local_touch : {false, true}) {
         rodakos::RemoteInputController controller({});
-        auto lease = std::make_shared<rodakos::StreamLease>(1, 1, 1, "original-peer");
         Fixture fixture;
         fixture.input_handler = [&](const std::string& payload, Service::ControlReply reply) {
-            controller.Handle(lease, payload, std::move(reply));
+            controller.Handle(fixture.lease, payload, std::move(reply));
         };
         fixture.Start();
         host::Receive(fixture.peer, fixture.stream_id,
@@ -474,7 +571,7 @@ RODAK_TEST("cancelled real input ACK allocation failure closes the original peer
         {
             CppAllocationFailure failure;
             if (local_touch) controller.OnLocalTouch();
-            else controller.Handle(lease, disable, {});
+            else controller.Handle(fixture.lease, disable, {});
         }
         fixture.service.FlushControlAcks();
         RODAK_CHECK(fixture.service.stop_requested_);
@@ -549,26 +646,32 @@ RODAK_TEST("display ACK all six startup resource failures leave no live instance
     Fixture fixture;
     fixture.display.capture_allowed = false;
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     fixture.display.capture_allowed = true;
     host::SetDefaultImplAvailable(false);
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     host::SetDefaultImplAvailable(true);
     host::SetOpenResult(ESP_PEER_ERR_FAIL);
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     host::SetOpenResult(ESP_PEER_ERR_NONE);
     host::SetConnectionResult(ESP_PEER_ERR_FAIL);
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     host::SetConnectionResult(ESP_PEER_ERR_NONE);
     host::SetTaskCreationAllowed(false);
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     host::SetTaskCreationAllowed(true);
     fixture.display.jpeg_allowed = false;
     RODAK_CHECK_FALSE(fixture.TryStart());
+    RODAK_CHECK(fixture.last_candidate.expired());
     host::JoinTasks();
     RODAK_CHECK_FALSE(fixture.service.control_acks_->Current());
     fixture.display.jpeg_allowed = true;
@@ -762,4 +865,398 @@ RODAK_TEST("production peer loop measures scheduling gaps and resets diagnostics
     RODAK_CHECK_EQ(fixture.service.loop_diagnostics_.sdk.samples, 0u);
     RODAK_CHECK_EQ(fixture.service.loop_diagnostics_.gap.samples, 0u);
     RODAK_CHECK_EQ(fixture.service.control_timing_count_, 0u);
+}
+
+RODAK_TEST("preopen first JPEG waits for actual video open and production task sends it once") {
+    Fixture fixture;
+    fixture.Start();
+    const std::vector<uint8_t> bytes{0xff, 0xd8, 1, 0xff, 0xd9};
+    RODAK_CHECK(fixture.display.EmitJpeg(std::vector<uint8_t>(bytes), 1, 1234));
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(4));
+    RODAK_CHECK(host::SentFrames().empty());
+    host::OpenVideoChannel(fixture.peer, 5);
+    const bool video_returned = host::WaitForVideoSendReturns(5, 1);
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    fixture.Stop();
+    std::cout << "preopen probe: received=" << fixture.service.stats_frames_received_.load()
+              << " dropped=" << fixture.service.stats_frames_dropped_.load()
+              << " SDK_complete_frames=" << fixture.service.stats_frames_sent_.load() << '\n';
+    RODAK_CHECK(video_returned);
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    CheckVideo(frames[0], fixture.peer, 5, bytes);
+}
+
+RODAK_TEST("postopen first JPEG still travels through the production task") {
+    Fixture fixture;
+    fixture.Start();
+    host::OpenVideoChannel(fixture.peer, 7);
+    host::RunPeerTasks();
+    const std::vector<uint8_t> bytes{0xff, 0xd8, 2, 0xff, 0xd9};
+    RODAK_CHECK(fixture.display.EmitJpeg(std::vector<uint8_t>(bytes), 1, 4567));
+    RODAK_CHECK(host::WaitForVideoSendReturns(7, 1));
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    CheckVideo(frames[0], fixture.peer, 7, bytes);
+}
+
+RODAK_TEST("preopen latest JPEG moves without allocation and frees replaced storage") {
+    Fixture fixture;
+    fixture.Start();
+    ResetAllocationWatches();
+    std::vector<uint8_t> first;
+    std::vector<uint8_t> latest;
+    {
+        WatchCppAllocation capture;
+        first = std::vector<uint8_t>(4096, 1);
+        latest = std::vector<uint8_t>(512, 2);
+    }
+    RODAK_CHECK_EQ(allocation_watch_count, 2u);
+    RODAK_CHECK_EQ(allocation_watches[0].address, first.data());
+    RODAK_CHECK_EQ(allocation_watches[1].address, latest.data());
+    RODAK_CHECK_EQ(allocation_watches[0].bytes, 4096u);
+    RODAK_CHECK_EQ(allocation_watches[1].bytes, 512u);
+    {
+        CppAllocationFailure failure;
+        fixture.display.EmitJpeg(std::move(first), 1, 100);
+        fixture.display.EmitJpeg(std::move(latest), 2, 200);
+    }
+    RODAK_CHECK_EQ(allocation_watches[0].releases.load(), 1u);
+    RODAK_CHECK_EQ(allocation_watches[1].releases.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.data(), allocation_watches[1].address);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_sequence_, 2u);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_timestamp_us_, 200);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_dropped_.load(), 1u);
+    host::OpenVideoChannel(fixture.peer, 9);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForVideoSendReturns(9, 1));
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    RODAK_CHECK_EQ(allocation_watches[1].releases.load(), 1u);
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    CheckVideo(frames[0], fixture.peer, 9, std::vector<uint8_t>(512, 2));
+    PrintAllocationEvidence("latest-replacement");
+}
+
+RODAK_TEST("preopen JPEG cannot cross Stop Start with a reused frame sequence") {
+    Fixture fixture;
+    fixture.Start();
+    const auto old_peer = fixture.peer;
+    fixture.display.EmitJpeg({1, 1, 1}, 1, 100);
+    fixture.Stop();
+    RODAK_CHECK(fixture.service.pending_jpeg_.empty());
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.capacity(), 0u);
+    RODAK_CHECK_FALSE(fixture.display.EmitJpeg({9}, 1, 111));
+    fixture.Start(23);
+    host::OpenVideoChannel(fixture.peer, 25);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    RODAK_CHECK(host::SentFrames().empty());
+    fixture.display.EmitJpeg({2, 2, 2}, 1, 200);
+    RODAK_CHECK(host::WaitForVideoSendReturns(25, 1));
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    RODAK_CHECK_NE(frames[0].peer, old_peer);
+    CheckVideo(frames[0], fixture.peer, 25, {2, 2, 2});
+}
+
+RODAK_TEST("preopen terminal state revokes and discards JPEG without video dispatch") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.display.EmitJpeg({1, 2, 3}, 1, 100);
+    host::EmitState(fixture.peer, ESP_PEER_STATE_DISCONNECTED);
+    RODAK_CHECK_FALSE(fixture.lease->IsActive());
+    host::OpenVideoChannel(fixture.peer, 27);
+    fixture.display.EmitJpeg({4, 5, 6}, 2, 200);
+    fixture.Stop();
+    RODAK_CHECK(host::SentFrames().empty());
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.capacity(), 0u);
+    RODAK_CHECK(host::IsClosed(fixture.peer));
+}
+
+RODAK_TEST("preopen SDK failure is only an attempt and does not replay without a new JPEG") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.display.EmitJpeg({1, 2, 3}, 1, 100);
+    host::SetSendResult(ESP_PEER_ERR_FAIL);
+    host::OpenVideoChannel(fixture.peer, 29);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForVideoSendReturns(29, 1));
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    RODAK_CHECK_EQ(host::SentFrames().size(), 1u);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_sent_.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.stats_send_errors_.load(), 1u);
+    host::SetSendResult(ESP_PEER_ERR_NONE);
+    fixture.display.EmitJpeg({4, 5, 6}, 2, 200);
+    RODAK_CHECK(host::WaitForVideoSendReturns(29, 2));
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 2u);
+    CheckVideo(frames[0], fixture.peer, 29, {1, 2, 3}, ESP_PEER_ERR_FAIL);
+    CheckVideo(frames[1], fixture.peer, 29, {4, 5, 6});
+    RODAK_CHECK_EQ(fixture.service.stats_frames_sent_.load(), 1u);
+}
+
+RODAK_TEST("preopen JPEG remains pending while reliable ACK retries have priority") {
+    Fixture fixture;
+    fixture.Start(31);
+    fixture.display.EmitJpeg({3, 1, 4}, 1, 100);
+    fixture.Receive(1);
+    fixture.Reply(0);
+    host::SetSendResult(ESP_PEER_ERR_WOULD_BLOCK);
+    host::OpenVideoChannel(fixture.peer, 33);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(4));
+    const auto pressured = host::SentFrames();
+    RODAK_CHECK_FALSE(pressured.empty());
+    for (const auto& attempt : pressured) {
+        RODAK_CHECK_EQ(attempt.stream_id, 31u);
+        RODAK_CHECK(attempt.returned);
+        RODAK_CHECK_EQ(attempt.result, ESP_PEER_ERR_WOULD_BLOCK);
+    }
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.service.mutex_);
+        RODAK_CHECK_FALSE(fixture.service.pending_jpeg_.empty());
+    }
+    host::SetSendResult(ESP_PEER_ERR_NONE);
+    RODAK_CHECK(host::WaitForVideoSendReturns(33, 1));
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK(frames.size() >= 3u);
+    CheckFrame(frames[frames.size() - 2], fixture.peer, 31, 1, true);
+    RODAK_CHECK_EQ(frames[frames.size() - 2].result, ESP_PEER_ERR_NONE);
+    CheckVideo(frames.back(), fixture.peer, 33, {3, 1, 4});
+}
+
+RODAK_TEST("preopen in-flight JPEG and pending replacement both release before Stop completes") {
+    Fixture fixture;
+    fixture.Start();
+    ResetAllocationWatches();
+    std::vector<uint8_t> first;
+    std::vector<uint8_t> next;
+    {
+        WatchCppAllocation capture;
+        first = std::vector<uint8_t>(4096, 4);
+        next = std::vector<uint8_t>(256, 5);
+    }
+    fixture.display.EmitJpeg(std::move(first), 1, 100);
+    host::OpenVideoChannel(fixture.peer, 35);
+    host::BlockNextSend();
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForBlockedSend());
+    RODAK_CHECK_EQ(allocation_watches[0].releases.load(), 0u);
+    fixture.display.EmitJpeg(std::move(next), 2, 200);
+    const auto old_peer = fixture.peer;
+    std::atomic<bool> stopped{false};
+    std::thread stopping([&] { fixture.service.Stop(); stopped.store(true); });
+    const bool stop_requested = WaitForStopRequest(fixture.service);
+    const bool stopped_early = stopped.load();
+    const bool old_closed_early = host::IsClosed(old_peer);
+    const bool replacement_started_early = fixture.TryStart(37);
+    const auto released_before_send = allocation_watches[0].releases.load();
+    const auto pending_released_before_send = allocation_watches[1].releases.load();
+    host::ReleaseSend();
+    stopping.join();
+    host::JoinTasks();
+    RODAK_CHECK(stop_requested);
+    RODAK_CHECK_FALSE(stopped_early);
+    RODAK_CHECK_FALSE(old_closed_early);
+    RODAK_CHECK_FALSE(replacement_started_early);
+    RODAK_CHECK_EQ(released_before_send, 0u);
+    RODAK_CHECK_EQ(pending_released_before_send, 0u);
+    RODAK_CHECK_EQ(allocation_watches[0].releases.load(), 1u);
+    RODAK_CHECK_EQ(allocation_watches[1].releases.load(), 1u);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.capacity(), 0u);
+    RODAK_CHECK_FALSE(host::CloseOverlappedSend());
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    CheckVideo(frames[0], old_peer, 35, std::vector<uint8_t>(4096, 4));
+    PrintAllocationEvidence("in-flight-and-pending-stop");
+    fixture.Start(37);
+    host::OpenVideoChannel(fixture.peer, 39);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 4));
+    fixture.Stop();
+    RODAK_CHECK_EQ(host::SentFrames().size(), 1u);
+}
+
+RODAK_TEST("preopen video open never enables remote input and lease revocation stays authoritative") {
+    rodakos::RemoteInputController controller({});
+    Fixture fixture;
+    fixture.input_handler = [&](const std::string& payload, Service::ControlReply reply) {
+        controller.Handle(fixture.lease, payload, std::move(reply));
+    };
+    fixture.Start(41);
+    fixture.display.EmitJpeg({6, 2, 6}, 1, 100);
+    host::OpenVideoChannel(fixture.peer, 43);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForVideoSendReturns(43, 1));
+    RODAK_CHECK_FALSE(controller.IsEnabled());
+    host::Receive(fixture.peer, 41, R"({"version":1,"seq":1,"kind":"pointer","action":"down","x":1,"y":1})");
+    fixture.Receive(2);
+    RODAK_CHECK(host::WaitForSendReturns(3));
+    const auto rejected = host::SentFrames();
+    CheckFrame(rejected[1], fixture.peer, 41, 1, false, "control_disabled_or_invalid");
+    CheckFrame(rejected[2], fixture.peer, 41, 2, false, "control_disabled_or_invalid");
+    host::Receive(fixture.peer, 41, R"({"version":1,"seq":3,"kind":"control","action":"enable"})");
+    RODAK_CHECK(host::WaitForSendReturns(4));
+    RODAK_CHECK(controller.IsEnabled());
+    fixture.lease->Revoke();
+    RODAK_CHECK_FALSE(controller.IsEnabled());
+    fixture.Stop();
+    RODAK_CHECK_FALSE(controller.IsEnabled());
+}
+
+RODAK_TEST("preopen cancelled handshake returns actual JPEG allocation and zero capacity") {
+    Fixture fixture;
+    fixture.Start();
+    ResetAllocationWatches();
+    std::vector<uint8_t> jpeg;
+    {
+        WatchCppAllocation capture;
+        jpeg = std::vector<uint8_t>(8192, 7);
+    }
+    RODAK_CHECK_EQ(allocation_watch_count, 1u);
+    RODAK_CHECK_EQ(allocation_watches[0].bytes, 8192u);
+    fixture.display.EmitJpeg(std::move(jpeg), 1, 100);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.data(), allocation_watches[0].address);
+    RODAK_CHECK_EQ(allocation_watches[0].releases.load(), 0u);
+    fixture.Stop();
+    RODAK_CHECK_EQ(allocation_watches[0].releases.load(), 1u);
+    RODAK_CHECK_EQ(allocation_watches[0].live.load(), nullptr);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.capacity(), 0u);
+    RODAK_CHECK_FALSE(fixture.service.config_.stream_lease);
+    fixture.lease.reset();
+    RODAK_CHECK(fixture.last_candidate.expired());
+    RODAK_CHECK(host::SentFrames().empty());
+    PrintAllocationEvidence("cancel-before-open");
+}
+
+RODAK_TEST("display requires an active caller stream lease before creating resources") {
+    Fixture fixture;
+    Service::Config config;
+    RODAK_CHECK_FALSE(fixture.service.Start(config, [](auto, auto&&) {}));
+    RODAK_CHECK_FALSE(fixture.display.capture_running);
+    RODAK_CHECK_EQ(host::LatestPeer(), nullptr);
+    config.stream_lease = std::make_shared<rodakos::StreamLease>(1, 1, 1, "revoked");
+    config.stream_lease->Revoke();
+    RODAK_CHECK_FALSE(fixture.service.Start(config, [](auto, auto&&) {}));
+    RODAK_CHECK_FALSE(fixture.display.capture_running);
+    RODAK_CHECK_EQ(host::LatestPeer(), nullptr);
+    fixture.Start();
+    fixture.Stop();
+}
+
+RODAK_TEST("preopen JPEG callback rejects its revoked original lease") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.lease->Revoke();
+    fixture.display.EmitJpeg({1, 2, 3}, 1, 100);
+    RODAK_CHECK(fixture.service.stop_requested_);
+    RODAK_CHECK(fixture.service.pending_jpeg_.empty());
+    host::OpenVideoChannel(fixture.peer, 45);
+    fixture.Stop();
+    RODAK_CHECK(host::SentFrames().empty());
+}
+
+RODAK_TEST("preopen retained JPEG is not sent when lease expires before channel open") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.display.EmitJpeg({2, 7, 1}, 1, 100);
+    RODAK_CHECK_FALSE(fixture.service.pending_jpeg_.empty());
+    fixture.lease->Revoke();
+    host::OpenVideoChannel(fixture.peer, 47);
+    host::RunPeerTasks();
+    const bool stopped = WaitForStopRequest(fixture.service);
+    fixture.Stop();
+    RODAK_CHECK(stopped);
+    RODAK_CHECK(host::SentFrames().empty());
+    RODAK_CHECK_EQ(fixture.service.stats_frames_sent_.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.pending_jpeg_.capacity(), 0u);
+}
+
+RODAK_TEST("JPEG WOULD_BLOCK retry obtains a fresh final lease admission") {
+    Fixture fixture;
+    fixture.Start();
+    const auto original = fixture.lease;
+    fixture.display.EmitJpeg({1, 2, 3}, 1, 100);
+    host::SetSendResult(ESP_PEER_ERR_WOULD_BLOCK);
+    host::OnNextSendReturn([original] { original->Revoke(); });
+    host::OpenVideoChannel(fixture.peer, 49);
+    host::RunPeerTasks();
+    const bool stopped = WaitForStopRequest(fixture.service);
+    fixture.Stop();
+    RODAK_CHECK(stopped);
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    CheckVideo(frames[0], fixture.peer, 49, {1, 2, 3}, ESP_PEER_ERR_WOULD_BLOCK);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_sent_.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.stats_chunks_sent_.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.stats_send_retries_.load(), 1u);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_dropped_.load(), 1u);
+}
+
+RODAK_TEST("JPEG next fragment rejects revoked lease while admitted SDK call may complete") {
+    Fixture fixture;
+    fixture.Start();
+    const auto original = fixture.lease;
+    fixture.display.EmitJpeg(std::vector<uint8_t>(20001, 3), 1, 100);
+    host::OnNextSendReturn([original] { original->Revoke(); });
+    host::OpenVideoChannel(fixture.peer, 51);
+    host::RunPeerTasks();
+    const bool stopped = WaitForStopRequest(fixture.service);
+    fixture.Stop();
+    RODAK_CHECK(stopped);
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 1u);
+    RODAK_CHECK_EQ(frames[0].peer, fixture.peer);
+    RODAK_CHECK_EQ(frames[0].stream_id, 51u);
+    RODAK_CHECK(frames[0].returned);
+    RODAK_CHECK_EQ(frames[0].result, ESP_PEER_ERR_NONE);
+    RODAK_CHECK_EQ(static_cast<uint8_t>(frames[0].payload[0]), 0u);
+    RODAK_CHECK_EQ(frames[0].payload.size(), 20005u);
+    RODAK_CHECK_EQ(fixture.service.stats_chunks_sent_.load(), 1u);
+    RODAK_CHECK_EQ(fixture.service.stats_bytes_sent_.load(), 20000u);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_sent_.load(), 0u);
+    RODAK_CHECK_EQ(fixture.service.stats_frames_dropped_.load(), 1u);
+}
+
+RODAK_TEST("production peer ACK rejects lease revoked while the API lock is unavailable") {
+    Fixture fixture;
+    fixture.Start(53);
+    fixture.Receive(1);
+    fixture.Reply(0);
+    std::unique_lock<std::recursive_mutex> lock(fixture.service.peer_api_mutex_);
+    const size_t reads = host::ClockReads();
+    host::RunPeerTasks();
+    const bool reached_peer = host::WaitForClockReads(reads + 3);
+    fixture.lease->Revoke();
+    lock.unlock();
+    const bool stopped = WaitForStopRequest(fixture.service);
+    fixture.Stop();
+    RODAK_CHECK(reached_peer);
+    RODAK_CHECK(stopped);
+    RODAK_CHECK(host::SentFrames().empty());
+}
+
+RODAK_TEST("display ACK revocation during successful JSON encoding prevents SDK entry") {
+    Fixture fixture;
+    fixture.Start(55);
+    fixture.Receive(1);
+    fixture.Reply(0);
+    RODAK_CHECK(fixture.lease->IsActive());
+    {
+        JsonLeaseRevocation revoke(fixture.lease);
+        fixture.service.FlushControlAcks();
+    }
+    RODAK_CHECK(json_revocation_allocations > 1u);
+    RODAK_CHECK_FALSE(fixture.lease->IsActive());
+    RODAK_CHECK(host::SentFrames().empty());
+    RODAK_CHECK(fixture.service.stop_requested_);
+    fixture.Stop();
 }

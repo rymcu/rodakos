@@ -15,6 +15,7 @@
 
 #include "esp_peer.h"
 #include "phone_os/display_control_ack_tracker.h"
+#include "phone_os/stream_lease.h"
 
 namespace rodakos {
 
@@ -34,6 +35,8 @@ public:
     using ControlCallback = std::function<void(const std::string& payload, ControlReply reply)>;
 
     struct Config {
+        // Use the caller's revocable stream; Start creates no implicit grant.
+        StreamLeasePtr stream_lease;
         int width = 320;
         int height = 240;
         uint8_t fps = 5;

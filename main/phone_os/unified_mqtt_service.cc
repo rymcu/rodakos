@@ -1783,6 +1783,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                 if (display) {
                     WebRtcDisplayService::Config config;
                     configure(config, 20000);
+                    config.stream_lease = lease;
                     auto on_control = [this, lease](const std::string& data, DisplayControlReply reply) {
                         static std::atomic<uint64_t> next_callback{0};
                         const uint64_t callback_no = next_callback.fetch_add(1, std::memory_order_relaxed) + 1;
