@@ -6,6 +6,13 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
+031 source now migrates Assistant I/O, frontend Capture and wake supervisor to the shared
+external task retirement mechanism, preserving restartable Deinit and per-operation stop
+completion. Local host verification and ESP-IDF 6.0.2 build pass; main is 7,148,928 B.
+This source has not been packaged or deployed, and actual device Deinit of the three voice
+tasks remains unverified. See [031 voice contract and software evidence](voice-task-retirement.md).
+The following 030 record retains its original installed identity and results.
+
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
 PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,
@@ -15,8 +22,9 @@ flow. Closed normal/matrix windows record seven correlated `stopped` receipts, a
 local-Camera/remote-Display order cells and one remote-pointer Camera Home action. Nine serial
 requests each have admission and completion evidence; all Stops have more than 60 seconds of
 raw serial coverage. Camera quality and physical GT911 touch are not accepted. The same-boot
-internal minimum is 359 B; resource/production **NO_GO**, three voice self-delete paths and
-the unproven cause of 028's Home rejection remain. See [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030)
+internal minimum is 359 B; resource/production **NO_GO** and the unproven cause of 028's Home
+rejection remain. Its three voice self-delete paths are addressed only by the later, undeployed
+031 source. See [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030)
 and [task retirement and deferred navigation](task-retirement.md). The following 029/028 records
 remain separate historical evidence.
 
@@ -303,7 +311,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | Deployed 030 has seven correlated Stops, four finite local-Camera/remote-Display order cells and one remote-pointer Home check; each Stop has over 60 seconds of raw serial coverage. The same-boot internal minimum is 359 B; physical full-resource return, Camera quality, GT911 touch, remaining voice paths, arbitrary OOM, DMA/IRQ/cache-off, media/audio/TLS concurrency and eight-hour soak remain open. Preserve 029's unexercised AES failure branch, 028's Home enqueue failure and 027's AES/TLS/log stall as distinct history; do not compare minima across boots. Resource/production **NO_GO** remains | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030), [029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
+| Resource recovery | Deployed 030 has seven correlated Stops, four finite local-Camera/remote-Display order cells and one remote-pointer Home check; each Stop has over 60 seconds of raw serial coverage. The same-boot internal minimum is 359 B; physical full-resource return, Camera quality, GT911 touch, actual voice Deinit on identified firmware, arbitrary OOM, DMA/IRQ/cache-off, media/audio/TLS concurrency and eight-hour soak remain open. Preserve 029's unexercised AES failure branch, 028's Home enqueue failure and 027's AES/TLS/log stall as distinct history; do not compare minima across boots. Resource/production **NO_GO** remains | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [031 voice software](voice-task-retirement.md), [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030), [029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

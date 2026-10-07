@@ -1,0 +1,99 @@
+# 031 语音任务回收合同与软件验证
+
+更新：2026-10-08。031 把 Assistant I/O、前端采集和唤醒 supervisor 的三个 WithCaps
+任务接入 [030 共享回收器](task-retirement.md)。本切片已完成宿主软件回归及本地 ESP-IDF
+6.0.2 构建；尚未构包、部署或取得这三个任务实际 Deinit 的设备证据。
+
+031 源码提交：[`7ad01b7452102fd1a6a2f64d4102ae42031509b2`](https://github.com/rymcu/rodakos/commit/7ad01b7452102fd1a6a2f64d4102ae42031509b2)。
+
+设备 `44:1b:f6:c3:b4:30` 的最后已记录部署仍是源码 `34c9e645`、包
+`20261008-055334` / `task-retirement-030` / `0.1.2-dev.1`。031 不改写该包的五条视频路径、
+7 条关联停止、359 B 同 boot internal 最低值或资源/生产 **NO_GO** 结论。
+源码与部署身份分别以 [release readiness](ota-release-readiness.md) 的对应记录为准。
+
+## 修复的退出边界
+
+原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本
+IDF 的自删除仍需创建清理任务；低内存时可能因创建失败而 abort。清空 handle 不表示
+任务栈已释放，也不保证 C++ 局部对象执行析构。CaptureTask 的函数级
+`std::vector<int16_t> afe_feed_buffer` 因此不能依赖 self-delete 释放容量。
+
+| 服务 | 回收任务 | 保持的栈与调度设置 |
+| --- | --- | --- |
+| `VoiceAssistantService` | `assistant_io` | 49152 B PSRAM，优先级 4，双核时 core 1 |
+| `VoiceAudioFrontend` | `voice_frontend` | 8192 B PSRAM，优先级 4，双核时 core 0 |
+| `VoiceWakeService` | `voice_wake` | 4096 B PSRAM，优先级 2，双核时 core 0 |
+
+每个服务持有自己的 owner 与最近一代 ticket。创建前保留记录，保存 ticket，再通过共享
+入口创建任务并发布 handle；创建失败取消新记录并恢复上一张 ticket。业务 handle 只表达
+活动状态，保留 ticket 不表示任务仍在工作。
+
+停止在服务锁内捕获精确票据，锁外等待。共享入口等完整业务函数及局部析构返回后才发布
+finished，再由外部 Stop 或常驻 Pump 调用真实 IDF WithCaps 删除路径。外部删除等待跨核
+收敛，删除任务并释放 TCB/栈；不会在退出时申请新回收记录或创建临时清理任务。
+
+普通 Deinit 保留重新 Init 的能力。只有析构执行 `Close → Deinit → Drain`，等所有所属代
+回收后才销毁服务锁和状态；不能把永久关闭 owner 的 Drain 放进每次普通 Deinit。
+自身任务调用 Stop 不等待自己，析构自身 owner 则属于无效生命周期。
+
+## 服务特有顺序
+
+Assistant 先停止录音输入，关闭 transport 并等待音频通道关闭，再 Join 原代 I/O；该顺序
+允许阻塞在重连 OpenAudioChannel 的任务退出。并发 Stop 的早退路径也等待捕获的 ticket，
+cleanup 与 Deinit 等待固定在各自操作代号，不追等随后启动的会话。业务会话 generation
+与任务回收 generation 是两种不同的标识。
+
+Frontend 的普通 Stop/StopListening 只停止录音或监听模式，常驻采集任务在 Deinit 才退出。
+CaptureTask 正常返回，使 `afe_feed_buffer` 自然析构；Deinit 等这次物理任务回收完成后
+才释放模型。等待通知 callback 结束仍在 lifecycle 锁外，允许 callback 重入 Stop/Deinit。
+
+AFE 保持原顺序：停止新 feed，等待正在执行的 feed 返回且 fetch 继续排空，随后停止 fetch，
+从外部删除 fetch 任务，最后 destroy AFE。`afe_fetch` 已使用外部 WithCaps 删除，不属于
+本次三条 self-delete 迁移。`wake_notify` 保持普通 internal 栈任务，其 callback 可能访问
+NVS，不迁至 PSRAM；本切片不扩展其 callback 局部析构或任意异常的保证。
+
+Wake 的 SetEnabled(false) 保留 supervisor，以便禁用时继续处理身份到期；Stop/Deinit
+才请求 supervisor 退出。并发 Stop/Deinit 可升级正在执行的 Disable，由同一 stop epoch
+完成清理并发布完成代号；外部等待者先 Join 原 ticket，再等待该 epoch。自身 Stop 及同一
+清理任务上的 Assistant 同步回调不等待自己，旧任务逻辑退出前也不能被 Start 复活。
+
+上述规则不承诺任意用户回调可重入：Wake 仍在普通 mutex 内调用部分 runtime、clock 和
+GetState 路径；Assistant 同任务递归 Deinit 也不属于本切片支持的调用合同。
+
+## 软件证据
+
+| 验证目标 | 已记录结果 | 主要边界 |
+| --- | --- | --- |
+| [Assistant 实际服务](../tests/voice_volume_service/README.md) | Debug 24、ASan/UBSan/leak 24；6 个完整 TU 变异负控及旧完整源/头红例 | I/O 尾部窗口、并发停止、原代等待、Deinit 重启及代号替换；transport/codec 仍为替身 |
+| [Frontend 实际服务](../tests/voice_audio_frontend_identity/README.md) | Debug 13、ASan/UBSan/leak 13；旧完整源/头与跳过 vector 析构两个负控 | 实际 CaptureTask 至少一次 MR feed，观察真实 vector 分配在任务删除前释放；覆盖 callback 重入与 lifecycle 锁顺序 |
+| [Wake 实际服务](../tests/voice_wake_service/README.md) | Debug 35、ASan/UBSan/leak 35；旧完整源/头红例 | Stop/Disable/Deinit 合并、旧代等待、自身停止、失败创建与身份到期 |
+| [身份集成](../tests/voice_identity_integration/README.md) | Debug 4、ASan/UBSan/leak 4 | MQTT/身份链连接真实 Wake 服务；硬件、音频和 NVS 为替身 |
+| [共享回收器](../tests/task_retirement/README.md) | Debug 14 CTest、ASan/UBSan/leak 13 CTest | 新增普通任务通知/外删宿主能力；原 6 个完整 TU 变异未另跑 sanitizer |
+| 共享 fixture 兼容检查 | Camera 7、Display 1、Peer 1 CTest；MQTT 默认分支 5 CTest | 兼容回归保持原场景范围，MQTT 既有负控未重跑 |
+
+测试直接编译完整生产 TU 和固定 ESP-IDF 6.0.2 的 WithCaps 函数链，替换调度器、核查询、
+底层分配与硬件依赖。host 外部删除实际 join worker 后才允许取出并释放模拟 TCB/stack。
+普通通知任务也运行真实宿主线程，不再使用“创建即悬停”的空对象。
+
+Frontend 在 AFE feed 记录局部 vector 的实际地址，通过链接器包装 C++ delete 观察释放，
+仍调用原始 delete。旧源码及配套头文件都冻结到 `34c9e645`；legacy 宏只隔离依赖新字段的
+绿色测试，不改变旧业务体。红例必须在真实 feed 后出现指定 cleanup-task 创建拒绝双标记
+及 SIGABRT，且不得出现 vector 释放或无关线程析构终止标记。跳过 vector 析构的变体则必须
+精确触发“任务删除前缓冲区已释放”断言。超时、编译失败及任意非零退出均不算检出。
+
+本地 ESP-IDF 6.0.2 构建的主应用为 **7,148,928 B**，SHA-256
+`cd3942e01f201569534a0deab7ed0b86680ce1094894986fa0903dd832fd5c07`。
+编译前后核对的生产输入未变化；这仅是本地构建产物，不是签名包、已安装固件或新设备证据。
+
+## 仍未关闭的门禁
+
+031 尚未构包部署，也未在设备上观察 assistant、capture、wake 三条完整 Deinit 退出。
+普通串口唤醒/停止会话不能自动等同于常驻 Capture 与 Wake supervisor 的 Deinit 验收。
+旧包的 COM3、MQTT、音量回执、视频停止及 Home 证据保持各自身份。
+
+不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
+安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
+没有硬性延迟期限；Capture 内存分配异常等业务失败也不属于本轮已验证的恢复保证。
+
+资源和生产发布继续 **NO_GO**。031 软件记录与
+[030 已部署视频证据](task-retirement.md#030-制品与有限设备证据) 分开保留。

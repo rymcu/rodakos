@@ -4,6 +4,9 @@
 有限正常视频、四格启停顺序与远程 pointer Home 证据见下文。028 的 Home `queued:false`、
 027 的停顿及资源、并发、质量和长稳门禁继续保留，不追溯改写历史结果。
 
+后续 [031 语音回收](voice-task-retirement.md) 已在本地源码中迁移三个语音任务并完成软件与
+构建验证，尚未构包部署。本页的 030 软件计数、五条视频范围和有限设备证据保持原身份。
+
 ## 业务结束与任务回收
 
 ESP-IDF 6.0.2 的 `vTaskDeleteWithCaps(nullptr)` 自删除路径会创建临时
@@ -63,8 +66,9 @@ stateDiagram-v2
 两种 peer 自主发生 SDK 错误或断连后，即使没有下一次 Start/Stop，常驻 Pump 也会回收完成的任务。
 `stopped` 日志仍先于完整 body 返回，不能单凭该日志确认任务栈已释放。
 
-本次只有上述 **5 条视频任务路径**。`VoiceWakeService`、`VoiceAudioFrontend`、
-`VoiceAssistantService` 的 3 条 WithCaps 自删除路径仍未迁移。028 的底层 DVP worker 修复保持
+030 只有上述 **5 条视频任务路径**。`VoiceWakeService`、`VoiceAudioFrontend`、
+`VoiceAssistantService` 的 3 条 WithCaps 自删除当时未迁移，后续源码范围见
+[031 合同](voice-task-retirement.md)。028 的底层 DVP worker 修复保持
 原有范围；030 不改变视频格式、栈容量/能力、优先级、核心固定规则或普通信令合同。
 
 ## 串口与 Camera 的预建导航队列
@@ -156,5 +160,6 @@ authority v3 以及 029 AES/Camera 生成补丁保持。目标回收池申请 44
 [030 release readiness](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030)；
 逐格截图和时间边界见 [Rodak 跨仓详细记录](https://github.com/rymcu/rodak/blob/master/docs/video-task-retirement-verification.md)。
 暗 Camera 图不作为成像质量通过；软件回收与 `physicalVerified=false` 回执不证明全部物理资源归还。
-voice 剩余 3 条迁移、任意 OOM、DMA/IRQ/cache-off、音频/SD/TLS 并发及长稳仍未关闭，
+该 030 包中的 voice 仍未迁移；031 仅提供后续软件记录，未补足设备退出验收。
+任意 OOM、DMA/IRQ/cache-off、音频/SD/TLS 并发及长稳仍未关闭，
 资源和生产发布保持 **NO_GO**。

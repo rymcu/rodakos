@@ -234,7 +234,7 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
 - WakeOnLanService creates a UDP socket only for a user-requested wake, requires active WiFi, and
   leaves device-list persistence to the Wake app's versioned `wol/devices` NVS document.
 
-### Video task retirement
+### Video and voice task retirement
 
 The five Camera Preview/JPEG, Display JPEG and Camera/Display peer task paths use
 `task-retirement.{h,cc}`. A bounded, lazily allocated PSRAM registry owns numeric
@@ -250,9 +250,15 @@ The external reaper calls the pinned IDF WithCaps delete path, which suspends th
 worker, waits for all cores to leave it, then frees its TCB/stack. A periodic call in
 the permanent main loop also reclaims autonomous peer failures. It does not create
 an exit-time cleanup task or allocate a retirement record at exit. This is not a
-deadline, zero-cost or whole-device OOM guarantee. Three voice WithCaps self-delete
-paths remain outside this migration. See [030 software contract](task-retirement.md)
-for scope, complete-source host fixtures and the still-open hardware gates.
+deadline, zero-cost or whole-device OOM guarantee. The 031 source also uses this registry
+for Assistant I/O, frontend Capture and wake supervisor. Ordinary voice Deinit remains
+restartable; only service destruction closes and drains its owner. Capture returns through
+its vector destructors before retirement, Assistant closes its transport before joining,
+and Wake coalesces Stop/Disable/Deinit completion by operation epoch. AFE fetch retains its
+existing external delete and wake notification retains its ordinary internal stack.
+See [030 video contract](task-retirement.md) and [031 voice contract](voice-task-retirement.md).
+The deployed device remains on 030; 031 has local software/build evidence but no package or
+hardware acceptance of the three voice Deinit paths.
 
 ### Deferred serial and Camera navigation
 
@@ -293,6 +299,7 @@ and [navigation host coverage](../tests/navigation_ui/README.md).
 - [Rodak AIoT v1 contract](rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](voice-assistant.md)
+- [Voice task retirement and software evidence](voice-task-retirement.md)
 - [Serial provisioning](serial-provisioning.md)
 - [Video task retirement and deferred navigation](task-retirement.md)
 - [Rodak MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md)

@@ -19,7 +19,9 @@ The latest recorded device package is `20261008-055334`, built from
 NVS/binding/token version 4. Guarded boot, closed normal/matrix windows, seven correlated Stops
 and the remote-pointer Home observation are recorded separately in
 [030](#2026-10-08-video-task-retirement-and-navigation-030). Resource/production **NO_GO**,
-Camera quality and three voice self-delete paths remain open. Historical
+Camera quality and the three voice exits on hardware remain open. The later
+[031 software slice](#2026-10-08-voice-task-retirement-031) migrates those exits in source,
+with local tests/build only and no new package or deployment. Historical
 [029](#2026-10-08-aes-dma-allocation-cleanup-029),
 [028](#2026-10-08-cooperative-dvp-worker-validation-028) and
 [027](#2026-10-08-candidate-capacity-and-camera-failure-027) retain their own identities and limits. Exact Stop evidence remains in
@@ -1868,3 +1870,32 @@ arbitrary OOM recovery, DMA/IRQ/cache-off, audio/SD/TLS concurrency, Camera qual
 GT911 touch, eight-hour soak or production-root gate is closed. Focused software checks and
 these finite device observations leave resource and production release **NO_GO**; they neither
 diagnose the original 028 Home failure nor rewrite any 027/028/029 result.
+
+## 2026-10-08 Voice task retirement 031
+
+Source `7ad01b7452102fd1a6a2f64d4102ae42031509b2` moves Assistant I/O, frontend Capture and
+wake supervisor to the existing external WithCaps retirement mechanism. Capture returns through
+its function-local AFE vector destructor; Stop/Deinit retain the captured task or operation
+generation. Ordinary Deinit remains restartable. See the [031 contract](voice-task-retirement.md).
+
+Local production-TU checks pass: Assistant 24, Capture 13 and Wake 35 cases in both Debug
+and ASan/UBSan/leak; identity integration passes four cases in both modes. Three complete
+legacy source/header pairs trigger the expected real IDF cleanup-creation rejection and SIGABRT.
+Six Assistant mutations and the skipped-vector-destructor mutation are independently detected.
+The shared fixture passes 14 Debug and 13 sanitizer CTests; compatibility reruns pass Camera
+7, Display 1, peer/ACK 1 and default MQTT 5 CTests. These counts have different suite units
+and are not a single whole-repository test total.
+
+ESP-IDF 6.0.2 local build succeeds: main **7,148,928 B**, SHA-256
+`cd3942e01f201569534a0deab7ed0b86680ce1094894986fa0903dd832fd5c07`; ELF SHA-256
+`92eefcb8402b793ffa19a421733926f4ae877b3bacb4ec99ca0af3ad92b2c203`.
+The eight production source/header inputs match their build-time hashes. This image has not
+been packaged or flashed; the installed package remains 030 `20261008-055334`.
+
+Evidence is under `D:/workspace/rodak/.codex-temp/voice-retirement-031/`, including
+`assistant/sealed-final/software-verification.json`, `frontend-evidence/review.json`,
+`wake/verification.json`, and `idf-build-result.json`. No Actions query or repair was performed.
+
+Actual voice-task Deinit, complete task/stack/hardware resource return, heap headroom,
+audio/TLS concurrency, acoustic quality, arbitrary OOM, physical power cuts, production root
+and eight-hour soak remain open. Resource and production release remain **NO_GO**.

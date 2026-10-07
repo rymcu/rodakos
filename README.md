@@ -10,6 +10,9 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 The latest recorded COM3 deployment is package `20261008-055334` from `34c9e645`, preserving
 NVS and the original binding. Its bounded 030 evidence is recorded in
 [release readiness](docs/ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030).
+The current 031 source also migrates three voice workers to external retirement, with local
+host tests and an ESP-IDF build; it has not been packaged, deployed or accepted on hardware.
+See [voice task retirement](docs/voice-task-retirement.md).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -36,8 +39,10 @@ NVS and the original binding. Its bounded 030 evidence is recorded in
   destructors return, avoiding IDF's exit-time cleanup-task creation. Serial app launch and Camera
   Home use a bounded precreated queue. The deployed 030 package has seven correlated Stops,
   four bounded local-Camera/remote-Display order checks and one remote-pointer Home check.
-  The same-boot internal minimum is 359 B; three voice self-delete paths, image quality,
-  resource recovery and production release remain open. See [task retirement](docs/task-retirement.md).
+  The same-boot internal minimum is 359 B; image quality, resource recovery and production
+  release remain open. The three voice exits are migrated in 031 source with their device
+  Deinit gate still open. See [task retirement](docs/task-retirement.md) and
+  [voice task retirement](docs/voice-task-retirement.md).
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
@@ -289,6 +294,7 @@ Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously cau
 - [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
 - [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](docs/voice-assistant.md)
+- [Voice task retirement and software evidence](docs/voice-task-retirement.md)
 - [Music scanning, playback errors and retry](docs/music-playback.md)
 - [Photos/Files scanning, image errors and retry](docs/media-browsing.md)
 - [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
