@@ -108,7 +108,8 @@ int WebRtcDisplayService::PumpPeer(esp_peer_handle_t peer) {
 bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_signaling,
                                 StateCallback on_state, ControlCallback on_control) {
     if (display_service_ == nullptr || !on_signaling || config.width <= 0 || config.height <= 0 ||
-        config.fps == 0 || config.fps > 30 || config.chunk_size == 0) {
+        config.fps == 0 || config.fps > 30 || config.chunk_size == 0 ||
+        !config.stream_lease || !config.stream_lease->IsActive()) {
         return false;
     }
 
@@ -165,6 +166,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         state_callback_ = {};
         control_callback_ = {};
         control_acks_->Close();
+        config_.stream_lease.reset();
         return false;
     }
 
@@ -200,6 +202,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         control_callback_ = {};
         control_acks_->Close();
         peer_ = nullptr;
+        config_.stream_lease.reset();
         return false;
     }
     const int open_ret = esp_peer_open(&peer_cfg, ops, &peer_);
@@ -216,6 +219,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         control_callback_ = {};
         control_acks_->Close();
         peer_ = nullptr;
+        config_.stream_lease.reset();
         return false;
     }
 
@@ -231,6 +235,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         state_callback_ = {};
         control_callback_ = {};
         control_acks_->Close();
+        config_.stream_lease.reset();
         return false;
     }
 
@@ -256,6 +261,7 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
         state_callback_ = {};
         control_callback_ = {};
         control_acks_->Close();
+        config_.stream_lease.reset();
         return false;
     }
     peer_task_ = created_peer_task;
@@ -285,6 +291,7 @@ void WebRtcDisplayService::Stop() {
             terminal_state_ = ESP_PEER_STATE_CLOSED;
             stop_requested_ = true;
         }
+        if (config_.stream_lease) config_.stream_lease->Revoke();
         control_acks_->Close();
         task = peer_task_;
     }
@@ -314,6 +321,7 @@ void WebRtcDisplayService::RequestStop(esp_peer_state_t state) {
         terminal_state_ = state;
         stop_requested_ = true;
     }
+    if (config_.stream_lease) config_.stream_lease->Revoke();
     channel_open_ = false;
     control_acks_->Close();
 }
@@ -321,6 +329,7 @@ void WebRtcDisplayService::RequestStop(esp_peer_state_t state) {
 void WebRtcDisplayService::FinishStop() {
     display_service_->StopJpegStream();
     esp_peer_handle_t peer = nullptr;
+    std::vector<uint8_t> pending_jpeg_to_release;
     StateCallback callback;
     ControlCallback control_callback;
     esp_peer_state_t terminal_state = ESP_PEER_STATE_CLOSED;
@@ -336,7 +345,7 @@ void WebRtcDisplayService::FinishStop() {
             video_stream_id_ = 0;
             control_stream_id_ = 0;
             control_channel_open_ = false;
-            pending_jpeg_.clear();
+            pending_jpeg_to_release.swap(pending_jpeg_);
             pending_jpeg_sequence_ = 0;
             pending_jpeg_timestamp_us_ = 0;
             control_acks_->Close();
@@ -351,6 +360,9 @@ void WebRtcDisplayService::FinishStop() {
             esp_peer_close(peer);
         }
     }
+    // Return the compact JPEG capacity before publishing task completion, with
+    // neither the service mutex nor the peer API mutex held during deallocation.
+    std::vector<uint8_t>().swap(pending_jpeg_to_release);
     display_service_->StopCapture();
     if (control_callback) {
         control_callback(std::string(), [](bool, const char*) {});
@@ -358,6 +370,7 @@ void WebRtcDisplayService::FinishStop() {
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         running_ = false;
+        config_.stream_lease.reset();
         // Publish only after resources are released. Keeping the service lock
         // prevents a new Start from racing its predecessor's terminal callback.
         if (callback) {
@@ -557,12 +570,14 @@ bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& a
     std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
     esp_peer_handle_t peer = nullptr;
     uint16_t stream_id = 0;
+    StreamLeasePtr lease;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (stop_requested_ || peer_ == nullptr || !control_channel_open_ ||
             !control_acks_->IsCurrent(ack.instance)) return false;
         peer = peer_;
         stream_id = control_stream_id_;
+        lease = config_.stream_lease;
     }
     cJSON* response_json = cJSON_CreateObject();
     const bool complete = response_json && cJSON_AddNumberToObject(response_json, "version", 1) &&
@@ -580,8 +595,19 @@ bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& a
     response.stream_id = stream_id;
     response.data = reinterpret_cast<uint8_t*>(encoded);
     response.size = static_cast<int>(std::strlen(encoded));
-    const int result = esp_peer_send_data(peer, &response);
+    int result = ESP_PEER_ERR_WRONG_STATE;
+    bool current = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        current = !stop_requested_ && peer_ == peer && control_channel_open_ &&
+            control_stream_id_ == stream_id && config_.stream_lease == lease &&
+            control_acks_->IsCurrent(ack.instance);
+    }
+    const bool admitted = current && lease && lease->TryApply([&] {
+        result = esp_peer_send_data(peer, &response);
+    });
     cJSON_free(encoded);
+    if (!admitted) RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
     if (error) *error = result;
     return result == ESP_PEER_ERR_NONE;
 }
@@ -751,20 +777,25 @@ void WebRtcDisplayService::HandleJpeg(std::vector<uint8_t>&& jpeg, uint32_t sequ
     }
     stats_frames_received_.fetch_add(1, std::memory_order_relaxed);
     bool accepted = false;
+    bool expired = false;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
-        if (running_ && channel_open_ && !stop_requested_) {
-            if (!pending_jpeg_.empty()) {
-                // JPEG worker may produce faster than SCTP can drain. Drop the
-                // older pending frame before replacing it with the latest one.
-                stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
-            }
-            pending_jpeg_ = std::move(jpeg);
-            pending_jpeg_sequence_ = sequence;
-            pending_jpeg_timestamp_us_ = timestamp_us;
-            accepted = true;
+        // Initial capture may precede DCEP; the peer task waits for video open.
+        if (running_ && !stop_requested_) {
+            const auto& lease = config_.stream_lease;
+            accepted = lease && lease->TryApply([&] {
+                if (!pending_jpeg_.empty()) {
+                    // Replace the previous pending JPEG rather than queue it.
+                    stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+                }
+                pending_jpeg_ = std::move(jpeg);
+                pending_jpeg_sequence_ = sequence;
+                pending_jpeg_timestamp_us_ = timestamp_us;
+            });
+            expired = !accepted;
         }
     }
+    if (expired) RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
     if (!accepted) {
         stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
         MaybeLogTransportStats();
@@ -775,6 +806,8 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
     ScopedDuration timing{*this, &LoopDiagnostics::jpeg};
     const int64_t send_started_at_us = esp_timer_get_time();
     esp_peer_handle_t peer = nullptr;
+    StreamLeasePtr lease;
+    uint16_t stream_id = 0;
     size_t chunk_size = kDefaultChunkSize;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -784,6 +817,8 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
             return false;
         }
         peer = peer_;
+        lease = config_.stream_lease;
+        stream_id = video_stream_id_;
         chunk_size = config_.chunk_size == 0
                          ? kDefaultChunkSize
                          : std::min<size_t>(config_.chunk_size, kMaxChunkSize);
@@ -840,15 +875,19 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
                 }
                 {
                     std::lock_guard<std::recursive_mutex> lock(mutex_);
-                    if (stop_requested_ || !channel_open_ || peer_ == nullptr) {
+                    if (stop_requested_ || !channel_open_ || peer_ == nullptr ||
+                        peer_ != peer || video_stream_id_ != stream_id || config_.stream_lease != lease) {
                         stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
                         MaybeLogTransportStats();
                         return false;
                     }
-                    peer = peer_;
-                    frame.stream_id = video_stream_id_;
+                    frame.stream_id = stream_id;
                 }
-                ret = esp_peer_send_data(peer, &frame);
+                if (!lease || !lease->TryApply([&] { ret = esp_peer_send_data(peer, &frame); })) {
+                    stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+                    RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
+                    return false;
+                }
             }
             if (ret == ESP_PEER_ERR_NONE) {
                 stats_chunks_sent_.fetch_add(1, std::memory_order_relaxed);

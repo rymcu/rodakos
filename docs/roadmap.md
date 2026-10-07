@@ -1,11 +1,33 @@
 # RodakOS Roadmap
 
 The trusted-server transport history starts from `7101282`.
-The current device runs source `6cb19f5bd3b0a50e30d6047c7edfc5673be876bc`,
-package 021 (`20261007-134645`, task `media-jpeg-psram-021`). Build, final ELF audit,
-VerifyOnly and NVS-preserving flash/boot checks passed with the original signing root,
-immutable assets and binding/tokenVersion=4. Scoped screen JPEG allocation now uses PSRAM;
-the first same-frame open sample has no net DMA loss, and screen-first Camera starts with
+The current device runs source `8238a5022724f1562c22bae6c3669717ab988a4b`,
+package 023 (`20261007-164049`, task `media-static-first-frame-023`). NVS-preserving flash
+and boot checks retain the original ID, bound state and tokenVersion=4. With the same static
+Photos page and configured 2.5-second offer delay, two sessions each receive and render one
+320×240 frame, 39.9/77.0 ms after video open. The 022 baseline opened both channels but
+dropped its sole source frame and reached the first-frame timeout. Normal Stop separates
+the two 023 sessions; remote control remains disabled and no JTAG is attached. After final
+screen stop/Home, logs continue for 323.086 s with no detected reset/panic markers. Fifteen
+`MQTT message dropped: worker queue full or allocation failed` messages remain. This closes the measured static
+first-frame regression, not Camera teardown, resource pressure, late control or soak.
+Directed WebRTC 45-case/5-negative and MQTT 104-case checks pass. The complete 023 host
+regression totals 37 unique suites / 92 CTests, 107 Python cases and 21 separately counted
+CI-helper cases; the same-source final ACK ASan suite is reused without double-counting.
+See [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023).
+
+The preceding package 022 (`dc847b2`, `20261007-150728`) passed NVS-preserving flash
+and Recovery/main/OTA-confirmation/Home checks with the original signing root,
+immutable assets and binding/tokenVersion=4. Its two bounded Camera runs exit normally
+after 28.300 s / 380 frames and 88.744 s / 1,171 frames. The first run's later JTAG capture
+has all 24 committed teardown marks, but subsequent halt/resume enters cache-error panic
+paths; final core `running` states do not prove healthy recovery. An empty second-window
+RTS attempt is not another Camera reproduction. A standard USB ROM/stub reset restores
+operation without writing Flash. The third window has no JTAG attach and continues logging
+for 147.311 s after the Home command following screen stop, with fresh MQTT evidence.
+
+Preserve the preceding 021 failure: scoped screen JPEG allocation uses PSRAM;
+its first same-frame open sample has no net DMA loss, and screen-first Camera starts with
 a 16,384-byte largest DMA block. Camera exit then stalls at STREAMOFF begin for at least
 127.583 seconds and requires a controlled RTS reset. In the separate recovery window,
 A3 decodes twice, but 3.2–3.5-second control replies still time out and are rejected;
@@ -14,7 +36,9 @@ internal largest is 8,192 bytes, with recovery-boot historical minimum 651 bytes
 This bounded allocation improvement does not fix Camera STREAMOFF, pre-callback delivery
 latency or the static-page first-frame gate; preserve 018/020's independent failures.
 Release remains **NO_GO**; exact hashes, host checks and limits are in
-[021 release evidence](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021)
+[023 release evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023),
+[022 release evidence](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022),
+[021 failure history](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021)
 and [media verification](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md).
 Earlier network packages retain their own evidence identity.
 
@@ -22,9 +46,12 @@ Earlier network packages retain their own evidence identity.
 overlays for the actual extended-DVP driver and a mandatory final-ELF gate.
 Local host validation (37 suites / 91 CTests) and ESP-IDF 6.0.2 Build3 pass; the 536-byte DRAM recorder has
 one native CAS and no calls or backward branches. This is observation support,
-not a lifecycle repair. The device still runs 021: Windows MI02 lacks its debug
-interface GUID, so live DRAM/PC capture is pending administrator driver repair
-and a successful capability check. See [Camera diagnostics](camera-teardown-diagnostics.md).
+not a lifecycle repair; two normal exits do not resolve 021's intermittent stall.
+Administrator driver installation now exposes MI02's debug interface and the exact uppercase
+serial passes the capability probe. The historical candidate `/kp` signature-policy check
+still failed; installation success is not WHQL/kernel-policy acceptance. Do not repeat JTAG
+on healthy windows or use debugger-perturbed operation as an unmodified baseline.
+See [Camera diagnostics](camera-teardown-diagnostics.md).
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
@@ -201,13 +228,13 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 021 scoped JPEG open shows no net DMA-free decrease in its first same-frame sample; screen-first Camera starts at DMA largest 16,384 B. Exit then stalls at STREAMOFF begin for 127.583 s and needs controlled reset. Final recovery-window internal largest is 8,192 B, with historical minimum 651 B; the failed first boot reached 59 B. These are separate boot histories. Camera STREAMOFF, arbitrary image/camera/voice/MQTT OOM, full LVGL exhaustion, resource return and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [021 evidence](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021) |
+| Resource recovery | 023 returns pending JPEG capacity before Stop completes; its finite Home observation has internal largest 8,192 B and boot minimum 2,311 B, with MQTT queue/allocation errors still present. This is not a controlled heap comparison with 022. Keep 022's two normal Camera exits and separate post-JTAG panic, and 021's 127.583 s STREAMOFF stall/reset. Camera root cause, arbitrary OOM, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023), [022 evidence](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
-| Media/storage | 021 post-reset A3 decodes twice (188/187 ms); held-down cancellation causes no extra load, but a later reenabled Retry still times out and is rejected. The first-window Camera→Photos switch stalls at STREAMOFF; Photos initialization does not prove Camera exit. Static-page first-frame availability, SD removal/slow cards, physical touch, arbitrary OOM, concurrency and soak remain open | [Media browsing](media-browsing.md), [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [Media save](media-save.md) |
+| Media/storage | 023 passes two static Photos first-frame sessions with a 2.5 s offer delay and no extra source frame. Broader low-memory/network first-frame recovery remains open. Preserve 022's finite Camera exits and 021's A3 decode/cancellation evidence and later timed-out Retry; these are different gates. SD removal/slow cards, physical touch, arbitrary OOM, concurrency and soak remain open | [Media browsing](media-browsing.md), [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023), [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [Media save](media-save.md) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
 | Ordinary commands | 021 retains the 019 cancelled-gesture correction: held down128 is accepted, up129 is rejected after cancellation, with no extra PNG load. Reenable131 does not recover the next Retry: down132/up133 still arrive after 3.197/3.193 s and are rejected. 020 had independently isolated 7.9-second delays before application callbacks. UDP/SCTP delivery, abnormal stream cleanup, reconnect/resource contention and GT911 physical touch remain open; keep timeout, grants and reliable ordering | [Command boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary), [021 evidence](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021), [020 evidence](ota-release-readiness.md#2026-10-07-peer-timing-diagnostics-020) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |

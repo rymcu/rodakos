@@ -3,6 +3,7 @@
 #include "esp_peer_default.h"
 
 #include <chrono>
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -32,6 +33,7 @@ bool release_send = false;
 bool close_overlap = false;
 bool cleanup_entered = false;
 std::atomic<int> send_result{ESP_PEER_ERR_NONE};
+std::function<void()> next_send_return;
 std::atomic<int64_t> clock_offset_us{0};
 size_t main_loop_count = 0;
 size_t clock_reads = 0;
@@ -56,6 +58,7 @@ void Reset() {
     block_next_send = send_blocked = release_send = close_overlap = false;
     cleanup_entered = false;
     send_result = open_result = ESP_PEER_ERR_NONE;
+    next_send_return = {};
     clock_offset_us = 0;
     main_loop_count = 0;
     clock_reads = 0;
@@ -71,6 +74,13 @@ void OpenControlChannel(esp_peer_handle_t peer, uint16_t stream_id) {
     auto* value = static_cast<Peer*>(peer);
     esp_peer_data_channel_info_t channel{};
     channel.label = const_cast<char*>("screen-control");
+    channel.stream_id = stream_id;
+    value->config.on_channel_open(&channel, value->config.ctx);
+}
+void OpenVideoChannel(esp_peer_handle_t peer, uint16_t stream_id) {
+    auto* value = static_cast<Peer*>(peer);
+    esp_peer_data_channel_info_t channel{};
+    channel.label = const_cast<char*>("screen-jpeg");
     channel.stream_id = stream_id;
     value->config.on_channel_open(&channel, value->config.ctx);
 }
@@ -97,6 +107,24 @@ void CloseControlChannel(esp_peer_handle_t peer, uint16_t stream_id) {
 std::vector<SentFrame> SentFrames() {
     std::lock_guard<std::mutex> lock(host_mutex);
     return sent_frames;
+}
+bool WaitForSendReturns(size_t minimum) {
+    std::unique_lock<std::mutex> lock(host_mutex);
+    return host_condition.wait_for(lock, std::chrono::seconds(2), [&] {
+        return static_cast<size_t>(std::count_if(sent_frames.begin(), sent_frames.end(),
+            [](const auto& frame) { return frame.returned; })) >= minimum;
+    });
+}
+bool WaitForVideoSendReturns(uint16_t stream_id, size_t minimum) {
+    std::unique_lock<std::mutex> lock(host_mutex);
+    return host_condition.wait_for(lock, std::chrono::seconds(2), [&] {
+        return static_cast<size_t>(std::count_if(sent_frames.begin(), sent_frames.end(),
+            [&](const auto& frame) { return frame.returned && frame.stream_id == stream_id; })) >= minimum;
+    });
+}
+size_t MainLoopCount() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return main_loop_count;
 }
 bool IsClosed(esp_peer_handle_t peer) {
     std::lock_guard<std::mutex> lock(host_mutex);
@@ -131,6 +159,10 @@ bool WaitForCleanupEntry() {
     return host_condition.wait_for(lock, std::chrono::seconds(2), [] { return cleanup_entered; });
 }
 void SetSendResult(int result) { send_result = result; }
+void OnNextSendReturn(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    next_send_return = std::move(callback);
+}
 void SetOpenResult(int result) { open_result = result; }
 void SetDefaultImplAvailable(bool available) { default_impl_available = available; }
 void SetConnectionResult(int result) { connection_result = result; }
@@ -234,6 +266,7 @@ int esp_peer_send_data(esp_peer_handle_t handle, esp_peer_data_frame_t* frame) {
     if (peer->closed) return ESP_PEER_ERR_WRONG_STATE;
     peer->sending = true;
     // Capture the bytes and borrowed peer at the actual production API call.
+    const size_t attempt = sent_frames.size();
     sent_frames.push_back({handle, frame->stream_id, frame->type,
         std::string(reinterpret_cast<const char*>(frame->data), frame->size)});
     if (block_next_send) {
@@ -244,7 +277,15 @@ int esp_peer_send_data(esp_peer_handle_t handle, esp_peer_data_frame_t* frame) {
     }
     peer->sending = false;
     clock_offset_us.fetch_add(send_cost_us.load());
-    return send_result;
+    const int result = send_result.load();
+    // Test callbacks only revoke a captured lease atomically. The SDK call has
+    // already been admitted; revocation must affect its next fragment/retry.
+    auto callback = std::move(next_send_return);
+    if (callback) callback();
+    sent_frames[attempt].result = result;
+    sent_frames[attempt].returned = true;
+    host_condition.notify_all();
+    return result;
 }
 int esp_peer_close(esp_peer_handle_t handle) {
     std::lock_guard<std::mutex> lock(host_mutex);

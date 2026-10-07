@@ -504,3 +504,85 @@ RODAK_TEST("MQTT display control can revoke its lease inside dispatch without ho
     RODAK_CHECK_FALSE(dispatched->IsActive());
     streams.mqtt.service.SetWebRtcDisplayControlCallback({});
 }
+
+RODAK_TEST("MQTT display Start passes the exact control lease and never reuses it for a replacement") {
+    Streams streams;
+    rodakos::StreamLeasePtr control_owner;
+    streams.mqtt.service.SetWebRtcDisplayControlCallback(
+        [&](const rodakos::StreamLeasePtr& lease, const std::string& payload,
+            rodakos::UnifiedMqttService::DisplayControlReply) {
+            if (!payload.empty()) control_owner = lease;
+        });
+    streams.Start(true, "video-lease-first", "same-video-session");
+    const auto original = streams.display.SavedLease();
+    streams.display.SavedControl()("same-owner", {});
+    RODAK_CHECK(original != nullptr);
+    RODAK_CHECK(original == control_owner);
+    RODAK_CHECK(original->IsActive());
+    {
+        std::lock_guard<std::mutex> lock(streams.mqtt.service.mqtt_mutex_);
+        RODAK_CHECK(original == streams.mqtt.service.display_lease_);
+        RODAK_CHECK_EQ(original->client_generation, streams.mqtt.service.client_generation_);
+        RODAK_CHECK_EQ(original->connection_epoch, streams.mqtt.service.connection_epoch_);
+    }
+    Process("video-lease-stop", Request(true, "stop", "same-video-session"));
+    RODAK_CHECK_EQ(Status(Ack("video-lease-stop")), "ok");
+    RODAK_CHECK_FALSE(original->IsActive());
+    streams.Start(true, "video-lease-replacement", "same-video-session");
+    const auto replacement = streams.display.SavedLease(1);
+    RODAK_CHECK(replacement != nullptr);
+    RODAK_CHECK(replacement != original);
+    RODAK_CHECK(replacement->IsActive());
+    RODAK_CHECK_EQ(replacement->session_id, original->session_id);
+    RODAK_CHECK_NE(replacement->instance_nonce, original->instance_nonce);
+    streams.mqtt.service.SetWebRtcDisplayControlCallback({});
+}
+
+RODAK_TEST("MQTT disconnect revokes the passed video lease before deferred cleanup can acquire its lock") {
+    Streams streams;
+    streams.Start(true, "video-revoke-start", "video-revoke-session");
+    const auto lease = streams.display.SavedLease();
+    RODAK_CHECK(lease != nullptr);
+    const unsigned stops = streams.display.stop_calls.load();
+    std::unique_lock<std::mutex> operation_lock(streams.mqtt.service.stream_operation_mutex_);
+    Disconnect();
+    const bool revoked = !lease->IsActive();
+    const bool still_running = streams.display.running;
+    const bool cleanup_waiting = streams.display.stop_calls == stops;
+    unsigned calls = 0;
+    const bool admitted = lease->TryApply([&]() { ++calls; });
+    operation_lock.unlock();
+    RODAK_CHECK(revoked);
+    RODAK_CHECK(still_running);
+    RODAK_CHECK(cleanup_waiting);
+    RODAK_CHECK_FALSE(admitted);
+    RODAK_CHECK_EQ(calls, 0u);
+    RODAK_CHECK(WaitUntil([&]() { return !streams.display.running; }));
+}
+
+RODAK_TEST("MQTT Stop revokes the passed video lease while native Start is still in flight") {
+    Streams streams;
+    BlockPoint start;
+    streams.display.before_start_return = [&]() { start.Enter(); };
+    Message(Topic("video-start-in-flight"), Request(true, "start", "video-start-session"), true);
+    const bool entered = start.Wait();
+    const auto lease = entered ? streams.display.SavedLease() : nullptr;
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&]() { streams.mqtt.service.Stop(); stopped = true; });
+    const bool revoked = WaitUntil([&]() {
+        return lease != nullptr ? !lease->IsActive() : !streams.mqtt.service.IsConnected();
+    });
+    const bool lease_inactive = lease != nullptr && !lease->IsActive();
+    const bool waited_for_start = !stopped.load();
+    start.Release();
+    stopper.join();
+    streams.display.before_start_return = {};
+    RODAK_CHECK(entered);
+    RODAK_CHECK(lease != nullptr);
+    RODAK_CHECK(revoked);
+    RODAK_CHECK(lease_inactive);
+    RODAK_CHECK(waited_for_start);
+    RODAK_CHECK_FALSE(streams.display.running);
+    RODAK_CHECK_EQ(streams.display.maximum_overlapping_operations.load(), 1u);
+    RODAK_CHECK(Wire("video-start-in-flight").empty());
+}
