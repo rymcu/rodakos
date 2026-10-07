@@ -111,6 +111,10 @@ public:
                             CloudDiagnosticCode* failure = nullptr);
     void InvalidateAccessTokenFreshness(const std::string& rejected_token);
     bool IsVoiceConfigCurrent(const DeviceCloudConfig& config) const;
+    // The callback is the MQTT admission linearization point. It may only
+    // attach prepared state; no SDK calls, joins, HTTP or resource cleanup.
+    bool ApplyIfMqttConfigCurrent(const DeviceCloudConfig& snapshot,
+                                  const std::function<bool()>& apply);
     bool Unbind(DeviceCloudConfig& config);
     ProvisioningUrlSaveResult SaveProvisioningUrl(
         const std::string& url,

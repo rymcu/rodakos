@@ -8,15 +8,13 @@ enum class MqttCredentialRefreshAction {
     kKeepCurrentClient,
     kStartConnection,
     kRestart,
-    kApplyInPlace,
+    kReplaceClient,
 };
 
 struct MqttCredentialRefreshState {
     bool refresh_succeeded = false;
     bool has_client = false;
-    bool client_connected = false;
-    bool same_session_identity = false;
-    bool outbox_empty = false;
+    bool same_effect_authority = false;
 };
 
 MqttCredentialRefreshAction DecideMqttCredentialRefreshAction(

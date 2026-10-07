@@ -49,6 +49,17 @@ struct Fixture {
     void Send(const std::string& payload, bool fragmented = false) {
         Message(Config().mqtt_topic_shadow_desired, payload, fragmented);
     }
+    void CheckRefreshedClient(esp_mqtt_client_handle_t previous, const std::string& credential) {
+        RODAK_CHECK(WaitUntil([&]() {
+            return CurrentClient() != nullptr && CurrentClient() != previous && service.IsConnected();
+        }));
+        const auto clients = ClientSnapshots();
+        RODAK_CHECK(clients.size() >= 2);
+        RODAK_CHECK(clients[clients.size() - 2].destroyed);
+        RODAK_CHECK(clients[clients.size() - 2].exited);
+        RODAK_CHECK_EQ(clients.back().credential, credential);
+        RODAK_CHECK_EQ(Restarts(), 0u);
+    }
     std::string Receipt(size_t index = 0) {
         RODAK_CHECK(WaitUntil([=]() { return ReceiptCount() > index; }));
         size_t found = 0;

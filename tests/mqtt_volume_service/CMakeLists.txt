@@ -7,10 +7,18 @@ set(APP_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/../app_model")
 set(MAIN "${CMAKE_CURRENT_SOURCE_DIR}/../../main")
 set(RODAK_MQTT_SERVICE_SOURCE "${MAIN}/phone_os/unified_mqtt_service.cc" CACHE FILEPATH
     "Complete MQTT service translation unit for baseline and negative host controls")
+set(RODAK_MQTT_POLICY_SOURCE "${MAIN}/phone_os/mqtt_credential_refresh_policy.cc" CACHE FILEPATH
+    "Credential refresh policy source paired with the reviewed complete service")
+set(RODAK_MQTT_INCLUDE_ROOT "" CACHE PATH
+    "Optional complete baseline header root containing phone_os MQTT service/policy headers")
+set(RODAK_MQTT_SERVICE_HEADER "${MAIN}/phone_os/unified_mqtt_service.h")
+if(RODAK_MQTT_INCLUDE_ROOT)
+    set(RODAK_MQTT_SERVICE_HEADER "${RODAK_MQTT_INCLUDE_ROOT}/phone_os/unified_mqtt_service.h")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${RODAK_MQTT_SERVICE_SOURCE}" "${MAIN}/phone_os/unified_mqtt_service.h")
+    "${RODAK_MQTT_SERVICE_SOURCE}" "${RODAK_MQTT_SERVICE_HEADER}")
 file(SHA256 "${RODAK_MQTT_SERVICE_SOURCE}" service_sha)
-file(SHA256 "${MAIN}/phone_os/unified_mqtt_service.h" header_sha)
+file(SHA256 "${RODAK_MQTT_SERVICE_HEADER}" header_sha)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/production-sources.json"
     "{\n  \"mode\": \"complete-service-translation-unit\",\n  \"unified_mqtt_service.cc\": \"${service_sha}\",\n  \"unified_mqtt_service.h\": \"${header_sha}\"\n}\n")
 
@@ -26,7 +34,7 @@ add_library(mqtt_volume_host STATIC
     "${MAIN}/phone_os/mqtt_light_effect.cc"
     "${MAIN}/phone_os/light_service.cc"
     "${MAIN}/rodakos_adapters/board_device_adapter.cc"
-    "${MAIN}/phone_os/mqtt_credential_refresh_policy.cc"
+    "${RODAK_MQTT_POLICY_SOURCE}"
     "${MAIN}/phone_os/audio_output_service.cc"
     "${MAIN}/phone_os/realtime_voice_contract.cc"
     "${MAIN}/phone_os/voice_identity.cc"
@@ -35,6 +43,7 @@ add_library(mqtt_volume_host STATIC
 target_include_directories(mqtt_volume_host BEFORE PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${RODAK_MQTT_INCLUDE_ROOT}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../light_service/fakes"
     "${CMAKE_CURRENT_SOURCE_DIR}/../light_service"
     "${APP_MODEL}/fakes"
@@ -73,6 +82,12 @@ target_link_libraries(rodakos_mqtt_voice_identity_tests PRIVATE mqtt_volume_host
 add_test(NAME rodakos_mqtt_voice_identity COMMAND rodakos_mqtt_voice_identity_tests)
 set_tests_properties(rodakos_mqtt_voice_identity PROPERTIES TIMEOUT 40)
 
+add_executable(rodakos_mqtt_credential_replacement_tests
+    mqtt_credential_replacement_test.cc diagnostic_test_main.cc)
+target_link_libraries(rodakos_mqtt_credential_replacement_tests PRIVATE mqtt_volume_host)
+add_test(NAME rodakos_mqtt_credential_replacement COMMAND rodakos_mqtt_credential_replacement_tests)
+set_tests_properties(rodakos_mqtt_credential_replacement PROPERTIES TIMEOUT 90)
+
 add_executable(rodakos_mqtt_queue_diagnostics_tests
     mqtt_queue_diagnostics_test.cc allocation_probe.cc diagnostic_test_main.cc)
 target_link_libraries(rodakos_mqtt_queue_diagnostics_tests PRIVATE mqtt_volume_host)
@@ -90,4 +105,10 @@ if(selected_service STREQUAL production_service)
         --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
         --link-flags=${CMAKE_EXE_LINKER_FLAGS})
     set_tests_properties(rodakos_mqtt_diagnostic_negative_controls PROPERTIES TIMEOUT 480)
+    add_test(NAME rodakos_mqtt_credential_negative_controls
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_credential_negative.py"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/replacement-negative-controls"
+        --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
+        --link-flags=${CMAKE_EXE_LINKER_FLAGS})
+    set_tests_properties(rodakos_mqtt_credential_negative_controls PROPERTIES TIMEOUT 480)
 endif()

@@ -34,6 +34,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1715,6 +1716,41 @@ void DeviceCloudConfigService::InvalidateAccessTokenFreshness(const std::string&
 bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& config) const {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);
     return config.cloud_generation == config_generation_;
+}
+
+bool DeviceCloudConfigService::ApplyIfMqttConfigCurrent(
+    const DeviceCloudConfig& snapshot, const std::function<bool()>& apply) {
+    auto current = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (current == nullptr || !apply) return false;
+    std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+    // Load returns AIoT completeness, not read success; legacy MQTT-only caches
+    // remain valid when their separately derived MQTT and trust gates pass.
+    const bool aiot_complete = Load(*current);
+    if (!current->has_mqtt_config || current->unbind_pending ||
+        current->server_trust_error || current->server_trust_pending ||
+        (current->server_requires_bound_identity && !aiot_complete)) return false;
+    // A same-authority refresh rotates the token without changing cloud_generation_.
+    // Compare the credentials and routing material under the persistence lock so
+    // a voice refresh cannot supersede a previously loaded MQTT snapshot at attach.
+    const auto mqtt_snapshot = [](const DeviceCloudConfig& config) {
+        return std::tie(config.cloud_generation, config.provisioning_url,
+            config.server_trust.version, config.server_trust.server_id,
+            config.server_trust.tls_name, config.server_trust.ca_pem,
+            config.server_connect_address, config.server_trust_error,
+            config.server_trust_pending, config.server_requires_bound_identity,
+            config.server_authority_record, config.aiot_device_secret,
+            config.aiot_access_token, config.aiot_registered, config.aiot_activated,
+            config.aiot_pending, config.unbind_pending, config.unbind_server_acknowledged,
+            config.mqtt_protocol_version, config.mqtt_broker_address, config.mqtt_broker_port,
+            config.mqtt_username, config.mqtt_password, config.mqtt_keepalive,
+            config.mqtt_device_key, config.mqtt_home_enabled, config.mqtt_http_base_url,
+            config.mqtt_topic_telemetry, config.mqtt_topic_shadow_report,
+            config.mqtt_topic_shadow_desired, config.mqtt_topic_ota_notify,
+            config.mqtt_topic_ota_progress, config.mqtt_topic_commands,
+            config.mqtt_topic_pc_status, config.mqtt_topic_home_prefix, config.has_mqtt_config);
+    };
+    if (mqtt_snapshot(snapshot) != mqtt_snapshot(*current)) return false;
+    return apply();
 }
 
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(

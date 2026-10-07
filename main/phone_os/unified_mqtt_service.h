@@ -73,6 +73,17 @@ public:
     bool Publish(const std::string& topic, const std::string& payload);
 
 private:
+    struct ClientInstance {
+        UnifiedMqttService* service = nullptr;
+        esp_mqtt_client_handle_t handle = nullptr;
+        uint32_t generation = 0;
+        bool sdk_started = false;
+        // ESP-MQTT borrows these pointers until the old task has fully exited.
+        ServerTrust tls_trust;
+        std::string broker_uri;
+        std::string client_id;
+    };
+
     struct ControlGateTiming {
         uint64_t callback_no = 0;
         uint64_t instance_nonce = 0;
@@ -122,8 +133,14 @@ private:
 
     void StartConnectionAsync();
     void Connect();
+    std::unique_ptr<DeviceCloudConfig> LoadMqttSnapshot();
+    bool StartClient(DeviceCloudConfig& config);
+    bool DestroyClient(std::unique_ptr<ClientInstance> client);
+    bool RetireClientForRefresh();
+    std::unique_ptr<ClientInstance> DetachClientLocked();
+    void RetryClientReplacement();
     void BindOtaProgressPublisher();
-    void ScheduleCredentialRefresh();
+    void ScheduleCredentialRefresh(uint32_t generation);
     void FinishCredentialRefresh();
     void MaybeScheduleTransportRecovery();
     bool ShouldDeferCredentialRefresh();
@@ -147,7 +164,7 @@ private:
     void CleanupRevokedStreams();
     void CleanupRevokedStreamsLocked();
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
-    void HandleMqttEvent(esp_mqtt_event_handle_t event);
+    void HandleMqttEvent(esp_mqtt_event_handle_t event, uint32_t generation);
     void HandleMessage(const std::string& topic, const std::string& payload,
                        uint32_t generation, uint64_t connection_epoch);
     void SubscribeTopics();
@@ -179,14 +196,15 @@ private:
     DisplayControlCallback display_control_callback_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
-    // ESP-MQTT borrows certificate/name pointers across reconnects.
-    ServerTrust mqtt_tls_trust_;
     uint32_t mqtt_sdk_stack_min_free_ = UINT32_MAX;
     esp_mqtt_client_handle_t client_ = nullptr;
+    std::unique_ptr<ClientInstance> client_instance_;
+    // A failed stop is not proof of task exit. Keep its callback/TLS storage
+    // alive even when the host test's esp_restart() stub returns.
+    std::unique_ptr<ClientInstance> failed_client_;
+    std::atomic<bool> client_lifecycle_failed_{false};
     esp_event_handler_instance_t ip_event_instance_ = nullptr;
     TimerHandle_t telemetry_timer_ = nullptr;
-    std::string broker_uri_;
-    std::string client_id_;
     StaticSemaphore_t publish_ack_semaphore_storage_ = {};
     SemaphoreHandle_t publish_ack_semaphore_ = nullptr;
     std::mutex reliable_publish_mutex_;
@@ -231,8 +249,10 @@ private:
     std::atomic<bool> force_refresh_{false};
     MqttTransportRecoveryPolicy transport_recovery_;
     bool transport_refresh_scheduled_ = false;
-    bool auth_refresh_pending_ = false;
+    uint32_t auth_refresh_generation_ = 0;
     std::unique_ptr<DeviceCloudConfig> pending_credential_config_;
+    int64_t client_replacement_retry_at_ms_ = 0;
+    int client_replacement_retry_ms_ = 2000;
     bool credential_restart_pending_ = false;
     bool credential_refresh_deferred_for_voice_ = false;
     struct PendingMessage {

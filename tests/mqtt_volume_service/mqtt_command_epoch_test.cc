@@ -311,6 +311,7 @@ RODAK_TEST("MQTT camera and display old callbacks remain invalid after credentia
     for (bool display : {false, true}) {
         StreamFixture fixture(display);
         fixture.Start("credential-old", "old-session");
+        auto* original = CurrentClient();
         const auto old_callbacks = fixture.Peer().SavedCallbacks();
         Emit(old_callbacks);
         Disconnect();
@@ -318,13 +319,14 @@ RODAK_TEST("MQTT camera and display old callbacks remain invalid after credentia
         config.mqtt_password = "rotated-command-token";
         SetConfig(config);
         RejectCredentials();
-        RODAK_CHECK(WaitUntil([&]() { return CredentialRevision() == 1 && fixture.mqtt.service.IsConnected(); }));
+        fixture.mqtt.CheckRefreshedClient(original, "rotated-command-token");
         Emit(old_callbacks);
         Process("credential-current");
         Drain();
         RODAK_CHECK(Wire("credential-old").empty());
         RODAK_CHECK_EQ(Wire("credential-current").size(), size_t{1});
-        RODAK_CHECK_EQ(Wire("credential-current")[0].credential_revision, 1u);
+        RODAK_CHECK_EQ(Wire("credential-current")[0].client_id, ClientSnapshots().back().id);
+        RODAK_CHECK_EQ(Wire("credential-current")[0].credential_revision, 0u);
         NoCommandOutbox();
     }
 }

@@ -134,6 +134,7 @@ RODAK_TEST("MQTT reconnect replays historical Start result without resurrecting 
 
 RODAK_TEST("MQTT token rotation preserves cached command outcomes for the same authority") {
     Streams streams;
+    auto* original = CurrentClient();
     const auto request = Request(true, "start");
     const auto first = Execute("token-replay", request);
     Disconnect();
@@ -141,7 +142,7 @@ RODAK_TEST("MQTT token rotation preserves cached command outcomes for the same a
     config.mqtt_password = "rotated-ledger-token";
     SetConfig(config);
     RejectCredentials();
-    RODAK_CHECK(WaitUntil([&]() { return CredentialRevision() == 1 && streams.mqtt.service.IsConnected(); }));
+    streams.mqtt.CheckRefreshedClient(original, "rotated-ledger-token");
     RODAK_CHECK_EQ(Execute("token-replay", request), first);
     RODAK_CHECK_EQ(streams.display.start_calls.load(), 1u);
     RODAK_CHECK_FALSE(streams.display.running);

@@ -151,6 +151,14 @@ jobs:
             host-check-results/asan-mqtt_volume_service/negative-controls/*/result.log
             host-check-results/asan-mqtt_volume_service/negative-controls/*/unified_mqtt_service.cc
             host-check-results/asan-mqtt_volume_service/negative-controls/*/build-*.log
+            host-check-results/asan-mqtt_volume_service/replacement-negative-controls/negative-results.json
+            host-check-results/asan-mqtt_volume_service/replacement-negative-controls/*/result.log
+            host-check-results/asan-mqtt_volume_service/replacement-negative-controls/*/unified_mqtt_service.cc
+            host-check-results/asan-mqtt_volume_service/replacement-negative-controls/*/build-*.log
+            host-check-results/asan-mqtt_cloud_integration/negative-controls/negative-results.json
+            host-check-results/asan-mqtt_cloud_integration/negative-controls/*/result.log
+            host-check-results/asan-mqtt_cloud_integration/negative-controls/*/device_cloud_config.cc
+            host-check-results/asan-mqtt_cloud_integration/negative-controls/*/build-*.log
           if-no-files-found: warn
           retention-days: 14
 

@@ -14,10 +14,10 @@ MqttCredentialRefreshAction DecideMqttCredentialRefreshAction(
     if (!state.has_client) {
         return MqttCredentialRefreshAction::kStartConnection;
     }
-    if (state.client_connected || !state.same_session_identity || !state.outbox_empty) {
+    if (!state.same_effect_authority) {
         return MqttCredentialRefreshAction::kRestart;
     }
-    return MqttCredentialRefreshAction::kApplyInPlace;
+    return MqttCredentialRefreshAction::kReplaceClient;
 }
 
 void MqttTransportRecoveryPolicy::RecordTransportFailure() {

@@ -211,6 +211,7 @@ RODAK_TEST("MQTT service drops a pending old-epoch receipt but retains the execu
 RODAK_TEST("MQTT service credential refresh rejects late output and preserves same-authority deduplication") {
     Fixture f;
     f.Start();
+    auto* original = CurrentClient();
     HoldUserEvents(true);
     f.Send(Request());
     RODAK_CHECK(WaitUntil([]() { return PendingUserEvents() != 0; }));
@@ -219,7 +220,7 @@ RODAK_TEST("MQTT service credential refresh rejects late output and preserves sa
     config.mqtt_password = "test-token-2";
     SetConfig(config);
     RejectCredentials();
-    RODAK_CHECK(WaitUntil([&]() { return CredentialRevision() == 1 && f.service.IsConnected(); }));
+    f.CheckRefreshedClient(original, "test-token-2");
     HoldUserEvents(false);
     f.Barrier();
     RODAK_CHECK_EQ(ReceiptCount(), 0u);
