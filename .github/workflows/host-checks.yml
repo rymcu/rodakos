@@ -159,6 +159,11 @@ jobs:
             host-check-results/asan-mqtt_cloud_integration/negative-controls/*/result.log
             host-check-results/asan-mqtt_cloud_integration/negative-controls/*/device_cloud_config.cc
             host-check-results/asan-mqtt_cloud_integration/negative-controls/*/build-*.log
+            host-check-results/asan-mqtt_cloud_integration/header-isolation-negative/*.json
+            host-check-results/asan-mqtt_cloud_integration/header-isolation-negative/*.log
+            host-check-results/asan-mqtt_cloud_integration/header-isolation-negative/*.gz
+            host-check-results/asan-mqtt_cloud_integration/header-isolation-negative/inputs/headers.cc
+            host-check-results/asan-mqtt_cloud_integration/header-isolation-negative/inputs/**/*.h
           if-no-files-found: warn
           retention-days: 14
 

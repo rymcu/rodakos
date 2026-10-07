@@ -71,6 +71,11 @@ get_filename_component(selected_mqtt "${RODAK_MQTT_SOURCE_ROOT}" ABSOLUTE)
 get_filename_component(production_mqtt "${MAIN}" ABSOLUTE)
 if(selected_cloud STREQUAL production_cloud AND selected_mqtt STREQUAL production_mqtt)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME mqtt_cloud_header_isolation
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_header_isolation.py"
+        --compiler "${CMAKE_CXX_COMPILER}"
+        --negative-evidence "${CMAKE_CURRENT_BINARY_DIR}/header-isolation-negative")
+    set_tests_properties(mqtt_cloud_header_isolation PROPERTIES TIMEOUT 120)
     add_test(NAME mqtt_cloud_fence_negative_controls
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_negative.py"
         --output "${CMAKE_CURRENT_BINARY_DIR}/negative-controls"
