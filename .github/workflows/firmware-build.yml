@@ -69,6 +69,8 @@ jobs:
             firmware-ci-results/development-refresh/
             build/rodakos.elf
             build/rodakos.map
+            build/screen-jpeg-preflight.json
+            build/screen-jpeg-linked.json
             recovery/build/rodakos_recovery.elf
             recovery/build/rodakos_recovery.map
           if-no-files-found: warn

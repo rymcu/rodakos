@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <vector>
 #include "lvgl.h"
@@ -8,12 +9,16 @@ constexpr size_t kFrameBytes = 320 * 240 * 2;
 constexpr size_t kRgbBytes = 320 * 240 * 3;
 constexpr size_t kJpegScratchBytes = 100 * 1024;
 constexpr size_t kJpegBytes = 4096;
+constexpr size_t kCodecContextBytes = 6436;
+constexpr size_t kCodecWorkspaceBytes = kCodecContextBytes + 128 + 1024 + 2048;
 struct Resources {
     size_t buffers = 0, bytes = 0, peak_bytes = 0, encoders = 0;
     size_t opens = 0, closes = 0, processes = 0;
     size_t last_output_capacity = 0;
     uint32_t first_rgb888 = 0, middle_rgb888 = 0, last_rgb888 = 0;
     size_t new_failures = 0, heap_failures = 0;
+    size_t codec_external_calls = 0, codec_internal_calls = 0, close_scope_checks = 0;
+    std::array<size_t, 4> original_allocator_calls{};
     size_t event_adds = 0, event_removes = 0, event_ops_without_lvgl_lock = 0;
 };
 void Reset();
@@ -23,6 +28,8 @@ void FailHeap(size_t bytes, size_t count = 2, bool after_encoder_open = false);
 void ClearFailures();
 void FailEncoderOpen(bool fail);
 void FailEncoderProcess(bool fail);
+void ThrowEncoderProcess(bool fail);
+void RejectCodecExternal(bool fail);
 void SetEncodedSize(size_t bytes);
 void AllowTaskCreation(bool allow);
 void AllowAsync(bool allow);

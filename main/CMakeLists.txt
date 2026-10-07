@@ -41,6 +41,7 @@ set(SOURCES
     "phone_os/camera_service.cc"
     "phone_os/webrtc_camera_service.cc"
     "phone_os/display_service.cc"
+    "phone_os/screen_jpeg_allocation.cc"
     "phone_os/webrtc_display_service.cc"
     "phone_os/time_service.cc"
     "phone_os/voice_audio_frontend.cc"
@@ -169,6 +170,13 @@ idf_component_register(
         esp_tinyusb
         esp_new_jpeg
         rodakos_fonts
+)
+
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=jpeg_calloc"
+    "-Wl,--wrap=jpeg_calloc_inner"
+    "-Wl,--wrap=jpeg_calloc_align"
+    "-Wl,--wrap=jpeg_calloc_align_inner"
 )
 
 
