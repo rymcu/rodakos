@@ -8,6 +8,9 @@ set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${RODAKOS_ROOT}/managed_components/lvgl__lvgl" "${CMAKE_CURRENT_BINARY_DIR}/lvgl")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${RODAKOS_ROOT}/cmake/lodepng_patch.cmake")
+rodak_apply_lodepng_patch(lvgl "${RODAKOS_ROOT}/managed_components/lvgl__lvgl" "${RODAKOS_ROOT}" "${Python3_EXECUTABLE}")
 add_executable(photos_ui_tests
     photos_ui_test.cc image_library_test.cc host_images.cc
     "${RODAKOS_ROOT}/tests/home_ui/test_main.cc"

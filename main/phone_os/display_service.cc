@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <inttypes.h>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <utility>
 
 #include <esp_heap_caps.h>
@@ -25,6 +27,29 @@ struct EncodeMetrics {
     int64_t close_us = 0;
     size_t output_size = 0;
 };
+
+class SemaphoreLock {
+public:
+    explicit SemaphoreLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    ~SemaphoreLock() { xSemaphoreGive(mutex_); }
+    SemaphoreLock(const SemaphoreLock&) = delete;
+    SemaphoreLock& operator=(const SemaphoreLock&) = delete;
+
+private:
+    SemaphoreHandle_t mutex_;
+};
+
+struct HeapDeleter {
+    void operator()(uint8_t* data) const { heap_caps_free(data); }
+};
+using HeapBuffer = std::unique_ptr<uint8_t, HeapDeleter>;
+
+struct EncoderDeleter {
+    void operator()(void* encoder) const { jpeg_enc_close(encoder); }
+};
+using Encoder = std::unique_ptr<void, EncoderDeleter>;
 
 uint8_t* AllocAligned(size_t size) {
     auto* buffer = static_cast<uint8_t*>(
@@ -62,21 +87,25 @@ bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
     const auto open_ret = jpeg_enc_open(&config, &encoder);
     if (metrics != nullptr) metrics->open_us = esp_timer_get_time() - open_started_us;
     if (open_ret != JPEG_ERR_OK || encoder == nullptr) return false;
-    std::vector<uint8_t> encoded(std::max<size_t>(64 * 1024, input_size));
+    Encoder owned_encoder(encoder);
+    const size_t capacity = std::max<size_t>(64 * 1024, input_size);
+    HeapBuffer encoded(AllocAligned(capacity));
+    if (!encoded) return false;
     int output_size = 0;
     const int64_t process_started_us = esp_timer_get_time();
     const auto ret = jpeg_enc_process(encoder, input, static_cast<int>(input_size),
-                                      encoded.data(), static_cast<int>(encoded.size()), &output_size);
+                                      encoded.get(), static_cast<int>(capacity), &output_size);
     if (metrics != nullptr) metrics->process_us = esp_timer_get_time() - process_started_us;
     const int64_t close_started_us = esp_timer_get_time();
-    jpeg_enc_close(encoder);
+    owned_encoder.reset();
     if (metrics != nullptr) metrics->close_us = esp_timer_get_time() - close_started_us;
-    if (ret != JPEG_ERR_OK || output_size <= 0 || static_cast<size_t>(output_size) > encoded.size()) {
+    if (ret != JPEG_ERR_OK || output_size <= 0 || static_cast<size_t>(output_size) > capacity) {
         return false;
     }
-    encoded.resize(static_cast<size_t>(output_size));
-    if (metrics != nullptr) metrics->output_size = encoded.size();
-    jpeg = std::move(encoded);
+    // resize 不会释放 225 KiB 编码容量；传输队列只保留实际 JPEG 字节。
+    std::vector<uint8_t> compact(encoded.get(), encoded.get() + output_size);
+    if (metrics != nullptr) metrics->output_size = compact.size();
+    jpeg = std::move(compact);
     return true;
 }
 
@@ -90,8 +119,8 @@ bool EncodeRgb565(const std::vector<uint8_t>& rgb565, int width, int height,
     // ESP_NEW_JPEG 的编码输入支持 RGB888，不支持 RGB565；
     // RGB565 常量用于解码输出，不能直接交给编码器。
     const size_t rgb888_size = pixel_count * 3;
-    auto* aligned_rgb888 = AllocAligned(rgb888_size);
-    if (aligned_rgb888 == nullptr) return false;
+    HeapBuffer aligned_rgb888(AllocAligned(rgb888_size));
+    if (!aligned_rgb888) return false;
     const int64_t conversion_started_us = esp_timer_get_time();
     for (size_t i = 0; i < pixel_count; ++i) {
         const uint16_t pixel = static_cast<uint16_t>(rgb565[i * 2]) |
@@ -99,14 +128,16 @@ bool EncodeRgb565(const std::vector<uint8_t>& rgb565, int width, int height,
         const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
         const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
         const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
-        aligned_rgb888[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
-        aligned_rgb888[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
-        aligned_rgb888[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+        aligned_rgb888.get()[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+        aligned_rgb888.get()[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+        aligned_rgb888.get()[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
     }
     if (metrics != nullptr) metrics->conversion_us = esp_timer_get_time() - conversion_started_us;
-    const bool encoded = EncodeJpeg(aligned_rgb888, rgb888_size, width, height, jpeg, metrics);
-    heap_caps_free(aligned_rgb888);
-    return encoded;
+    try {
+        return EncodeJpeg(aligned_rgb888.get(), rgb888_size, width, height, jpeg, metrics);
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
 }
 }  // namespace
 
@@ -118,13 +149,13 @@ DisplayService::DisplayService(lv_display_t* display) : display_(display) {
 DisplayService::~DisplayService() {
     StopJpegStream();
     StopCapture();
-    if (display_ != nullptr && lvgl_port_lock(1000)) {
-        lv_async_call_cancel(&RefreshDisplayForCapture, display_);
-        lvgl_port_unlock();
-    }
-    if (event_attached_ && display_ != nullptr) {
-        lv_display_remove_event_cb_with_user_data(display_, &DisplayService::OnDisplayEvent, this);
-        event_attached_ = false;
+    {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        if (display_ != nullptr && lvgl_port_lock(0)) {
+            lv_async_call_cancel(&RefreshDisplayForCapture, display_);
+            DetachWithLvglLock();
+            lvgl_port_unlock();
+        }
     }
     if (mutex_ != nullptr) {
         vSemaphoreDelete(mutex_);
@@ -137,42 +168,72 @@ DisplayService::~DisplayService() {
 }
 
 bool DisplayService::Attach() {
-    if (display_ == nullptr || event_attached_) return display_ != nullptr;
-    lv_display_add_event_cb(display_, &DisplayService::OnDisplayEvent, LV_EVENT_ALL, this);
-    event_attached_ = true;
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    if (display_ == nullptr) return false;
+    if (event_attached_) return true;
+    if (!lvgl_port_lock(1000)) return false;
+    AttachWithLvglLock();
+    lvgl_port_unlock();
     return true;
 }
 
+void DisplayService::AttachWithLvglLock() {
+    if (display_ == nullptr || event_attached_) return;
+    lv_display_add_event_cb(display_, &DisplayService::OnDisplayEvent, LV_EVENT_ALL, this);
+    event_attached_ = true;
+}
+
+void DisplayService::DetachWithLvglLock() {
+    if (!event_attached_ || display_ == nullptr) return;
+    lv_display_remove_event_cb_with_user_data(display_, &DisplayService::OnDisplayEvent, this);
+    event_attached_ = false;
+}
+
 bool DisplayService::StartCapture(int width, int height) {
-    if (display_ == nullptr || !Attach() || width <= 0 || height <= 0 ||
-        lv_display_get_horizontal_resolution(display_) != width ||
-        lv_display_get_vertical_resolution(display_) != height) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    if (display_ == nullptr || width <= 0 || height <= 0) {
         SetError("Unsupported display capture dimensions");
         return false;
     }
-    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!lvgl_port_lock(1000)) {
+        SetError("Failed to lock display for capture");
+        return false;
+    }
+    const bool dimensions_supported =
+        lv_display_get_horizontal_resolution(display_) == width &&
+        lv_display_get_vertical_resolution(display_) == height;
+    if (dimensions_supported) AttachWithLvglLock();
+    lvgl_port_unlock();
+    if (!dimensions_supported) {
+        SetError("Unsupported display capture dimensions");
+        return false;
+    }
     if (mutex_ == nullptr) return false;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (capture_running_) {
-        xSemaphoreGive(mutex_);
-        return true;
-    }
-    const size_t frame_size = static_cast<size_t>(width) * height * 2;
-    // 持久镜像必须保留所有未刷新的像素；发布缓冲仅供 JPEG worker 读取。
-    mirror_rgb565_.assign(frame_size, 0);
-    latest_frame_ = {};
-    latest_frame_.rgb565.assign(frame_size, 0);
-    if (frame_ready_semaphore_ != nullptr) {
-        while (xSemaphoreTake(frame_ready_semaphore_, 0) == pdTRUE) {
+    try {
+        SemaphoreLock lock(mutex_);
+        if (capture_running_) return true;
+        const size_t frame_size = static_cast<size_t>(width) * height * 2;
+        // 两份缓冲都可用后再发布，分配失败不能留下半初始化的镜像。
+        std::vector<uint8_t> mirror(frame_size, 0);
+        DisplayFrame latest;
+        latest.rgb565.resize(frame_size, 0);
+        mirror_rgb565_.swap(mirror);
+        latest_frame_ = std::move(latest);
+        if (frame_ready_semaphore_ != nullptr) {
+            while (xSemaphoreTake(frame_ready_semaphore_, 0) == pdTRUE) {
+            }
         }
+        has_frame_ = false;
+        frame_pending_ = false;
+        frame_count_ = 0;
+        width_ = width;
+        height_ = height;
+        capture_running_ = true;
+        last_error_ = "";
+    } catch (const std::bad_alloc&) {
+        SetError("Not enough memory for display capture");
+        return false;
     }
-    has_frame_ = false;
-    frame_pending_ = false;
-    frame_count_ = 0;
-    width_ = width;
-    height_ = height;
-    capture_running_ = true;
-    xSemaphoreGive(mutex_);
     // MQTT 只安排刷新，实际绘制在 LVGL 任务完成。
     bool refresh_queued = false;
     if (lvgl_port_lock(1000)) {
@@ -180,11 +241,12 @@ bool DisplayService::StartCapture(int width, int height) {
         lvgl_port_unlock();
     }
     if (!refresh_queued) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        capture_running_ = false;
-        mirror_rgb565_.clear();
-        latest_frame_ = {};
-        xSemaphoreGive(mutex_);
+        {
+            SemaphoreLock lock(mutex_);
+            capture_running_ = false;
+            std::vector<uint8_t>().swap(mirror_rgb565_);
+            latest_frame_ = {};
+        }
         SetError("Failed to schedule the initial display refresh");
         return false;
     }
@@ -196,36 +258,46 @@ bool DisplayService::StartCapture(int width, int height) {
 void DisplayService::StopCapture() {
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     if (mutex_ == nullptr) return;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    capture_running_ = false;
-    mirror_rgb565_.clear();
-    latest_frame_ = {};
-    has_frame_ = false;
-    frame_pending_ = false;
-    xSemaphoreGive(mutex_);
+    {
+        SemaphoreLock lock(mutex_);
+        capture_running_ = false;
+        std::vector<uint8_t>().swap(mirror_rgb565_);
+        latest_frame_ = {};
+        has_frame_ = false;
+        frame_pending_ = false;
+    }
     if (frame_ready_semaphore_ != nullptr) xSemaphoreGive(frame_ready_semaphore_);
 }
 
 bool DisplayService::IsRunning() const {
     if (mutex_ == nullptr) return false;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool running = capture_running_;
-    xSemaphoreGive(mutex_);
-    return running;
+    SemaphoreLock lock(mutex_);
+    return capture_running_;
 }
 
 bool DisplayService::GetLatestFrame(DisplayFrame& frame) {
+    frame = {};
     if (mutex_ == nullptr) return false;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool ok = capture_running_ && has_frame_;
-    if (ok) frame = latest_frame_;
-    xSemaphoreGive(mutex_);
-    return ok;
+    try {
+        SemaphoreLock lock(mutex_);
+        if (!capture_running_ || !has_frame_) {
+            last_error_ = "No display frame is ready yet";
+            return false;
+        }
+        DisplayFrame next = latest_frame_;
+        frame = std::move(next);
+        return true;
+    } catch (const std::bad_alloc&) {
+        SetError("Not enough memory for display frame");
+        return false;
+    }
 }
 
 bool DisplayService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
+    jpeg.clear();
     DisplayFrame frame;
-    if (!GetLatestFrame(frame) || frame.width <= 0 || frame.height <= 0) {
+    if (!GetLatestFrame(frame)) return false;
+    if (frame.width <= 0 || frame.height <= 0) {
         SetError("No display frame is ready yet");
         return false;
     }
@@ -241,46 +313,59 @@ bool DisplayService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
         SetError("Invalid display JPEG stream configuration");
         return false;
     }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (!capture_running_ || jpeg_stream_running_) {
-        xSemaphoreGive(mutex_);
-        SetError(!capture_running_ ? "Display capture is not running" : "Display JPEG stream is already running");
-        return false;
+    bool started = false;
+    std::shared_ptr<JpegFrameCallback> callback_to_release;
+    {
+        SemaphoreLock lock(mutex_);
+        if (!capture_running_ || jpeg_stream_running_) {
+            last_error_ = !capture_running_ ? "Display capture is not running"
+                                            : "Display JPEG stream is already running";
+            return false;
+        }
+        // worker 只复制共享所有权；逐帧复制 std::function 也可能在持锁时抛 bad_alloc。
+        try {
+            jpeg_stream_callback_ = std::make_shared<JpegFrameCallback>(std::move(callback));
+        } catch (const std::bad_alloc&) {
+            last_error_ = "Not enough memory for display JPEG callback";
+            return false;
+        }
+        jpeg_stream_fps_ = fps;
+        jpeg_stream_stop_requested_ = false;
+        jpeg_stream_running_ = true;
+        jpeg_stream_task_ready_ = false;
+        TaskHandle_t task = nullptr;
+        if (xTaskCreateWithCaps(JpegStreamTaskEntry, "display_jpeg", kTaskStackSize, this, 3,
+                                &task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            jpeg_stream_running_ = false;
+            jpeg_stream_fps_ = 0;
+            callback_to_release = std::move(jpeg_stream_callback_);
+            last_error_ = "Failed to start display JPEG stream task";
+        } else {
+            jpeg_stream_task_ = task;
+            ++jpeg_stream_generation_;
+            jpeg_stream_task_ready_ = true;
+            started = true;
+        }
     }
-    jpeg_stream_fps_ = fps;
-    jpeg_stream_callback_ = std::move(callback);
-    jpeg_stream_stop_requested_ = false;
-    jpeg_stream_running_ = true;
-    jpeg_stream_task_ready_ = false;
-    TaskHandle_t task = nullptr;
-    if (xTaskCreateWithCaps(JpegStreamTaskEntry, "display_jpeg", kTaskStackSize, this, 3, &task,
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        jpeg_stream_running_ = false;
-        jpeg_stream_callback_ = {};
-        xSemaphoreGive(mutex_);
-        SetError("Failed to start display JPEG stream task");
-        return false;
-    }
-    jpeg_stream_task_ = task;
-    jpeg_stream_task_ready_ = true;
-    xSemaphoreGive(mutex_);
-    return true;
+    return started;
 }
 
 void DisplayService::StopJpegStream() {
     if (mutex_ == nullptr) return;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const TaskHandle_t task = jpeg_stream_task_;
-    jpeg_stream_stop_requested_ = true;
-    xSemaphoreGive(mutex_);
+    TaskHandle_t task = nullptr;
+    uint64_t generation = 0;
+    {
+        SemaphoreLock lock(mutex_);
+        task = jpeg_stream_task_;
+        generation = jpeg_stream_generation_;
+        jpeg_stream_stop_requested_ = true;
+    }
     if (frame_ready_semaphore_ != nullptr) xSemaphoreGive(frame_ready_semaphore_);
     if (task == nullptr || task == xTaskGetCurrentTaskHandle()) return;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(20));
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool running = jpeg_stream_task_ != nullptr;
-        xSemaphoreGive(mutex_);
-        if (!running) break;
+        SemaphoreLock lock(mutex_);
+        if (jpeg_stream_completed_generation_ >= generation) break;
     }
 }
 
@@ -292,13 +377,11 @@ void DisplayService::OnDisplayEvent(lv_event_t* event) {
 void DisplayService::HandleDisplayEvent(lv_event_t* event) {
     const lv_event_code_t code = lv_event_get_code(event);
     if ((code != LV_EVENT_FLUSH_START && code != LV_EVENT_FLUSH_FINISH) || mutex_ == nullptr) return;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
+    SemaphoreLock lock(mutex_);
     const bool active = capture_running_ && width_ > 0 && height_ > 0 && !mirror_rgb565_.empty();
-    xSemaphoreGive(mutex_);
     if (!active) return;
     auto* display = static_cast<lv_display_t*>(lv_event_get_current_target(event));
     if (code == LV_EVENT_FLUSH_FINISH) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
         if (frame_pending_ && lv_display_flush_is_last(display)) {
             // partial flush 只更新脏区域，交换不同代缓冲会让未重绘部分
             // 回退到旧画面或黑屏。发布完整副本，保持持久镜像始终最新。
@@ -313,7 +396,6 @@ void DisplayService::HandleDisplayEvent(lv_event_t* event) {
             frame_pending_ = false;
             if (frame_ready_semaphore_ != nullptr) xSemaphoreGive(frame_ready_semaphore_);
         }
-        xSemaphoreGive(mutex_);
         return;
     }
     auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
@@ -322,8 +404,8 @@ void DisplayService::HandleDisplayEvent(lv_event_t* event) {
     const int area_width = lv_area_get_width(area);
     const int area_height = lv_area_get_height(area);
     if (area->x1 < 0 || area->y1 < 0 || area->x2 >= width_ || area->y2 >= height_ ||
-        area_width <= 0 || area_height <= 0 || draw_buf->header.stride < area_width * 2) return;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
+        area_width <= 0 || area_height <= 0 ||
+        draw_buf->header.stride < static_cast<unsigned>(area_width) * 2U) return;
     for (int y = 0; y < area_height; ++y) {
         const auto* source = draw_buf->data + static_cast<size_t>(y) * draw_buf->header.stride;
         auto* target = mirror_rgb565_.data() +
@@ -331,7 +413,6 @@ void DisplayService::HandleDisplayEvent(lv_event_t* event) {
         std::memcpy(target, source, static_cast<size_t>(area_width) * 2);
     }
     frame_pending_ = true;
-    xSemaphoreGive(mutex_);
 }
 
 void DisplayService::JpegStreamTaskEntry(void* arg) {
@@ -341,15 +422,19 @@ void DisplayService::JpegStreamTaskEntry(void* arg) {
 }
 
 void DisplayService::JpegStreamTask() {
+    uint64_t stream_generation = 0;
     while (true) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool ready = jpeg_stream_task_ready_;
-        xSemaphoreGive(mutex_);
-        if (ready) break;
+        {
+            SemaphoreLock lock(mutex_);
+            if (jpeg_stream_task_ready_) {
+                stream_generation = jpeg_stream_generation_;
+                break;
+            }
+        }
         vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(1)));
     }
     uint32_t last_sequence = 0;
-    int64_t last_encode_at_us = 0;
+    int64_t last_attempt_at_us = -1;
     int64_t stats_started_us = esp_timer_get_time();
     uint32_t stats_attempts = 0;
     uint32_t stats_encoded = 0;
@@ -360,23 +445,26 @@ void DisplayService::JpegStreamTask() {
     int64_t stats_close_us = 0;
     size_t stats_output_bytes = 0;
     while (true) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool stop = jpeg_stream_stop_requested_ || !jpeg_stream_running_;
-        const uint8_t fps = jpeg_stream_fps_;
-        auto callback = jpeg_stream_callback_;
-        xSemaphoreGive(mutex_);
-        if (stop || fps == 0 || !callback) break;
+        uint8_t fps = 0;
+        std::shared_ptr<JpegFrameCallback> callback;
+        {
+            SemaphoreLock lock(mutex_);
+            if (jpeg_stream_stop_requested_ || !jpeg_stream_running_) break;
+            fps = jpeg_stream_fps_;
+            callback = jpeg_stream_callback_;
+        }
+        if (fps == 0 || !callback) break;
 
         // 即使 LVGL 在 worker 忙时发布多帧，也要保持配置的 FPS 上限。
         // 二值信号量会把突发通知合并为一个，只保留最新画面，避免旧截图排队。
         const int64_t interval_us = 1000000LL / static_cast<int64_t>(fps);
-        if (last_encode_at_us != 0) {
-            const int64_t remaining_us = interval_us - (esp_timer_get_time() - last_encode_at_us);
+        if (last_attempt_at_us >= 0) {
+            const int64_t remaining_us = interval_us - (esp_timer_get_time() - last_attempt_at_us);
             if (remaining_us > 0) {
                 const TickType_t wait_ticks = pdMS_TO_TICKS(
                     std::max<int64_t>(1, (remaining_us + 999) / 1000));
                 // 限速窗口内不要消费通知；保留通知后，间隔到期即可立即编码。
-                vTaskDelay(wait_ticks);
+                vTaskDelay(std::max<TickType_t>(1, std::min<TickType_t>(wait_ticks, pdMS_TO_TICKS(20))));
                 continue;
             }
         }
@@ -389,30 +477,40 @@ void DisplayService::JpegStreamTask() {
             vTaskDelay(pdMS_TO_TICKS(std::max(20, 1000 / static_cast<int>(fps))));
         }
 
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        const bool woke_stop = jpeg_stream_stop_requested_ || !jpeg_stream_running_;
-        xSemaphoreGive(mutex_);
-        if (woke_stop) break;
+        {
+            SemaphoreLock lock(mutex_);
+            if (jpeg_stream_stop_requested_ || !jpeg_stream_running_) break;
+            // 静态画面不必反复分配 150 KiB 帧副本。
+            if (!capture_running_ || !has_frame_ || latest_frame_.sequence == last_sequence) continue;
+        }
 
         DisplayFrame frame;
-        if (GetLatestFrame(frame) && frame.sequence != last_sequence) {
+        {
             std::vector<uint8_t> jpeg;
             EncodeMetrics metrics;
             ++stats_attempts;
-            if (EncodeRgb565(frame.rgb565, frame.width, frame.height, jpeg, &metrics)) {
+            if (GetLatestFrame(frame) &&
+                EncodeRgb565(frame.rgb565, frame.width, frame.height, jpeg, &metrics)) {
                 last_sequence = frame.sequence;
-                last_encode_at_us = esp_timer_get_time();
                 ++stats_encoded;
                 stats_conversion_us += metrics.conversion_us;
                 stats_open_us += metrics.open_us;
                 stats_process_us += metrics.process_us;
                 stats_close_us += metrics.close_us;
                 stats_output_bytes += metrics.output_size;
-                callback(std::move(jpeg), frame.sequence, frame.timestamp_us);
+                try {
+                    (*callback)(std::move(jpeg), frame.sequence, frame.timestamp_us);
+                } catch (const std::bad_alloc&) {
+                    // 回调可能已接收该帧，不能自动重放同一 sequence。
+                    ++stats_failed;
+                    SetError("Not enough memory to deliver display JPEG");
+                }
             } else {
                 ++stats_failed;
             }
             const int64_t now_us = esp_timer_get_time();
+            // 复制或编码失败也消耗一次尝试，避免持续刷新在 OOM 时形成忙循环。
+            last_attempt_at_us = now_us;
             if (now_us - stats_started_us >= kJpegStatsIntervalUs) {
                 const uint32_t sample_count = stats_encoded;
                 ESP_LOGI(TAG,
@@ -440,33 +538,34 @@ void DisplayService::JpegStreamTask() {
             }
         }
     }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    jpeg_stream_running_ = false;
-    jpeg_stream_stop_requested_ = false;
-    jpeg_stream_fps_ = 0;
-    jpeg_stream_callback_ = {};
-    jpeg_stream_task_ = nullptr;
-    jpeg_stream_task_ready_ = false;
-    xSemaphoreGive(mutex_);
+    std::shared_ptr<JpegFrameCallback> callback_to_release;
+    {
+        SemaphoreLock lock(mutex_);
+        jpeg_stream_running_ = false;
+        jpeg_stream_stop_requested_ = false;
+        jpeg_stream_fps_ = 0;
+        callback_to_release = std::move(jpeg_stream_callback_);
+        jpeg_stream_task_ = nullptr;
+        jpeg_stream_task_ready_ = false;
+        jpeg_stream_completed_generation_ =
+            std::max(jpeg_stream_completed_generation_, stream_generation);
+    }
 }
 
 std::string DisplayService::last_error() const {
     if (mutex_ == nullptr) return last_error_;
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const std::string error = last_error_;
-    xSemaphoreGive(mutex_);
-    return error;
+    SemaphoreLock lock(mutex_);
+    return last_error_;
 }
 
-void DisplayService::SetError(const std::string& error) {
-    ESP_LOGW(TAG, "%s", error.c_str());
+void DisplayService::SetError(const char* error) {
+    ESP_LOGW(TAG, "%s", error);
     if (mutex_ == nullptr) {
         last_error_ = error;
         return;
     }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
+    SemaphoreLock lock(mutex_);
     last_error_ = error;
-    xSemaphoreGive(mutex_);
 }
 
 }  // namespace rodakos

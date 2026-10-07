@@ -126,6 +126,7 @@ jobs:
           path: |
             host-check-results/*.log
             host-check-results/**/Testing/Temporary/*.log
+            host-check-results/**/production-sources.json
           if-no-files-found: warn
           retention-days: 14
 

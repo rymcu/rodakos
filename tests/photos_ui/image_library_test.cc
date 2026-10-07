@@ -6,10 +6,27 @@
 #include "phone_os/resource_failure_injection.h"
 #include <algorithm>
 #include <iterator>
+#include <src/draw/lv_draw_buf_private.h>
 #include <src/draw/lv_image_decoder_private.h>
 #include <src/misc/cache/instance/lv_image_header_cache.h>
 
 using namespace rodakos::ImageLibrary;
+
+namespace {
+void* RejectDrawBufferAllocation(size_t, lv_color_format_t) { return nullptr; }
+
+class ScopedImageBufferAllocationFailure {
+public:
+    ScopedImageBufferAllocationFailure()
+        : handlers_(lv_draw_buf_get_image_handlers()), original_(handlers_->buf_malloc_cb) {
+        handlers_->buf_malloc_cb = RejectDrawBufferAllocation;
+    }
+    ~ScopedImageBufferAllocationFailure() { handlers_->buf_malloc_cb = original_; }
+private:
+    lv_draw_buf_handlers_t* handlers_;
+    lv_draw_buf_malloc_cb original_;
+};
+}  // namespace
 
 RODAK_TEST("Photo scan distinguishes absent service, failed mount, and an empty mounted card") {
     photo_test::Files fs;
@@ -194,13 +211,17 @@ RODAK_TEST("BMP explicit reload replaces cached dimensions after the same file c
     RODAK_CHECK_EQ(header.w,1U);
 }
 
-RODAK_TEST("PNG uses real decoder preflight and remains decodable after preflight closes") {
+RODAK_TEST("PNG keeps the successful real decode and remains drawable without decoding again") {
     photo_test::ResetFailures(); photo_test::TestFiles files;
     const auto png=files.Png("good.png");
     {
         auto result=LoadImageForDisplayDetailed(png);
         RODAK_CHECK(result.status==ImageLoadStatus::kLoaded);
-        RODAK_CHECK(result.image->GetImageDescriptor()->header.cf==LV_COLOR_FORMAT_RAW_ALPHA);
+        RODAK_CHECK(result.image->GetImageDescriptor()->header.cf==LV_COLOR_FORMAT_ARGB8888);
+        RODAK_CHECK_EQ(result.image->GetImageDescriptor()->data[0],0U);
+        RODAK_CHECK_EQ(result.image->GetImageDescriptor()->data[1],128U);
+        RODAK_CHECK_EQ(result.image->GetImageDescriptor()->data[2],255U);
+        RODAK_CHECK_EQ(result.image->GetImageDescriptor()->data[3],255U);
         lv_image_decoder_dsc_t decoder{}; lv_image_decoder_args_t args{}; args.no_cache=true;
         RODAK_CHECK(lv_image_decoder_open(&decoder,result.image->GetImageSource(),&args)==LV_RESULT_OK);
         RODAK_CHECK(decoder.decoded!=nullptr);
@@ -221,6 +242,18 @@ RODAK_TEST("PNG uses real decoder preflight and remains decodable after prefligh
         auto recovered=LoadImageForDisplayDetailed(files.Png("retry.png"));
         RODAK_CHECK(recovered.status==ImageLoadStatus::kLoaded);
     }
+    RODAK_CHECK(photo_test::image_buffers.empty());
+}
+
+RODAK_TEST("PNG classifies LodePNG allocation error 83 as insufficient memory") {
+    photo_test::ResetFailures(); photo_test::TestFiles files;
+    ImageLoadResult result;
+    {
+        ScopedImageBufferAllocationFailure failure;
+        result=LoadImageForDisplayDetailed(files.Png("oom.png"));
+    }
+    RODAK_CHECK(result.status==ImageLoadStatus::kInsufficientMemory);
+    RODAK_CHECK(result.image==nullptr);
     RODAK_CHECK(photo_test::image_buffers.empty());
 }
 

@@ -1,0 +1,21 @@
+{
+  "component": "lvgl/lvgl",
+  "version": "9.3.0",
+  "repository": "https://github.com/lvgl/lvgl",
+  "ref": "v9.3.0",
+  "license": "MIT",
+  "component_hash": "b702d642e03e95928046d5c6726558e6444e112420c77efa5fdb6650b0a13c5d",
+  "source_hashes_lf": {
+    "CMakeLists.txt": "62885d1685bcb21a9164b7ba8eec997824352a1f7996a3ab4c88b16194f9984e",
+    "env_support/cmake/esp.cmake": "67675cfc396e9c92a61ed22a52b22a3dc736e1bf60c3f60fce41059c7305655c",
+    "src/draw/lv_draw_buf.c": "94ba137be50d8516e17314da33992fb53995ea071d9043fa7174d4e52d629f4e",
+    "src/draw/lv_draw_buf.h": "45fa9990279ef5aecd1808e78d06681bdae598e8def00932d03360de294cf9b6",
+    "src/draw/lv_image_dsc.h": "b356ba1594fad06d6716d12d07cbd4c2164889e0094af018c47840eef57bb0d7",
+    "src/libs/lodepng/lodepng.c": "160a73c414aa7f8e3c6f7d977b098bfaecb370f048a7b8e18b67f246549b696b",
+    "src/libs/lodepng/lodepng.h": "9c5db08ee60e791b0d74e1a1d2f5e4fe9310d5eace2647197068556fd791fb2b",
+    "src/libs/lodepng/lv_lodepng.c": "845fd3b2529cf2040850e1c74b7bd7f1f30a7c0856530a0c19345f2521a5c788",
+    "src/lv_api_map_v9_0.h": "d31e9ac2965968328225aba92614d349fca2c9fa0d378ea3ea766d55b31e290f",
+    "idf_component.yml": "781a286dd77a7274371d02faca6dc69ec9270d1ef125625439c88f340125afd2",
+    "LICENCE.txt": "27a80bd36832ab42d35ad60c08b2b230a807a9bc0d58e94ec1531543dc49cbe8"
+  }
+}

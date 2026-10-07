@@ -5,6 +5,7 @@
 #include <esp_jpeg_common.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -17,6 +18,9 @@
 #include "jpg/jpeg_to_image.h"
 #include <src/draw/lv_image_decoder_private.h>
 #include <src/misc/cache/instance/lv_image_header_cache.h>
+
+extern "C" unsigned lodepng_decode32(unsigned char** out, unsigned* width, unsigned* height,
+                                      const unsigned char* input, size_t input_size);
 
 namespace rodakos {
 
@@ -259,6 +263,23 @@ bool IsFileRenderableImage(const std::string& filename) {
 }
 
 namespace {
+struct DrawBufferDeleter {
+    void operator()(lv_draw_buf_t* buffer) const { lv_draw_buf_destroy(buffer); }
+};
+using DrawBuffer = std::unique_ptr<lv_draw_buf_t, DrawBufferDeleter>;
+
+class DecodedPngImage final : public LvglImage {
+public:
+    explicit DecodedPngImage(DrawBuffer buffer) : buffer_(std::move(buffer)) {
+        lv_draw_buf_to_image(buffer_.get(), &descriptor_);
+    }
+    ~DecodedPngImage() override { lv_image_cache_drop(&descriptor_); }
+    const lv_image_dsc_t* GetImageDescriptor() const override { return &descriptor_; }
+private:
+    DrawBuffer buffer_;
+    lv_image_dsc_t descriptor_{};
+};
+
 ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t height) {
     FILE* file = fopen(path.c_str(), "rb");
     if (file == nullptr) return {ImageLoadStatus::kReadFailed, {}};
@@ -318,26 +339,44 @@ ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t he
             return {ImageLoadStatus::kDecodeFailed, {}};
         }
     }
-    std::shared_ptr<LvglImage> image;
-    try {
-        image = std::make_shared<LvglAllocatedImage>(data, size);
-    } catch (const std::bad_alloc&) {
-        heap_caps_free(data);
-        return {ImageLoadStatus::kInsufficientMemory, {}};
-    } catch (...) {
-        heap_caps_free(data);
-        return {ImageLoadStatus::kDecodeFailed, {}};
+    unsigned png_width = 0, png_height = 0;
+    unsigned char* raw = nullptr;
+    const auto* encoded = static_cast<const uint8_t*>(data);
+    const unsigned depth = size > 24 ? encoded[24] : 0;
+    const unsigned color = size > 25 ? encoded[25] : 0;
+    const int64_t started = esp_timer_get_time();
+    const unsigned error = lodepng_decode32(&raw, &png_width, &png_height, encoded, size);
+    DrawBuffer decoded(reinterpret_cast<lv_draw_buf_t*>(raw));
+    heap_caps_free(data);
+    if (error != 0 || !decoded) {
+        ESP_LOGW(TAG, "PNG decode failed: code=%u bytes=%u size=%ux%u depth=%u color=%u elapsed_ms=%lld "
+                 "internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
+                 error, static_cast<unsigned>(size), png_width, png_height, depth, color,
+                 static_cast<long long>((esp_timer_get_time() - started) / 1000),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+        return {error == 83 ? ImageLoadStatus::kInsufficientMemory : ImageLoadStatus::kDecodeFailed, {}};
     }
-    lv_image_decoder_dsc_t decoder{};
-    lv_image_decoder_args_t args{};
-    args.no_cache = true;
-    // Header inspection alone accepts truncated PNGs; exercise the actual decoder.
-    if (lv_image_decoder_open(&decoder, image->GetImageSource(), &args) != LV_RESULT_OK)
-        return {ImageLoadStatus::kDecodeFailed, {}};
-    const bool decoded = decoder.decoded != nullptr;
-    lv_image_decoder_close(&decoder);
-    if (!decoded) return {ImageLoadStatus::kDecodeFailed, {}};
-    return {ImageLoadStatus::kLoaded, std::move(image)};
+    // LodePNG returns RGBA samples; LVGL's ARGB8888 layout stores blue first.
+    for (size_t i = 0; i < static_cast<size_t>(png_width) * png_height; ++i)
+        std::swap(decoded->data[i * 4], decoded->data[i * 4 + 2]);
+    ESP_LOGI(TAG, "PNG decode succeeded: bytes=%u size=%ux%u depth=%u color=%u elapsed_ms=%lld "
+             "internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
+             static_cast<unsigned>(size), png_width, png_height, depth, color,
+             static_cast<long long>((esp_timer_get_time() - started) / 1000),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+    try {
+        // Keep this successful decode. A second decode during drawing can fail
+        // after the UI has already reported success, and doubles transient pressure.
+        return {ImageLoadStatus::kLoaded, std::make_shared<DecodedPngImage>(std::move(decoded))};
+    } catch (const std::bad_alloc&) {
+        return {ImageLoadStatus::kInsufficientMemory, {}};
+    }
 }
 void SortPaths(ImageScanResult& result) {
     std::sort(result.paths.begin(), result.paths.end(), [](const auto& left, const auto& right) {
