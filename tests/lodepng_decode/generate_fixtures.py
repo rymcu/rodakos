@@ -79,7 +79,7 @@ def create(name, depth, color, channels, interlace):
     (root / f'{name}.rgba').write_bytes(expected)
     return {'name': name, 'bytes': len(png), 'depth': depth, 'color': color, 'interlace': interlace}
 
-def create_rgba8_filters():
+def create_rgba8_filters(name='rgba8-filters', width=width, height=height):
     raw = bytearray()
     previous = b''
     for y in range(height):
@@ -91,9 +91,10 @@ def create_rgba8_filters():
     expected = b''.join(rgba(x, y, 6, 4) for y in range(height) for x in range(width))
     ihdr = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
-    (root / 'rgba8-filters.png').write_bytes(png)
-    (root / 'rgba8-filters.rgba').write_bytes(expected)
-    return {'name': 'rgba8-filters', 'bytes': len(png), 'depth': 8, 'color': 6, 'interlace': 0}
+    (root / f'{name}.png').write_bytes(png)
+    (root / f'{name}.rgba').write_bytes(expected)
+    return {'name': name, 'bytes': len(png), 'width': width, 'height': height,
+            'depth': 8, 'color': 6, 'interlace': 0}
 
 cases = [
     create('gray16', 16, 0, 1, 0),
@@ -106,6 +107,7 @@ cases = [
     create('rgba8-adam7', 8, 6, 4, 1),
     create('rgb16-adam7', 16, 2, 3, 1),
     create('rgba16-adam7', 16, 6, 4, 1),
+    create_rgba8_filters('rgba8-471x423', 471, 423),
 ]
 
 def create_rejected_geometry(name, rejected_width, rejected_height):

@@ -19,6 +19,7 @@ target_compile_options(rodakos_camera_capture_tests PRIVATE -Wall -Wextra -Werro
 target_link_libraries(rodakos_camera_capture_tests PRIVATE Threads::Threads)
 target_link_options(rodakos_camera_capture_tests PRIVATE
     -Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap
+    -Wl,--wrap=_Znwm -Wl,--wrap=_ZdlPv -Wl,--wrap=_ZdlPvm
     -Wl,--wrap=time -Wl,--wrap=mkdir -Wl,--wrap=fwrite -Wl,--wrap=fflush -Wl,--wrap=fclose)
 add_test(NAME rodakos_camera_capture COMMAND rodakos_camera_capture_tests)
 set_tests_properties(rodakos_camera_capture PROPERTIES TIMEOUT 30)

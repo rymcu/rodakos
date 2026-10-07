@@ -276,11 +276,133 @@ RODAK_TEST("capture retries preserve local and remote preview leases and release
     RODAK_CHECK_FALSE(f.Save().empty());
     f.camera->StopPreview(CameraService::PreviewOwner::kLocal);
     RODAK_CHECK(f.camera->GetState().preview_running);
+    RODAK_CHECK(f.camera->GetState().has_frame);
+    RODAK_CHECK(camera_host::preview_frame_bytes.load() >= 8u);
     f.camera->StopPreview(CameraService::PreviewOwner::kRemote);
     camera_host::JoinTasks();
     RODAK_CHECK_FALSE(f.camera->GetState().preview_running);
+    RODAK_CHECK_FALSE(f.camera->GetState().has_frame);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
     RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
     RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+}
+
+RODAK_TEST("final preview stop releases its owned pixels and rejects stale capture before restart") {
+    Fixture f; f.Preview();
+    CameraFrame snapshot;
+    RODAK_CHECK(f.camera->GetLatestFrame(snapshot));
+    const auto pixels = snapshot.rgb565;
+    RODAK_CHECK_EQ(pixels.size(), 8u);
+    RODAK_CHECK(camera_host::preview_frame_bytes.load() >= pixels.size());
+
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_FALSE(f.camera->GetState().has_frame);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+    CameraFrame stopped_frame;
+    RODAK_CHECK_FALSE(f.camera->GetLatestFrame(stopped_frame));
+    Bytes jpeg{1, 2, 3};
+    RODAK_CHECK_FALSE(f.camera->CaptureJpeg(jpeg));
+    RODAK_CHECK(jpeg.empty());
+    RODAK_CHECK_EQ(snapshot.rgb565, pixels);
+
+    f.Preview();
+    RODAK_CHECK(f.camera->GetLatestFrame(stopped_frame));
+    RODAK_CHECK_EQ(stopped_frame.rgb565, pixels);
+    RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+}
+
+RODAK_TEST("stopping a remote preview owner retains the local owner's live frame") {
+    Fixture f; f.Preview();
+    RODAK_CHECK(f.camera->StartPreview(CameraService::PreviewOwner::kRemote, 2, 2));
+    f.camera->StopPreview(CameraService::PreviewOwner::kRemote);
+    CameraFrame frame;
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    RODAK_CHECK(f.camera->GetLatestFrame(frame));
+    RODAK_CHECK(camera_host::preview_frame_bytes.load() >= 8u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 2u);
+    f.camera->StopPreview(CameraService::PreviewOwner::kRemote);
+    RODAK_CHECK(f.camera->GetLatestFrame(frame));
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_FALSE(f.camera->GetLatestFrame(frame));
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+}
+
+RODAK_TEST("unexpected dequeue failure revokes both preview leases and releases the last frame") {
+    Fixture f; f.Preview();
+    RODAK_CHECK(f.camera->StartPreview(CameraService::PreviewOwner::kRemote, 2, 2));
+    camera_host::fail_dequeue = true;
+    for (unsigned attempt = 0; attempt < 1000 && f.camera->GetState().preview_running; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RODAK_CHECK_FALSE(f.camera->GetState().preview_running);
+    camera_host::JoinTasks();
+    RODAK_CHECK_FALSE(f.camera->GetState().has_frame);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+    RODAK_CHECK(f.camera->last_error().find("dequeue failed") != std::string::npos);
+    CameraFrame frame;
+    RODAK_CHECK_FALSE(f.camera->GetLatestFrame(frame));
+
+    camera_host::fail_dequeue = false;
+    f.Preview();
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_FALSE(f.camera->GetState().preview_running);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+}
+
+RODAK_TEST("concurrent frame readers own their copies across final preview stop") {
+    Fixture f; f.Preview();
+    std::atomic<bool> done{false}, valid{true};
+    std::atomic<unsigned> snapshots{0};
+    auto reader = std::async(std::launch::async, [&]() {
+        while (!done) {
+            CameraFrame frame;
+            if (f.camera->GetLatestFrame(frame)) {
+                ++snapshots;
+                std::this_thread::yield();
+                if (frame.width != 2 || frame.height != 2 || frame.rgb565 != Bytes(8, 0xff)) {
+                    valid = false;
+                }
+            }
+        }
+    });
+    while (snapshots == 0) std::this_thread::yield();
+    f.camera->StopPreview();
+    bool rejected_stale_frame = true;
+    for (unsigned attempt = 0; attempt < 100; ++attempt) {
+        CameraFrame frame;
+        rejected_stale_frame &= !f.camera->GetLatestFrame(frame);
+    }
+    done = true;
+    reader.get();
+    camera_host::JoinTasks();
+    RODAK_CHECK(valid.load());
+    RODAK_CHECK(rejected_stale_frame);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+}
+
+RODAK_TEST("preview stop waits for the worker's final service access before publishing completion") {
+    Fixture f; f.Preview();
+    std::promise<void> entered, release;
+    const auto entered_future = entered.get_future();
+    const auto gate = release.get_future().share();
+    camera_host::preview_state_query_hook = [&]() { entered.set_value(); gate.wait(); };
+    auto stop = std::async(std::launch::async, [&]() { f.camera->StopPreview(); });
+    const bool reached_tail = entered_future.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    const bool waited = stop.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+    release.set_value();
+    stop.get();
+    camera_host::JoinTasks();
+    camera_host::preview_state_query_hook = {};
+    RODAK_CHECK(reached_tail);
+    RODAK_CHECK(waited);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
 }
 
 RODAK_TEST("camera destruction revokes every preview lease before deleting service state") {

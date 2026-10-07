@@ -742,7 +742,6 @@ void CameraService::PreviewTask() {
 #endif
 
     CloseStream();
-    MarkPreviewStopped();
     const auto state = GetState();
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int64_t stopped_at_us = esp_timer_get_time();
@@ -753,6 +752,9 @@ void CameraService::PreviewTask() {
 #else
     ESP_LOGI(TAG, "Camera preview stopped: frames=%" PRIu32, state.frame_count);
 #endif
+    // StopPreview may return and destroy the service as soon as this publishes
+    // the empty task handle. No service access may follow it.
+    MarkPreviewStopped();
 }
 
 bool CameraService::OpenStream(int width, int height) {
@@ -926,6 +928,8 @@ void CameraService::MarkPreviewStopped() {
         local_preview_lease_ = false;
         remote_preview_lease_ = false;
         stop_requested_ = false;
+        has_frame_ = false;
+        latest_frame_ = {};
         preview_task_ = nullptr;
         preview_task_ready_ = false;
         xSemaphoreGive(mutex_);

@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdarg>
@@ -27,17 +28,35 @@ std::mutex tasks_mutex, mappings_mutex;
 std::vector<std::unique_ptr<std::thread>> tasks;
 std::set<void*> mappings;
 thread_local TaskHandle_t current_task = nullptr;
+thread_local bool is_preview_task = false;
+constexpr size_t kPreviewFrameBytes = 2 * 2 * 2;
+std::mutex preview_allocations_mutex;
+std::array<void*, 32> preview_allocations{};
 std::string mount_path;
 sdmmc_card_t card;
 dev_fs_fat_handle_t board_handle{&card, nullptr};
+
+void ForgetPreviewAllocation(void* pointer) {
+    std::lock_guard<std::mutex> lock(preview_allocations_mutex);
+    for (auto& allocation : preview_allocations) {
+        if (allocation == pointer && pointer != nullptr) {
+            allocation = nullptr;
+            camera_host::preview_frame_bytes -= kPreviewFrameBytes;
+            break;
+        }
+    }
+}
 }
 
 namespace camera_host {
 std::atomic<bool> fail_mount{false}, fail_directory{false}, fail_write{false}, fail_flush{false}, fail_close{false};
 std::atomic<bool> fail_encoder_open{false}, fail_encoder_process{false}, fail_allocation{false}, empty_encoded{false};
 std::atomic<bool> collide_on_create{false};
+std::atomic<bool> fail_dequeue{false};
 std::atomic<unsigned> encoder_handles{0}, frame_mappings{0};
+std::atomic<size_t> preview_frame_bytes{0};
 std::function<void()> write_hook;
+std::function<void()> preview_state_query_hook;
 std::string collision_path;
 void Reset(const std::string& path) {
     mount_path = path;
@@ -45,8 +64,14 @@ void Reset(const std::string& path) {
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
     fail_encoder_open = fail_encoder_process = fail_allocation = empty_encoded = false;
     collide_on_create = false;
+    fail_dequeue = false;
     write_hook = {};
+    preview_state_query_hook = {};
     collision_path.clear();
+}
+bool IsCameraConfigured() {
+    if (is_preview_task && preview_state_query_hook) preview_state_query_hook();
+    return true;
 }
 void JoinTasks() {
     std::vector<std::unique_ptr<std::thread>> pending;
@@ -64,13 +89,18 @@ int64_t esp_timer_get_time() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-BaseType_t xTaskCreateWithCaps(TaskFunction_t function, const char*, uint32_t, void* argument,
+BaseType_t xTaskCreateWithCaps(TaskFunction_t function, const char* name, uint32_t, void* argument,
                              uint32_t, TaskHandle_t* handle, uint32_t) {
     std::lock_guard<std::mutex> lock(tasks_mutex);
     auto task = std::make_unique<std::thread>();
     *handle = task.get();
     const auto identity = *handle;
-    *task = std::thread([=]() { current_task = identity; function(argument); });
+    const bool preview = std::strcmp(name, "camera_preview") == 0;
+    *task = std::thread([=]() {
+        current_task = identity;
+        is_preview_task = preview;
+        function(argument);
+    });
     tasks.push_back(std::move(task));
     return pdPASS;
 }
@@ -102,6 +132,32 @@ jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t, const uint8_t*, int input_bytes
 void jpeg_enc_close(jpeg_enc_handle_t encoder) { delete static_cast<int*>(encoder); --camera_host::encoder_handles; }
 
 extern "C" {
+void* __real__Znwm(size_t);
+void __real__ZdlPv(void*);
+void __real__ZdlPvm(void*, size_t);
+
+void* __wrap__Znwm(size_t size) {
+    void* pointer = __real__Znwm(size);
+    // Track the fake device's RGB565 allocations made by the production preview
+    // worker, including buffers retained by the service after the worker exits.
+    if (is_preview_task && size == kPreviewFrameBytes) {
+        std::lock_guard<std::mutex> lock(preview_allocations_mutex);
+        const auto free_slot = std::find(preview_allocations.begin(), preview_allocations.end(), nullptr);
+        if (free_slot == preview_allocations.end()) std::abort();
+        *free_slot = pointer;
+        camera_host::preview_frame_bytes += size;
+    }
+    return pointer;
+}
+void __wrap__ZdlPv(void* pointer) {
+    ForgetPreviewAllocation(pointer);
+    __real__ZdlPv(pointer);
+}
+void __wrap__ZdlPvm(void* pointer, size_t size) {
+    ForgetPreviewAllocation(pointer);
+    __real__ZdlPvm(pointer, size);
+}
+
 int __real_open(const char*, int, ...);
 int __real_close(int);
 int __real_ioctl(int, unsigned long, ...);
@@ -145,6 +201,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         buffer->m.offset = buffer->index * 4096;
     } else if (request == VIDIOC_DQBUF) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (camera_host::fail_dequeue) { errno = EIO; return -1; }
         auto* buffer = static_cast<v4l2_buffer*>(argument);
         buffer->index = 0; buffer->bytesused = 8; buffer->flags = V4L2_BUF_FLAG_DONE;
     }

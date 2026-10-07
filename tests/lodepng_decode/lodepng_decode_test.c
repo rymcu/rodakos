@@ -2,6 +2,7 @@
 #include <src/draw/lv_draw_buf_private.h>
 #include <src/draw/lv_image_decoder_private.h>
 #include <src/libs/lodepng/lodepng.h>
+#include "allocation_probe.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,13 +121,14 @@ int main(int argc, char** argv)
 {
     static const char* cases[] = {
         "gray16", "ga16", "rgb8", "rgba8", "rgba8-filters", "rgb16", "rgba16",
-        "rgba8-adam7", "rgb16-adam7", "rgba16-adam7"
+        "rgba8-adam7", "rgb16-adam7", "rgba16-adam7", "rgba8-471x423"
     };
     if(argc != 2) return 2;
     lv_init();
     for(size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         int expected_allocations = (strcmp(cases[i], "rgba8") == 0 ||
-                                    strcmp(cases[i], "rgba8-filters") == 0) ? 0 :
+                                    strcmp(cases[i], "rgba8-filters") == 0 ||
+                                    strcmp(cases[i], "rgba8-471x423") == 0) ? 0 :
                                    strcmp(cases[i], "rgba8-adam7") == 0 ? 1 : -1;
         int result = verify_case(argv[1], cases[i], expected_allocations);
         if(result) {
@@ -137,6 +139,14 @@ int main(int argc, char** argv)
 
     if(verify_geometry_rejection(argv[1], "oversize")) return 20;
     if(verify_geometry_rejection(argv[1], "stride-overflow")) return 21;
+    size_t png_size = 0, expected_size = 0;
+    unsigned char * png = read_file(argv[1], "rgba8-471x423", "png", &png_size);
+    unsigned char * expected = read_file(argv[1], "rgba8-471x423", "rgba", &expected_size);
+    if(!png || !expected) return 22;
+    int allocation_result = verify_rgba8_allocation_recovery(png, png_size, expected, expected_size, 471, 423);
+    free(expected);
+    free(png);
+    if(allocation_result) return allocation_result;
     lv_deinit();
     printf("%zu PNG variants and 2 geometry rejections passed\n",
            sizeof(cases) / sizeof(cases[0]));
