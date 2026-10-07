@@ -245,12 +245,20 @@ RODAK_TEST("PNG keeps the successful real decode and remains drawable without de
     RODAK_CHECK(photo_test::image_buffers.empty());
 }
 
-RODAK_TEST("PNG classifies LodePNG allocation error 83 as insufficient memory") {
+RODAK_TEST("PNG RGBA8 reuses scanlines while RGB8 allocation error 83 remains distinct") {
     photo_test::ResetFailures(); photo_test::TestFiles files;
     ImageLoadResult result;
     {
         ScopedImageBufferAllocationFailure failure;
-        result=LoadImageForDisplayDetailed(files.Png("oom.png"));
+        result=LoadImageForDisplayDetailed(files.Png("in-place.png"));
+    }
+    RODAK_CHECK(result.status==ImageLoadStatus::kLoaded);
+    RODAK_CHECK(result.image!=nullptr);
+    result.image.reset();
+    RODAK_CHECK(photo_test::image_buffers.empty());
+    {
+        ScopedImageBufferAllocationFailure failure;
+        result=LoadImageForDisplayDetailed(files.PngRgb("oom.png"));
     }
     RODAK_CHECK(result.status==ImageLoadStatus::kInsufficientMemory);
     RODAK_CHECK(result.image==nullptr);

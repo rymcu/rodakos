@@ -27,6 +27,7 @@ struct TestFiles {
     std::string Jpeg(const std::string& name);
     std::string Bmp(const std::string& name);
     std::string Png(const std::string& name);
+    std::string PngRgb(const std::string& name);
     std::string Save(const std::string& name, const std::vector<uint8_t>& bytes);
 };
 

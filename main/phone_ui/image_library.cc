@@ -344,14 +344,15 @@ ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t he
     const auto* encoded = static_cast<const uint8_t*>(data);
     const unsigned depth = size > 24 ? encoded[24] : 0;
     const unsigned color = size > 25 ? encoded[25] : 0;
+    const unsigned interlace = size > 28 ? encoded[28] : 0;
     const int64_t started = esp_timer_get_time();
     const unsigned error = lodepng_decode32(&raw, &png_width, &png_height, encoded, size);
     DrawBuffer decoded(reinterpret_cast<lv_draw_buf_t*>(raw));
     heap_caps_free(data);
     if (error != 0 || !decoded) {
-        ESP_LOGW(TAG, "PNG decode failed: code=%u bytes=%u size=%ux%u depth=%u color=%u elapsed_ms=%lld "
+        ESP_LOGW(TAG, "PNG decode failed: code=%u bytes=%u size=%ux%u depth=%u color=%u interlace=%u elapsed_ms=%lld "
                  "internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
-                 error, static_cast<unsigned>(size), png_width, png_height, depth, color,
+                 error, static_cast<unsigned>(size), png_width, png_height, depth, color, interlace,
                  static_cast<long long>((esp_timer_get_time() - started) / 1000),
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
@@ -362,9 +363,9 @@ ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t he
     // LodePNG returns RGBA samples; LVGL's ARGB8888 layout stores blue first.
     for (size_t i = 0; i < static_cast<size_t>(png_width) * png_height; ++i)
         std::swap(decoded->data[i * 4], decoded->data[i * 4 + 2]);
-    ESP_LOGI(TAG, "PNG decode succeeded: bytes=%u size=%ux%u depth=%u color=%u elapsed_ms=%lld "
+    ESP_LOGI(TAG, "PNG decode succeeded: bytes=%u size=%ux%u depth=%u color=%u interlace=%u elapsed_ms=%lld "
              "internal_free=%u internal_largest=%u psram_free=%u psram_largest=%u",
-             static_cast<unsigned>(size), png_width, png_height, depth, color,
+             static_cast<unsigned>(size), png_width, png_height, depth, color, interlace,
              static_cast<long long>((esp_timer_get_time() - started) / 1000),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),

@@ -17,5 +17,6 @@ directory; managed component files remain unchanged. `cmake/lodepng_patch.cmake`
 one source entry on the resolved LVGL target for both ESP-IDF and host tests.
 
 `tests/lodepng_decode` generates valid fixtures with the Python standard library and verifies 8/16
-bit grayscale, grayscale-alpha, RGB and RGBA, 16-bit Adam7 RGB/RGBA, exact output pixels, and
-both oversized-dimension and oversized-stride rejection under ASan/UBSan.
+bit grayscale, grayscale-alpha, RGB and RGBA, non-interlaced RGBA filters 0-4, RGBA8 and 16-bit
+Adam7 RGB/RGBA, exact output pixels, and both oversized-dimension and oversized-stride rejection
+under ASan/UBSan.

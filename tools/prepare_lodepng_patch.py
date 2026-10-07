@@ -50,14 +50,71 @@ def prepare(component, lock, manifest, output):
         require(hashlib.sha256(content).hexdigest() == digest, "Unreviewed LVGL source: " + path)
         sources[path] = content.decode()
     source = sources["src/libs/lodepng/lodepng.c"]
-    original = "lv_draw_buf_t * decoded = lv_draw_buf_create_ex(image_cache_draw_buf_handlers, *w, *h, LV_COLOR_FORMAT_ARGB8888, 4 * *w);"
+    original = """    if(!state->error) {
+        lv_draw_buf_t * decoded = lv_draw_buf_create_ex(image_cache_draw_buf_handlers, *w, *h, LV_COLOR_FORMAT_ARGB8888, 4 * *w);
+        if(decoded) {
+            *out = (unsigned char*)decoded;
+            outsize = decoded->data_size;
+        }
+        else state->error = 83; /*alloc fail*/
+    }
+    if(!state->error) {
+        lv_draw_buf_t * decoded = (lv_draw_buf_t *)*out;
+        lodepng_memset(decoded->data, 0, outsize);
+        state->error = postProcessScanlines(decoded->data, scanlines, *w, *h, &state->info_png);
+    }
+    lodepng_free(scanlines);"""
     require(source.count(original) == 1, "Unexpected decode allocation boundary")
-    source = source.replace(original, """/* RodakOS: unfilter the original samples before RGBA8 conversion.
+    source = source.replace(original, """    /* RodakOS: RGBA8 scanlines can be unfiltered and compacted in place. Adopt
+       the decompression allocation so large non-interlaced PNGs do not need a
+       second full-size pixel buffer. Adam7 and color conversion keep the
+       reviewed allocation path below. */
+    if(!state->error && state->info_png.interlace_method == 0 &&
+       state->info_png.color.colortype == LCT_RGBA && state->info_png.color.bitdepth == 8 &&
+       lodepng_color_mode_equal(&state->info_raw, &state->info_png.color) &&
+       scanlines_size <= 0xffffffffu &&
+       lv_draw_buf_align(scanlines, LV_COLOR_FORMAT_ARGB8888) == scanlines) {
+        lv_draw_buf_t * decoded;
+        state->error = postProcessScanlines(scanlines, scanlines, *w, *h, &state->info_png);
+        if(!state->error) {
+            decoded = (lv_draw_buf_t *)lv_malloc_zeroed(sizeof(lv_draw_buf_t));
+            if(decoded) {
+                lv_result_t initialized = lv_draw_buf_init(decoded, *w, *h,
+                                                           LV_COLOR_FORMAT_ARGB8888, 4 * *w,
+                                                           scanlines, (uint32_t)scanlines_size);
+                if(initialized != LV_RESULT_OK) {
+                    lv_free(decoded);
+                    decoded = 0;
+                    state->error = 83;
+                }
+            }
+            if(decoded) {
+                decoded->header.flags = LV_IMAGE_FLAGS_MODIFIABLE | LV_IMAGE_FLAGS_ALLOCATED;
+                *out = (unsigned char *)decoded;
+                scanlines = 0;
+            }
+            else if(!state->error) state->error = 83; /*alloc fail*/
+        }
+    }
+    else if(!state->error) {
+        /* RodakOS: unfilter the original samples before RGBA8 conversion.
            RGB16/RGBA16 require 6/8 bytes per pixel, including Adam7 output. */
         unsigned raw_bpp = lodepng_get_bpp(&state->info_png.color);
         uint32_t raw_stride = (*w * raw_bpp + 7) / 8;
         uint32_t stride = raw_stride > 4 * *w ? raw_stride : 4 * *w;
-        lv_draw_buf_t * decoded = lv_draw_buf_create_ex(image_cache_draw_buf_handlers, *w, *h, LV_COLOR_FORMAT_ARGB8888, stride);""")
+        lv_draw_buf_t * decoded = lv_draw_buf_create_ex(image_cache_draw_buf_handlers, *w, *h,
+                                                        LV_COLOR_FORMAT_ARGB8888, stride);
+        if(decoded) {
+            *out = (unsigned char*)decoded;
+            outsize = decoded->data_size;
+        }
+        else state->error = 83; /*alloc fail*/
+        if(!state->error) {
+            lodepng_memset(decoded->data, 0, outsize);
+            state->error = postProcessScanlines(decoded->data, scanlines, *w, *h, &state->info_png);
+        }
+    }
+    lodepng_free(scanlines);""")
     boundary = "    /*the input filesize is a safe upper bound for the sum of idat chunks size*/"
     require(source.count(boundary) == 1, "Unexpected dimension validation boundary")
     source = source.replace(boundary, """    /* RodakOS: LVGL stores dimensions and stride in 16-bit fields. Validate

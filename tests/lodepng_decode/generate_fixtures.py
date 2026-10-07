@@ -32,6 +32,33 @@ def rgba(x, y, color, channels):
         return bytes([values[0], values[0], values[0], values[1]])
     return bytes(values + ([255] if color == 2 else []))
 
+def paeth(a, b, c):
+    estimate = a + b - c
+    distance_a = abs(estimate - a)
+    distance_b = abs(estimate - b)
+    distance_c = abs(estimate - c)
+    if distance_a <= distance_b and distance_a <= distance_c:
+        return a
+    if distance_b <= distance_c:
+        return b
+    return c
+
+def filter_row(row, previous, filter_type, bytewidth):
+    filtered = bytearray(len(row))
+    for index, value in enumerate(row):
+        left = row[index - bytewidth] if index >= bytewidth else 0
+        above = previous[index] if previous else 0
+        upper_left = previous[index - bytewidth] if previous and index >= bytewidth else 0
+        predictor = {
+            0: 0,
+            1: left,
+            2: above,
+            3: (left + above) // 2,
+            4: paeth(left, above, upper_left),
+        }[filter_type]
+        filtered[index] = (value - predictor) & 0xff
+    return filtered
+
 def create(name, depth, color, channels, interlace):
     raw = bytearray()
     if interlace:
@@ -52,13 +79,31 @@ def create(name, depth, color, channels, interlace):
     (root / f'{name}.rgba').write_bytes(expected)
     return {'name': name, 'bytes': len(png), 'depth': depth, 'color': color, 'interlace': interlace}
 
+def create_rgba8_filters():
+    raw = bytearray()
+    previous = b''
+    for y in range(height):
+        row = b''.join(pixel_bytes(x, y, 8, 4) for x in range(width))
+        filter_type = y % 5
+        raw.append(filter_type)
+        raw.extend(filter_row(row, previous, filter_type, 4))
+        previous = row
+    expected = b''.join(rgba(x, y, 6, 4) for y in range(height) for x in range(width))
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+    (root / 'rgba8-filters.png').write_bytes(png)
+    (root / 'rgba8-filters.rgba').write_bytes(expected)
+    return {'name': 'rgba8-filters', 'bytes': len(png), 'depth': 8, 'color': 6, 'interlace': 0}
+
 cases = [
     create('gray16', 16, 0, 1, 0),
     create('ga16', 16, 4, 2, 0),
     create('rgb8', 8, 2, 3, 0),
     create('rgba8', 8, 6, 4, 0),
+    create_rgba8_filters(),
     create('rgb16', 16, 2, 3, 0),
     create('rgba16', 16, 6, 4, 0),
+    create('rgba8-adam7', 8, 6, 4, 1),
     create('rgb16-adam7', 16, 2, 3, 1),
     create('rgba16-adam7', 16, 6, 4, 1),
 ]
