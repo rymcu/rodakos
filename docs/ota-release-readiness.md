@@ -1253,3 +1253,42 @@ ephemeral audit, browser image and serial records. This bundle does **not** incl
 legacy persistent-signal replay cleanup. Its 19/19 result verifies the new session's bounded
 control-plane delivery, not historical replay removal, SDK support for all candidates,
 physical control/audio, Camera teardown or long-duration capacity. **NO_GO** remains.
+
+### Legacy replay cleanup and final desktop verification
+
+The subsequent desktop build rejects persistent camera/display signaling at creation, HTTP
+pull, MQTT replay and final publication. It follows the firmware's command/type precedence;
+ordinary commands and existing terminal records retain their behavior. In `legacy-cleanup-024`,
+the actual database's 315 known signal records change from 148 acked / 41 delivered / 126 failed
+to 148 acked / 167 failed. All 41 carry the replay prohibition reason, and the original 274
+terminal records are unchanged. No database record was manually edited or deleted. That
+reconnect window has no queue-drop or failed-ACK log, but still includes one firmware-initiated
+credential-refresh isolation restart. Desktop cleanup does not fix that firmware behavior.
+
+`final-ack-024` uses desktop main bundle SHA-256
+`bcc18f44f64fb473f71301668b90bc917790d90a3374d08c6b2fc25604ca8859` with unchanged 024 firmware.
+With zero candidate delay, it again has 19/19 sequential ACKs and a rendered 320×240 image;
+the sequence takes 19.304 s, and eight SDK remote-candidate-limit logs remain. Stop/Home is
+followed by 98.936 s of serial observation without reset/panic or queue-drop/failed-ACK markers.
+Final MQTT internal free/largest is 21,287 / 8,192 B, PSRAM is 2,568,632 / 1,572,864 B, and the
+boot's internal minimum is 1,711 B. The original ID/bound/tokenVersion=4, MQTT connectivity and
+idle voice state remain at 10:37:59 UTC. Control stays disabled; no JTAG is attached and COM3
+is released. The evidence records exact desktop source hashes; these are bounded observations,
+not a comparison of capacity across boot histories or acceptance of the remaining hardware gates.
+
+### First 024 CI candidate failure
+
+Main `b961cf4` host run `37607779353` and PR test-merge `a6e2bf5` host run `37607860538`
+fail while linking `voice_identity_integration`: the shared MQTT `host_runtime.cc` calls
+`mqtt_host::ResetDiagnosticLogs()`, but the integration target did not link the new
+`diagnostics_support.cc`. MQTT's own five CTests already pass. This is a cross-suite host
+harness dependency omission, not an infrastructure failure or a firmware runtime diagnosis.
+The earlier source-reuse review missed that dependency; a focused integration rerun and fresh
+candidate CI are required. The flashed application, immutable assets and signing root are unchanged.
+
+The integration target now links `${MQTT}/diagnostics_support.cc`. A cross-repository reference
+check finds no other target missing the shared dependency. Fresh Debug and ASan/UBSan/leak
+builds both link the test and fixture executables, pass **four cases / one CTest**, and emit the
+expected fixture snapshot. Evidence is Rodak
+`.codex-temp/mqtt-diagnostics-024/voice-identity-ci-fix/test-evidence.json`. This focused repair
+does not turn the earlier failed runs green; the next exact main/PR candidates need fresh CI.
