@@ -13,6 +13,72 @@ lock change adds this component and the manifest hash; it does not upgrade other
 components. DNS-SD responses are bounded routing hints, authenticated by the existing
 USB-installed TLS pin before use. See [trusted server discovery](trusted-server-discovery.md).
 
+## LVGL LodePNG decode overlay
+
+RodakOS keeps `lvgl/lvgl` pinned at 9.3.0. Its bundled LodePNG integration allocates the final
+ARGB8888 row width before PNG unfiltering. A 16-bit RGB or RGBA source needs six or eight bytes per
+pixel during that earlier step, so the upstream buffer can be too small even though the final image
+is four bytes per pixel. The project-owned overlay allocates the larger raw/final stride, rejects
+dimensions or strides that cannot fit LVGL's 16-bit image fields, and then preserves the existing
+conversion to compact ARGB8888 output. Normal and Adam7 inputs remain supported.
+
+This reviewed decoder defect is separate from the package-013 `A3.PNG` incident. The recorded Retry
+abort terminated in the `DisplayService` JPEG path on `std::bad_alloc`. The package-014 hardware
+rerun later established that `A3.PNG` is a 69,200-byte, 471 x 423, 8-bit color-type-6 (RGBA) image.
+Its first open and two Retry attempts all returned LodePNG error 83 while the display JPEG stream
+continued and the device stayed running. The 16-bit correction therefore does not describe this
+input or explain its remaining decode failure.
+
+`patches/lvgl/9.3.0/provenance.json` records LF-normalized SHA-256 values for exactly 11 reviewed
+upstream files:
+
+- `CMakeLists.txt` and `env_support/cmake/esp.cmake`
+- `src/draw/lv_draw_buf.c`, `src/draw/lv_draw_buf.h` and `src/draw/lv_image_dsc.h`
+- `src/libs/lodepng/lodepng.c`, `src/libs/lodepng/lodepng.h` and
+  `src/libs/lodepng/lv_lodepng.c`
+- `src/lv_api_map_v9_0.h`, `idf_component.yml` and `LICENCE.txt`
+
+`tools/prepare_lodepng_patch.py` verifies that exact file set and every digest, the project's 9.3.0
+manifest pin, the lock version, registry source and component hash, and the resolved
+`.component_hash`. It also requires one exact allocation boundary and one exact dimension-check
+boundary before generating output. `cmake/lodepng_patch.cmake` writes
+`<build>/rodak_patches/lvgl/lodepng.c` and replaces exactly one LodePNG source on the resolved LVGL
+target. Managed component files, the remaining LVGL sources, headers and compile settings are not
+modified. Missing output is regenerated; any version, source-set, digest or target-layout drift
+stops configuration instead of compiling an unchecked fallback.
+
+The focused software evidence passes in Debug and ASan/UBSan with leak detection: 8 valid PNG
+variants plus 2 geometry rejections in `tests/lodepng_decode`, 24 production Photos/ImageLibrary
+cases, 43 existing Home/LVGL cases, and 21 production `DisplayService` allocation/lifecycle cases.
+The last suite covers the package-013 abort boundary but is not a decoder-provenance test. The
+release host runner includes all four targets. Package 014 adds bounded device evidence: the same
+screen session accepted the open and two Retry inputs, kept producing JPEG frames, reported a
+stable memory error, and did not abort, panic or reboot. It still did not render `A3.PNG`.
+
+For this RGBA8 image, the decoder can hold about 797 kB of decompressed scanlines at the same time as
+a 796,932-byte (778 KiB) final ARGB8888 buffer, in addition to compressed input and concurrent
+display-stream allocations. The first failure reported 1,728,656 bytes of free PSRAM but a largest
+PSRAM block of 1,605,632 bytes. The current high-confidence diagnosis is therefore the two-full-frame
+decode peak and fragmentation, not the 16-bit stride defect. Keep that as a diagnostic conclusion
+until an allocator-level trace or a later reduced-peak implementation proves the cause and displays
+the image successfully.
+
+For an intentional LVGL upgrade:
+
+1. Change `main/idf_component.yml`, resolve a fresh `dependencies.lock`, and confirm the component
+   manager selected the reviewed registry package.
+2. Review the new decoder allocation/conversion behavior and all 11 provenance files. Update the
+   package hash, repository ref and normalized source hashes together; never copy forward old hashes.
+3. Rebase or remove the transformation only after locating the new unique source boundaries. Keep
+   the generated output outside `managed_components/` and require exactly one target substitution.
+4. Run `tests/lodepng_decode`, `tests/photos_ui`, `tests/home_ui` and `tests/display_service` in Debug
+   and ASan/UBSan, then run the release host checks and an ESP-IDF 6.0.2 firmware build. Record the
+   resulting image size/hash and keep the device gate open until an identified package displays
+   `A3.PNG` successfully across first open and Retry with display JPEG capture active.
+
+Remove the overlay only when a reviewed LVGL release preserves the same raw-row safety and geometry
+rejection semantics. Keep the host regressions when switching their default source to that release.
+
 ## Codec volume and I2S failure overlay
 
 RodakOS keeps `espressif/esp_codec_dev` at 1.5.7. That upstream release's

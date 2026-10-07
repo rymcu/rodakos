@@ -12,7 +12,7 @@ Files 在每次读取前记录目标目录并清除旧 entries。进入子目录
 
 图像接口返回成功、格式不支持、读取失败、已知分配失败或一般解码失败。完整读取和资源所有权分别检查；不把类型未知的解码错误都归为内存不足。Files 预览错误持续显示，Retry 保留原文件路径；重试前重新检查 FileService 和存储状态，成功后隐藏错误和按钮。
 
-PNG 保留压缩数据的 `RAW_ALPHA` 描述，通过真实 LodePNG 解码预检后关闭临时 decoder；只读到尺寸不算成功。BMP 校验头、偏移、尺寸和完整像素范围，保留 24/32 位直接像素及明确 RGB565 masks 的 16 位 bitfields，拒绝调色板、RLE、top-down 等当前未支持形式。BMP 随后仍按 filesystem source 渲染，文件后来被修改/拔卡不在本次加载结果保证内；PNG 再次绘制也仍需要 decoder 内存。
+PNG 完整读取后直接通过真实 `lodepng_decode32` 生成像素，并由 LVGL 9.3.0 的 checked overlay 保护原始行宽、最终 ARGB8888 行宽和 16 位几何字段。成功结果转换为 LVGL 的 ARGB8888 字节布局并由图像对象持续持有，绘制时不再进行第二次 PNG 解码；只读到尺寸不算成功。保留的像素会一直占用内存到图像释放。BMP 校验头、偏移、尺寸和完整像素范围，保留 24/32 位直接像素及明确 RGB565 masks 的 16 位 bitfields，拒绝调色板、RLE、top-down 等当前未支持形式。BMP 随后仍按 filesystem source 渲染，文件后来被修改/拔卡不在本次加载结果保证内。
 
 替换、返回、刷新与销毁先从 LVGL image 对象分离旧 source，再丢弃 cache 和拥有的图像。关闭应用会取消其待执行 Home 请求；销毁须取得 LVGL 所有权，不能因锁超时就释放仍被界面引用的数据。Photos 的缩略图调度失败保留可见提示和恢复入口，不能一直表现为正在加载。
 
@@ -41,10 +41,51 @@ PNG 保留压缩数据的 `RAW_ALPHA` 描述，通过真实 LodePNG 解码预检
 
 提交后的 ESP-IDF 6.0.2 增量构建通过：`build/rodakos.bin` 为 **7,106,432 B**，SHA-256 **`a6e2620fac3ac673dbc635e41a52385c9423b4aef79df22c2416583a1184b060`**，位于 13,959,168 B 的 `ota_0` 容量以内。Home 测试人口和 release fault injection 关闭，原验证公钥、sdkconfig 和依赖锁保持原基线。该软件阶段未操作设备；后续打包、刷写与有限实测单独记录如下。
 
-## 012/013 实机与长名称修正
+## 012–014 实机与长名称修正
 
-012（`20261007-053630`）保留 NVS 刷写后，Photos 扫描到 41 张图片，真实 `a1.jpg` 可显示；`A3.PNG` 显示一般加载错误并可 Retry，重试仍失败，原因尚未归因。Files 的长目录名覆盖了 `Folder` 说明，由 `3504308ce13b631fe67727b5e120670899050c1f` 修正：列表名称和信息标题按实际字体固定单行省略，垂直 padding 调为 6，行高与间距保持。Files 15 和 Photos 23 项再次分别通过 Debug/ASan/UBSan/leak；Photos 仅扩展既有指针测试，生产代码未改。
+012（`20261007-053630`）保留 NVS 刷写后，Photos 扫描到 41 张图片，真实 `a1.jpg` 可显示；`A3.PNG` 显示一般加载错误并可 Retry，重试仍失败，在该次记录中尚未归因。Files 的长目录名覆盖了 `Folder` 说明，由 `3504308ce13b631fe67727b5e120670899050c1f` 修正：列表名称和信息标题按实际字体固定单行省略，垂直 padding 调为 6，行高与间距保持。Files 15 和 Photos 23 项再次分别通过 Debug/ASan/UBSan/leak；Photos 仅扩展既有指针测试，生产代码未改。
 
-当前设备为 013（`20261007-055040` / `media-browsing-layout-013`），main **7,106,528 B**，SHA-256 **`91344e3508c4bada6f6dd05c5ec2145016317dc3d367c46333c93ea5460bbc60`**。这是普通 flavor、开发签名包，复用 011 immutable 资产及开发根；VerifyOnly、保留 NVS 增量刷写、Home 与 OTA 确认通过。真实画面确认长目录名及文件信息不再重叠，JPEG 打开/Retry 成功并返回相册。随后屏幕控制授权不可用，013 的 PNG 步骤未完成，不能声称 PNG 实机通过或已确定屏幕断连原因。
+013（`20261007-055040` / `media-browsing-layout-013`）的 main 为 **7,106,528 B**，SHA-256 **`91344e3508c4bada6f6dd05c5ec2145016317dc3d367c46333c93ea5460bbc60`**。真实画面确认长目录名及文件信息不再重叠，JPEG 打开/Retry 成功并返回相册。后续对 crash ELF 和终止路径的核对表明，`A3.PNG` Retry 已实际触发，但终止点是并发 `DisplayService` JPEG 路径未处理的 `std::bad_alloc`，随后进入 abort；它不是 `A3.PNG` 已被证明为 16 位 PNG 的证据，也不能把 abort 归因于 PNG 位深或 LodePNG 覆盖层。013 未得到成功或失败后的稳定 PNG 画面。
 
-退出屏幕后的两轮 WSS 静音、MQTT 共存、唤醒监听恢复及两条新遥测通过；原 ID、bound 和 tokenVersion=4 保持，COM3 释放。内部堆历史最低 **335 B** 在首次 WebSocket 任务创建/握手前已有记录，此时语音准备及 HTTPS 刷新已进行；现有采样无法定位低点所属阶段。停止后可观察到资源回升，但不能证明容量充足、无泄漏或全并发安全。真实触摸/声学、PNG 设备失败归因、SD/慢卡/OOM/soak 继续开放。完整包身份、画面、串口与结束状态见 [012/013 联合验收记录](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md)。
+退出屏幕后的两轮 WSS 静音、MQTT 共存、唤醒监听恢复及两条新遥测通过；原 ID、bound 和 tokenVersion=4 保持，COM3 释放。内部堆历史最低 **335 B** 在首次 WebSocket 任务创建/握手前已有记录，此时语音准备及 HTTPS 刷新已进行；现有采样无法定位低点所属阶段。停止后可观察到资源回升，但不能证明容量充足、无泄漏或全并发安全。真实触摸/声学、稳定 PNG 显示、SD/慢卡/OOM/soak 继续开放。完整包身份、画面、串口与结束状态见 [012–014 联合验收记录](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md)。
+
+## 014 软件修复、包身份与实机结果
+
+`DisplayService` 的最终软件修复把 capture/frame 复制、RGB565→RGB888、JPEG encoder scratch、紧凑输出和 callback 所有权等分配失败收敛为可报告错误，保证互斥量和 codec/buffer 资源释放，并对持续失败按帧率节流；callback 抛出 `bad_alloc` 后不重放旧序号，下一张新帧仍可恢复。PNG 路径直接保留一次成功的 ARGB8888 解码结果，避免 UI 已报告加载成功后在绘制阶段再次解码和再次承受瞬时分配压力。LVGL 9.3.0 LodePNG 采用 build-local checked overlay，11 个上游文件的 provenance、组件锁和目标替换均 fail closed；详情见 [依赖维护](dependency-maintenance.md#lvgl-lodepng-decode-overlay)。
+
+最终软件证据均通过 Debug 和 ASan/UBSan（含泄漏检查）：
+
+| 套件 | 通过数 | 边界 |
+| --- | ---: | --- |
+| DisplayService | 21 | 生产 capture/JPEG worker、分配失败、锁、停止和恢复；codec/LVGL/RTOS 边界为明确替身 |
+| Home UI | 43 | 真实 LVGL partial-flush 镜像与既有 Home/UI 回归 |
+| Photos / ImageLibrary | 24 | 生产 loader/UI、真实 LodePNG/BMP、一次解码后保留 ARGB8888；ESP JPEG 为替身 |
+| LodePNG overlay | 8 + 2 | 8 个 8/16 位及 Adam7 PNG 变体，加 2 个几何/stride 拒绝 |
+
+ESP-IDF 6.0.2 最终增量构建通过。源码提交为
+`89705604e6d84bdff5db62f1b98d623b19743267`；014 包目录为
+`build/packages/ota/20261007-092426`，taskNo `media-png-display-recovery-014`，version
+`0.1.2-dev.1`。这是 `buildFlavor=production` 的开发签名普通包，Home 测试人口和故障注入均
+关闭。`rodakos.bin` 为 **7,108,688 B**，SHA-256
+**`44e2a1130e2d551d34e2971dc47ed59dda9dc8cfee86f6ca8e3179dc7ee631f4`**；包 ZIP SHA-256 为
+**`5449af4f51da1d312800ac15a9b8e332aef003b804fa5d1a1afa7966e2af512e`**。Recovery、
+Bootloader、分区表、otadata 和公钥与 013 一致，签名 keyId 仍为
+`bfd07b5f030766ee83cd06b7889465a47effef99bc44e644dcc4400da8a60fdf`。
+
+014 先通过 `-VerifyOnly -AllowDevelopmentPackage`，再以非 Erase 增量方式只写 otadata 和
+`ota_0`，保留 NVS、绑定与 trust。Recovery → main、Home 启动及本地 OTA 确认均通过；设备
+保持 MAC `44:1b:f6:c3:b4:30`、原 ID、`bound` 和 `tokenVersion=4`。
+
+同一屏幕会话确认 `/sdcard/photos/A3.PNG` 为 **69,200 B、471 x 423、8-bit、color type 6
+(RGBA)**。控制 enable sequence 1、首次打开 sequence 2/3，以及两次 Retry sequence 4/5、
+6/7 均收到 `accepted=true`。三次解码都稳定返回 LodePNG error 83，页面显示
+`Not enough image memory`；屏幕 JPEG 全程继续出帧，没有 abort、panic 或 reboot。首次失败
+时 internal free/largest 为 28,139/13,824 B，PSRAM free/largest 为
+1,728,656/1,605,632 B。会话关闭后的只读状态保持 `bound`、`tokenVersion=4`、MQTT online、
+voice idle，COM3 已释放。
+
+014 已验证 013 的未处理 JPEG 分配不会再终止设备，也排除了“A3 是 16-bit PNG”的猜测，
+但 **A3.PNG 仍未成功显示**。当前高置信诊断是 RGBA8 解码时约 0.8 MB 的 scanlines 与
+796,932 B（约 778 KiB）的最终 ARGB8888 像素同时存在形成峰值并受碎片影响；在后续降峰值实现或 allocator
+证据前，这仍是诊断结论。A3 成功显示、真实 SD 缺失/移除/慢卡、任意 OOM、跨服务并发、
+资源归还和八小时 soak 门禁继续开放。
