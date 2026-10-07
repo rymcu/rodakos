@@ -5,8 +5,20 @@
 #include "phone_ui/remote_text_input.h"
 
 #include <deque>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #include <lvgl.h>
 #include <src/others/test/lv_test.h>
+
+namespace { thread_local bool reject_cpp_allocations = false; }
+void* operator new(size_t size) {
+    if (reject_cpp_allocations) throw std::bad_alloc();
+    if (auto* value = std::malloc(size == 0 ? 1 : size)) return value;
+    throw std::bad_alloc();
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, size_t) noexcept { std::free(value); }
 
 namespace {
 using rodakos::StreamLease;
@@ -19,6 +31,10 @@ constexpr const char* kText = R"({"version":1,"kind":"text","text":"hello"})";
 constexpr const char* kHome = R"({"version":1,"kind":"shortcut","shortcut":"home"})";
 constexpr const char* kDown = R"({"version":1,"kind":"pointer","action":"down","x":55,"y":60})";
 constexpr const char* kUp = R"({"version":1,"kind":"pointer","action":"up","x":55,"y":60})";
+struct CppAllocationFailure {
+    CppAllocationFailure() { reject_cpp_allocations = true; }
+    ~CppAllocationFailure() { reject_cpp_allocations = false; }
+};
 
 struct Fixture {
     std::deque<std::function<void()>> deferred;
@@ -228,6 +244,124 @@ RODAK_TEST("pointer boundaries precede reliable navigation and page reset preser
     f.RunNavigation();
     f.controller.ProcessActions();
     RODAK_CHECK_EQ(f.Text(), "hello");
+}
+
+RODAK_TEST("page reset rejects cancelled input once outside controller lock") {
+    Fixture f;
+    auto lease = f.Lease();
+    f.Input(lease, kEnable);
+    std::vector<std::string> reasons;
+    const auto reply = [&](bool accepted, const char* reason) {
+        RODAK_CHECK_FALSE(accepted);
+        reasons.emplace_back(reason);
+        RODAK_CHECK(f.controller.IsEnabled());
+        f.controller.ResetForPageTransition();
+    };
+    f.controller.Handle(lease, kText, reply);
+    f.controller.Handle(lease, kDown, reply);
+    f.controller.Handle(lease, kUp, reply);
+    f.controller.ResetForPageTransition();
+    RODAK_CHECK_EQ(reasons.size(), 3u);
+    for (const auto& reason : reasons) RODAK_CHECK_EQ(reason, "page_transition");
+    f.controller.ProcessActions();
+    RODAK_CHECK_EQ(f.Read().state, LV_INDEV_STATE_RELEASED);
+    RODAK_CHECK_EQ(f.Text(), "");
+    RODAK_CHECK_EQ(reasons.size(), 3u);
+}
+
+RODAK_TEST("local touch completes cancelled pointer replies while preserving queued text") {
+    Fixture f;
+    auto lease = f.Lease();
+    f.Input(lease, kEnable);
+    std::vector<std::string> reasons;
+    const auto reply = [&](bool accepted, const char* reason) {
+        RODAK_CHECK_FALSE(accepted);
+        reasons.emplace_back(reason);
+        RODAK_CHECK(f.controller.IsEnabled());
+        f.controller.OnLocalTouch();
+    };
+    f.Input(lease, kText);
+    f.controller.Handle(lease, kDown, reply);
+    f.controller.Handle(lease, kUp, reply);
+    f.controller.OnLocalTouch();
+    RODAK_CHECK_EQ(reasons.size(), 2u);
+    for (const auto& reason : reasons) RODAK_CHECK_EQ(reason, "local_touch_active");
+    f.controller.ProcessActions();
+    RODAK_CHECK_EQ(f.Read().state, LV_INDEV_STATE_RELEASED);
+    RODAK_CHECK_EQ(f.Text(), "hello");
+}
+
+RODAK_TEST("disable rejects pending navigation and its tail exactly once before reenable") {
+    Fixture f;
+    auto lease = f.Lease();
+    f.Input(lease, kEnable);
+    std::vector<std::string> reasons;
+    const auto reply = [&](bool accepted, const char* reason) {
+        RODAK_CHECK_FALSE(accepted);
+        reasons.emplace_back(reason);
+        RODAK_CHECK_FALSE(f.controller.IsEnabled());
+    };
+    f.controller.Handle(lease, kHome, reply);
+    f.controller.ProcessActions();
+    f.controller.Handle(lease, kText, reply);
+    f.controller.Handle(lease, kDown, reply);
+    f.controller.Handle(lease, kUp, reply);
+    f.Input(lease, kDisable);
+    RODAK_CHECK_EQ(reasons.size(), 4u);
+    for (const auto& reason : reasons) RODAK_CHECK_EQ(reason, "control_disabled");
+    f.Input(lease, kEnable);
+    f.RunNavigation();
+    f.controller.ProcessActions();
+    RODAK_CHECK(f.navigations.empty());
+    RODAK_CHECK_EQ(f.Text(), "");
+    RODAK_CHECK_EQ(reasons.size(), 4u);
+}
+
+RODAK_TEST("navigation already admitted retains its result through synchronous disable") {
+    Fixture f;
+    auto lease = f.Lease();
+    f.Input(lease, kEnable);
+    f.during_navigation = [&]() { f.Input(lease, kDisable); };
+    std::vector<bool> results;
+    f.controller.Handle(lease, kHome, [&](bool accepted, const char*) { results.push_back(accepted); });
+    f.controller.ProcessActions();
+    f.RunNavigation();
+    RODAK_CHECK_EQ(results.size(), 1u);
+    RODAK_CHECK(results[0]);
+    RODAK_CHECK_EQ(f.navigations.size(), 1u);
+    RODAK_CHECK_FALSE(f.controller.IsEnabled());
+}
+
+RODAK_TEST("full-queue cancellation delivers all replies without heap allocation") {
+    for (const auto mode : {0, 1, 2}) {
+        Fixture f;
+        auto lease = f.Lease();
+        f.Input(lease, kEnable);
+        size_t cancelled = 0;
+        const char* expected = mode == 0 ? "page_transition" : mode == 1 ? "local_touch_active" : "control_disabled";
+        const auto reply = [&](bool accepted, const char* reason) {
+            RODAK_CHECK_FALSE(accepted);
+            RODAK_CHECK(reason && std::strcmp(reason, expected) == 0);
+            ++cancelled;
+        };
+        if (mode == 2) {
+            f.controller.Handle(lease, kHome, reply);
+            f.controller.ProcessActions();
+        }
+        if (mode != 1) for (int i = 0; i < 16; ++i) f.controller.Handle(lease, kText, reply);
+        for (int i = 0; i < 32; ++i) f.controller.Handle(lease, i % 2 == 0 ? kDown : kUp, reply);
+        const std::string disable = kDisable;
+        {
+            CppAllocationFailure failure;
+            if (mode == 0) f.controller.ResetForPageTransition();
+            else if (mode == 1) f.controller.OnLocalTouch();
+            else f.controller.Handle(lease, disable, {});
+        }
+        RODAK_CHECK_EQ(cancelled, mode == 0 ? 48u : mode == 1 ? 32u : 49u);
+        if (mode == 2) f.RunNavigation();
+        f.controller.ProcessActions();
+        RODAK_CHECK_EQ(f.Text(), "");
+    }
 }
 
 RODAK_TEST("late production ACK callback cannot reach a new peer or reuse its sequence") {

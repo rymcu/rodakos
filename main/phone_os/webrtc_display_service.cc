@@ -33,6 +33,15 @@ constexpr uint32_t kDataSendRetryDelayMs = 2;
 // 重新竞争发送机会；控制通道仍保持可靠有序。
 constexpr int64_t kDataSendRetryTimeoutUs = 20000;
 constexpr int64_t kTransportStatsIntervalUs = 5000000;
+constexpr int64_t kControlAckRetryTimeoutUs = 1000000;
+constexpr uint32_t kControlAckMaxAttempts = 50;
+std::atomic<int64_t> next_control_retry_log_us{0};
+std::atomic<int64_t> next_control_recovery_log_us{0};
+bool AdmitControlDiagnostic(std::atomic<int64_t>& deadline, int64_t now_us) {
+    auto next = deadline.load(std::memory_order_relaxed);
+    return now_us >= next && deadline.compare_exchange_strong(
+        next, now_us + kTransportStatsIntervalUs, std::memory_order_relaxed);
+}
 }
 
 WebRtcDisplayService::WebRtcDisplayService(DisplayService* display_service)
@@ -463,7 +472,8 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
     callback(payload, control_acks_->MakeReply(instance, sequence, kind_name));
 }
 
-bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& ack) {
+bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& ack, int* error) {
+    if (error) *error = ESP_PEER_ERR_WRONG_STATE;
     std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
     esp_peer_handle_t peer = nullptr;
     uint16_t stream_id = 0;
@@ -475,20 +485,25 @@ bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& a
         stream_id = control_stream_id_;
     }
     cJSON* response_json = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response_json, "version", 1);
-    cJSON_AddNumberToObject(response_json, "seq", ack.sequence);
-    cJSON_AddBoolToObject(response_json, "accepted", ack.accepted);
-    if (!ack.reason.empty()) cJSON_AddStringToObject(response_json, "reason", ack.reason.c_str());
-    char* encoded = cJSON_PrintUnformatted(response_json);
-    const std::string payload = encoded != nullptr ? encoded : "{}";
-    if (encoded != nullptr) cJSON_free(encoded);
+    const bool complete = response_json && cJSON_AddNumberToObject(response_json, "version", 1) &&
+        cJSON_AddNumberToObject(response_json, "seq", ack.sequence) &&
+        cJSON_AddBoolToObject(response_json, "accepted", ack.accepted) &&
+        (ack.reason.empty() || cJSON_AddStringToObject(response_json, "reason", ack.reason.c_str()));
+    char* encoded = complete ? cJSON_PrintUnformatted(response_json) : nullptr;
     cJSON_Delete(response_json);
+    if (!encoded) {
+        if (error) *error = ESP_PEER_ERR_NO_MEM;
+        return false;
+    }
     esp_peer_data_frame_t response{};
     response.type = ESP_PEER_DATA_CHANNEL_DATA;
     response.stream_id = stream_id;
-    response.data = reinterpret_cast<uint8_t*>(const_cast<char*>(payload.data()));
-    response.size = static_cast<int>(payload.size());
-    return esp_peer_send_data(peer, &response) == ESP_PEER_ERR_NONE;
+    response.data = reinterpret_cast<uint8_t*>(encoded);
+    response.size = static_cast<int>(std::strlen(encoded));
+    const int result = esp_peer_send_data(peer, &response);
+    cJSON_free(encoded);
+    if (error) *error = result;
+    return result == ESP_PEER_ERR_NONE;
 }
 
 int WebRtcDisplayService::OnChannelOpen(esp_peer_data_channel_info_t* channel, void* ctx) {
@@ -569,7 +584,7 @@ void WebRtcDisplayService::PeerTask() {
         int64_t pending_timestamp_us = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
-            if (!stop_requested_ && channel_open_ && !pending_jpeg_.empty()) {
+            if (!stop_requested_ && !control_acks_->HasPending() && channel_open_ && !pending_jpeg_.empty()) {
                 pending_jpeg.swap(pending_jpeg_);
                 pending_sequence = pending_jpeg_sequence_;
                 pending_timestamp_us = pending_jpeg_timestamp_us_;
@@ -600,7 +615,48 @@ void WebRtcDisplayService::QueueControlAck(const DisplayControlAckTracker::Insta
 }
 
 void WebRtcDisplayService::FlushControlAcks() {
-    for (const auto& ack : control_acks_->Take()) SendControlAck(ack);
+    // Only ACKs are retried, never inputs. Keep FIFO ownership until SCTP accepts
+    // the head; the next PeerTask loop pumps receive/close before trying again.
+    std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
+    if (control_acks_->Overflowed()) {
+        ESP_LOGW(TAG, "control ACK queue unavailable; closing peer");
+        RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
+        return;
+    }
+    DisplayControlAckTracker::Ack ack;
+    bool no_memory = false;
+    for (size_t count = 0; count < 32 && control_acks_->Front(ack, no_memory); ++count) {
+        const int64_t now_us = esp_timer_get_time();
+        if (ack.attempts >= kControlAckMaxAttempts ||
+            (ack.first_attempt_us >= 0 && now_us - ack.first_attempt_us >= kControlAckRetryTimeoutUs)) {
+            ESP_LOGW(TAG, "control ACK retry exhausted: seq=%u attempts=%u; closing peer",
+                     static_cast<unsigned>(ack.sequence), static_cast<unsigned>(ack.attempts));
+            RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
+            return;
+        }
+        control_acks_->MarkAttempt(ack, now_us);
+        int error = no_memory ? ESP_PEER_ERR_NO_MEM : ESP_PEER_ERR_NONE;
+        if (!no_memory && SendControlAck(ack, &error)) {
+            if (ack.attempts != 0 && AdmitControlDiagnostic(next_control_recovery_log_us, now_us)) {
+                ESP_LOGI(TAG, "control ACK recovered: seq=%u attempts=%u elapsed_ms=%u",
+                         static_cast<unsigned>(ack.sequence), static_cast<unsigned>(ack.attempts + 1),
+                         static_cast<unsigned>((now_us - ack.first_attempt_us) / 1000));
+            }
+            control_acks_->Complete(ack);
+            continue;
+        }
+        if (!control_acks_->IsCurrent(ack.instance)) return;
+        if (error == ESP_PEER_ERR_WOULD_BLOCK || error == ESP_PEER_ERR_NO_MEM) {
+            if (ack.attempts == 0 && AdmitControlDiagnostic(next_control_retry_log_us, now_us))
+                ESP_LOGW(TAG, "control ACK retry: seq=%u error=%d",
+                         static_cast<unsigned>(ack.sequence), error);
+            return;
+        }
+        ESP_LOGW(TAG, "control ACK failed: seq=%u error=%d; closing peer",
+                 static_cast<unsigned>(ack.sequence), error);
+        RequestStop(ESP_PEER_STATE_DATA_CHANNEL_CLOSED);
+        return;
+    }
 }
 
 void WebRtcDisplayService::HandleJpeg(std::vector<uint8_t>&& jpeg, uint32_t sequence,
@@ -756,6 +812,12 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
                 loop_ret = esp_peer_main_loop(peer);
             }
             FlushControlAcks();
+            if (control_acks_->HasPending()) {
+                // The partially sent latest-only frame may expire. Do not add
+                // video pressure while a reliable result is waiting for space.
+                stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
             if (loop_ret != ESP_PEER_ERR_NONE && loop_ret != ESP_PEER_ERR_WOULD_BLOCK) {
                 stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
                 stats_send_errors_.fetch_add(1, std::memory_order_relaxed);

@@ -2,6 +2,7 @@
 #include "host_runtime.h"
 #include "phone_os/display_service.h"
 #include "phone_os/display_control_ack_tracker.h"
+#include "phone_os/remote_input_controller.h"
 #include "freertos/task.h"
 #include "esp_peer.h"
 #include <cJSON.h>
@@ -10,13 +11,24 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace { thread_local bool reject_cpp_allocations = false; }
+void* operator new(size_t size) {
+    if (reject_cpp_allocations) throw std::bad_alloc();
+    if (auto* value = std::malloc(size == 0 ? 1 : size)) return value;
+    throw std::bad_alloc();
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, size_t) noexcept { std::free(value); }
 
 // Only expose scheduling seams in this test TU. The production translation
 // unit is separately compiled, unchanged, with its original private header.
@@ -33,6 +45,7 @@ public:
     rodakos::DisplayService display;
     Service service{&display};
     std::vector<Service::ControlReply> replies;
+    Service::ControlCallback input_handler;
     esp_peer_handle_t peer = nullptr;
     uint16_t stream_id = 0;
 
@@ -45,7 +58,8 @@ public:
     bool TryStart(uint16_t stream = 11) {
         if (!service.Start({}, [](auto, auto&&) {}, {},
                 [this](const std::string& payload, Service::ControlReply reply) {
-                    if (!payload.empty()) replies.push_back(std::move(reply));
+                    if (input_handler) input_handler(payload, std::move(reply));
+                    else if (!payload.empty()) replies.push_back(std::move(reply));
                 })) return false;
         peer = host::LatestPeer();
         stream_id = stream;
@@ -102,6 +116,24 @@ bool WaitForStopRequest(Service& service) {
     }
     return false;
 }
+size_t json_allocations_left = 0;
+void* FailJsonAllocation(size_t size) {
+    if (json_allocations_left == 0) return nullptr;
+    --json_allocations_left;
+    return std::malloc(size);
+}
+struct JsonAllocationFailure {
+    explicit JsonAllocationFailure(size_t successful_allocations) {
+        json_allocations_left = successful_allocations;
+        cJSON_Hooks hooks{FailJsonAllocation, std::free};
+        cJSON_InitHooks(&hooks);
+    }
+    ~JsonAllocationFailure() { cJSON_InitHooks(nullptr); }
+};
+struct CppAllocationFailure {
+    CppAllocationFailure() { reject_cpp_allocations = true; }
+    ~CppAllocationFailure() { reject_cpp_allocations = false; }
+};
 }
 
 RODAK_TEST("display ACK encodes the actual admitted reply and control peer") {
@@ -310,28 +342,207 @@ RODAK_TEST("display ACK production validation encodes invalid JSON and replay re
     RODAK_CHECK_EQ(fixture.replies.size(), 1u);
 }
 
-RODAK_TEST("display ACK transport failures are returned and never replayed") {
-    for (const auto failure : {ESP_PEER_ERR_FAIL, ESP_PEER_ERR_WOULD_BLOCK}) {
+RODAK_TEST("display ACK temporary send pressure retries FIFO without repeating input") {
+    for (const auto failure : {ESP_PEER_ERR_NO_MEM, ESP_PEER_ERR_WOULD_BLOCK}) {
         Fixture fixture;
         fixture.Start();
         fixture.Receive(1);
         fixture.Reply(0);
-        const auto batch = fixture.service.control_acks_->Take();
-        RODAK_CHECK_EQ(batch.size(), 1u);
         host::SetSendResult(failure);
-        RODAK_CHECK_FALSE(fixture.service.SendControlAck(batch[0]));
+        fixture.service.FlushControlAcks();
         fixture.Receive(2);
-        fixture.Reply(1);
+        fixture.Reply(1, false, "local_touch_active");
         fixture.service.FlushControlAcks();
         RODAK_CHECK_EQ(host::SentFrames().size(), 2u);
-        fixture.service.FlushControlAcks();
-        RODAK_CHECK_EQ(host::SentFrames().size(), 2u);
-        fixture.Stop();
-        fixture.Start(47);
+        RODAK_CHECK_EQ(fixture.replies.size(), 2u);
         host::SetSendResult(ESP_PEER_ERR_NONE);
         fixture.service.FlushControlAcks();
-        RODAK_CHECK_EQ(host::SentFrames().size(), 2u);
+        const auto frames = host::SentFrames();
+        RODAK_CHECK_EQ(frames.size(), 4u);
+        CheckFrame(frames[0], fixture.peer, 11, 1, true);
+        CheckFrame(frames[1], fixture.peer, 11, 1, true);
+        CheckFrame(frames[2], fixture.peer, 11, 1, true);
+        CheckFrame(frames[3], fixture.peer, 11, 2, false, "local_touch_active");
+        fixture.service.FlushControlAcks();
+        RODAK_CHECK_EQ(host::SentFrames().size(), 4u);
     }
+}
+
+RODAK_TEST("display ACK retry cannot reach replacement peer or reused sequence") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Receive(1);
+    fixture.Reply(0);
+    host::SetSendResult(ESP_PEER_ERR_WOULD_BLOCK);
+    fixture.service.FlushControlAcks();
+    const auto old_peer = fixture.peer;
+    fixture.Stop();
+    fixture.Start(47);
+    host::SetSendResult(ESP_PEER_ERR_NONE);
+    fixture.Reply(0);
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK_EQ(host::SentFrames().size(), 1u);
+    fixture.Receive(1);
+    fixture.Reply(1);
+    fixture.service.FlushControlAcks();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK_EQ(frames.size(), 2u);
+    CheckFrame(frames[0], old_peer, 11, 1, true);
+    CheckFrame(frames[1], fixture.peer, 47, 1, true);
+}
+
+RODAK_TEST("display ACK allocation failures never publish partial JSON and recover") {
+    // Object, key/value fields, reason and JSON print buffer all fail in turn.
+    for (size_t fail_after = 0; fail_after < 12; ++fail_after) {
+        Fixture fixture;
+        fixture.Start();
+        fixture.Receive(1);
+        fixture.Reply(0, false, "quoted \"reason\"\n换行");
+        {
+            JsonAllocationFailure failure(fail_after);
+            fixture.service.FlushControlAcks();
+        }
+        RODAK_CHECK(host::SentFrames().empty());
+        fixture.service.FlushControlAcks();
+        const auto frames = host::SentFrames();
+        RODAK_CHECK_EQ(frames.size(), 1u);
+        CheckFrame(frames[0], fixture.peer, 11, 1, false, "quoted \"reason\"\n换行");
+    }
+}
+
+RODAK_TEST("display ACK reason-copy OOM retains FIFO head for recovery or bounded close") {
+    for (bool exhaust : {false, true}) {
+        Fixture fixture;
+        fixture.Start();
+        fixture.Receive(1);
+        const std::string reason(120, 'r');
+        fixture.Reply(0, false, reason.c_str());
+        {
+            CppAllocationFailure failure;
+            fixture.service.FlushControlAcks();
+            if (exhaust) {
+                host::AdvanceTimeUs(1000000);
+                fixture.service.FlushControlAcks();
+            }
+        }
+        RODAK_CHECK(host::SentFrames().empty());
+        RODAK_CHECK_EQ(fixture.service.stop_requested_, exhaust);
+        fixture.service.FlushControlAcks();
+        const auto frames = host::SentFrames();
+        RODAK_CHECK_EQ(frames.size(), exhaust ? 0u : 1u);
+        if (!exhaust) CheckFrame(frames[0], fixture.peer, 11, 1, false, reason.c_str());
+    }
+}
+
+RODAK_TEST("display ACK enqueue OOM fails closed without escaping the input callback") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Receive(1);
+    fixture.Reply(0);
+    fixture.Receive(2);
+    {
+        CppAllocationFailure failure;
+        fixture.Reply(1, false, "rejection reason beyond the inline string capacity");
+    }
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK(fixture.service.stop_requested_);
+    RODAK_CHECK(host::SentFrames().empty());
+    fixture.Stop();
+    fixture.Start(59);
+    fixture.Receive(1);
+    fixture.Reply(2);
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK_EQ(host::SentFrames().size(), 1u);
+    CheckFrame(host::SentFrames()[0], fixture.peer, 59, 1, true);
+}
+
+RODAK_TEST("cancelled real input ACK allocation failure closes the original peer") {
+    for (bool local_touch : {false, true}) {
+        rodakos::RemoteInputController controller({});
+        auto lease = std::make_shared<rodakos::StreamLease>(1, 1, 1, "original-peer");
+        Fixture fixture;
+        fixture.input_handler = [&](const std::string& payload, Service::ControlReply reply) {
+            controller.Handle(lease, payload, std::move(reply));
+        };
+        fixture.Start();
+        host::Receive(fixture.peer, fixture.stream_id,
+            R"({"version":1,"seq":1,"kind":"control","action":"enable"})");
+        fixture.service.FlushControlAcks();
+        host::Receive(fixture.peer, fixture.stream_id,
+            R"({"version":1,"seq":2,"kind":"pointer","action":"down","x":1,"y":1})");
+        const std::string disable = R"({"version":1,"kind":"control","action":"disable"})";
+        {
+            CppAllocationFailure failure;
+            if (local_touch) controller.OnLocalTouch();
+            else controller.Handle(lease, disable, {});
+        }
+        fixture.service.FlushControlAcks();
+        RODAK_CHECK(fixture.service.stop_requested_);
+        RODAK_CHECK_EQ(host::SentFrames().size(), 1u);
+        CheckFrame(host::SentFrames()[0], fixture.peer, 11, 1, true);
+    }
+}
+
+RODAK_TEST("display ACK persistent pressure is bounded by time or attempts") {
+    for (bool use_time : {false, true}) {
+        Fixture fixture;
+        fixture.Start();
+        fixture.Receive(1);
+        fixture.Reply(0);
+        host::SetSendResult(ESP_PEER_ERR_WOULD_BLOCK);
+        fixture.service.FlushControlAcks();
+        if (use_time) host::AdvanceTimeUs(1000000);
+        for (int i = 0; i < 50; ++i) fixture.service.FlushControlAcks();
+        RODAK_CHECK(fixture.service.stop_requested_);
+        RODAK_CHECK_EQ(host::SentFrames().size(), use_time ? 1u : 50u);
+        host::SetSendResult(ESP_PEER_ERR_NONE);
+        fixture.service.FlushControlAcks();
+        RODAK_CHECK_EQ(host::SentFrames().size(), use_time ? 1u : 50u);
+        fixture.Stop();
+        fixture.Start(49);
+        fixture.Receive(1);
+        fixture.Reply(1);
+        fixture.service.FlushControlAcks();
+        CheckFrame(host::SentFrames().back(), fixture.peer, 49, 1, true);
+    }
+}
+
+RODAK_TEST("display ACK fatal transport error and queue overflow close old control") {
+    for (bool overflow : {false, true}) {
+        Fixture fixture;
+        fixture.Start();
+        const size_t count = overflow ? 33 : 2;
+        for (size_t i = 0; i < count; ++i) {
+            fixture.Receive(i + 1);
+            fixture.Reply(i);
+        }
+        host::SetSendResult(ESP_PEER_ERR_FAIL);
+        fixture.service.FlushControlAcks();
+        RODAK_CHECK(fixture.service.stop_requested_);
+        RODAK_CHECK_EQ(host::SentFrames().size(), overflow ? 0u : 1u);
+        host::SetSendResult(ESP_PEER_ERR_NONE);
+        fixture.service.FlushControlAcks();
+        RODAK_CHECK_EQ(host::SentFrames().size(), overflow ? 0u : 1u);
+    }
+}
+
+RODAK_TEST("display ACK backpressure keeps production peer loop pumping and pauses JPEG") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Receive(1);
+    fixture.Reply(0);
+    fixture.service.channel_open_ = true;
+    fixture.service.pending_jpeg_ = {1, 2, 3};
+    host::SetSendResult(ESP_PEER_ERR_WOULD_BLOCK);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(4));
+    host::EmitState(fixture.peer, ESP_PEER_STATE_DISCONNECTED);
+    fixture.Stop();
+    const auto frames = host::SentFrames();
+    RODAK_CHECK(frames.size() >= 3u);
+    for (const auto& frame : frames) CheckFrame(frame, fixture.peer, 11, 1, true);
+    RODAK_CHECK_EQ(fixture.replies.size(), 1u);
+    RODAK_CHECK(host::IsClosed(fixture.peer));
 }
 
 RODAK_TEST("display ACK all six startup resource failures leave no live instance") {

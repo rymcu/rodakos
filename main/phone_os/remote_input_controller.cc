@@ -1,6 +1,7 @@
 #include "phone_os/remote_input_controller.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <deque>
@@ -52,6 +53,7 @@ struct Action {
     std::string kind;
     std::string value;
     RemoteInputController::Reply reply;
+    bool executing = false;
 };
 struct Pointer {
     Grant grant;
@@ -62,6 +64,18 @@ struct Pointer {
 void Reject(const RemoteInputController::Reply& reply, const char* reason) {
     if (reply) reply(false, reason);
 }
+// Match the bounded input queues (16 actions, 32 pointers, one navigation).
+// Cancellation runs under memory pressure and must not allocate to deliver replies.
+struct CancelledReplies {
+    std::array<RemoteInputController::Reply, 49> items;
+    size_t size = 0;
+    void Add(RemoteInputController::Reply& reply) {
+        if (reply) items[size++] = std::move(reply);
+    }
+    void ReplyAll(const char* reason) const {
+        for (size_t i = 0; i < size; ++i) Reject(items[i], reason);
+    }
+};
 }  // namespace
 
 struct RemoteInputController::State {
@@ -75,9 +89,22 @@ struct RemoteInputController::State {
     std::shared_ptr<Action> navigation;
     RemotePointerSample pointer;
 
-    void ClearLocked() {
+    void CancelPointersLocked(CancelledReplies& replies) {
+        for (auto& item : pointers) replies.Add(item.reply);
+        pointers.clear();
+    }
+    void CancelPendingLocked(CancelledReplies& replies) {
+        for (auto& item : actions) replies.Add(item.reply);
+        actions.clear();
+        CancelPointersLocked(replies);
+    }
+    void ClearLocked(CancelledReplies* cancelled = nullptr) {
         if (grant) grant->enabled.store(false);
         grant.reset();
+        if (cancelled) {
+            CancelPendingLocked(*cancelled);
+            if (navigation && !navigation->executing) cancelled->Add(navigation->reply);
+        }
         actions.clear();
         pointers.clear();
         navigation.reset();
@@ -124,6 +151,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
     const char* reason = "control_disabled_or_invalid";
     bool immediate_reply = true;
     std::vector<Reply> coalesced;
+    CancelledReplies cancelled;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->PruneLocked();
@@ -139,7 +167,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
                 accepted = true;
             } else if (cJSON_IsString(action) && std::strcmp(action->valuestring, "disable") == 0) {
                 if (!state->grant || state->grant->lease == lease) {
-                    state->ClearLocked();
+                    state->ClearLocked(&cancelled);
                     accepted = true;
                 }
             }
@@ -203,6 +231,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
             }
         }
     }
+    cancelled.ReplyAll("control_disabled");
     for (const auto& old : coalesced) if (old) old(true, "coalesced");
     if (immediate_reply && reply) {
         reply(accepted, accepted && std::strcmp(reason, "coalesced") != 0 ? nullptr : reason);
@@ -237,25 +266,30 @@ void RemoteInputController::ProcessActions() {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->closed) return;
                     owns_navigation = state->navigation == request && state->grant == request->grant;
+                    request->executing = owns_navigation;
                 }
                 bool accepted = false;
                 if (owns_navigation) request->grant->TryApply([&]() {
                     accepted = state->executor.navigate && state->executor.navigate(request->value);
                 });
+                Reply reply;
                 {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->closed) return;
                     if (state->navigation == request) state->navigation.reset();
+                    reply = std::move(request->reply);
                 }
-                if (request->reply) request->reply(accepted, accepted ? nullptr : "navigation_rejected");
+                if (reply) reply(accepted, accepted ? nullptr : "navigation_rejected");
                 if (state->executor.wake) state->executor.wake();
             };
             if (!state->executor.defer_navigation || !state->executor.defer_navigation(apply)) {
+                Reply reply;
                 {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->navigation == request) state->navigation.reset();
+                    reply = std::move(request->reply);
                 }
-                Reject(request->reply, "navigation_queue_full");
+                Reject(reply, "navigation_queue_full");
             }
             return;
         }
@@ -292,19 +326,26 @@ void RemoteInputController::ReadPointer(
 }
 
 void RemoteInputController::ResetForPageTransition() {
-    std::lock_guard<std::mutex> lock(state_->mutex);
-    state_->PruneLocked();
-    state_->pointer.pressed = false;
-    if (!state_->navigation) {
-        state_->actions.clear();
-        state_->pointers.clear();
+    CancelledReplies cancelled;
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->PruneLocked();
+        state_->pointer.pressed = false;
+        if (!state_->navigation) state_->CancelPendingLocked(cancelled);
     }
+    // Replies may synchronously revoke or replace this grant. Never call them
+    // while holding the controller mutex or retain queued input after reset.
+    cancelled.ReplyAll("page_transition");
 }
 
 void RemoteInputController::OnLocalTouch() {
-    std::lock_guard<std::mutex> lock(state_->mutex);
-    state_->pointer.pressed = false;
-    state_->pointers.clear();
+    CancelledReplies cancelled;
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->pointer.pressed = false;
+        state_->CancelPointersLocked(cancelled);
+    }
+    cancelled.ReplyAll("local_touch_active");
 }
 
 bool RemoteInputController::IsEnabled() const {

@@ -80,7 +80,7 @@ private:
     void EmitState(esp_peer_state_t state);
     void EmitMessage(esp_peer_msg_t* message);
     void HandleControlData(esp_peer_data_frame_t* frame);
-    bool SendControlAck(const DisplayControlAckTracker::Ack& ack);
+    bool SendControlAck(const DisplayControlAckTracker::Ack& ack, int* error = nullptr);
     void QueueControlAck(const DisplayControlAckTracker::InstancePtr& instance,
                          uint32_t sequence, bool accepted, const char* reason);
     void FlushControlAcks();

@@ -33,4 +33,7 @@ void SetOpenResult(int result);
 void SetDefaultImplAvailable(bool available);
 void SetConnectionResult(int result);
 void SetTaskCreationAllowed(bool allowed);
+void AdvanceTimeUs(int64_t delta);
+void RunPeerTasks();
+bool WaitForMainLoops(size_t minimum);
 }
