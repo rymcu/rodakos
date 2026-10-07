@@ -6,6 +6,43 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
+028 source `6666a3e52e50ddab989019517f237b2633e7c168` is now installed as the original-root
+package `20261008-021356`. It cooperatively parks the DVP worker before owner-side WithCaps
+deletion and moves only its 3,072 B stack payload to PSRAM. Targeted host/negative controls,
+IDF build, signature/source/final-ELF checks and the NVS-preserving Recovery/main/OTA/Home boot
+pass. The 70-second cold-baseline capture is closed; fresh device state retains the original
+ID, bound/tokenVersion=4 and connected MQTT.
+
+Five normal Camera and five normal Display Start/image/Stop cycles are now independently
+sealed on that boot: nine `stopped` and Display03 `already_stopped`, with at least 60 seconds
+of observation after each confirmed Stop. The first Camera image is dark and only Display01
+has a visual Home review; decoded/static images do not establish motion or camera quality.
+Warnings and three raw Camera `E:RX` records remain. No reset/panic/MQTT disconnect is captured,
+but the boot-cumulative internal minimum reaches **555 B**, first reported in Camera02's quiet
+window after Camera01 had recorded 563 B. This does not identify the low point's time or cause.
+Final sampled Main internal free/largest is 15,491/7,680 B, DMA 14,387/7,680 B. Resource and
+release decisions remain **NO_GO**; these finite cycles do not prove concurrency, IRQ/cache-off
+behavior, no leak or eight-hour soak. Static changes also shift the internal heap start by
+256 B and grow the controller by 4 B, so moving a 3 KiB stack is not a measured net heap gain.
+See [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028).
+
+027 source `3ff55ab7ec3d46cd7a1e2c41fca5d700505c0a06` sets the public Camera/Display
+candidate capacity to 32 and adds bounded heap samples. Its earlier package `20261008-004814` was installed
+with the same immutable Recovery, development root, NVS, binding and token version 4. Normal
+Display matches all 18 native candidate endpoints to SDK Add records, receives a real Home image
+and confirms Stop; its selected path is candidate 4. Separate diagnostic SDP/trickle windows
+then verify 18/32 admissions, the 33rd input and full-table duplicate limit, plus a working path
+at overall candidate 14 after ten owned sinks. These are bounded Display inputs, not Camera or
+normal five-cycle video acceptance; SDK over-limit still receives a software ACK.
+An independent Camera window fails before any remote frame: DMA free/largest reaches 943/832 B,
+then AES allocation fails and MQTT disconnects. Fault DRAM records prove ioctl returned 0 and
+execution reached the following log boundary; the lock owner is not directly known. The debugger
+then enters a separate panic path. Official USB reset recovers the same 027 main/MQTT after an
+unsuccessful direct RTS attempt; all windows are preserved. See
+[027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) and
+[Camera teardown diagnostics](camera-teardown-diagnostics.md). The later 028 finite cycles
+do not rewrite the 027 failure or establish complete resource recovery.
+
 026 source `cc776c1d007abe7e415ce9b386dea887eefe304e` adds exact-instance Stop confirmation
 using the original Start command number. A successfully started instance is remembered only
 after its native Stop returns; `stopped` and `already_stopped` are software results, while unknown
@@ -225,7 +262,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 024 identifies inbound queue rejection and outbound count-limit pressure. The separate production ACK-paced session passes 19/19 ACKs without queue warnings, but still reaches the SDK remote-candidate limit. Preserve the earlier credential-recovery restart and 41 old-signaling-replay queue rejections; this pass predates legacy-replay cleanup. Default-heap samples do not establish general capacity. Keep 023's pending-JPEG return evidence, 022's separate normal Camera exits/post-JTAG panic and 021's STREAMOFF stall/reset. Camera root cause, arbitrary OOM, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024), [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023) |
+| Resource recovery | 028 completes five Camera/five Display finite normal UI cycles with confirmed Stop and post-Stop observation; boot minimum 555 B, warnings and raw Camera RX records keep resource/quality gates open. 027 Display diagnostic capacity/beyond-ten-path evidence is complete within its scope, but its Camera AES/TLS failure and post-ioctl log stall remain separate failures. Preserve earlier Camera/credential/late-control history. Startup-order variants, arbitrary OOM, DMA/IRQ/cache-off behavior, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

@@ -53,6 +53,10 @@ RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host �
 `xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`，不回退内部栈；TCB、
 controller、ring、descriptor 和 queue 保持原内部内存要求。目标 ELF DWARF 的 controller
 从 144 B 增至 148 B；3,072 B 栈迁移与 4 B 结构增量不是实机 free/largest 净收益。
+最终 ELF 中 IRAM text 增加 72 B、末尾对齐增加 184 B，合计使内部 SRAM 边界后移 256 B；
+DRAM dummy 增加 256 B、data/bss 地址及 heap start 同步增加 256 B，data/bss 大小和每任务对齐 TLS 大小
+均未变。不能仅凭 BSS 大小不变声称静态内部占用不变，也不能把 IRAM 与映射的 DRAM
+区域当成两份独立占用相加。028 的记录表地址为 `0x3fca85e8`，必须按对应 ELF 取证。
 
 owner 在原 spinlock 内发布 shutdown，再非阻塞地向队列前端写 STOP；队列已满时已有事件
 能够唤醒 worker。worker 在接收前后复查请求，等待已进入的回调、日志或处理分支结束，

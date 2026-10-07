@@ -14,12 +14,16 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-The latest recorded device package is `20261007-231703`, built from
-`cc776c1d007abe7e415ce9b386dea887eefe304e`, with the existing development root and preserved
-NVS/binding/token version 4. Exact Stop and the remaining resource limits are recorded in
+The latest recorded device package is `20261008-021356`, built from
+`6666a3e52e50ddab989019517f237b2633e7c168`, with the existing development root and preserved
+NVS/binding/token version 4. Guarded flash and first boot pass; five Camera/five Display finite
+normal UI cycles have sealed image/Stop evidence in
+[028](#2026-10-08-cooperative-dvp-worker-validation-028), while resource, quality and release
+gates remain open. The earlier Display candidate
+and Camera failure windows remain in [027](#2026-10-08-candidate-capacity-and-camera-failure-027). Exact Stop evidence remains in
 [026](#2026-10-07-exact-stream-stop-026); earlier dated windows retain their own firmware identity.
 
-Evidence review updated on 2026-10-07. The earlier source baseline `c64cf06` / `f7e8c91`
+Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
 recorded appearance-gate package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
 (about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
@@ -38,7 +42,7 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The preceding installed package was 025 (`20261007-200215`, source `8d5cf99`), with the original
+The historical 025 package (`20261007-200215`, source `8d5cf99`) preserved the original
 development signing root and immutable Recovery preserved. Same-authority MQTT refresh now
 replaces its SDK client; its bounded validation is recorded in
 [025 evidence](#2026-10-07-mqtt-credential-client-replacement-025).
@@ -1463,3 +1467,182 @@ their blocking limits. Production-root migration, physical power-cut, Camera STR
 late control, full resource recovery, real SD/touch/audio and eight-hour soak remain **NO_GO**.
 The current workflow remains local tests/builds/device evidence: no new Actions dependency,
 repair, rerun, billing or required-check work is introduced, and historical CI retains its own scope.
+
+## 2026-10-08 candidate capacity and Camera failure 027
+
+Source `3ff55ab7ec3d46cd7a1e2c41fca5d700505c0a06` uses the public 32-candidate setting
+for Camera and Display, preserving the 50 ms timeout, 400 KiB caches and SDK binary. Two fixed
+32 B resource observers add 64 B to final internal BSS. Their local generation/call counters and
+sampled heap minima are diagnostics, not MQTT epochs, admission counts or continuous peaks.
+The native-Stop sample occurs before peer-task self-deletion.
+
+Debug and ASan/UBSan/leak each pass 3 CTests, 55 positive cases and 9 source negative controls.
+The actual Camera/Display translation units use real SDK headers. ESP-IDF 6.0.2 and final
+Camera/JPEG ELF gates pass. Rodak's test-only commit `8a0b3883` passes 5 focused files / 130 tests
+and ESLint; the running desktop production baseline remains `d28370c8`.
+
+| Artifact | Identity |
+| --- | --- |
+| Package / task | `20261008-004814` / `candidate-capacity-027` |
+| Main image | 7,139,328 B; SHA-256 `543384d49558150178f46a4b72e6d269b3f8782f65f75bb5c83f8d74d858f4a8` |
+| ZIP | SHA-256 `21b8cd50e017c0e5be9b36cb8bafbb94c700c5ef935938ecb03458a4779825b5` |
+| ELF | SHA-256 `a3104057f18a032d31b32dbb978e31d92cef869709bc6d54cc90392324f6c4bd` |
+
+Independent checks confirm signature, all ten ZIP entries, final build flags/partitions and the
+five unchanged immutable-package files from 026. The guarded NVS-preserving refresh passes
+Recovery/main/Home/local OTA confirmation, preserving MAC, device ID, bound and tokenVersion=4.
+
+The normal Display window matches 18 native candidates to 18 SDK Add endpoint/type/order records
+with no over-limit warning, receives a real 320×240 Home image and returns `stopped`. UI image
+removal takes 33 ms; device confirmation is observed at 1,378 ms. The selected useful endpoint
+is candidate 4, so this does not prove a path beyond candidate 10 or the 32/33 boundary.
+Retain the bind/remote lookup and close errors; this is not an error-free window. The serial
+capture spans 206.240 s, including 115.551 s after Stop response queuing. Sampled post-Stop
+internal free/largest is about 18,163/8,192 B; complete recovery or a leak is not established.
+
+The independent normal Camera window receives no remote image or signaling offer at the desktop. After preview,
+before peer open, DMA free/largest is 1,907/1,792 B; after open it is 943/832 B. AES allocation
+fails 900 device ms later, TLS write returns `-0x0084` and MQTT disconnects. Stop remains unknown.
+The native first frame at 87 ms is not a remote frame. Following STREAMOFF begin, the unperturbed
+serial window remains silent for 492.499 s until the capture-close request. Stale telemetry does
+not prove continued progress.
+
+Only after that capture closes, JTAG reads 23 committed diagnostic records with zero pending/drop:
+ioctl-return phase 2 is 0, phase 3 before the following completion log is present, phase 4 is
+absent. The original failure therefore cannot be described as ioctl still blocked; the actual
+log-lock owner remains unproven. The separate debugger window subsequently enters a panic path,
+despite a single SMP resume. A direct RTS attempt fails to restore output/MQTT. Official USB reset
+then boots the same confirmed 027 directly into main/Home/OTA/MQTT, with no new flash or erase;
+the first-flash validator's exit 5 is retained because its only missing marker is Recovery.
+A fresh 17:40:33 UTC snapshot confirms original bound/token4 and uptime 455,201 ms.
+
+Evidence lives in Rodak `.codex-temp/candidate-capacity-027/`, with separate sealed analyses for
+normal Display, Camera failure, fault DRAM and USB recovery. See the
+[complete cross-project record](https://github.com/rymcu/rodak/blob/master/docs/video-candidate-resource-verification.md)
+and [diagnostic contract](camera-teardown-diagnostics.md).
+
+After USB recovery, eight separate capacity-only Display sessions test both trickle and SDP:
+18 unique owned endpoints produce 18 SDK Add/0 limit, 32 produce 32/0, 33 produce 32/1, and
+32 plus a repeated first input also produce 32/1. The corresponding software ACK counts are
+19/33/34/34 for trickle and 1/1/1/2 for SDP. Full-table checking precedes deduplication; no extra
+non-owned Add occurs in these capacity windows. Retain the large-SDP fragment warnings.
+A ninth window puts ten nonresponding owned sinks in one Answer, then forwards all 18 native
+candidate strings unchanged. The selected useful endpoint is overall candidate 14, with its Add
+after the first ten and before the first SDK Select pair; DTLS and a decoded 320×240 Home JPEG
+follow. An earlier unselected browser peer-reflexive candidate and the final pair's in-progress
+state are retained. The nine correlated Stops all return stopped, followed by 60.016–60.031 s
+of observed serial and original bound/token4 snapshots per window. The first v2 tool's pre-Answer
+SDP/ufrag comparison failure is preserved separately; v3 changes comparison only, not forwarded
+strings. Independent analysis SHA-256 is
+`4808d5142aa884827a8b8e3af571c264ff30c19756339f128d6bf51d359720b9`.
+
+Camera remote frames, cooperative worker cleanup, five normal video cycles, concurrency and soak
+remain open. Capacity-only sessions have no expected video and cannot satisfy normal video cycles.
+Preserve 026's boot minimum 331 B; a new boot's minimum is not evidence of improved capacity.
+Release remains **NO_GO**.
+
+## 2026-10-08 cooperative DVP worker validation 028
+
+Source `6666a3e52e50ddab989019517f237b2633e7c168` changes the pinned generated DVP
+overlay to request cooperative shutdown, wait for the worker's final controller-lock release,
+and delete the parked task through owner-side `vTaskDeleteWithCaps`. A callback cannot delete
+its own worker. The 3,072 B worker stack is PSRAM-only, without an internal fallback; the event
+queue remains 3, priority 23, and DMA ring configuration/actual payload remain 8,192/7,680 B.
+No SDK binary, candidate setting or frame-format change is part of 028.
+
+Debug and ASan/UBSan each pass 13 worker cases and six source negative controls. They cover
+empty/full queues, requests around receive, admitted callback/capture-start completion, final
+lock release, early task execution before handle publication, allocation failures and self-delete.
+The old 027 worker's direct-delete boundary fails while a real host stdout mutex is still held;
+the host does not asynchronously kill a C++ thread or establish the device's actual lock owner.
+The worker, existing teardown overlay, Camera capture and teardown-diagnostics targets pass eight separate
+Debug/ASan configurations. The local unified runner now registers the worker target; its syntax
+is checked, but the whole runner was not rerun. ESP-IDF 6.0.2 builds the frozen production sources.
+
+| Artifact | Identity |
+| --- | --- |
+| Package / task | `20261008-021356` / `camera-worker-028` |
+| Version / flavor | `0.1.2-dev.1` / normal production app flavor, original development signing root |
+| Main image | 7,139,552 B; SHA-256 `b88259da929d7c353f6de91a6756ed6ae0ee500d2af17000eb2aba1443094e11` |
+| ZIP | SHA-256 `b481dca82508ddff5d2d560796264d6092b4e3323b37200a2ea3290720c821cf` |
+| ELF | SHA-256 `a68ebb351a41246c7efa9f4e4d9babfb3ea052ded1a7e6717eabfa30196d3ce2` |
+
+Independent package validation executes the signature, JPEG allocator and Camera final-ELF
+checks. Commit blobs, generated translation units, build flags, partitions, binary-embedded ELF
+hash, ZIP contents and five immutable files match the frozen evidence and 027 baseline. This
+verifies payload/source identity; it is not production-root deployment or hardware acceptance.
+The validation report SHA-256 is
+`eb24fed091c43208ceb72bce8a6d87b99a467ca2767d9f7ab2a09be418f62b62`.
+
+Final-ELF memory comparison is more than a BSS-size check: IRAM text grows 72 B and end padding
+184 B, making a 256 B aligned change. DRAM data/BSS sizes are unchanged but their addresses and
+the internal heap start move by 256 B; heap end and aligned native TLS delta remain unchanged.
+IRAM/DRAM can alias the same SRAM, so these views must not be added as independent occupancy.
+Target DWARF shows controller 144→148 B, flags at offsets 96/97 and the internal TCB still
+100 B. Moving a 3,072 B stack allocation to PSRAM is not measured net internal/DMA recovery.
+
+The guarded NVS-preserving flash exits successfully and verifies Recovery → main, local OTA
+confirmation and Home. A separate 70-second cold-baseline capture is closed. The fresh device
+snapshot retains ID `c78845a8-06c9-4dcd-b7ff-d33e599f23ff`, MAC `44:1b:f6:c3:b4:30`, bound,
+tokenVersion=4 and MQTT connected. This is a new 028 boot; earlier 027 uptimes/minima are not
+joined to it. No erase, re-binding or new trust root is implied.
+
+The first normal UI Camera session receives a decoded 320×240 remote image. Visual inspection
+finds a dark scene; reception/decoding does not establish camera image quality. Stop removes
+the image in 55 ms and its matching confirmation is observed in 1,520 ms. Serial shows the full
+close path and 108.656 seconds after Stop, through 2026-10-07 18:37:39 UTC; that capture is
+closed. Its independent analysis matches 18 native candidates to 18 SDK Add records, selects
+candidate 4 and retains 30 succeeded-pair stats samples. The playing audit contains no command
+record; the stopped audit contains one, so no additional per-signal ACK audit is inferred.
+Retain 27 timestamped warning/error lines; the absence of raw `E:RX` in this window is not a
+global no-overflow claim. Independent analysis SHA-256 is
+`5f03676494665fb2b14d6e580c344e3bb260eb169b420603b32fdf2b512a5358`.
+Its success does not retroactively diagnose the 027 lock owner or close all STREAMOFF failures.
+
+The remaining closed capture combines Camera02–05 and Display01–05 with the independently
+sealed Camera01, establishing **five Camera/five Display finite normal UI Start/image/Stop
+cycles** on the same boot. All use the normal product UI, without diagnostic SDP changes; each
+window matches 18 SDK Add records to its native candidates. Start and later playing snapshots
+decode 320×240 images, but identical dark/static bytes do not prove motion quality or uninterrupted
+frame delivery. Only Display01 has a separate visual Home review. The 027 capacity-only sessions
+are not counted as normal video cycles, and these sequential cycles do not prove every
+Camera-first/Display-first startup order or simultaneous dual-stream operation.
+
+Ten correlated Stop results are **nine `stopped` and one `already_stopped` (Display03)**.
+Display03's UI Stop is at 18:53:01.614 UTC; native close completes at device 1,238,153 ms,
+the stopped state at 1,238,193 ms and original Stop ACK at 1,238,203 ms. The typed response at
+18:53:03.049 UTC is the exact-instance idempotent result, not a tenth `stopped` or an unknown
+session success. The selected audit scans 2,000 events without truncating the ten-Stop scope.
+Each repeated window retains 60.573–60.612 seconds of post-Stop observation; Camera01 has its
+separate 108.656-second post-Stop capture.
+
+The repeated serial capture is closed with exit 0: 250,360 bytes across 30,892 timing chunks,
+contiguous byte coverage and nondecreasing host/device timestamps. No panic, reset or MQTT
+disconnect is found within those captured records. Preserve **214 timestamped warning/error
+lines** and three raw `E:RX` records: Camera02 `153600-76800`, Camera04 `153600-53760`, and
+Camera05 `153600-126720`. These successful finite cycles are not warning-free or camera-quality
+acceptance and do not erase older failures.
+
+Camera01 records a boot-cumulative internal minimum of **563 B**. The later same-boot value
+**555 B** is first reported during Camera02 quiet at device 545,213 ms / 18:41:28.768 UTC;
+this is the report time, not proof of when or why the historical low occurred. The final Main
+sample is internal free/largest **15,491/7,680 B**, DMA free/largest **14,387/7,680 B**. The
+separate final MQTT sample is internal free **15,475 B**, DMA free **14,371 B**, largest blocks
+**7,680 B**, and PSRAM free/largest **2,493,572/1,900,544 B**. Do not combine these distinct
+sampling times into one measurement or classify their differences as a leak or net recovery.
+
+The final device snapshot reports uptime **1,595,076 ms**, shadow version **1066**, original
+bound/tokenVersion=4 and MQTT connected. After serial closure, the UI has zero images and
+control disabled; that later UI check does not extend the captured hardware time window. No
+full NVS byte-equivalence, sufficient memory floor or complete task/DMA/IRQ reclamation is
+claimed. Cache-off/NVS/OTA and media/audio/TLS coexistence, arbitrary memory pressure, real
+touch/acoustics, camera quality and eight-hour soak remain open. Resource and release decisions
+remain **NO_GO**.
+
+Local evidence is under Rodak `.codex-temp/camera-worker-028/`: `software-verification.json`,
+`runner-supplement.json`, `target-abi.json`, `package-independent-verification.json` and the
+independent source review. Flash/cold-baseline/Camera01 and the repeated capture are separate
+closed windows. The repeated analysis rechecks 115 input hashes and reuses the prior Camera01
+review without counting another run. Its SHA-256 is
+`65c3cebe56a786f06613f3d1eaa5d20c2c294be65464e9e26bc7698adce6da03`; seal SHA-256 is
+`27b64e4943ce2d5a71d256c72532e2b21df8a34f8e88c0891c4424b59b5ab556`.
