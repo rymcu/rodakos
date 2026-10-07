@@ -2,7 +2,10 @@
 
 025 将同一授权身份下的自动 MQTT 凭据刷新改为完整替换 SDK client。正常路径先撤销旧连接的应用准入，停止并销毁旧 SDK client，再使用当前已持久化凭据建立新 client；设备服务和整机继续运行。
 
-本文说明实现合同和验收方法。当前设备验证结果仍属于已记录的 024；025 的实机结果、包身份与完整 CI 结论待独立记录。
+本文说明实现合同和验收方法。025 具名包已通过有效 token 短停、实际认证拒绝后的
+generation 1→3 替换、65 秒服务中断和后续屏幕观察；精确包、窗口及限制见
+[025 发布证据](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)。
+本地软件与硬件结果不代替当前 main/PR 的独立 CI 工件核验。
 
 ## 适用范围
 
@@ -68,6 +71,23 @@ SDK `start` 返回成功只证明任务创建请求成功，不能证明任务�
 
 SDK stop 内部等待、网络/TLS 调用和媒体 peer 清理仍有各自阻塞边界。客户端替换没有给这些调用增加硬取消保证。收到 SDK 停止确认仅说明最后一次 client 访问和相关清理已结束，不证明 FreeRTOS idle 已立即回收任务 TCB/stack，也不证明全部堆资源归还。
 
+## 025 软件验证
+
+源码 `8d5cf99f95b59d45b0a1e66fc3a02d1a502618a6` 的 MQTT 完整服务回归在
+Debug 与 ASan/UBSan/leak 各通过 133 个正常案例，其中客户端替换为 18 个；
+四个完整服务负变体均命中指定断言。ASan 的七个 CTest 还包含六个已有诊断负变体。
+共享语音身份服务在两个构建中各通过四个案例。
+
+真实 DeviceCloud 合同在两个构建中各通过 44 个案例；同时链接真实 MQTT 与
+DeviceCloud 的组合目标各通过六个案例及两个完整 Cloud 负变体。旧版完整生产源码
+在新生命周期与组合回归中按预期失败，未将编译错误、超时或 sanitizer 异常当作成功检出。
+SDK overlay 的七个函数级场景及八个生成器检查另外验证，其生成源码与固件实际输入相同；
+这仍不等于在 host 执行完整 SDK 或验证实际网络。
+
+测试与边界见 [MQTT suite](../tests/mqtt_volume_service/README.md) 和
+[Cloud 组合 suite](../tests/mqtt_cloud_integration/README.md)。完整仓库回归、固件和设备
+窗口分别记录，不能由这些定向案例代替。
+
 ## 实机验收方法
 
 使用具名的 025 源码、构建和签名包记录进行验证，保持同一台已绑定设备与同一服务器 authority。
@@ -79,6 +99,7 @@ SDK stop 内部等待、网络/TLS 调用和媒体 peer 清理仍有各自阻塞
 - 保留外部 Stop、语音延期、旧 outbox/结果隔离、SDK 创建失败及正常恢复的独立软件证据。SDK stop 未确认的异常 fail-safe 窗口单独记录，不能合并进正常成功窗口。
 - 结束时记录 MQTT/语音/媒体状态、串口释放情况和观测时长。短时恢复不替代声学、Camera/媒体资源归还、真实存储故障或八小时稳定性门禁。
 
-当前仍待取得 025 具名固件的上述实机证据，并将精确提交、CI 工件核验和异常边界写入发布记录。024 的主动隔离重启历史继续保留，不能由新的软件实现追溯改写为已通过。
+025 已取得上述有限实机恢复证据。更广语音并发、撤权、异常 SDK 停止及资源门禁仍需
+独立验收；024 的主动隔离重启历史继续保留，不能追溯改写为已通过。
 
 相关合同：[MQTT volume effects](mqtt-volume-effects.md)、[命令结果与重放边界](rodak-aiot-contract-v1.md#command-results-and-replay-boundary)、[语音与 Device Cloud 恢复](voice-assistant.md)、[可信服务器与迁址](trusted-server-discovery.md)、[发布验收](ota-release-readiness.md)。

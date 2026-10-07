@@ -1,5 +1,9 @@
 # RodakOS 固件构建 CI
 
+本文带 SHA 的早期结果保留为历史基线。最新 main/PR 的精确 Actions 和下载工件核验由
+[#26](https://github.com/rymcu/rodakos/issues/26) 汇总；当前设备运行的原开发根具名包见
+[025 发布记录](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)。CI 临时根包不等于设备已刷包。
+
 [固件工作流](../.github/workflows/firmware-build.yml) 独立于主机测试，在 PR、`main` push
 及手动触发时构建普通功能 flavor 的主应用和 Recovery，生成明确标记的开发签名包。
 它属于 [#26](https://github.com/rymcu/rodakos/issues/26) 的固件构建阶段；已通过的候选、

@@ -183,12 +183,14 @@ physically local diagnostic/control path and does not grant new app privileges.
    descriptor and unified MQTT response.
 
 When MQTT authentication is rejected later, RodakOS refreshes bootstrap credentials
-without accepting any secret over serial. An unchanged session identity with an
-empty outbox may update the running client in place; identity, routing, outbox,
-configuration, or reconnect failures restart the device. A transient bootstrap
-failure keeps the existing client so the next authentication rejection can retry;
-only MQTT connection events update the logical connected state while HTTP refresh is
-pending.
+without accepting any secret over serial. Since 025, an unchanged effect authority
+uses complete SDK-client replacement, including connected clients and nonempty outboxes:
+revoke old work, confirm stop/destroy, then attach a new client using an exact persisted
+credential check. An initialization failure retries offline without repeating a successful
+HTTP refresh. Changed authority or unconfirmed SDK stop retain restart isolation.
+Explicit serial provisioning keeps the restart boundary described above. See
+[MQTT credential refresh](mqtt-credential-refresh.md) for callback generations, voice
+deferral, failure limits and validation.
 
 Partial requests must not erase an existing working configuration. A failed
 bootstrap refresh may retain the previous cloud credentials. An accepted legacy
