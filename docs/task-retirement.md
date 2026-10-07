@@ -1,7 +1,8 @@
 # 030 视频任务回收与延后导航合同
 
-更新：2026-10-08。本页记录已实现的软件边界与主机验证；当前没有 030 签名包或实机验收结果。
-028 的 Home `queued:false`、027 的停顿以及资源、并发和长稳门禁继续保留。
+更新：2026-10-08。030 源码 `34c9e645` 已完成制品独审，并以包 `20261008-055334` 保 NVS 部署；
+有限正常视频、四格启停顺序与远程 pointer Home 证据见下文。028 的 Home `queued:false`、
+027 的停顿及资源、并发、质量和长稳门禁继续保留，不追溯改写历史结果。
 
 ## 业务结束与任务回收
 
@@ -115,6 +116,10 @@ dispatch 异常或 teardown 清理失败则中止，避免把可能悬挂的 tim
 
 本地封存清单不随仓库提交，摘要定位如下：
 
+- 候选 `34c9e645` 的总软件独审为 Rodak
+  `.codex-temp/task-retirement-030/software-review/seal-34c9e645-20261008/software-verification.json`，
+  SHA-256 `4a229beba08f8c708ebe3805c9461cd9ed4e2b1553cc679943fcd14db3cace51`。
+  下列早期分项记录保持原身份；辅助 pin 工具的后续变化由总独审单列，不把旧指纹冒充当前输入。
 - RodakOS `.codex-temp/task-retirement-030/verification.json`：
   SHA-256 `baa66a666bd29d984cb6063ec350b4db6be618ad39623b52e6c56f982bc52257`。
 - Rodak `.codex-temp/task-retirement-030/camera/software-verification.json`：
@@ -131,6 +136,25 @@ dispatch 异常或 teardown 清理失败则中止，避免把可能悬挂的 tim
 本地 ESP-IDF 6.0.2 构建通过。主应用按 `ota_0` 槽打包；根目录默认 flash 命令及 Recovery
 分区大小提示不能作为部署入口，仍须使用保 NVS 的专用构包与刷写流程。
 
-030 签名制品、目标二进制与源码对应、保 NVS 部署、冷基线、重复 Start/Stop、此前 Home 拒绝场景、
-自主断连和资源压力的设备观察均须独立验收。上述软件结果不关闭任意 OOM、DMA/IRQ/cache-off、
-音频/SD/TLS 并发、成像质量或长稳门禁，也不追溯改写 027/028/029 的历史结论。
+## 030 制品与有限设备证据
+
+原开发签名根的包 `20261008-055334` / `task-retirement-030` / `0.1.2-dev.1` 已部署到
+`44:1b:f6:c3:b4:30`。制品独审核对源码/对象/map/ELF、签名、ZIP 和分区；五项不可变文件、
+authority v3 以及 029 AES/Camera 生成补丁保持。目标回收池申请 448 B PSRAM，导航环申请
+304 B PSRAM；回收内部符号 21 B、含对齐跨度 24 B，均不能换算成设备净内存收益。
+
+关闭的 normal/matrix 窗口共得到 **7 条关联 `stopped`**，每次 Stop 后原始串口覆盖均超过 60 秒。
+矩阵按 m2→m1→m3→m4 执行四种本地 Camera/远端 Display 顺序，随后 b1 通过正常远程 pointer
+点击 Camera Home；9 条串口请求均有 `queued:true` 与 `complete ok:true`。b1 没有串口 Home，
+也不属于 GT911 实体触摸。m2 过早截图仍是旧 Camera 图，保留原件并仅采用后续确认图证明 Home。
+
+冷 helper 的 70 秒 monotonic 截止与 68.831 秒实际数据跨度分开记账；cold/normal/matrix 的
+2/44/89 条警告和错误均保留。没有观察到 fatal、重启或 MQTT 断连，但该 boot 的内部堆最低仅
+359 B。终态保持原绑定/token4、MQTT 在线、voice 未连接，图像为 0、远控关闭、采集已关闭。
+
+精确身份、软件/制品/硬件摘要及最后 Main/DMA 样本见
+[030 release readiness](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030)；
+逐格截图和时间边界见 [Rodak 跨仓详细记录](https://github.com/rymcu/rodak/blob/master/docs/video-task-retirement-verification.md)。
+暗 Camera 图不作为成像质量通过；软件回收与 `physicalVerified=false` 回执不证明全部物理资源归还。
+voice 剩余 3 条迁移、任意 OOM、DMA/IRQ/cache-off、音频/SD/TLS 并发及长稳仍未关闭，
+资源和生产发布保持 **NO_GO**。

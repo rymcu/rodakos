@@ -9,10 +9,16 @@ the remaining physical and production-release gates still require their own evid
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
 PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,
-real-LVGL navigation tests and ESP-IDF 6.0.2 build pass. Three voice WithCaps self-delete
-paths remain; the 028 Home rejection's actual cause is still unproven. This is not yet a
-030 package or hardware result: installed firmware remains the following 029 baseline.
-See [task retirement and deferred navigation](task-retirement.md).
+real-LVGL navigation tests and ESP-IDF 6.0.2 build pass. Source `34c9e6453344b8eb7896ab5476ef222504c12a94`
+is now installed as development-signed package `20261008-055334` through the NVS-preserving
+flow. Closed normal/matrix windows record seven correlated `stopped` receipts, all four
+local-Camera/remote-Display order cells and one remote-pointer Camera Home action. Nine serial
+requests each have admission and completion evidence; all Stops have more than 60 seconds of
+raw serial coverage. Camera quality and physical GT911 touch are not accepted. The same-boot
+internal minimum is 359 B; resource/production **NO_GO**, three voice self-delete paths and
+the unproven cause of 028's Home rejection remain. See [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030)
+and [task retirement and deferred navigation](task-retirement.md). The following 029/028 records
+remain separate historical evidence.
 
 029 source `83cab8021c265ed162d9bbf827b59299dbdfc546` fixes one confirmed AES DMA
 allocation-failure cleanup defect through a pinned build overlay. If an input bounce buffer
@@ -297,7 +303,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 029's AES cleanup is software/package verified; guarded boot, cold baseline and one normal Camera/Display smoke each have closed independent evidence, two `stopped` results and over 60 seconds after each Stop ACK. The AES failure branch remains unproven on hardware and normal peak demand is unchanged; the new boot minimum 547 B is separate from 028's 555 B. Earlier 028 passes five Camera/five Display finite cycles and three startup/exit-order cells, but Display-first/Home-first retains a Home enqueue failure despite a later single retry succeeding. Two desktop remote-stream exclusion checks pass within their software boundary. Warnings/raw Camera RX history, arbitrary OOM, DMA/IRQ/cache-off behavior, media/audio/TLS concurrency and eight-hour soak remain open. Preserve 027's independent Camera AES/TLS failure and post-ioctl log stall | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
+| Resource recovery | Deployed 030 has seven correlated Stops, four finite local-Camera/remote-Display order cells and one remote-pointer Home check; each Stop has over 60 seconds of raw serial coverage. The same-boot internal minimum is 359 B; physical full-resource return, Camera quality, GT911 touch, remaining voice paths, arbitrary OOM, DMA/IRQ/cache-off, media/audio/TLS concurrency and eight-hour soak remain open. Preserve 029's unexercised AES failure branch, 028's Home enqueue failure and 027's AES/TLS/log stall as distinct history; do not compare minima across boots. Resource/production **NO_GO** remains | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [030 evidence](ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030), [029 evidence](ota-release-readiness.md#2026-10-08-aes-dma-allocation-cleanup-029), [028 evidence](ota-release-readiness.md#2026-10-08-cooperative-dvp-worker-validation-028), [027 evidence](ota-release-readiness.md#2026-10-08-candidate-capacity-and-camera-failure-027) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

@@ -7,6 +7,9 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
+The latest recorded COM3 deployment is package `20261008-055334` from `34c9e645`, preserving
+NVS and the original binding. Its bounded 030 evidence is recorded in
+[release readiness](docs/ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030).
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -31,8 +34,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
 - Five video workers now retire through an external owner after their complete body and local
   destructors return, avoiding IDF's exit-time cleanup-task creation. Serial app launch and Camera
-  Home use a bounded precreated queue. Local software/build checks pass; the 030 device gates and
-  three remaining voice self-delete paths stay open. See [task retirement](docs/task-retirement.md).
+  Home use a bounded precreated queue. The deployed 030 package has seven correlated Stops,
+  four bounded local-Camera/remote-Display order checks and one remote-pointer Home check.
+  The same-boot internal minimum is 359 B; three voice self-delete paths, image quality,
+  resource recovery and production release remain open. See [task retirement](docs/task-retirement.md).
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
   Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next

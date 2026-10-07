@@ -14,13 +14,15 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-The latest recorded device package is `20261008-021356`, built from
-`6666a3e52e50ddab989019517f237b2633e7c168`, with the existing development root and preserved
-NVS/binding/token version 4. Guarded flash and first boot pass; five Camera/five Display finite
-normal UI cycles have sealed image/Stop evidence in
-[028](#2026-10-08-cooperative-dvp-worker-validation-028), while resource, quality and release
-gates remain open. The earlier Display candidate
-and Camera failure windows remain in [027](#2026-10-08-candidate-capacity-and-camera-failure-027). Exact Stop evidence remains in
+The latest recorded device package is `20261008-055334`, built from
+`34c9e6453344b8eb7896ab5476ef222504c12a94`, with the existing development root and preserved
+NVS/binding/token version 4. Guarded boot, closed normal/matrix windows, seven correlated Stops
+and the remote-pointer Home observation are recorded separately in
+[030](#2026-10-08-video-task-retirement-and-navigation-030). Resource/production **NO_GO**,
+Camera quality and three voice self-delete paths remain open. Historical
+[029](#2026-10-08-aes-dma-allocation-cleanup-029),
+[028](#2026-10-08-cooperative-dvp-worker-validation-028) and
+[027](#2026-10-08-candidate-capacity-and-camera-failure-027) retain their own identities and limits. Exact Stop evidence remains in
 [026](#2026-10-07-exact-stream-stop-026); earlier dated windows retain their own firmware identity.
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
@@ -1787,3 +1789,82 @@ Local evidence lives under Rodak `.codex-temp/aes-dma-cleanup-029/`, including
 `b90cdf2ab9ec42b600335bf134fc6f2dc2fe8f0c0c89776a02b97bda5f940001`; package seal SHA-256 is
 `ad73f01dcf868d7a4cb7ea32600d9b13c964c37e89448d59d3f4dd744cd08e19`.
 The separate 028 startup-order windows remain under `.codex-temp/resource-concurrency-029/`.
+
+## 2026-10-08 video task retirement and navigation 030
+
+Source `34c9e6453344b8eb7896ab5476ef222504c12a94` is installed as package
+`20261008-055334`, task `task-retirement-030`, version `0.1.2-dev.1`. Five video workers use
+generation-owned external WithCaps retirement; serial/Camera Home use the precreated navigation
+queue. The [implementation contract](task-retirement.md) records the focused software checks.
+This section adds the subsequent package and device evidence; the preceding 028/029 sections
+remain unchanged history. Detailed images, timings and limitations are in the
+[cross-repository 030 record](https://github.com/rymcu/rodak/blob/master/docs/video-task-retirement-verification.md).
+
+The development-signed main image is **7,147,584 B**, SHA-256
+`ee0223caef8588250b17e6f08b0f8765b732ca8618621071bbd37c2c54f31637`;
+ELF SHA-256 is `6ac7a3ed563614d7e335a9b5ca3917fe287cfa2324ec2fff8e7d7f8d8c816022`.
+The independent audit checks the clean candidate commit, compilation/object/map identities,
+image-embedded ELF hash, direct public-key and official verification, ZIP entries and partition
+bounds. The five immutable files and merged bytes outside the app partition match 029;
+authority v3 and the existing AES/Camera generated patches are retained. This is not a
+reproducible-build proof or a production-trust-root deployment.
+
+Local evidence paths below are relative to Rodak `.codex-temp/task-retirement-030/`:
+
+| Independent record | SHA-256 |
+| --- | --- |
+| `software-review/seal-34c9e645-20261008/software-verification.json` | `4a229beba08f8c708ebe3805c9461cd9ed4e2b1553cc679943fcd14db3cace51` |
+| `package-review/candidate-20261008-055334/review.json` | `30f4e387646ac10a54fe7d92faaa4e61047b91aa98a4378474955d0687f1fe4a` |
+| `hardware-review/final-1/analysis.json` | `e09ce2650bfcb460e3c26367bcba5f2bd930a4c88a8399a6ba6c6deb91fd2227` |
+
+Guarded COM3 refresh verifies the installed bootloader, partition table and Recovery, then writes
+only otadata and app. Both write hashes and the Recovery → main → OTA confirmation → Home
+handoff pass. Device `44:1b:f6:c3:b4:30` retains its original binding and tokenVersion=4.
+The cold helper exits successfully at its **70 s monotonic deadline**; its actual received-byte
+span is **68.831 s**, not 70 s of continuous serial data. Retain its two invalid MQTT fragment warnings.
+
+Normal Camera/Display observations and five matrix/button Display sessions yield **7 correlated
+`stopped` receipts**, all still `physicalVerified=false`. Each Stop has at least 60 seconds of
+actual raw serial coverage. Normal Camera captured 656 frames, but saved JPEGs remain nearly
+dark and do not pass image-quality acceptance. Normal Display shows Home; that window has no
+serial Home request and does not substitute for the matrix.
+
+| Actual order | Startup / shutdown | Stop ACK to last serial byte before quiet snapshot |
+| --- | --- | --- |
+| Normal Camera / Display | Separate normal streams | 84.689 / 102.564 s |
+| m2 | Display first / Home first | 90.893 s |
+| m1 | Camera first / Home first | 148.471 s |
+| m3 | Camera first / Display Stop first | 89.682 s |
+| m4 | Display first / Display Stop first | 89.824 s |
+| b1 | Display, local Camera, remote-pointer Home, Stop | 131.762 s |
+
+The four cells run **m2 → m1 → m3 → m4**, followed by b1. Their eight serial Camera/Home
+requests plus b1's ninth Camera request each have `queued:true` and `complete ok:true`.
+m2's early `home-requested` image still shows Camera, even though capture began 33 ms after
+serial completion; retain it and use only the later `home-confirmed` image as displayed-Home
+evidence. m3 and m4 Home are observed in the subsequent m4 and b1 first frames respectively,
+before the next Camera request and without another Home command.
+
+b1 uses normal renderer pointer handlers at device `(292,20)`: seq 6 enable → 7 down → 8 up,
+`Return home requested`, a Home image, and seq 9 disable are recorded. It adds no serial Home
+command. This checks the remote Camera-page button path, **not physical GT911 touch**; Stop
+returns control to disabled. Local Camera plus remote Display does not prove two simultaneous
+remote video streams.
+
+Normal/matrix capture lifecycles are **301.453 / 1059.968 s**; their received-byte spans are
+298.606 / 1059.245 s. Preserve **44 normal + 89 matrix + 2 cold** warning/error lines, including
+ICE/DTLS messages. No fatal/reset/MQTT-disconnect marker appears in these closed windows.
+The same boot's internal minimum is **359 B**; final Main internal free/largest is
+**16,319/8,192 B**, DMA **16,039/8,192 B**. These do not establish sufficient headroom, no leaks
+or an improvement/regression against 029's minimum from another boot.
+
+The final `2026-10-07T22:30:21.989Z` snapshot retains bound/token4, MQTT online and voice
+disconnected, with latest uptime **1,504,523 ms** and shadow revision **1074**. The final UI has
+zero images and control disabled; all serial captures are closed. The hardware audit rehashes
+106 inputs, preserving the normal intermediate report, early image and raw timings.
+
+Three voice WithCaps self-delete paths remain. No complete physical task/stack/resource census,
+arbitrary OOM recovery, DMA/IRQ/cache-off, audio/SD/TLS concurrency, Camera quality, physical
+GT911 touch, eight-hour soak or production-root gate is closed. Focused software checks and
+these finite device observations leave resource and production release **NO_GO**; they neither
+diagnose the original 028 Home failure nor rewrite any 027/028/029 result.
