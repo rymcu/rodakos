@@ -248,6 +248,21 @@ Host tests, failure mutations and audit details are in
 DMA/PSRAM recovery, TLS concurrency and task-stack headroom require separately
 identified hardware evidence in [media browsing](media-browsing.md).
 
+## Camera teardown diagnostics
+
+The checked `esp_video` / `esp_cam_sensor` 2.3.0 overlay records stop and extended-DVP
+delete boundaries into a boot-local DRAM table. It preserves upstream lifecycle,
+return/error handling and cleanup order. Both generated translation units require
+reviewed source/metadata/IDF identities and the full locked graph, excluding only
+the platform-generated top-level `manifest_hash`. Managed sources stay unchanged.
+
+The recorder alone opts into native atomics for its fixed internal-DRAM object;
+the global ESP-IDF SPIRAM atomic workaround remains enabled. A mandatory final-ELF
+audit verifies the storage, instruction bytes and bounded native CAS implementation.
+See [Camera diagnostics](camera-teardown-diagnostics.md) and the
+[overlay contract](../patches/camera_teardown/2.3.0/README.md). These diagnostics do
+not establish a teardown repair or replace hardware resource acceptance.
+
 ## Codec validation
 
 Resolve the pinned dependencies through the normal [firmware build](firmware-download.md) first.

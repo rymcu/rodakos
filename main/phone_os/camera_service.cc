@@ -1,5 +1,6 @@
 #include "phone_os/resource_failure_injection.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/camera-teardown-diagnostics.h"
 
 #include "rodakos_adapters/file_service.h"
 
@@ -970,8 +971,15 @@ void CameraService::CloseStream() {
     if (fd_ >= 0) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ESP_LOGI(TAG, "CloseStream: STREAMOFF begin");
-        ioctl(fd_, VIDIOC_STREAMOFF, &type);
+        rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_IOCTL_ENTER, xPortGetCoreID(), 0);
+        const int streamoff_result = ioctl(fd_, VIDIOC_STREAMOFF, &type);
+        rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_IOCTL_RETURNED, xPortGetCoreID(),
+                                     streamoff_result);
+        rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_BEFORE_LOG, xPortGetCoreID(),
+                                     streamoff_result);
         ESP_LOGI(TAG, "CloseStream: STREAMOFF complete");
+        rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_AFTER_LOG, xPortGetCoreID(),
+                                     streamoff_result);
     }
     for (auto& buffer : buffers_) {
         if (buffer.data != nullptr && buffer.data != MAP_FAILED) {

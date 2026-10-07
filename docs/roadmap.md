@@ -18,6 +18,14 @@ Release remains **NO_GO**; exact hashes, host checks and limits are in
 and [media verification](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md).
 Earlier network packages retain their own evidence identity.
 
+022 adds boot-local Camera teardown phase diagnostics, with checked build-local
+overlays for the actual extended-DVP driver and a mandatory final-ELF gate.
+Local host validation (37 suites / 91 CTests) and ESP-IDF 6.0.2 Build3 pass; the 536-byte DRAM recorder has
+one native CAS and no calls or backward branches. This is observation support,
+not a lifecycle repair. The device still runs 021: Windows MI02 lacks its debug
+interface GUID, so live DRAM/PC capture is pending administrator driver repair
+and a successful capability check. See [Camera diagnostics](camera-teardown-diagnostics.md).
+
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7
 plan is retained in the [documentation archive](archive/README.md).

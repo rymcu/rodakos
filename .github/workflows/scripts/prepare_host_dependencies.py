@@ -15,6 +15,8 @@ HOST_COMPONENTS = (
     "chmorgan/esp-libhelix-mp3",
     "espressif/cjson",
     "espressif/esp_codec_dev",
+    "espressif/esp_cam_sensor",
+    "espressif/esp_video",
     "espressif/esp_websocket_client",
     "espressif/mqtt",
     "lvgl/lvgl",
@@ -34,8 +36,10 @@ def main():
     lock = YAML(typ="safe").load(original_lock)
     for name in HOST_COMPONENTS:
         locked = lock["dependencies"][name]
+        # Retain the exact registry spelling already committed in this lock.
+        registry = "https://components.espressif.com" if name == "espressif/esp_cam_sensor" else "https://components.espressif.com/"
         if locked["source"] != {
-            "registry_url": "https://components.espressif.com/",
+            "registry_url": registry,
             "type": "service",
         }:
             raise RuntimeError(f"Unreviewed host component source: {name}")

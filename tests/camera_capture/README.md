@@ -83,3 +83,17 @@ paths outside these catches, CameraApp/LVGL allocations and storage/DMA implemen
 separate boundaries. The task-deletion fake does not validate ESP-IDF `vTaskDeleteWithCaps(nullptr)`:
 its temporary cleanup task still requires internal stack/TCB allocation and can abort at low heap.
 No arbitrary-OOM or physical shutdown guarantee follows from this host suite.
+
+## STREAMOFF 与日志阻塞诊断（022）
+
+新增四项独立 CTest 使用同一份生产 `CameraService`、真实固定 DRAM 记录模块与 host
+V4L2/日志边界。每项启动新进程，不向记录模块添加 reset：分别阻塞 STREAMOFF 内部或
+返回后的 complete 日志，并各自覆盖返回 `0` 和 `-1`。在阻塞期间从另一线程读取 snapshot，
+应分别只见 ioctl enter，或见 ioctl returned / before-log 而没有 after-log；释放后必须看到
+四个标记、原始有符号返回值、preview 停止与帧内存归还。异常清理先释放 gate，再等待 worker。
+
+原 33 项与新增 4 项在 Debug、ASan/UBSan/leak 下通过。共 5 项 CTest（原 suite 为一个
+CTest）。这些测试证明生产调用点能区分两类受控阻塞，不证明实机 STREAMOFF 故障的原因。
+`ioctl` 的 `-1` 不包含 errno；标记中的 core 只表示该调用点采样。enter 前仍有普通 begin
+日志，缺少 enter 本身不能证明程序未进入 CloseStream。真实下层驱动分段由独立
+`camera_teardown_patch` suite 验证。
