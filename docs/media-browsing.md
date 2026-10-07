@@ -24,7 +24,7 @@ PNG 完整读取后直接通过真实 `lodepng_decode32` 生成像素，并由 L
 - `tests/file_manager_ui` 编译生产 Files、PhoneAppHost 与真实 LVGL；FileService 和图像结果为可控替身，单独验证目录/预览状态、路径、操作和释放顺序。
 - `tests/camera_capture` 使用生产 FileService 与真实临时主机目录，验证未挂载/缺失目录错误经过 adapter 传播；底层目录读取故障另由 `tests/file_directory` 覆盖。
 
-测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–017 的有限设备证据见下节，不关闭这些门禁。
+测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–019 的软件、启动与有限设备证据分别见下节，不关闭这些门禁。
 
 ## 2026-10-07 初始软件验证
 
@@ -53,7 +53,7 @@ PNG 完整读取后直接通过真实 `lodepng_decode32` 生成像素，并由 L
 
 014 先把 capture/frame 复制、RGB565→RGB888、JPEG encoder scratch、紧凑输出和 callback 所有权等分配失败收敛为可报告错误，保证互斥量和 codec/buffer 资源释放，并对持续失败按帧率节流；callback 抛出 `bad_alloc` 后不重放旧序号，下一张新帧仍可恢复。PNG 路径保留一次成功的 ARGB8888 解码结果，避免绘制阶段二次解码。015 进一步让非交错 RGBA8 PNG 在 LodePNG 的 decompression allocation 内完成 unfilter/compact，并把该分配直接交给 LVGL draw buffer，去掉同时存在的第二份完整 ARGB8888 像素缓冲。016 再修正独立的屏幕 JPEG 峰值：不再为 worker 深拷贝 153,600 B RGB565 帧，而是在一块 230,400 B 缓冲内锁中复制 RGB565、锁外反向原地扩展为 RGB888；输出 scratch 固定为上游 320 x 240 示例使用的 100 KiB，超出上限时安全丢弃该帧并允许新帧恢复。
 
-LVGL 9.3.0 LodePNG 继续采用 build-local checked overlay，11 个上游文件的 provenance、组件锁和目标替换均 fail closed；详情见 [依赖维护](dependency-maintenance.md#lvgl-lodepng-decode-overlay)。以下为包含 017 新增 Camera 与 PNG 回归的当前定向软件证据，均通过 Debug 和 ASan/UBSan（含泄漏检查）；017 的改动与实机范围见后节：
+LVGL 9.3.0 LodePNG 继续采用 build-local checked overlay，11 个上游文件的 provenance、组件锁和目标替换均 fail closed；详情见 [依赖维护](dependency-maintenance.md#lvgl-lodepng-decode-overlay)。以下为截至 017 的定向软件证据，均通过 Debug 和 ASan/UBSan（含泄漏检查）；018 新增保护与测试单独记录在后节：
 
 | 套件 | 通过数 | 边界 |
 | --- | ---: | --- |
@@ -83,7 +83,7 @@ LodePNG 的 Huffman inflate 在每轮（包括 end code 后）要求 260 B 余�
 
 Camera 21 项 Debug/ASan/UBSan/leak 通过；旧生产源码负对照有 6 项失败，仅 `clear()` 而保留 vector capacity 的变异也有 6 项失败。PNG 使用 471 × 423 合成 RGBA8、11 个有效变体及 2 个几何拒绝场景。单块预算 **1,081,344 B** 下，旧 reserve 实际请求 1,196,213 B 并返回 error 83；修复后最大请求 797,615 B，成功解码并归还全部跟踪分配。IDAT、inflate reserve、收养 draw-buffer descriptor 三个拒绝点均返回 83，清理后再次成功。合成文件压缩输入为 **9,673 B**，其 `peak_live=818804` 只代表 host ledger，不能作为真实 **69,200 B** A3 的设备峰值。017 完整 release host runner 另行通过 **30 个 suite / 42 项 CTest / 17 + 15 + 8 + 12 = 52 项 Python**，关键源文件哈希在运行前后保持一致。
 
-当前设备包为 `build/packages/ota/20261007-112648`，taskNo `media-camera-png-recovery-017`，version `0.1.2-dev.1`；main **7,108,864 B**，SHA-256 **`507eab226775a848afef1b4df3657b7d02f80d8d812b7a0597844ac052497175`**，ZIP SHA-256 **`3db39d56efcb388c71baa12493cde68c6de07b60dc9d0ca48dba37fb027a60eb`**。VerifyOnly、保留 NVS 的非 Erase 增量刷写、Recovery → main → Home 与本地 OTA 确认通过；immutable 资产与 016 相同，仍为原开发签名链，原设备 ID / bound / tokenVersion=4 保持。
+017 历史设备包为 `build/packages/ota/20261007-112648`，taskNo `media-camera-png-recovery-017`，version `0.1.2-dev.1`；main **7,108,864 B**，SHA-256 **`507eab226775a848afef1b4df3657b7d02f80d8d812b7a0597844ac052497175`**，ZIP SHA-256 **`3db39d56efcb388c71baa12493cde68c6de07b60dc9d0ca48dba37fb027a60eb`**。VerifyOnly、保留 NVS 的非 Erase 增量刷写、Recovery → main → Home 与本地 OTA 确认通过；immutable 资产与 016 相同，仍为原开发签名链，原设备 ID / bound / tokenVersion=4 保持。
 
 017 首轮先开屏幕同传再进 Camera，两次相机初始化都在 DVP DMA 分配失败，失败前最大连续 DMA 块分别为 **6,656 / 4,352 B**。随后 185 ms 的 A3 成功仅发生在相机未真正启动后的路径，不能作为“相机运行后恢复”的证据。停止屏幕同传后，Camera 才真正启动；重开屏幕后持续预览 **32.304 秒 / 467 帧**并退出，再打开 A3 及两次 Retry 均最终成功解码，耗时 **201 / 203 / 191 ms**。后一次 Retry 的桌面控制报告 timeout，串口随后记录成功解码与显示；因此该次证明设备执行结果，不证明远控 ACK 全通过。第二轮同样先启动 Camera 再开屏幕同传，实际预览 **21.960 秒 / 332 帧**；退出后 A3 再次在 **185 ms** 成功解码，真实像素截图已核对。两次真正运行 Camera 后共四次解码成功，与此前相机启动失败后的 185 ms 分开计数。
 
@@ -92,3 +92,46 @@ Camera 21 项 Debug/ASan/UBSan/leak 通过；旧生产源码负对照有 6 项�
 最终两条 MQTT health 的 PSRAM free 分别为 **2,558,664 / 2,557,636 B**，largest 均为 **1,507,328 B**；internal free 为 **24,971 / 24,935 B**，largest 均为 **7,680 B**，MQTT worker 最低剩余栈 **2,828 B**。最终 voice health 为 enabled=1 / listening=1；internal 历史最低从首轮 235 B 进一步降为 **131 B**，PSRAM 历史最低 **418,800 B**。内部最大连续块 **7,680 B** 仍低于 soak 的 **8 KiB** 门槛，不能称资源余量充足、无泄漏或发布稳定。结束时原 ID / bound / tokenVersion=4 保持，MQTT 在线、voice inactive，COM3 已释放。原始连续日志、汇总与最终设备状态分别位于 Rodak `.codex-temp/camera-resource-017/serial.log`、`result.json` 与 `device-final.json`。
 
 017 已扩展“真正运行 Camera → 退出 → A3 首开/Retry”的定向通过范围。屏幕先开时的 DMA 失败、迟到输入与 ACK/timeout、跨服务并发 OOM、资源长期归还、真实 SD/慢卡、物理触摸/声学和八小时 soak 仍开放；不能以解码成功覆盖这些失败与未测项。
+
+同 017 固件的后续独立窗口位于 Rodak `.codex-temp/resource-window-017/`：一次真实 Camera 运行 **88.576 秒 / 1,081 帧**后退出。完整 RX 的第三屏幕会话只确认 A3 首开/Retry1 **181 / 200 ms**；Retry2 的 seq72/73 未见 ACK，串口也没有第三次加载，随后 disable74 的 accepted 回执迟到 **4.006 秒**。较早仅记录 TX 的文件不能证明 ACK 丢失，这段结果也不能被早期“timeout 后最终解码成功”覆盖。
+
+## 018 Camera 分配保护、ACK 与阶段诊断
+
+018 源码 `d2517914e22337880b1ba38ee5013f143f994733` 包含 Camera 保护 `5c973fd`、ACK 修正 `c48d55a` 与 JPEG 阶段采样。Camera 的快照、错误/状态字符串、callback 复制、编码和保存结果发布等已知分配边界使用 RAII/catch 归还锁与资源；预览丢帧后 requeue 驱动缓冲，保存路径在写入前准备、成功后 move 发布。短错误不再为已处理的 OOM 增加长字符串分配。这不覆盖 CameraApp/LVGL 任意分配、exception emergency pool 耗尽、真实驱动或 IDF 任务清理分配。
+
+屏幕 ACK 仅在原 peer instance 内重试 `WOULD_BLOCK/NO_MEM`，保持 FIFO，最多从首次发送尝试起 **1 秒或 50 次**；输入动作不重放。重试时继续 peer loop 并暂停 JPEG 发送，部分 JSON 不发送，入队 OOM/溢出或重试耗尽关闭原实例。page transition/local touch/disable 对尚待处理输入返回明确拒绝；pointer accepted 只证明输入样本在最终读取入口获准，不等于后续点击业务成功。该一秒预算不是浏览器点击到回执的端到端承诺，桌面三秒 timeout 未改变。
+
+定向 Debug / ASan / UBSan / leak 均通过：Camera **33**、完整生产 ACK **21**、真实 host LVGL input **20**、DisplayService **24** 项。Camera 旧 017 生产 TU 的六个选定负对照全部失败；ACK/input 同旧源码分别为 **8 / 4** 项失败。018 完整 runner 独立通过 **30 suite / 42 CTest / 52 Python**；追加 ACK/input 两个独立 suite/CTest 后，合计 **32 suite / 44 CTest**，**682 个**源文件运行前后哈希一致。事实源为 WSL `~/.cache/rodakos-release-media-018/result-018.json` 及其 `runner.log`、`source-hashes-before.json`、`source-hashes-after.json`；该冻结先于 019 变更，不证明后续源码。
+
+设备包 `build/packages/ota/20261007-120809`，taskNo `media-resource-ack-018`，version `0.1.2-dev.1`；main **7,116,480 B**，SHA-256 **`d2e4b2447834bd018a25530c7f93f57f8c81e12bb8948e50a8b730ab3a490db8`**；ZIP SHA-256 **`8d10f136bf99280d446ead87245f2f454c44d41c0d6fde4943c20ec49529fff2`**。普通 production flavor、开发签名，Home 测试人口和 fault injection 关闭。VerifyOnly、保留 NVS 刷写、Recovery → main → Home → OTA 确认通过。
+
+实机证据必须拆成两个窗口：
+
+- 第一窗口先开 screen，再进入 Camera；设备时间 **34,767 ms** 记录 first frame。**77,897 ms** 的最后日志是 `Closing app: camera`，之后串口持续静默，直到 root 通过 RTS 受控复位；没有 panic 日志，但未取得退出完成，不能记作无故障通过或已定位死锁。
+- 复位后的独立窗口正常预览 **18.080 秒 / 243 帧**并退出，A3 三次实际加载/显示成功，解码 **193 / 190 / 192 ms**。第三次伴随桌面 timeout：down83 accepted 回执迟到 **7.745 秒**，up84 在 **7.741 秒**后收到 `accepted=false / control_disabled`，自动 disable85 的 accepted 回执迟到 **4.741 秒**。前两次 down/up79–82 为 **475 / 608 / 932 / 1,086 ms**。因此三次解码成功不是三次远控操作完整通过；被取消的 release 与后续 LVGL 点击的关系仍需单独验证。
+
+JPEG 首帧同 seq 的 DMA free 从 **14,983 B** 降至 open 后 **6,899 B**，process 后 **6,863 B**、close 后 **14,947 B**；open/close 对应约 **8,084 B** 内部瞬时占用，largest **8,192 → 5,376 → 8,192 B**。018 只增加观测，**没有修改 JPEG allocator**。`JPEG heap min` 每项是独立最低值，时间/序号只关联 dma_largest；after_close 时输出 scratch 仍在外层生命周期内，不能据该点 PSRAM 未回升判定泄漏。
+
+回到 Home 并停止 screen/remote 后，两条 MQTT health 的 internal free 为 **36,075 / 36,039 B**、largest **11,776 B**；PSRAM free **2,552,400 / 2,552,436 B**、largest **1,409,024 B**，MQTT stack_min **2,956 B**。wake listening=1，internal 历史最低仅 **47 B**。不同复位/运行历史下的最终 largest 不能宣称修复 DMA 容量。设备仍为 `44:1b:f6:c3:b4:30` / `c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、bound、tokenVersion=4、MQTT connected、voice inactive。
+
+原始记录为 Rodak `.codex-temp/resource-window-018/serial.log`、`after-reset/serial.log`、`after-reset/control-final.json` 和 `device-final.json`。Camera 退出停顿、迟到控制与取消 release 的动作语义、JPEG 内部工作区/DMA 竞争、任意 OOM/SD/音频/TLS 并发和八小时 soak 均继续开放，发布 **NO_GO** 不变。后续软件修复及设备包须以新的源码/包身份另记，不能计入 018。
+
+## 019 取消远程手势的修正与制品
+
+019 源码 `42b12ccd183577a331433a69218c8fcc6191a0ee` 修复一个由真实 LVGL 负对照确认的动作边界：远程 down 已交给 LVGL 后，disable 等取消清除了待处理 up，旧 bridge 随后返回普通 RELEASED，仍可能让 LVGL 触发 CLICKED。018 的明确拒绝 ACK 并不自动撤销 LVGL 已持有的按下状态；软件机制已复现，但这不是对 018 所有迟到时延的唯一归因。
+
+取消现在无条件推进代次，controller 先交付一次取消释放，再处理新按下；bridge 仅对已交付的远程手势调用 `lv_indev_reset`。物理触摸先发布、`OnLocalTouch` 后到的接管同样重置旧远程手势。LVGL 读循环先令旧 `prev_state` 归 RELEASED，再接受新 press，避免把新手势继承到已取消的对象。物理触摸自身点击、正常远程 up、重新授权和旧实例隔离保持各自语义；输入已在最终入口获准后发生的撤销仍不能物理回滚。
+
+RemoteInput **30 项 Debug/ASan/UBSan/leak**、ACK **21 项 ASan**、Home **43 项 ASan**通过；取消代次恢复旧条件的变异有 **2 项失败**，移除 LVGL reset 的变异有 **8 项失败**。用例覆盖 disable/revoke/page transition/local takeover、快速重新授权/新 down，以及 up 出队后到最终准入前的取消。独立审查已核对冻结源码和实际日志；记录为 WSL `~/.cache/rodakos-cancel-019-evidence/` 与 `rodakos-cancel-019-negative/`。这些是生产 controller/bridge 与真实 host LVGL 的证据，不代替 GT911 物理测试。
+
+同包的 `13b8d3f` 仅为 Camera App 销毁、StopPreview、STREAMOFF、fd close 和 device release 增加成对阶段日志；Camera **33 项 Debug**通过。它用于定位 018 的退出停顿，没有声称修复该停顿。018 的 **32 suite / 44 CTest / 52 Python** 全量结果保持原冻结身份，不能作为 019 全量通过。
+
+019 包为 `build/packages/ota/20261007-122610`，taskNo `media-control-cancel-019`，version `0.1.2-dev.1`；main **7,119,152 B**，SHA-256 **`665fffea5212885d839290bebaec20500d7690367b80cfb89436281cd454e278`**，ZIP SHA-256 **`e842df1f271f8c413a678ca479de4f37ebd64427a4789019a11811ed6fd99799`**。普通 production flavor、开发签名、Home 测试人口/fault injection OFF；VerifyOnly、保留 NVS 刷写、Recovery → main → Home → OTA 确认通过，原 bound/tokenVersion=4 与 MQTT 连接保持。JPEG allocator 未迁移，发布保持 **NO_GO**。
+
+019 首次先开 screen 再进 Camera，仍在最大连续 DMA 块 **6,656 B** 时启动失败。停止 screen 后重新进入 Camera，实际运行 **56.779 秒 / 792 帧**；退出时 UI cleanup、STREAMOFF、fd close、device release、worker stopped、audio release 均有完成日志，本次没有重现停顿。这条成功路径不定位或关闭 018 的退出故障。
+
+正常首开 A3 **189 ms** 解码成功。随后只发送 held-down93，收到 accepted（**1,188 ms**）后，通过 UI 停用远控：up94 被拒绝 `control_disabled`（**20 ms**），disable95 accepted（**22 ms**），该取消窗口没有新的 `Loading photo` 或 PNG decode。重新 enable96 后，正常 retry97/98 均 accepted（**800 / 860 ms**），A3 **190 ms** 成功。因此本次定向实机结果支持“取消旧手势不再产生额外加载，重新授权后正常点击可用”。
+
+下一次压力 Retry 仍触发桌面 timeout。设备在同一日志时间 **187,345 ms** 才处理 down99/up100/disable101；down/up 均拒绝 `control_disabled`（**3,870 / 3,869 ms**），disable101 accepted（**868 ms**）。没有第三次 PNG 加载，取消动作语义保持，但端到端时延没有收口。串口入口日志到达主机分别为发送后 **3,861 / 3,860 / 857 ms**，回执只晚于对应日志到达 **9–11 ms**，日志未记录 `control ACK retry`。这将主要等待范围收窄到 controller 入口之前，仍需进一步拆分 SDK、网络和调度；USB/日志缓冲包含在主机到达时间内，不能把它当成精确网络包时延，也不能归为发送端 ACK 有界重试或重新执行了点击。
+
+原始证据为 Rodak `.codex-temp/resource-window-019/serial.log`、`serial-timing.jsonl`、`control-final.json`、`result.json` 及 `device-final.json`。已记录周期 JPEG 合计 **148 attempts / 148 encoded / 0 failed**，不是完整逐帧账本；窗口无 panic/abort/reboot，收尾未另行重启。最终回到 Home 并停止 screen/remote，COM3 已释放；原 ID / bound / tokenVersion=4 保持、MQTT connected、voice inactive。两条 MQTT health 的 internal free **33,159 / 33,071 B**、largest **7,680 B**，PSRAM free **2,553,000 / 2,553,032 B**、largest **1,343,488 B**；MQTT stack_min **2,956 B**，wake enabled/listening=1、supervisor stack_min **2,424 B**，internal 历史最低 **467 B**。最终内部连续块仍低于 **8 KiB** soak 门槛；取消误点击的定向通过不覆盖控制迟到、018 Camera 退出故障、DMA 余量、物理触摸和全并发/soak 门禁。

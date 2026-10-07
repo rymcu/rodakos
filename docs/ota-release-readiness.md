@@ -26,8 +26,14 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest media slice, including a bounded package-017 device run, is
-[Camera exit and PNG allocation validation](#2026-10-07-camera-exit-and-png-allocation-validation).
+The latest package is 019, with a cancelled-gesture correction, successful guarded refresh/boot
+and a targeted device cancellation pass. End-to-end control timeouts and screen-first DMA failure
+still occurred. See
+[cancelled-gesture correction](#2026-10-07-cancelled-gesture-correction-019).
+Package 018 retains its Camera-exit stall requiring controlled reset and a separate post-reset
+window with delayed/rejected control replies. See
+[resource and ACK diagnostics](#2026-10-07-resource-and-ack-diagnostics-018).
+Package 017 retains its independent [Camera exit and PNG allocation evidence](#2026-10-07-camera-exit-and-png-allocation-validation).
 The 013–016 progression remains in
 [media decode and display-allocation validation](#2026-10-07-media-decode-and-display-allocation-validation).
 The preceding Recorder/Camera work remains recorded in
@@ -46,17 +52,19 @@ correction passed 14 real-codec tests in both modes and 13 generator validation 
 The previously recorded 43 Home UI, 11 signature/journal, 3 one-shot fault, and
 5 production Recovery state-machine tests remain passing evidence for their recorded baseline,
 with ASan/UBSan and leak checks; those separate targets were not rerun for the audio-only change.
-The media allocation slice has 43 Home UI, 24 production `DisplayService`, 24 Photos/ImageLibrary,
-21 Camera/FileService, and 11 valid plus 2 rejected-geometry LodePNG cases in Debug and ASan/UBSan
-with leak detection. The complete 017 host runner passes 30 suites and 42 CTest cases plus Python
-groups of 17, 15, 8 and 12 cases; key source hashes are unchanged before and after the run.
-Its 7,108,864-byte firmware was packaged and flashed as development package 017. Two actual Camera
-previews were followed by four successful A3 decodes. Screen-first Camera startup still failed DMA
-allocation twice, and one successful device decode followed a desktop control timeout. The observed
-131-byte historical minimum internal heap and final 7,680-byte largest block do not establish
-sufficient headroom; the latter is below the 8 KiB soak threshold. Package 016's
-clean-restart five PNG displays and 34/34 JPEG encodes remain accepted for their recorded window;
-they do not replace these newer failure observations or the outstanding resource/soak gates.
+The 018 focused runs pass 33 Camera/FileService, 21 production display ACK, 20 real-LVGL input and
+24 production `DisplayService` cases in Debug and ASan/UBSan with leak detection. The independent 018
+runner passes 30 suites / 42 CTest / 52 Python cases; adding the separate ACK/input checks gives
+32 suites / 44 CTest. All 682 recorded source hashes match before/after this run, before 019 changes.
+Package 018's 7,116,480-byte image passed guarded refresh and boot.
+Its first Camera exit stopped producing serial output and required a controlled RTS reset.
+After reset, an 18.080-second / 243-frame preview exited normally and A3 decoded three times,
+but the third attempt included a rejected up84 and delayed down83/disable85 replies.
+The JPEG stage snapshots show about 8,084 bytes of temporary internal allocation; 018 does not
+change the allocator. Final internal largest 11,776 bytes comes from a different run history,
+while the historical internal minimum is 47 bytes. These results do not establish sufficient
+headroom, reliable input cancellation or release stability. Earlier 016/017 successful windows
+remain valid within their recorded limits and do not replace these newer failures.
 Seventeen Python signing/capture-evidence tests pass after the 2026-10-06 collector regression update.
 The added host cases reject missing/repeated device uptime and unterminated failure logs; they do
 not establish a hardware soak. `build/logs/release-readiness.json` records the
@@ -76,10 +84,10 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | MQTT volume effects / lifecycle              | Production helper and actual UnifiedMqttService: correlation, ordering, authority ledger, real connection epoch, SDK callback/queue, Stop, refresh, unbind and scoped receipt publishing | Eighteen helper and fourteen service host regressions pass; hardware unverified |
 | RGB light patches / lifecycle               | Real LightService, board adapter, MQTT callback/worker and receipts: atomic merge/commit, driver failures, 64-result eviction, authority versions and cancellation | Thirteen native driver and seventeen MQTT light regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
-| Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants and complete display ACK sender | 55 command, 15 input and 13 ACK host cases pass; 21 desktop cross-repository cases pass; hardware unverified |
+| Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants, original-peer ACK retry and cancellation without synthetic click | 019 input 30 pass Debug/ASan, ACK 21 / Home 43 pass ASan. Device held-down cancellation caused no extra PNG load, and reenable worked; a later pressure click still timed out before the controller entry. Wider input/physical gates remain open |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
 | Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
-| Media PNG / display allocation | Production PNG ownership, checked LodePNG inflate headroom, Camera final-frame release and stop publication, display capture/JPEG allocation | Software suites pass; 017 records four successful A3 decodes after two actual Camera previews. Screen-first DMA failures, a Retry control timeout, broader OOM/concurrency and soak remain open |
+| Media PNG / display allocation | PNG ownership/inflate headroom, Camera frame release and selected allocation recovery, display capture/JPEG diagnostics | 019 screen-first DMA failure persists; after recovery, a 56.779 s / 792-frame Camera exit and two A3 loads passed. 018 exit stall remains unresolved, and final 7,680-byte internal largest misses the 8 KiB soak gate. Broader OOM/concurrency remains open |
 | Other resource failures                     | Physical image/display coexistence, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                               | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -518,7 +526,7 @@ upstream 320 x 240 RGB888 example; output beyond that bound safely drops the fra
 can recover. The application-owned heap-caps peak falls from about 614,400 to 332,800 bytes. The real
 codec uses about another 46,080 bytes of PSRAM outside that application peak.
 
-The current focused software gate, including the 017 extensions described below, passes in Debug
+The focused software gate recorded through 017 passes in Debug
 and ASan/UBSan with leak detection:
 
 | Target | Cases | Boundary |
@@ -638,6 +646,138 @@ Keep screen-first DMA/resource admission, late input and ACK/timeout handling, a
 broader Camera/media/voice/TLS concurrency, long-term resource return, real SD/slow-card behavior,
 physical touch/acoustics, actual power cuts and the eight-hour release soak open. This targeted
 Camera-exit/PNG improvement does not change the production-release **NO_GO** decision.
+
+## 2026-10-07 resource and ACK diagnostics 018
+
+Source `d2517914e22337880b1ba38ee5013f143f994733` combines Camera allocation recovery (`5c973fd`),
+original-peer ACK retry/cancellation replies (`c48d55a`) and JPEG-stage heap diagnostics. Camera
+snapshot/codec/callback/state failures release their locks and owned resources; frame-copy failures
+requeue driver buffers, and photo result strings are allocated before committing the file. This
+does not cover arbitrary CameraApp/LVGL allocations, exhausted exception emergency storage,
+real DMA/storage failures or IDF task-cleanup allocations.
+
+ACK retries apply only to `WOULD_BLOCK`/`NO_MEM`, preserve FIFO and original instance ownership,
+and stop after one second from the first send attempt or 50 attempts. They do not retry input
+actions or promise a one-second browser-to-device result. Incomplete JSON is never sent; enqueue
+OOM/overflow, permanent send error or budget exhaustion terminates the original peer. JPEG yields
+to pending ACKs while the peer loop continues. Cancellation callbacks execute outside the input lock.
+Pointer acceptance remains input-sample admission, not proof of a completed application click.
+
+Focused tests pass in both Debug and ASan/UBSan/leak: **Camera 33, ACK 21, input 20, DisplayService 24**.
+Six selected Camera cases fail against the old 017 production TU; ACK/input old-source controls
+fail 8/4 cases respectively. These do not imply all old tests fail. The independent complete 018
+runner passes **30 suites / 42 CTest / 52 Python**; adding the two ACK/input suites gives
+**32 suites / 44 CTest**. All **682** recorded source hashes are identical before/after the run,
+which completed before 019 source changes. Evidence is WSL
+`~/.cache/rodakos-release-media-018/result-018.json`, `runner.log` and
+`source-hashes-before.json` / `source-hashes-after.json`; older copied files in that directory do
+not establish new results. ESP-IDF 6.0.2 build passed.
+
+Development package `build/packages/ota/20261007-120809`, task `media-resource-ack-018`, version
+`0.1.2-dev.1`, contains a **7,116,480-byte** main image, SHA-256
+`d2e4b2447834bd018a25530c7f93f57f8c81e12bb8948e50a8b730ab3a490db8`; ZIP SHA-256
+`8d10f136bf99280d446ead87245f2f454c44d41c0d6fde4943c20ec49529fff2`.
+Home test population and fault injection are disabled. VerifyOnly, NVS-preserving incremental
+flash, Recovery → main → Home and OTA confirmation passed. Production flavor is not production
+signing-root acceptance.
+
+The first screen-first Camera window reached first frame at device time **34,767 ms**. Its last
+serial line at **77,897 ms** was `Closing app: camera`; output remained silent until a controlled
+RTS reset. No panic line was captured, but Camera exit was not confirmed and the failure is not
+classified as a proven deadlock or a successful recovery.
+
+In the separate post-reset window, Camera ran **18.080 seconds / 243 frames**, stopped, and A3
+decoded/displayed in **193 / 190 / 192 ms**. For the third attempt, down83 was accepted after
+**7.745 s**, up84 was rejected with `control_disabled` after **7.741 s**, and automatic disable85
+was accepted after **4.741 s**. Earlier down/up79–82 replies took **475 / 608 / 932 / 1,086 ms**.
+Three decoded images do not prove three accepted click sequences. The relationship between
+cancelling a held pointer, a synthesized release and a later LVGL click requires a separate fix
+and real-LVGL/device validation; it must not be silently attributed to ACK transport loss.
+
+The first JPEG stage sequence observed DMA free **14,983 → 6,899 → 6,863 → 14,947 bytes** across
+before-open/open/process/close, with largest **8,192 → 5,376 → 8,192 bytes**. The open/close pair
+accounts for an observed **8,084-byte** transient internal allocation. This identifies an active
+resource competitor, not a unique explanation for every Camera failure. **No JPEG allocator
+change is present in 018.** Periodic heap minima are independent fields; only the largest-DMA
+minimum has the recorded timestamp/sequence. Output scratch remains live at after-close.
+
+After returning Home and stopping screen/control, the two MQTT samples report internal free
+**36,075 / 36,039 bytes**, largest **11,776 bytes**; PSRAM free **2,552,400 / 2,552,436 bytes**,
+largest **1,409,024 bytes**, and worker minimum stack **2,956 bytes**. Wake remains listening;
+its historical internal minimum is **47 bytes**. The changed final largest block follows a
+different reset/exercise history and is not evidence of a DMA-capacity fix. Original device ID
+`c78845a8-06c9-4dcd-b7ff-d33e599f23ff`, MAC `44:1b:f6:c3:b4:30`, bound/tokenVersion=4 and MQTT
+connection are retained; voice is inactive.
+
+Evidence: Rodak `.codex-temp/resource-window-018/serial.log`, `after-reset/serial.log`,
+`after-reset/control-final.json` and `device-final.json`; the earlier 017 complete-RX comparison
+is in `.codex-temp/resource-window-017/`. Its Retry2 seq72/73 had no ACK or third device load,
+distinct from 017's earlier delayed-but-eventually-decoded run. See [media browsing](media-browsing.md).
+Camera-exit stalls, delayed input, cancellation/release semantics, JPEG/DMA pressure, broader
+OOM/media/voice/TLS/storage concurrency and eight-hour soak remain open. Release stays **NO_GO**.
+
+## 2026-10-07 cancelled-gesture correction 019
+
+Source `42b12ccd183577a331433a69218c8fcc6191a0ee` fixes a real-LVGL reproduced cancellation
+boundary: once a remote down has been read, dropping its queued up and emitting a normal RELEASED
+sample can still dispatch CLICKED. The explicit rejection ACK added in 018 does not itself reset
+LVGL's held gesture. This mechanism does not identify the cause of every earlier transport/UI delay.
+
+Every cancellation now advances its generation, including cancellation between dequeuing up and
+final admission. The controller delivers a cancellation release before dequeuing a new press;
+the bridge resets the previously delivered remote gesture on the LVGL thread and lets prev_state
+return to RELEASED before another read. Physical takeover also resets the old remote gesture when
+the physical sample is published before OnLocalTouch. Normal up/click, physical-only clicks,
+reenable/replacement and original-instance isolation retain separate tests and admission semantics.
+
+Production input/bridge with real host LVGL passes **30 cases in Debug and ASan/UBSan/leak**.
+ACK **21** and Home **43** pass ASan. A conditional-generation mutation fails **2** cases; removing
+the LVGL reset fails **8**. Frozen source hashes and logs are in WSL
+`~/.cache/rodakos-cancel-019-evidence/`; mutation logs are in `rodakos-cancel-019-negative/`.
+The accompanying `13b8d3f` adds Camera destruction/worker/STREAMOFF/fd-close/device-release phase
+logs, with **33 Camera Debug cases** passing. These logs do not establish a Camera-exit stall fix.
+The complete 018 **32-suite / 44-CTest / 52-Python** run cannot be reused as a complete 019 run.
+
+Package `build/packages/ota/20261007-122610`, task `media-control-cancel-019`, version
+`0.1.2-dev.1`, contains **7,119,152 bytes**, main SHA-256
+`665fffea5212885d839290bebaec20500d7690367b80cfb89436281cd454e278`; ZIP SHA-256
+`e842df1f271f8c413a678ca479de4f37ebd64427a4789019a11811ed6fd99799`.
+It is a normal production-flavor, development-signed package with Home test population and fault
+injection disabled. VerifyOnly, the NVS-preserving refresh and Recovery/main/Home/OTA confirmation
+passed with the original bound/tokenVersion=4 and MQTT connected. No JPEG allocator migration
+is included.
+
+The 019 screen-first Camera attempt still failed with a **6,656-byte** largest DMA block. After
+screen sharing stopped, Camera recovered and ran **56.779 seconds / 792 frames**. Its exit completed
+UI cleanup, STREAMOFF, fd close, device release, worker stop and audio release. This successful
+exit does not locate or close the separate 018 stall.
+
+A3 first opened in **189 ms**. In a targeted cancellation trial, held-down93 was accepted after
+**1,188 ms**, then UI disable produced up94 rejected as `control_disabled` after **20 ms** and
+disable95 accepted after **22 ms**, with no additional photo load/decode. After reenable96,
+normal retry97/98 was accepted after **800 / 860 ms** and A3 decoded in **190 ms**. This establishes
+the bounded cancelled-gesture correction and subsequent normal-click recovery on the device.
+
+The next pressure Retry still timed out: down99/up100/disable101 were logged at the controller's
+parsed-input entry at the same device time **187,345 ms**. Down/up were rejected as
+`control_disabled` after **3,870 / 3,869 ms**, disable was accepted after **868 ms**, and no third
+PNG load occurred. Host receipt of the matching serial entry logs was **3,861 / 3,860 / 857 ms**
+after TX, followed by ACKs **9–11 ms** later. There was no recorded `control ACK retry`; this
+narrows the dominant wait to before the controller entry, with SDK/network/scheduling still to
+separate. USB/log buffering is included in host receipt timestamps, so these are not exact
+packet-network timings. It is not an all-input pass.
+
+Evidence is Rodak `.codex-temp/resource-window-019/serial.log`, `serial-timing.jsonl`,
+`control-final.json`, `result.json` and `device-final.json`. Recorded periodic JPEG totals are
+**148/148/0**, not a complete per-frame ledger. No panic/abort/reboot was captured, and no extra
+restart was used for closeout. The device returned Home with screen/control stopped and COM3
+released, preserving its original ID/bound/tokenVersion=4, MQTT connected and voice inactive.
+Final internal free is **33,159 / 33,071 bytes**, largest **7,680 bytes**; PSRAM free
+**2,553,000 / 2,553,032 bytes**, largest **1,343,488 bytes**. MQTT/supervisor minimum stacks are
+**2,956 / 2,424 bytes**, wake is enabled/listening, and historical internal minimum is **467 bytes**.
+The final internal largest still misses the **8 KiB** soak threshold. Release remains **NO_GO**
+for outstanding control latency, the 018 Camera-exit diagnosis, DMA/resource concurrency,
+physical, signing and soak gates.
 
 ## Build and package
 
