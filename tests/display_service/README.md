@@ -1,27 +1,30 @@
 # DisplayService 分配失败与恢复
 
 本目标直接、完整地编译生产 `main/phone_os/display_service.cc` 和原始公开头文件，
-不替换 `EncodeRgb565`、`EncodeJpeg`、帧复制、worker 或 Stop 路径。
+不替换 RGB565 → RGB888 转换、`EncodeJpeg`、worker 或 Stop 路径。
 配置时将生产源码 SHA-256 写入构建目录 `production-sources.json`。
 
-21 个用例覆盖：
+24 个用例覆盖：
 
 - StartCapture 第一／第二份帧缓冲分配失败、初始刷新排队失败；失败后能取得锁并重新启动。
 - GetLatestFrame 复制失败清除调用方旧数据、释放锁并允许重试；没有新帧时不返回旧 JPEG。
-- RGB888 两级 heap-caps 分配、encoder 打开后的 scratch 两级分配、紧凑 JPEG 的 C++
-  分配失败；encoder 与每个 heap-caps 缓冲都有独立的打开／关闭和分配／释放计数。
+- RGB888 两级 heap-caps 分配、encoder 打开后的 100 KiB scratch 两级分配、紧凑 JPEG 的
+  C++ 分配失败；encoder 与每个 heap-caps 缓冲都有独立的打开／关闭和分配／释放计数。
+- JPEG worker 在同一块 230400 字节缓冲中先复制 RGB565 快照，再反向原地扩展 RGB888；
+  首／中／末像素验证快照完整，heap-caps 峰值为 230400 + 102400 字节，不再分配
+  153600 字节 `DisplayFrame` 深拷贝。100 KiB 输出越界会丢弃该帧并在新帧恢复。
 - codec 打开／处理失败；恢复后输出内容来自真实 RGB565 → RGB888 转换，交付 vector 的
   size/capacity 为 codec 实际输出 4096 字节，不保留 230400 字节 scratch。
-- callback 存储／task 创建失败；worker 的帧复制、codec、紧凑输出失败按 5 FPS 节流，
+- callback 存储／task 创建失败；worker 的 codec、紧凑输出失败按 5 FPS 验证节流，
   以独立 producer 每 10 ms 持续发布 flush 唤醒，验证失败尝试仍间隔至少 190 ms，
-  避免将 semaphore 自身等待误算为节流。恢复后只发送最新帧，没有新帧时不重复分配
-  153600 字节副本。
+  避免将 semaphore 自身等待误算为节流。RGB888 持续分配失败验证 Stop 有界；这些失败
+  共用同一尝试节流路径。恢复后只发送最新帧，没有新帧时不分配 153600 字节副本。
 - callback 抛出 `bad_alloc` 后不重放同一序号、下一新帧可用；callback 自停、外部 Stop
   等待已进入 callback、持续分配失败时及时停止、callback 所有权及异步刷新注销。
 - callback 最后一个共享引用在 service mutex 外析构，析构重入 service 不会死锁；旧流 Stop
   仅等待其捕获的 generation，callback 析构同步启动替代流时不会错误等待新 task。
 - 并发 StartCapture 只注册一次 LVGL event callback，注册与析构注销都持有 LVGL lock；
-  CaptureJpeg 的帧复制 OOM 保留精确错误，不被“尚无画面”覆盖。
+  `GetLatestFrame` 仍保留调用方深拷贝语义，`CaptureJpeg` 不再依赖该临时副本。
 
 主机边界：LVGL 使用最小的 flush 事件、display buffer 和异步排队替身；初始异步刷新仅
 检查排队与注销，不运行真实绘制树。FreeRTOS 使用真实 C++ 线程、条件变量和互斥语义，

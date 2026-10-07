@@ -44,6 +44,7 @@ bool new_worker_only = false;
 size_t heap_size = 0, heap_count = 0;
 bool heap_after_open = false;
 bool fail_open = false, fail_process = false, allow_tasks = true, allow_async = true;
+size_t encoded_size = 4096;
 thread_local Task* current_task = nullptr;
 thread_local char external_task;
 thread_local size_t ui_lock_depth = 0;
@@ -97,6 +98,7 @@ void Reset() {
     new_nth = new_count = heap_size = heap_count = 0;
     new_time_count = process_time_count = 0;
     new_worker_only = heap_after_open = fail_open = fail_process = false;
+    encoded_size = 4096;
     allow_tasks = allow_async = true;
     async_calls = {};
 }
@@ -121,6 +123,7 @@ void ClearFailures() {
 }
 void FailEncoderOpen(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); fail_open = fail; }
 void FailEncoderProcess(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); fail_process = fail; }
+void SetEncodedSize(size_t bytes) { std::lock_guard<std::mutex> lock(host_mutex); encoded_size = bytes; }
 void AllowTaskCreation(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_tasks = allow; }
 void AllowAsync(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_async = allow; }
 Resources Snapshot() { std::lock_guard<std::mutex> lock(host_mutex); return resources; }
@@ -214,6 +217,7 @@ void* heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned) {
     *slot = {pointer, bytes};
     ++resources.buffers;
     resources.bytes += bytes;
+    resources.peak_bytes = std::max(resources.peak_bytes, resources.bytes);
     return pointer;
 }
 void heap_caps_free(void* pointer) {
@@ -243,12 +247,24 @@ jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t encoder, const uint8_t* input, i
                               uint8_t* output, int output_capacity, int* output_size) {
     std::lock_guard<std::mutex> lock(host_mutex);
     ++resources.processes;
+    resources.last_output_capacity = static_cast<size_t>(output_capacity);
+    const auto pack_rgb = [](const uint8_t* pixel) {
+        return (static_cast<uint32_t>(pixel[0]) << 16) |
+               (static_cast<uint32_t>(pixel[1]) << 8) | pixel[2];
+    };
+    if (input != nullptr && input_size >= 3) {
+        const size_t pixel_count = static_cast<size_t>(input_size) / 3;
+        resources.first_rgb888 = pack_rgb(input);
+        resources.middle_rgb888 = pack_rgb(input + (pixel_count / 2) * 3);
+        resources.last_rgb888 = pack_rgb(input + (pixel_count - 1) * 3);
+    }
     if (process_time_count < process_times.size()) process_times[process_time_count++] = Now();
-    if (fail_process || !encoder || input_size != 320 * 240 * 3 || output_capacity < 4096) return -1;
+    if (fail_process || !encoder || input_size != 320 * 240 * 3 ||
+        static_cast<size_t>(output_capacity) < encoded_size) return -1;
     // The fake stands at the codec boundary; the real RGB565 conversion and
     // allocation/copy/cleanup paths execute before and after this call.
-    std::memset(output, input[0], 4096);
-    *output_size = 4096;
+    std::memset(output, input[0], encoded_size);
+    *output_size = static_cast<int>(encoded_size);
     return JPEG_ERR_OK;
 }
 jpeg_error_t jpeg_enc_close(jpeg_enc_handle_t encoder) {

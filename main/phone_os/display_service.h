@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -45,12 +46,19 @@ public:
     std::string last_error() const;
 
 private:
+    struct EncodeMetrics;
+
     static void OnDisplayEvent(lv_event_t* event);
     static void JpegStreamTaskEntry(void* arg);
     void AttachWithLvglLock();
     void DetachWithLvglLock();
     void HandleDisplayEvent(lv_event_t* event);
     void JpegStreamTask();
+    bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
+                    std::vector<uint8_t>& jpeg, EncodeMetrics* metrics);
+    bool EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
+                          uint32_t& sequence, int64_t& timestamp_us, EncodeMetrics* metrics,
+                          const char*& error);
     void SetError(const char* error);
 
     lv_display_t* display_ = nullptr;

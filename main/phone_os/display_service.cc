@@ -17,16 +17,9 @@ namespace rodakos {
 namespace {
 constexpr const char* TAG = "DisplayService";
 constexpr uint8_t kJpegQuality = 65;
+constexpr size_t kJpegOutputCapacity = 100 * 1024;
 constexpr uint32_t kTaskStackSize = 8192;
 constexpr int64_t kJpegStatsIntervalUs = 5 * 1000 * 1000;
-
-struct EncodeMetrics {
-    int64_t conversion_us = 0;
-    int64_t open_us = 0;
-    int64_t process_us = 0;
-    int64_t close_us = 0;
-    size_t output_size = 0;
-};
 
 class SemaphoreLock {
 public:
@@ -71,8 +64,29 @@ void RefreshDisplayForCapture(void* user_data) {
     lv_refr_now(display);
 }
 
-bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
-                std::vector<uint8_t>& jpeg, EncodeMetrics* metrics) {
+}  // namespace
+
+struct DisplayService::EncodeMetrics {
+    int64_t conversion_us = 0;
+    int64_t open_us = 0;
+    int64_t process_us = 0;
+    int64_t close_us = 0;
+    size_t output_size = 0;
+};
+
+namespace {
+bool HasRgb565Frame(const DisplayFrame& frame) {
+    if (frame.width <= 0 || frame.height <= 0) return false;
+    if (static_cast<size_t>(frame.width) > SIZE_MAX / static_cast<size_t>(frame.height)) {
+        return false;
+    }
+    const size_t pixel_count = static_cast<size_t>(frame.width) * frame.height;
+    return pixel_count <= SIZE_MAX / 2 && frame.rgb565.size() >= pixel_count * 2;
+}
+}  // namespace
+
+bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
+                                std::vector<uint8_t>& jpeg, EncodeMetrics* metrics) {
     const int64_t open_started_us = esp_timer_get_time();
     jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
     config.width = width;
@@ -88,43 +102,82 @@ bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
     if (metrics != nullptr) metrics->open_us = esp_timer_get_time() - open_started_us;
     if (open_ret != JPEG_ERR_OK || encoder == nullptr) return false;
     Encoder owned_encoder(encoder);
-    const size_t capacity = std::max<size_t>(64 * 1024, input_size);
-    HeapBuffer encoded(AllocAligned(capacity));
+    // esp_new_jpeg 的 320x240 RGB888 示例使用 100 KiB 输出缓冲。屏幕帧实测约
+    // 6-13 KiB，固定上限避免在 PNG 常驻时再申请一份 225 KiB 原始帧大小缓冲。
+    HeapBuffer encoded(AllocAligned(kJpegOutputCapacity));
     if (!encoded) return false;
     int output_size = 0;
     const int64_t process_started_us = esp_timer_get_time();
     const auto ret = jpeg_enc_process(encoder, input, static_cast<int>(input_size),
-                                      encoded.get(), static_cast<int>(capacity), &output_size);
+                                      encoded.get(), static_cast<int>(kJpegOutputCapacity), &output_size);
     if (metrics != nullptr) metrics->process_us = esp_timer_get_time() - process_started_us;
     const int64_t close_started_us = esp_timer_get_time();
     owned_encoder.reset();
     if (metrics != nullptr) metrics->close_us = esp_timer_get_time() - close_started_us;
-    if (ret != JPEG_ERR_OK || output_size <= 0 || static_cast<size_t>(output_size) > capacity) {
+    if (ret != JPEG_ERR_OK || output_size <= 0 ||
+        static_cast<size_t>(output_size) > kJpegOutputCapacity) {
         return false;
     }
-    // resize 不会释放 225 KiB 编码容量；传输队列只保留实际 JPEG 字节。
+    // 传输队列只保留实际 JPEG 字节，不持有 100 KiB 编码缓冲。
     std::vector<uint8_t> compact(encoded.get(), encoded.get() + output_size);
     if (metrics != nullptr) metrics->output_size = compact.size();
     jpeg = std::move(compact);
     return true;
 }
 
-bool EncodeRgb565(const std::vector<uint8_t>& rgb565, int width, int height,
-                  std::vector<uint8_t>& jpeg, EncodeMetrics* metrics = nullptr) {
+bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
+                                      uint32_t& sequence, int64_t& timestamp_us,
+                                      EncodeMetrics* metrics, const char*& error) {
     jpeg.clear();
-    if (width <= 0 || height <= 0 || rgb565.size() < static_cast<size_t>(width) * height * 2) {
+    sequence = 0;
+    timestamp_us = 0;
+    error = nullptr;
+
+    int width = 0;
+    int height = 0;
+    {
+        SemaphoreLock lock(mutex_);
+        if (!capture_running_ || !has_frame_ || latest_frame_.sequence == previous_sequence ||
+            !HasRgb565Frame(latest_frame_)) {
+            error = "No new display frame is ready yet";
+            return false;
+        }
+        width = latest_frame_.width;
+        height = latest_frame_.height;
+    }
+
+    const size_t pixel_count = static_cast<size_t>(width) * height;
+    if (pixel_count > SIZE_MAX / 3) {
+        error = "Display frame dimensions are too large";
         return false;
     }
-    const size_t pixel_count = static_cast<size_t>(width) * height;
-    // ESP_NEW_JPEG 的编码输入支持 RGB888，不支持 RGB565；
-    // RGB565 常量用于解码输出，不能直接交给编码器。
     const size_t rgb888_size = pixel_count * 3;
     HeapBuffer aligned_rgb888(AllocAligned(rgb888_size));
-    if (!aligned_rgb888) return false;
+    if (!aligned_rgb888) {
+        error = "Not enough memory for display JPEG input";
+        return false;
+    }
+
+    const size_t rgb565_size = pixel_count * 2;
+    {
+        SemaphoreLock lock(mutex_);
+        if (!capture_running_ || !has_frame_ || latest_frame_.sequence == previous_sequence ||
+            latest_frame_.width != width || latest_frame_.height != height ||
+            !HasRgb565Frame(latest_frame_)) {
+            error = "No new display frame is ready yet";
+            return false;
+        }
+        std::memcpy(aligned_rgb888.get(), latest_frame_.rgb565.data(), rgb565_size);
+        sequence = latest_frame_.sequence;
+        timestamp_us = latest_frame_.timestamp_us;
+    }
+
+    // RGB565 快照先占用目标缓冲的前 2 B/px，再从尾向头原地扩展为 RGB888。
+    // 这样锁内只有一次 memcpy，避免 12-34 ms 全帧转换阻塞 LVGL flush。
     const int64_t conversion_started_us = esp_timer_get_time();
-    for (size_t i = 0; i < pixel_count; ++i) {
-        const uint16_t pixel = static_cast<uint16_t>(rgb565[i * 2]) |
-                               (static_cast<uint16_t>(rgb565[i * 2 + 1]) << 8);
+    for (size_t i = pixel_count; i-- > 0;) {
+        const uint16_t pixel = static_cast<uint16_t>(aligned_rgb888.get()[i * 2]) |
+                               (static_cast<uint16_t>(aligned_rgb888.get()[i * 2 + 1]) << 8);
         const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
         const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
         const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
@@ -132,14 +185,21 @@ bool EncodeRgb565(const std::vector<uint8_t>& rgb565, int width, int height,
         aligned_rgb888.get()[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
         aligned_rgb888.get()[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
     }
-    if (metrics != nullptr) metrics->conversion_us = esp_timer_get_time() - conversion_started_us;
+    if (metrics != nullptr) {
+        metrics->conversion_us = esp_timer_get_time() - conversion_started_us;
+    }
+
     try {
-        return EncodeJpeg(aligned_rgb888.get(), rgb888_size, width, height, jpeg, metrics);
+        if (!EncodeJpeg(aligned_rgb888.get(), rgb888_size, width, height, jpeg, metrics)) {
+            error = "Display JPEG encode failed";
+            return false;
+        }
+        return true;
     } catch (const std::bad_alloc&) {
+        error = "Not enough memory for display JPEG output";
         return false;
     }
 }
-}  // namespace
 
 DisplayService::DisplayService(lv_display_t* display) : display_(display) {
     mutex_ = xSemaphoreCreateMutex();
@@ -294,18 +354,12 @@ bool DisplayService::GetLatestFrame(DisplayFrame& frame) {
 }
 
 bool DisplayService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
-    jpeg.clear();
-    DisplayFrame frame;
-    if (!GetLatestFrame(frame)) return false;
-    if (frame.width <= 0 || frame.height <= 0) {
-        SetError("No display frame is ready yet");
-        return false;
-    }
-    if (!EncodeRgb565(frame.rgb565, frame.width, frame.height, jpeg)) {
-        SetError("Display JPEG encode failed");
-        return false;
-    }
-    return true;
+    uint32_t sequence = 0;
+    int64_t timestamp_us = 0;
+    const char* error = nullptr;
+    const bool encoded = EncodeLatestJpeg(0, jpeg, sequence, timestamp_us, nullptr, error);
+    if (!encoded && error != nullptr) SetError(error);
+    return encoded;
 }
 
 bool DisplayService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
@@ -484,14 +538,15 @@ void DisplayService::JpegStreamTask() {
             if (!capture_running_ || !has_frame_ || latest_frame_.sequence == last_sequence) continue;
         }
 
-        DisplayFrame frame;
         {
             std::vector<uint8_t> jpeg;
             EncodeMetrics metrics;
+            uint32_t sequence = 0;
+            int64_t timestamp_us = 0;
+            const char* error = nullptr;
             ++stats_attempts;
-            if (GetLatestFrame(frame) &&
-                EncodeRgb565(frame.rgb565, frame.width, frame.height, jpeg, &metrics)) {
-                last_sequence = frame.sequence;
+            if (EncodeLatestJpeg(last_sequence, jpeg, sequence, timestamp_us, &metrics, error)) {
+                last_sequence = sequence;
                 ++stats_encoded;
                 stats_conversion_us += metrics.conversion_us;
                 stats_open_us += metrics.open_us;
@@ -499,7 +554,7 @@ void DisplayService::JpegStreamTask() {
                 stats_close_us += metrics.close_us;
                 stats_output_bytes += metrics.output_size;
                 try {
-                    (*callback)(std::move(jpeg), frame.sequence, frame.timestamp_us);
+                    (*callback)(std::move(jpeg), sequence, timestamp_us);
                 } catch (const std::bad_alloc&) {
                     // 回调可能已接收该帧，不能自动重放同一 sequence。
                     ++stats_failed;

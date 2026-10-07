@@ -36,6 +36,17 @@ struct Fixture {
         }
         host::Flush(display, pixels.data(), {0, 0, 319, 239});
     }
+    void PublishMarkers() {
+        pixels.fill(0);
+        const auto set_pixel = [&](size_t index, uint16_t rgb565) {
+            pixels[index * 2] = static_cast<uint8_t>(rgb565);
+            pixels[index * 2 + 1] = static_cast<uint8_t>(rgb565 >> 8);
+        };
+        set_pixel(0, 0xf800);
+        set_pixel((320 * 240) / 2, 0x07e0);
+        set_pixel(320 * 240 - 1, 0x001f);
+        host::Flush(display, pixels.data(), {0, 0, 319, 239});
+    }
 };
 
 template <typename F> bool Wait(F&& predicate, std::chrono::milliseconds timeout = 2500ms) {
@@ -130,16 +141,17 @@ RODAK_TEST("frame copy allocation failure clears caller output and unlocks befor
     RODAK_CHECK_EQ(frame.sequence, 1u);
     RODAK_CHECK_EQ(frame.rgb565[1], 0xf8);
 }
-RODAK_TEST("CaptureJpeg preserves the precise frame copy allocation error") {
+RODAK_TEST("CaptureJpeg avoids a frame-sized deep copy before encoding") {
     Fixture fixture;
     fixture.Start();
     fixture.Publish();
     host::FailNew(host::kFrameBytes);
     std::vector<uint8_t> jpeg{1, 2, 3};
-    RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
-    RODAK_CHECK(jpeg.empty());
-    RODAK_CHECK_EQ(fixture.service.last_error(), "Not enough memory for display frame");
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    RODAK_CHECK_EQ(host::Snapshot().new_failures, 0u);
+    RODAK_CHECK_EQ(jpeg.size(), host::kJpegBytes);
     RODAK_CHECK(fixture.service.IsRunning());
+    host::ClearFailures();
 }
 RODAK_TEST("capture with no ready frame cannot return an old JPEG") {
     Fixture fixture;
@@ -163,11 +175,11 @@ RODAK_TEST("RGB888 allocation failure returns false without opening an encoder a
     RODAK_CHECK_EQ(jpeg.size(), host::kJpegBytes);
     CheckReleased();
 }
-RODAK_TEST("scratch allocation failure after encoder open closes encoder and RGB888") {
+RODAK_TEST("100 KiB scratch allocation failure after encoder open closes encoder and RGB888") {
     Fixture fixture;
     fixture.Start();
     fixture.Publish();
-    host::FailHeap(host::kRgbBytes, 2, true);
+    host::FailHeap(host::kJpegScratchBytes, 2, true);
     std::vector<uint8_t> jpeg{9};
     RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
     RODAK_CHECK(jpeg.empty());
@@ -177,6 +189,29 @@ RODAK_TEST("scratch allocation failure after encoder open closes encoder and RGB
     RODAK_CHECK_EQ(state.processes, 0u);
     CheckReleased();
     RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    CheckReleased();
+}
+RODAK_TEST("JPEG heap-caps peak uses one RGB888 snapshot and bounded scratch") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    std::vector<uint8_t> jpeg;
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    const auto state = host::Snapshot();
+    RODAK_CHECK_EQ(state.last_output_capacity, host::kJpegScratchBytes);
+    RODAK_CHECK_EQ(state.peak_bytes, host::kRgbBytes + host::kJpegScratchBytes);
+    CheckReleased();
+}
+RODAK_TEST("reverse in-place expansion preserves first middle and last RGB888 pixels") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.PublishMarkers();
+    std::vector<uint8_t> jpeg;
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    const auto state = host::Snapshot();
+    RODAK_CHECK_EQ(state.first_rgb888, 0xff0000u);
+    RODAK_CHECK_EQ(state.middle_rgb888, 0x00ff00u);
+    RODAK_CHECK_EQ(state.last_rgb888, 0x0000ffu);
     CheckReleased();
 }
 RODAK_TEST("compact JPEG allocation failure clears old output and releases every resource") {
@@ -250,28 +285,15 @@ RODAK_TEST("task startup failure releases a reentrant callback owner outside the
     RODAK_CHECK(released.load());
     RODAK_CHECK(observed_running.load());
 }
-RODAK_TEST("worker frame copy failures are paced and recover without repeated old frame callbacks") {
+RODAK_TEST("worker does not allocate frame-sized deep copies") {
     Fixture fixture;
     fixture.Start();
     fixture.Publish();
     std::atomic<int> callbacks{0};
     host::FailNew(host::kFrameBytes, 1, 100, true);
     RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&&, auto, auto) { ++callbacks; }));
-    std::jthread producer([&](std::stop_token stop) {
-        while (!stop.stop_requested()) { fixture.Publish(); std::this_thread::sleep_for(10ms); }
-    });
-    RODAK_CHECK(Wait([] { return host::Snapshot().new_failures >= 3; }));
-    producer.request_stop();
-    producer.join();
-    RODAK_CHECK(host::Snapshot().new_failures <= 4);
-    RODAK_CHECK_EQ(callbacks.load(), 0);
-    host::ClearFailures();
-    CheckCadence(host::NewFailureTimes());
     RODAK_CHECK(Wait([&] { return callbacks.load() == 1; }));
-    host::FailNew(host::kFrameBytes, 1, 100, true);
-    const auto failures = host::Snapshot().new_failures;
-    std::this_thread::sleep_for(450ms);
-    RODAK_CHECK_EQ(host::Snapshot().new_failures, failures);
+    RODAK_CHECK_EQ(host::Snapshot().new_failures, 0u);
     RODAK_CHECK_EQ(callbacks.load(), 1);
     host::ClearFailures();
     fixture.service.StopJpegStream();
@@ -336,6 +358,26 @@ RODAK_TEST("worker compact allocation failure sends no old JPEG and later sends 
     RODAK_CHECK_EQ(sequence.load(), latest.sequence);
     RODAK_CHECK_EQ(marker.load(), 0u);
     RODAK_CHECK_EQ(capacity.load(), host::kJpegBytes);
+    fixture.service.StopJpegStream();
+    CheckReleased();
+}
+RODAK_TEST("worker drops JPEG output beyond 100 KiB and recovers on a newer frame") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish(0xf800);
+    host::SetEncodedSize(host::kJpegScratchBytes + 1);
+    std::atomic<int> callbacks{0};
+    std::atomic<unsigned> marker{99};
+    RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&& jpeg, auto, auto) {
+        marker.store(jpeg.front());
+        ++callbacks;
+    }));
+    RODAK_CHECK(Wait([] { return host::Snapshot().processes >= 2; }));
+    RODAK_CHECK_EQ(callbacks.load(), 0);
+    host::SetEncodedSize(host::kJpegBytes);
+    fixture.Publish(0x001f);
+    RODAK_CHECK(Wait([&] { return callbacks.load() == 1; }));
+    RODAK_CHECK_EQ(marker.load(), 0u);
     fixture.service.StopJpegStream();
     CheckReleased();
 }
@@ -465,13 +507,13 @@ RODAK_TEST("stop during sustained allocation failures is bounded and destruction
         RODAK_CHECK(service.StartCapture());
         std::array<uint8_t, host::kFrameBytes> pixels{};
         host::Flush(display, pixels.data(), {0, 0, 319, 239});
-        host::FailNew(host::kFrameBytes, 1, 100, true);
+        host::FailHeap(host::kRgbBytes, 100);
         auto token = std::make_shared<int>(1);
         const std::weak_ptr<int> weak = token;
         Service::JpegFrameCallback callback = [token](auto&&, auto, auto) {};
         token.reset();
         RODAK_CHECK(service.StartJpegStream(1, std::move(callback)));
-        RODAK_CHECK(Wait([] { return host::Snapshot().new_failures >= 1; }));
+        RODAK_CHECK(Wait([] { return host::Snapshot().heap_failures >= 1; }));
         const auto started = Clock::now();
         service.StopJpegStream();
         const auto elapsed = Clock::now() - started;
