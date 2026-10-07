@@ -1,5 +1,11 @@
 # RodakOS Roadmap
 
+Decision of 2026-10-07: delivery proceeds through local tests, builds and recorded device
+validation without depending on GitHub Actions. Do not repair or rerun Actions, or pursue its
+billing, quota or required-check setup. Existing runs remain evidence for their original
+candidates; missing or unavailable Actions do not block delivery. Actual software failures and
+the remaining physical and production-release gates still require their own evidence.
+
 025 source `8d5cf99f95b59d45b0a1e66fc3a02d1a502618a6` implements complete SDK-client
 replacement for automatic MQTT credential refresh within the existing authority boundary.
 The worker revokes the old connection, confirms stop/destroy, reloads current credentials

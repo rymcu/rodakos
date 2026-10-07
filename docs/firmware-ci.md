@@ -1,13 +1,18 @@
 # RodakOS 固件构建 CI
 
-本文带 SHA 的早期结果保留为历史基线。最新 main/PR 的精确 Actions 和下载工件核验由
+2026-10-07 用户决定：后续交付不依赖 GitHub Actions，不再修复或重跑 Actions，也不处理其
+账单、额度或 required checks。固件继续通过[本地构建与打包入口](firmware-download.md)
+验证源码、依赖、最终 ELF、签名包和产物摘要，再按对应门禁取实机证据。Actions 缺失或
+不可用不构成交付阻塞；下述已有工作流、日期记录及其失败/修复结果保留为历史。
+
+本文带 SHA 的结果保留为历史基线。已取得的 main/PR 精确 Actions 和下载工件核验由
 [#26](https://github.com/rymcu/rodakos/issues/26) 汇总；当前设备运行的原开发根具名包见
 [025 发布记录](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)。CI 临时根包不等于设备已刷包。
 
 [固件工作流](../.github/workflows/firmware-build.yml) 独立于主机测试，在 PR、`main` push
 及手动触发时构建普通功能 flavor 的主应用和 Recovery，生成明确标记的开发签名包。
 它属于 [#26](https://github.com/rymcu/rodakos/issues/26) 的固件构建阶段；已通过的候选、
-远端运行及下载包复核见下文，仓库 required checks 与生产发布门禁仍独立。
+远端运行及下载包复核见下文；当前不再要求配置 required checks，生产发布门禁仍独立。
 
 ## 固定输入与环境
 
@@ -81,8 +86,9 @@ CMake/project/flash 元数据、ELF 符号表、生成 board 配置和两个开�
 python .github/workflows/scripts/firmware_ci.py verify-package /path/to/development-package
 ```
 
-`build` 子命令限定在临时 Actions checkout，避免覆盖本机开发构建。真实云端构建、
-artifact 下载复核和 PR required checks 仍需对应 Actions run 的成功证据。生产密钥、
+`build` 子命令限定在临时 Actions checkout，避免覆盖本机开发构建；本地继续使用项目原有
+构建和打包入口，不为验证而绕过此限制。引用已有云端构建时保留对应 run 与工件身份，
+无需为交付新增 Actions 结果或 required checks。生产密钥、
 有线迁移、掉电、资源故障和长期实机门禁仍见 [OTA 发布验收](ota-release-readiness.md)。
 
 ## 2026-10-07 本地验证边界
@@ -145,4 +151,5 @@ bootloader、分区表、otadata、Recovery 与公钥逐字节一致。
 Recovery 为 338,592 字节。同一候选的主机测试见
 [Actions 37514192380](https://github.com/rymcu/rodakos/actions/runs/37514192380)。
 这些包使用本次 CI 的临时开发信任根；未刷设备，不替代已安装 Recovery 的兼容性、
-生产密钥、实际掉电或长期实机验收。#26 的 PR 可见性与 required checks/保护规则仍开放。
+生产密钥、实际掉电或长期实机验收。当时未完成的 PR required checks/保护规则配置
+按本文开头的用户决定不再作为当前交付前置条件。

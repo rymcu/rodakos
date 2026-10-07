@@ -1,11 +1,16 @@
 # RodakOS 主机测试 CI
 
+2026-10-07 用户决定：后续交付不依赖 GitHub Actions，不再修复或重跑 Actions，也不处理其
+账单、额度或 required checks。已有工作流配置与运行结果保留；本文带日期的失败、修复和
+成功记录只属于各自历史候选。当前软件验收继续使用下述本地 runner、语法检查及源码/日志
+核验，Actions 缺失或不可用不构成交付阻塞，实际测试失败和硬件门禁继续独立处理。
+
 [RodakOS host checks](../.github/workflows/host-checks.yml) 在所有 Pull Request、
 `main` push 和手动触发时运行。这是 [#26](https://github.com/rymcu/rodakos/issues/26)
 的主机测试阶段；已验证的候选 SHA、Actions 与下载工件记录见下文。
 
 下文带 SHA 的早期记录保留为历史基线。025 的本地完整结果见[发布记录](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)；
-最新 main/PR 的精确候选、Actions 与下载工件核验统一在 [#26](https://github.com/rymcu/rodakos/issues/26) 更新，不能沿用旧候选绿灯。
+已取得的 main/PR 精确候选、Actions 与下载工件核验保留在 [#26](https://github.com/rymcu/rodakos/issues/26)，不能沿用旧候选绿灯，也不要求为后续候选补跑 Actions。
 
 ## 环境与依赖
 
@@ -146,13 +151,14 @@ ID `11436647432`，86,906 字节；GitHub 报告的归档 SHA-256 为
 `f9c6d0806371d42bd8b4eaebf20e72ac1160a0dbebde3cc073f7f7fa92d8e091`。
 同一候选的固件构建和开发包复核见 [固件 CI](firmware-ci.md#2026-10-07-完整构建与工件复核通过)。
 
-## #26 仍开放的门禁
+## 当前本地验证与发布边界
 
 主应用/Recovery 的独立 ESP-IDF job 已通过上述候选的完整冷构建与开发包校验，具体输入
 门禁、开发包边界及修复记录见 [固件 CI](firmware-ci.md)。
 本页主机依赖校验只覆盖前述六个组件。
 
-PR 检查展示及仓库套餐允许的 required checks/保护规则仍需确认；构建通过不代表
-这些仓库治理配置已经完成，也不建立生产发布或工件分发流程。
+后续候选继续记录本地 host、PowerShell 语法和固件构建/包校验的源码身份与实际结果；
+不再把 PR Actions 展示、required checks 或保护规则配置作为待完成门禁。既有治理提案
+不因本文自动采纳，生产发布与工件分发仍须有各自证据。
 主机测试成功不会关闭 [发布验收](ota-release-readiness.md) 中的真实掉电、设备资源耗尽、
 声学、跨网络和长期运行门禁。

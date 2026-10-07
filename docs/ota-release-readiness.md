@@ -5,6 +5,13 @@ accepted as completed where their evidence is recorded in the repository. This d
 the remaining signed-firmware release, interruption, and resource-failure work. Passing software
 tests does not close physical power-loss or full heap-exhaustion gates.
 
+Decision of 2026-10-07: release evidence is collected through local tests, firmware builds,
+package verification and the physical gates below. GitHub Actions success or repair is not a
+delivery prerequisite; do not rerun Actions or pursue billing, quota or required-check setup.
+Preserve existing CI outcomes with their original candidates as history, including failures.
+Missing or unavailable Actions do not make the release NO_GO; the unresolved software,
+production-root, power-loss, resource and soak gates retain their existing acceptance criteria.
+
 ## Current evidence
 
 Evidence review updated on 2026-10-07. The earlier source baseline `c64cf06` / `f7e8c91`
