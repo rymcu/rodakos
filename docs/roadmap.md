@@ -3,13 +3,16 @@
 The trusted-server transport history starts from `7101282`.
 Original-connection result publication and the SDK event-queue correction remain the baseline;
 current source/build identity and validation are recorded in [release evidence](ota-release-readiness.md).
-The current device runs source `860752e44474625fdbcd589b71e47b36374f4d21` / development package
-017 (`20261007-112648`, task `media-camera-png-recovery-017`). Its 7,108,864-byte main image has
-SHA-256 `507eab226775a848afef1b4df3657b7d02f80d8d812b7a0597844ac052497175`; the package ZIP has
-SHA-256 `3db39d56efcb388c71baa12493cde68c6de07b60dc9d0ca48dba37fb027a60eb`.
+The current device runs source `42b12ccd183577a331433a69218c8fcc6191a0ee` / development package
+019 (`20261007-122610`, task `media-control-cancel-019`). Its 7,119,152-byte main image has
+SHA-256 `665fffea5212885d839290bebaec20500d7690367b80cfb89436281cd454e278`; the package ZIP has
+SHA-256 `e842df1f271f8c413a678ca479de4f37ebd64427a4789019a11811ed6fd99799`.
 VerifyOnly, the NVS-preserving incremental flash and Recovery/main/Home/OTA-confirmation startup passed;
-immutable assets match 016 and the original development trust chain. Bounded
-media evidence is in
+the original development trust chain remains in use. Its cancelled-gesture correction passes host
+and targeted device validation, while a later pressure click still timed out and screen-first Camera
+still failed DMA allocation. Package 018's Camera-exit
+stall, controlled reset and later delayed/rejected control replies retain their historical identity.
+Release remains **NO_GO**. Bounded media evidence is in
 [media verification](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md).
 Earlier 010/011 diagnosis and network evidence retains its own package identity in
 [cloud diagnosis verification](https://github.com/rymcu/rodak/blob/master/docs/cloud-diagnostics-verification.md).
@@ -114,6 +117,14 @@ firmware build does not change an existing hardware gate.
   Epoch changes discard old results; the host SDK model separates enqueue from wire publication.
   Stream operations now use revocable instance leases and serialized cleanup; remote input checks
   its stream and enable grant at final LVGL execution, and delayed ACKs retain the peer instance.
+  Package 018 adds original-peer FIFO ACK retries for temporary send/allocation pressure, bounded
+  by one second from first send attempt or 50 attempts, plus explicit cancellation replies.
+  Real-LVGL input 20 and complete ACK 21 cases pass Debug/sanitizers; device replies can still arrive
+  after the desktop's unchanged three-second timeout. Cancelled pointer-release action semantics
+  are corrected in 019 by a cancellation generation and explicit LVGL reset/release before new input;
+  30 real-LVGL input cases pass Debug/ASan, with ACK 21 / Home 43 ASan checks. Device held-down
+  cancellation produced no extra load, and a reenabled click worked; a later pressure click still
+  timed out before the parsed-input entry. Accepted samples do not establish completed business clicks.
   A volatile latest-64 command cache replays final ACKs and rejects raw-payload conflicts. Eviction
   and device restart remain outside its deduplication guarantee. See the
   [command contract](rodak-aiot-contract-v1.md#command-results-and-replay-boundary),
@@ -135,8 +146,8 @@ firmware build does not change an existing hardware gate.
   component/target checks. `DisplayService` allocation, in-place RGB conversion, bounded JPEG
   output, callback and stop/recovery paths have 24 focused host cases; Photos/ImageLibrary has 24,
   Home UI has 43, and the overlay now has 11 valid variants plus 2 geometry rejections. Camera capture
-  has 21 focused cases, including final-owner frame release, unexpected dequeue failure, concurrent
-  snapshots and publishing stop only after the worker's final service access. Package 013's
+  has 33 focused cases, including final-owner frame release, unexpected dequeue failure, concurrent
+  snapshots, selected allocation failures and publishing stop only after the worker's final service access. Package 013's
   `A3.PNG` Retry abort was located in the concurrent DisplayService JPEG path on `std::bad_alloc`;
   package 014 returned error 83 for first open and two Retries without reboot. Package 015 displayed
   all three PNG attempts but the old JPEG peak then failed sustained screen encoding. Package 016
@@ -150,6 +161,16 @@ firmware build does not change an existing hardware gate.
   after exiting them, four A3 decodes succeeded in 201/203/191/185 ms. Starting Camera while the
   screen stream was already active still failed DMA allocation twice. One Retry had a desktop
   control timeout despite later device decode success, so remote ACK acceptance remains open.
+  Package 018 adds Camera allocation cleanup and JPEG heap-phase diagnostics, without changing
+  the JPEG allocator. Its first Camera exit stalled without a captured panic and required reset.
+  The separate post-reset Camera preview ran 18.080 s / 243 frames and A3 decoded three times in
+  193/190/192 ms, but one release input was rejected and down/disable ACKs arrived 7.745/4.741 s late.
+  First-frame open/close snapshots identify about 8,084 bytes of temporary internal JPEG allocation.
+  Package 019 adds Camera exit phase logs (Camera 33 Debug) and fixes cancelled gestures at the LVGL
+  boundary; it has no JPEG allocator migration and does not claim to fix the earlier Camera stall.
+  Screen-first Camera still failed at a 6,656-byte largest DMA block; after stopping screen sharing,
+  it ran 56.779 s / 792 frames and all recorded exit stages completed. Two A3 loads took 189/190 ms;
+  cancellation trials did not produce extra loads, while a later pressure click still timed out.
   See [media browsing](media-browsing.md) and
   [dependency maintenance](dependency-maintenance.md#lvgl-lodepng-decode-overlay).
 - Recorder and Web upload hold path-scoped leases through writes and cleanup; Camera uses the
@@ -164,15 +185,15 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 017 adds Camera final-frame release and known-size PNG inflate headroom to 016's DisplayService peak correction. Camera 21 and PNG 11+2 focused cases pass; the complete 017 host runner passes 30 suites / 42 CTest / 52 Python cases. Two actual Camera previews followed by four successful A3 decodes extend the bounded device evidence; periodic JPEG totals are 106/106/0, not a complete per-frame ledger. Screen-first Camera startup still failed DVP DMA allocation at largest blocks of 6,656/4,352 B; one Retry control timeout preceded device decode success. Final internal largest is 7,680 B, below the 8 KiB soak threshold; historical internal minimum is 131 B. DMA/resource admission, late input/ACK timing, arbitrary image/camera/voice/MQTT OOM, SD recovery, full LVGL exhaustion, audio/TLS pressure, resource return and eight-hour soak remain open. Earlier package failures retain their dated evidence boundaries | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [OTA release readiness](ota-release-readiness.md#resource-failures-and-soak), [012–017 evidence](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md) |
+| Resource recovery | 019 targeted cancellation passes and a recovered Camera runs 56.779 s / 792 frames with complete exit stages; recorded JPEG periods total 148/148/0. Screen-first Camera still fails at DMA largest 6,656 B, no JPEG allocator migration was applied, and final internal largest 7,680 B remains below 8 KiB with historical minimum 467 B. Preserve 018's unresolved exit stall and identified 8,084 B JPEG transient; its 32-suite / 44-CTest / 52-Python complete run and 682 unchanged hashes do not prove the later 019 source. Camera-exit diagnosis, DMA admission, pre-controller input latency, arbitrary image/camera/voice/MQTT OOM, SD recovery, full LVGL exhaustion, resource return and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [019 release evidence](ota-release-readiness.md#2026-10-07-cancelled-gesture-correction-019), [012–019 evidence](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |
-| Media/storage | Photos/Files scan errors, retries and long-name layout are implemented. Current focused evidence covers DisplayService 24, Home UI 43, Photos/ImageLibrary 24, Camera/FileService 21 and LodePNG 11+2 cases under Debug/sanitizers. 017 retains ARGB8888 PNG ownership, reserves 260 bytes of Huffman headroom, and frees the final CameraService frame before publishing stop. After two real Camera previews, A3 first-open/Retry results passed within the recorded four-decode window; the separate 185 ms decode after failed Camera startup is not counted in that window. SD removal/slow cards, synchronous-I/O responsiveness, physical touch, arbitrary OOM, broader concurrency, media/audio focus and soak remain open. RGB565 PNG retention was not added | [Media browsing and evidence](media-browsing.md), [RodakOS #35](https://github.com/rymcu/rodakos/issues/35), [Media save](media-save.md), [RodakOS #28](https://github.com/rymcu/rodakos/issues/28) |
+| Media/storage | Photos/Files scan errors, retries and long-name layout are implemented. Camera/FileService 33, DisplayService 24, Home 43 / Photos 24 / LodePNG 11+2 retain their recorded source/mode boundaries. 019 A3 first-open/normal Retry decoded in 189/190 ms; explicit cancellation and a later timed-out rejected click produced no extra load. The 018 Camera exit stall remains unresolved. SD removal/slow cards, synchronous-I/O responsiveness, physical touch, arbitrary OOM, broader concurrency, media/audio focus and soak remain open | [Media browsing and evidence](media-browsing.md), [RodakOS #35](https://github.com/rymcu/rodakos/issues/35), [Media save](media-save.md), [RodakOS #28](https://github.com/rymcu/rodakos/issues/28) |
 | RGB light | Board driver failures, physical output and recovery on the identified firmware; host receipts remain volatile software evidence. Backlight, voice identity, media and OTA require their own mutation contracts | [MQTT light effects](mqtt-light-effects.md) |
-| Ordinary commands | 010/011 recorded real display frames and explicitly authorized remote input. In 017, a Retry produced a desktop control timeout before serial evidence of successful decode/display; this is not an all-ACK pass. Stream revocation/cleanup under abnormal connections, sustained reconnect/resource contention, late-input/ACK timing and GT911 physical touch still need hardware validation; recent-cache tests do not establish persistence, unbounded deduplication or physical rollback | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary), [017 media evidence](media-browsing.md#017-相机退出与-png-分配峰值) |
+| Ordinary commands | 019 prevents a cancelled held remote gesture from producing a synthetic LVGL click; input 30 / ACK 21 / Home 43 focused checks pass, with mutation controls. Device held-down93 cancellation produced rejected up94 and no extra PNG load; reenabled retry97/98 worked. Pressure retry99/100 still timed out and was rejected after 3.870/3.869 s, with no third load; all three inputs including disable101 reached the parsed controller entry together. SDK/network/scheduling before that entry, abnormal stream cleanup, sustained reconnect/resource contention and GT911 physical touch stay open. Preserve independent 018/017 failures; the send-retry budget is not end-to-end latency | [Command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary), [019 correction](media-browsing.md#019-取消远程手势的修正与制品) |
 | Board telemetry | Validate battery/charging readings on hardware, plus I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
 
 Already recorded COM3 voice, provisioning, WebRTC, and appearance gates remain accepted within

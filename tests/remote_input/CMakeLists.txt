@@ -14,12 +14,16 @@ add_executable(rodakos_remote_input_tests
 )
 target_compile_features(rodakos_remote_input_tests PRIVATE cxx_std_20)
 target_include_directories(rodakos_remote_input_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
     "${RODAKOS_ROOT}/main" "${RODAKOS_ROOT}/tests/app_model"
     "${RODAKOS_ROOT}/managed_components/espressif__cjson/cJSON")
 target_link_libraries(rodakos_remote_input_tests PRIVATE lvgl)
 if(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(rodakos_remote_input_tests PRIVATE m Threads::Threads)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(rodakos_remote_input_tests PRIVATE -Wl,--wrap=pthread_mutex_unlock)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(rodakos_remote_input_tests PRIVATE -Wall -Wextra -Werror)

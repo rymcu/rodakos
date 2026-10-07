@@ -260,8 +260,9 @@ public:
         lv_indev_set_driver_data(indev_, this);
         lv_indev_set_read_cb(indev_, [](lv_indev_t* indev, lv_indev_data_t* data) {
             auto* self = static_cast<CachedBridgePointer*>(lv_indev_get_driver_data(indev));
-            self->state_.Read(self->local_pressed_, self->local_point_,
-                              self->remote_pressed_, self->remote_point_, *data);
+            self->cancelled_ = self->state_.Read(self->local_pressed_, self->local_point_,
+                                               self->remote_pressed_, self->remote_point_, *data);
+            if (self->cancelled_) lv_indev_reset(indev, nullptr);
         });
     }
 
@@ -271,6 +272,7 @@ public:
         local_pressed_ = pressed;
         local_point_ = point;
         lv_indev_read(indev_);
+        if (cancelled_) lv_indev_read(indev_);
         Pump(20);
     }
 
@@ -278,12 +280,14 @@ public:
         remote_pressed_ = pressed;
         remote_point_ = point;
         lv_indev_read(indev_);
+        if (cancelled_) lv_indev_read(indev_);
         Pump(20);
     }
 
 private:
     lv_indev_t* indev_;
     rodakos::TouchPointerState state_;
+    bool cancelled_ = false;
     bool local_pressed_ = false;
     lv_point_t local_point_ = {0, 0};
     bool remote_pressed_ = false;

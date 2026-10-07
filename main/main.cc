@@ -193,6 +193,7 @@ void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
     g_remote_inputs.ProcessActions();
     lv_obj_t* focused = rodakos::CurrentRemoteTextareaTarget();
     const bool focused_textarea = focused != nullptr && lv_obj_check_type(focused, &lv_textarea_class);
+    bool cancelled_remote_gesture = false;
     // The production controller performs the final lease/grant admission around
     // this LVGL input delivery; a cached global enable flag is never authority.
     g_remote_inputs.ReadPointer([&](const rodakos::RemotePointerSample& remote) {
@@ -210,10 +211,15 @@ void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
             else lv_obj_add_flag(touch->remote_indicator, LV_OBJ_FLAG_HIDDEN);
         }
         const lv_point_t remote_point{static_cast<lv_coord_t>(remote.x), static_cast<lv_coord_t>(remote.y)};
-        touch->pointer_state.Read(pressed, point, remote.pressed, remote_point, *data);
+        if (touch->pointer_state.Read(pressed, point, remote.pressed, remote_point, *data,
+                                      remote.cancel_generation)) {
+            lv_indev_reset(indev, nullptr);
+            cancelled_remote_gesture = true;
+        }
     });
-    // Give LVGL a distinct read for down/move/up so gestures observe the path.
-    data->continue_reading = false;
+    // A cancellation releases prev_state before an already queued replacement
+    // press is read; ordinary down/move/up still get separate input cycles.
+    data->continue_reading = cancelled_remote_gesture;
 }
 
 void TouchPollTask(void* arg) {

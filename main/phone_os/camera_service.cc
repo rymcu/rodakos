@@ -11,6 +11,8 @@
 #include <cstring>
 #include <ctime>
 #include <inttypes.h>
+#include <memory>
+#include <new>
 #include <utility>
 
 #include <esp_err.h>
@@ -43,6 +45,29 @@ constexpr uint8_t kJpegQuality = 82;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
 constexpr const char* kGpioLogTag = "gpio";
+// Keep this fallback inside libstdc++'s small-string storage.
+constexpr const char* kAllocationError = "Camera OOM";
+
+class SemaphoreLock {
+public:
+    explicit SemaphoreLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    ~SemaphoreLock() { xSemaphoreGive(mutex_); }
+    SemaphoreLock(const SemaphoreLock&) = delete;
+    SemaphoreLock& operator=(const SemaphoreLock&) = delete;
+private:
+    SemaphoreHandle_t mutex_;
+};
+
+struct HeapDeleter {
+    void operator()(uint8_t* pointer) const { heap_caps_free(pointer); }
+};
+struct EncoderDeleter {
+    void operator()(void* encoder) const { jpeg_enc_close(encoder); }
+};
+using HeapBuffer = std::unique_ptr<uint8_t, HeapDeleter>;
+using Encoder = std::unique_ptr<void, EncoderDeleter>;
 
 
 const char* ErrnoName() {
@@ -272,7 +297,13 @@ bool CameraService::StartPreview(PreviewOwner owner, int width, int height) {
     latest_frame_ = {};
     xSemaphoreGive(mutex_);
 
-    if (!OpenStream(width, height)) {
+    bool opened = false;
+    try {
+        opened = OpenStream(width, height);
+    } catch (const std::bad_alloc&) {
+        SetError(kAllocationError);
+    }
+    if (!opened) {
         CloseStream();
         return false;
     }
@@ -318,6 +349,7 @@ bool CameraService::StartPreview(PreviewOwner owner, int width, int height) {
 }
 
 void CameraService::StopPreview(PreviewOwner owner) {
+    ESP_LOGI(TAG, "StopPreview: begin");
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     if (mutex_ == nullptr) {
         return;
@@ -333,7 +365,9 @@ void CameraService::StopPreview(PreviewOwner owner) {
     }
     xSemaphoreGive(mutex_);
 
+    if (should_wait) ESP_LOGI(TAG, "StopPreview: stop requested");
     if (!should_wait || task == xTaskGetCurrentTaskHandle()) {
+        ESP_LOGI(TAG, "StopPreview: no worker wait");
         return;
     }
 
@@ -346,6 +380,7 @@ void CameraService::StopPreview(PreviewOwner owner) {
         const bool running = preview_task_ != nullptr;
         xSemaphoreGive(mutex_);
         if (!running) {
+            ESP_LOGI(TAG, "StopPreview: worker stopped");
             break;
         }
     }
@@ -355,83 +390,96 @@ bool CameraService::GetLatestFrame(CameraFrame& frame) {
     if (mutex_ == nullptr) {
         return false;
     }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool ok = has_frame_;
-    if (ok) {
-        frame = latest_frame_;
+    try {
+        SemaphoreLock lock(mutex_);
+        if (!has_frame_) {
+            last_error_ = "No camera frame is ready yet";
+            return false;
+        }
+        // Failure cannot mutate a snapshot already owned by the caller.
+        CameraFrame next = latest_frame_;
+        frame = std::move(next);
+        return true;
+    } catch (const std::bad_alloc&) {
+        SetError(kAllocationError);
+        return false;
     }
-    xSemaphoreGive(mutex_);
-    return ok;
 }
 
 std::string CameraService::last_error() const {
     if (mutex_ == nullptr) {
         return last_error_;
     }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    std::string error = last_error_;
-    xSemaphoreGive(mutex_);
-    return error;
+    try {
+        SemaphoreLock lock(mutex_);
+        return last_error_;
+    } catch (const std::bad_alloc&) {
+        return kAllocationError;
+    }
 }
 
 bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
     jpeg.clear();
-    CameraFrame frame;
-    if (!GetLatestFrame(frame)) {
-        SetError("No camera frame is ready yet");
-        return false;
-    }
+    try {
+        CameraFrame frame;
+        if (!GetLatestFrame(frame)) {
+            return false;
+        }
 
-    auto packed = PackRgb565Frame(frame);
-    if (packed.empty()) {
-        SetError("Camera frame is incomplete");
-        return false;
-    }
+        auto packed = PackRgb565Frame(frame);
+        if (packed.empty()) {
+            SetError("Camera frame is incomplete");
+            return false;
+        }
 
-    const size_t rgb888_size = static_cast<size_t>(frame.width) * frame.height * 3;
-    auto* aligned_input = AllocAlignedJpegInput(rgb888_size);
-    if (aligned_input == nullptr) {
-        SetError("Not enough memory for JPEG input");
-        return false;
-    }
-    if (!CopyRgb565LeToRgb888(packed, frame.width, frame.height, aligned_input, rgb888_size)) {
-        heap_caps_free(aligned_input);
-        SetError("Failed to convert camera frame");
-        return false;
-    }
+        const size_t rgb888_size = static_cast<size_t>(frame.width) * frame.height * 3;
+        HeapBuffer aligned_input(AllocAlignedJpegInput(rgb888_size));
+        if (!aligned_input) {
+            SetError("Not enough memory for JPEG input");
+            return false;
+        }
+        if (!CopyRgb565LeToRgb888(packed, frame.width, frame.height, aligned_input.get(), rgb888_size)) {
+            SetError("Failed to convert camera frame");
+            return false;
+        }
 
-    jpeg_enc_config_t jpeg_cfg = DEFAULT_JPEG_ENC_CONFIG();
-    jpeg_cfg.width = frame.width;
-    jpeg_cfg.height = frame.height;
-    jpeg_cfg.src_type = JPEG_PIXEL_FORMAT_RGB888;
-    jpeg_cfg.subsampling = JPEG_SUBSAMPLE_420;
-    jpeg_cfg.quality = kJpegQuality;
-    jpeg_cfg.task_enable = false;
+        jpeg_enc_config_t jpeg_cfg = DEFAULT_JPEG_ENC_CONFIG();
+        jpeg_cfg.width = frame.width;
+        jpeg_cfg.height = frame.height;
+        jpeg_cfg.src_type = JPEG_PIXEL_FORMAT_RGB888;
+        jpeg_cfg.subsampling = JPEG_SUBSAMPLE_420;
+        jpeg_cfg.quality = kJpegQuality;
+        jpeg_cfg.task_enable = false;
 
-    jpeg_enc_handle_t encoder = nullptr;
-    if (jpeg_enc_open(&jpeg_cfg, &encoder) != JPEG_ERR_OK || encoder == nullptr) {
-        heap_caps_free(aligned_input);
-        SetError("Failed to open JPEG encoder");
+        jpeg_enc_handle_t encoder = nullptr;
+        const auto open_result = jpeg_enc_open(&jpeg_cfg, &encoder);
+        Encoder owned_encoder(encoder);
+        if (open_result != JPEG_ERR_OK || encoder == nullptr) {
+            SetError("Failed to open JPEG encoder");
+            return false;
+        }
+
+        const size_t out_capacity = std::max<size_t>(64 * 1024, rgb888_size);
+        std::vector<uint8_t> encoded(out_capacity);
+        int out_len = 0;
+        const jpeg_error_t enc_ret = jpeg_enc_process(encoder, aligned_input.get(),
+                                                      static_cast<int>(rgb888_size),
+                                                      encoded.data(),
+                                                      static_cast<int>(encoded.size()),
+                                                      &out_len);
+        owned_encoder.reset();
+        aligned_input.reset();
+        if (enc_ret != JPEG_ERR_OK || out_len <= 0 || static_cast<size_t>(out_len) > encoded.size()) {
+            SetError("JPEG encode failed");
+            return false;
+        }
+        encoded.resize(static_cast<size_t>(out_len));
+        jpeg = std::move(encoded);
+        return true;
+    } catch (const std::bad_alloc&) {
+        SetError(kAllocationError);
         return false;
     }
-
-    const size_t out_capacity = std::max<size_t>(64 * 1024, rgb888_size);
-    std::vector<uint8_t> encoded(out_capacity);
-    int out_len = 0;
-    const jpeg_error_t enc_ret = jpeg_enc_process(encoder, aligned_input,
-                                                  static_cast<int>(rgb888_size),
-                                                  encoded.data(),
-                                                  static_cast<int>(encoded.size()),
-                                                  &out_len);
-    jpeg_enc_close(encoder);
-    heap_caps_free(aligned_input);
-    if (enc_ret != JPEG_ERR_OK || out_len <= 0 || static_cast<size_t>(out_len) > encoded.size()) {
-        SetError("JPEG encode failed");
-        return false;
-    }
-    encoded.resize(static_cast<size_t>(out_len));
-    jpeg = std::move(encoded);
-    return true;
 }
 
 bool CameraService::StartJpegStream(uint8_t fps, JpegFrameCallback callback) {
@@ -511,68 +559,80 @@ void CameraService::StopJpegStream() {
 bool CameraService::CapturePhoto(std::string& saved_path) {
     std::lock_guard<std::mutex> capture_lock(capture_mutex_);
     saved_path.clear();
-    std::vector<uint8_t> encoded;
-    if (!CaptureJpeg(encoded)) {
-        return false;
-    }
-
-    if (file_service_ == nullptr) {
-        SetError("File service is not available");
-        return false;
-    }
-    std::string committed_path;
-    const bool saved = file_service_->WithIoLock([&]() {
-        if (!file_service_->IsMounted() && !file_service_->Init()) {
-            SetError("SD card is not available");
-            return false;
-        }
-        if (!file_service_->Exists(kPhotoDir) && !file_service_->CreateDirectory(kPhotoDir)) {
-            SetError("Failed to create /photos on SD card");
+    try {
+        std::vector<uint8_t> encoded;
+        if (!CaptureJpeg(encoded)) {
             return false;
         }
 
-        const std::string candidate = BuildPhotoPath();
-        if (candidate.empty()) {
-            SetError("Failed to choose a unique photo path");
+        if (file_service_ == nullptr) {
+            SetError("File service is not available");
             return false;
         }
-        // The I/O lock serializes service writers; exclusive creation also
-        // protects existing photos from writers outside this service instance.
-        if (!file_service_->WriteNewFile(candidate, encoded)) {
-            SetError("Failed to save photo");
+        std::string committed_path;
+        std::string saved_history;
+        const bool saved = file_service_->WithIoLock([&]() {
+            if (!file_service_->IsMounted() && !file_service_->Init()) {
+                SetError("SD card is not available");
+                return false;
+            }
+            if (!file_service_->Exists(kPhotoDir) && !file_service_->CreateDirectory(kPhotoDir)) {
+                SetError("Failed to create /photos on SD card");
+                return false;
+            }
+
+            const std::string candidate = BuildPhotoPath();
+            if (candidate.empty()) {
+                SetError("Failed to choose a unique photo path");
+                return false;
+            }
+            // Allocate both publication strings before committing a new file.
+            // Successful storage must not be followed by a fallible result copy.
+            committed_path = candidate;
+            saved_history = candidate;
+            // The I/O lock serializes service writers; exclusive creation also
+            // protects existing photos from writers outside this service instance.
+            if (!file_service_->WriteNewFile(candidate, encoded)) {
+                SetError("Failed to save photo");
+                return false;
+            }
+            return true;
+        });
+        if (!saved) {
             return false;
         }
-        committed_path = candidate;
+
+        saved_path = std::move(committed_path);
+        if (mutex_ != nullptr) {
+            SemaphoreLock lock(mutex_);
+            last_saved_path_ = std::move(saved_history);
+            last_error_.clear();
+        }
+        ESP_LOGI(TAG, "Saved photo: %s (%u bytes)", saved_path.c_str(), static_cast<unsigned>(encoded.size()));
         return true;
-    });
-    if (!saved) {
+    } catch (const std::bad_alloc&) {
+        SetError(kAllocationError);
         return false;
     }
-
-    saved_path = committed_path;
-    if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        last_saved_path_ = saved_path;
-        last_error_.clear();
-        xSemaphoreGive(mutex_);
-    }
-    ESP_LOGI(TAG, "Saved photo: %s (%u bytes)", saved_path.c_str(), static_cast<unsigned>(encoded.size()));
-    return true;
 }
 
 CameraState CameraService::GetState() const {
     CameraState state;
     state.available = IsAvailable();
     if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
+        SemaphoreLock lock(mutex_);
         state.preview_running = preview_running_;
         state.has_frame = has_frame_;
         state.width = active_width_;
         state.height = active_height_;
         state.frame_count = frame_count_;
-        state.last_saved_path = last_saved_path_;
-        state.last_error = last_error_;
-        xSemaphoreGive(mutex_);
+        try {
+            state.last_saved_path = last_saved_path_;
+            state.last_error = last_error_;
+        } catch (const std::bad_alloc&) {
+            state.last_saved_path.clear();
+            state.last_error = kAllocationError;
+        }
     }
     return state;
 }
@@ -580,7 +640,13 @@ CameraState CameraService::GetState() const {
 void CameraService::PreviewTaskEntry(void* arg) {
     auto* service = static_cast<CameraService*>(arg);
     if (service != nullptr) {
-        service->PreviewTask();
+        try {
+            service->PreviewTask();
+        } catch (const std::bad_alloc&) {
+            service->CloseStream();
+            service->SetError(kAllocationError);
+            service->MarkPreviewStopped();
+        }
     }
     vTaskDeleteWithCaps(nullptr);
 }
@@ -612,28 +678,33 @@ void CameraService::JpegStreamTask() {
     uint32_t last_sequence = 0;
     while (true) {
         uint8_t fps = 0;
-        JpegFrameCallback callback;
-        bool should_stop = false;
-        if (mutex_ != nullptr) {
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            should_stop = jpeg_stream_stop_requested_ || !jpeg_stream_running_;
-            fps = jpeg_stream_fps_;
-            callback = jpeg_stream_callback_;
-            xSemaphoreGive(mutex_);
-        }
-        if (should_stop || fps == 0 || !callback) {
-            break;
-        }
-
-        CameraFrame latest;
-        if (GetLatestFrame(latest) && latest.sequence != last_sequence) {
-            std::vector<uint8_t> jpeg;
-            if (CaptureJpeg(jpeg)) {
-                last_sequence = latest.sequence;
-                callback(std::move(jpeg), latest.sequence, latest.timestamp_us);
+        try {
+            JpegFrameCallback callback;
+            bool should_stop = false;
+            if (mutex_ != nullptr) {
+                SemaphoreLock lock(mutex_);
+                should_stop = jpeg_stream_stop_requested_ || !jpeg_stream_running_;
+                fps = jpeg_stream_fps_;
+                // Stop must remain observable even when every callback copy fails.
+                if (!should_stop && fps != 0) callback = jpeg_stream_callback_;
             }
+            if (should_stop || fps == 0 || !callback) {
+                break;
+            }
+
+            CameraFrame latest;
+            if (GetLatestFrame(latest) && latest.sequence != last_sequence) {
+                std::vector<uint8_t> jpeg;
+                if (CaptureJpeg(jpeg)) {
+                    last_sequence = latest.sequence;
+                    callback(std::move(jpeg), latest.sequence, latest.timestamp_us);
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            // A callback may already own this sequence; never replay it.
+            SetError(kAllocationError);
         }
-        vTaskDelay(pdMS_TO_TICKS(std::max(1, 1000 / static_cast<int>(fps))));
+        vTaskDelay(pdMS_TO_TICKS(1000 / static_cast<int>(std::max<uint8_t>(1, fps))));
     }
 
     if (mutex_ != nullptr) {
@@ -707,24 +778,30 @@ void CameraService::PreviewTask() {
             frame.height = active_height_;
             frame.stride = active_stride_;
             frame.timestamp_us = esp_timer_get_time();
-            CopyRgb565Frame(buffers_[buf.index].data, buffers_[buf.index].length,
-                            active_stride_, active_height_, active_pixelformat_, frame.rgb565);
-            RotateRgb565Frame180(frame);
+            try {
+                CopyRgb565Frame(buffers_[buf.index].data, buffers_[buf.index].length,
+                                active_stride_, active_height_, active_pixelformat_, frame.rgb565);
+                RotateRgb565Frame180(frame);
 
-            if (mutex_ != nullptr) {
-                xSemaphoreTake(mutex_, portMAX_DELAY);
-                frame.sequence = latest_frame_.sequence + 1;
-                latest_frame_ = std::move(frame);
-                has_frame_ = true;
-                frame_count_++;
-                xSemaphoreGive(mutex_);
-                if (!received_frame) {
-                    ESP_LOGI(TAG, "Camera first frame ready: %dx%d stride=%d elapsed_ms=%" PRId64,
-                             active_width_, active_height_, active_stride_,
-                             (esp_timer_get_time() - started_at_us) / 1000);
+                if (mutex_ != nullptr) {
+                    xSemaphoreTake(mutex_, portMAX_DELAY);
+                    frame.sequence = latest_frame_.sequence + 1;
+                    latest_frame_ = std::move(frame);
+                    has_frame_ = true;
+                    frame_count_++;
+                    xSemaphoreGive(mutex_);
+                    if (!received_frame) {
+                        ESP_LOGI(TAG, "Camera first frame ready: %dx%d stride=%d elapsed_ms=%" PRId64,
+                                 active_width_, active_height_, active_stride_,
+                                 (esp_timer_get_time() - started_at_us) / 1000);
+                    }
+                    received_frame = true;
+                    last_frame_at_us = esp_timer_get_time();
                 }
-                received_frame = true;
-                last_frame_at_us = esp_timer_get_time();
+            } catch (const std::bad_alloc&) {
+                // Requeue the driver buffer and retain published frames/owners.
+                // A later frame can recover without reopening the device.
+                SetError(kAllocationError);
             }
         }
 
@@ -741,7 +818,9 @@ void CameraService::PreviewTask() {
     }
 #endif
 
+    ESP_LOGI(TAG, "Preview exit: CloseStream begin");
     CloseStream();
+    ESP_LOGI(TAG, "Preview exit: CloseStream complete");
     const auto state = GetState();
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int64_t stopped_at_us = esp_timer_get_time();
@@ -890,7 +969,9 @@ void CameraService::CloseStream() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     if (fd_ >= 0) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ESP_LOGI(TAG, "CloseStream: STREAMOFF begin");
         ioctl(fd_, VIDIOC_STREAMOFF, &type);
+        ESP_LOGI(TAG, "CloseStream: STREAMOFF complete");
     }
     for (auto& buffer : buffers_) {
         if (buffer.data != nullptr && buffer.data != MAP_FAILED) {
@@ -900,10 +981,14 @@ void CameraService::CloseStream() {
     }
     buffers_.clear();
     if (fd_ >= 0) {
+        ESP_LOGI(TAG, "CloseStream: fd close begin");
         close(fd_);
         fd_ = -1;
+        ESP_LOGI(TAG, "CloseStream: fd close complete");
     }
+    ESP_LOGI(TAG, "CloseStream: device release begin");
     camera_device_.Release();
+    ESP_LOGI(TAG, "CloseStream: device release complete");
     active_width_ = 0;
     active_height_ = 0;
     active_stride_ = 0;
@@ -939,11 +1024,18 @@ void CameraService::MarkPreviewStopped() {
 void CameraService::SetError(const std::string& error) {
     ESP_LOGW(TAG, "%s", error.c_str());
     if (mutex_ != nullptr) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        last_error_ = error;
-        xSemaphoreGive(mutex_);
+        SemaphoreLock lock(mutex_);
+        try {
+            last_error_ = error;
+        } catch (const std::bad_alloc&) {
+            last_error_ = kAllocationError;
+        }
     } else {
-        last_error_ = error;
+        try {
+            last_error_ = error;
+        } catch (const std::bad_alloc&) {
+            last_error_ = kAllocationError;
+        }
     }
 }
 

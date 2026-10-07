@@ -3,6 +3,7 @@
 #include "esp_peer_default.h"
 
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -30,7 +31,9 @@ bool send_blocked = false;
 bool release_send = false;
 bool close_overlap = false;
 bool cleanup_entered = false;
-int send_result = ESP_PEER_ERR_NONE;
+std::atomic<int> send_result{ESP_PEER_ERR_NONE};
+std::atomic<int64_t> clock_offset_us{0};
+size_t main_loop_count = 0;
 int open_result = ESP_PEER_ERR_NONE;
 bool default_impl_available = true;
 int connection_result = ESP_PEER_ERR_NONE;
@@ -50,6 +53,8 @@ void Reset() {
     block_next_send = send_blocked = release_send = close_overlap = false;
     cleanup_entered = false;
     send_result = open_result = ESP_PEER_ERR_NONE;
+    clock_offset_us = 0;
+    main_loop_count = 0;
     connection_result = ESP_PEER_ERR_NONE;
     default_impl_available = task_creation_allowed = true;
 }
@@ -125,6 +130,17 @@ void SetOpenResult(int result) { open_result = result; }
 void SetDefaultImplAvailable(bool available) { default_impl_available = available; }
 void SetConnectionResult(int result) { connection_result = result; }
 void SetTaskCreationAllowed(bool allowed) { task_creation_allowed = allowed; }
+void AdvanceTimeUs(int64_t delta) { clock_offset_us.fetch_add(delta); }
+void RunPeerTasks() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    for (const auto& task : tasks) task->ready = true;
+    host_condition.notify_all();
+}
+bool WaitForMainLoops(size_t minimum) {
+    std::unique_lock<std::mutex> lock(host_mutex);
+    return host_condition.wait_for(lock, std::chrono::seconds(2),
+        [&] { return main_loop_count >= minimum; });
+}
 }
 
 BaseType_t xTaskCreateWithCaps(void (*entry)(void*), const char*, size_t, void* arg,
@@ -164,7 +180,7 @@ void vTaskDelay(TickType_t) {
 void vTaskDeleteWithCaps(TaskHandle_t) {}
 int64_t esp_timer_get_time() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::chrono::steady_clock::now().time_since_epoch()).count() + clock_offset_us.load();
 }
 
 extern "C" {
@@ -182,7 +198,12 @@ int esp_peer_open(esp_peer_cfg_t* config, const esp_peer_ops_t*, esp_peer_handle
     return ESP_PEER_ERR_NONE;
 }
 int esp_peer_new_connection(esp_peer_handle_t) { return connection_result; }
-int esp_peer_main_loop(esp_peer_handle_t) { return ESP_PEER_ERR_NONE; }
+int esp_peer_main_loop(esp_peer_handle_t) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    ++main_loop_count;
+    host_condition.notify_all();
+    return ESP_PEER_ERR_NONE;
+}
 int esp_peer_create_data_channel(esp_peer_handle_t, esp_peer_data_channel_cfg_t*) {
     return ESP_PEER_ERR_NONE;
 }

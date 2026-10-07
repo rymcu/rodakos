@@ -1,6 +1,7 @@
 #include "phone_os/remote_input_controller.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <deque>
@@ -9,9 +10,28 @@
 #include <vector>
 
 #include <cJSON.h>
+#include <esp_log.h>
 
 namespace rodakos {
 namespace {
+constexpr const char* TAG = "RemoteInput";
+void LogControlInput(const cJSON* json, const std::string& kind) {
+    const auto* action = cJSON_GetObjectItemCaseSensitive(json, "action");
+    const char* action_name = "-";
+    if (cJSON_IsString(action)) {
+        if (std::strcmp(action->valuestring, "move") == 0) return;
+        for (const auto* known : {"down", "up", "enable", "disable"}) {
+            if (std::strcmp(action->valuestring, known) == 0) action_name = known;
+        }
+    }
+    if (kind != "pointer" && kind != "control" && kind != "text" && kind != "shortcut") return;
+    const auto* sequence = cJSON_GetObjectItemCaseSensitive(json, "seq");
+    const uint32_t seq = cJSON_IsNumber(sequence) && sequence->valuedouble >= 1 &&
+        sequence->valuedouble <= UINT32_MAX ? static_cast<uint32_t>(sequence->valuedouble) : 0;
+    ESP_LOGI(TAG, "control input: seq=%u kind=%s action=%s",
+             static_cast<unsigned>(seq), kind.c_str(), action_name);
+}
+
 bool IsValidUtf8(const char* text) {
     if (text == nullptr) return false;
     const auto* p = reinterpret_cast<const unsigned char*>(text);
@@ -52,6 +72,7 @@ struct Action {
     std::string kind;
     std::string value;
     RemoteInputController::Reply reply;
+    bool executing = false;
 };
 struct Pointer {
     Grant grant;
@@ -62,6 +83,18 @@ struct Pointer {
 void Reject(const RemoteInputController::Reply& reply, const char* reason) {
     if (reply) reply(false, reason);
 }
+// Match the bounded input queues (16 actions, 32 pointers, one navigation).
+// Cancellation runs under memory pressure and must not allocate to deliver replies.
+struct CancelledReplies {
+    std::array<RemoteInputController::Reply, 49> items;
+    size_t size = 0;
+    void Add(RemoteInputController::Reply& reply) {
+        if (reply) items[size++] = std::move(reply);
+    }
+    void ReplyAll(const char* reason) const {
+        for (size_t i = 0; i < size; ++i) Reject(items[i], reason);
+    }
+};
 }  // namespace
 
 struct RemoteInputController::State {
@@ -74,10 +107,33 @@ struct RemoteInputController::State {
     std::deque<Pointer> pointers;
     std::shared_ptr<Action> navigation;
     RemotePointerSample pointer;
+    uint64_t pointer_cancel_generation = 0;
+    uint64_t delivered_cancel_generation = 0;
 
-    void ClearLocked() {
+    void CancelHeldPointerLocked() {
+        // An up may already have been dequeued but not yet admitted. Every
+        // cancellation advances the epoch; the LVGL bridge filters local input.
+        ++pointer_cancel_generation;
+        pointer.pressed = false;
+    }
+
+    void CancelPointersLocked(CancelledReplies& replies) {
+        for (auto& item : pointers) replies.Add(item.reply);
+        pointers.clear();
+    }
+    void CancelPendingLocked(CancelledReplies& replies) {
+        for (auto& item : actions) replies.Add(item.reply);
+        actions.clear();
+        CancelPointersLocked(replies);
+    }
+    void ClearLocked(CancelledReplies* cancelled = nullptr) {
+        CancelHeldPointerLocked();
         if (grant) grant->enabled.store(false);
         grant.reset();
+        if (cancelled) {
+            CancelPendingLocked(*cancelled);
+            if (navigation && !navigation->executing) cancelled->Add(navigation->reply);
+        }
         actions.clear();
         pointers.clear();
         navigation.reset();
@@ -120,10 +176,12 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
         Reject(reply, "control_disabled_or_invalid"); return;
     }
     const std::string kind = kind_json->valuestring;
+    LogControlInput(json.get(), kind);
     bool accepted = false;
     const char* reason = "control_disabled_or_invalid";
     bool immediate_reply = true;
     std::vector<Reply> coalesced;
+    CancelledReplies cancelled;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->PruneLocked();
@@ -132,14 +190,14 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
             const auto* action = cJSON_GetObjectItemCaseSensitive(json.get(), "action");
             if (cJSON_IsString(action) && std::strcmp(action->valuestring, "enable") == 0) {
                 if (!state->grant || state->grant->lease != lease) {
-                    state->ClearLocked();
+                    if (state->grant) state->ClearLocked();
                     state->grant = std::make_shared<ControlGrant>(lease);
                 }
                 state->pointer.enabled = true;
                 accepted = true;
             } else if (cJSON_IsString(action) && std::strcmp(action->valuestring, "disable") == 0) {
                 if (!state->grant || state->grant->lease == lease) {
-                    state->ClearLocked();
+                    state->ClearLocked(&cancelled);
                     accepted = true;
                 }
             }
@@ -203,6 +261,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
             }
         }
     }
+    cancelled.ReplyAll("control_disabled");
     for (const auto& old : coalesced) if (old) old(true, "coalesced");
     if (immediate_reply && reply) {
         reply(accepted, accepted && std::strcmp(reason, "coalesced") != 0 ? nullptr : reason);
@@ -237,25 +296,30 @@ void RemoteInputController::ProcessActions() {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->closed) return;
                     owns_navigation = state->navigation == request && state->grant == request->grant;
+                    request->executing = owns_navigation;
                 }
                 bool accepted = false;
                 if (owns_navigation) request->grant->TryApply([&]() {
                     accepted = state->executor.navigate && state->executor.navigate(request->value);
                 });
+                Reply reply;
                 {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->closed) return;
                     if (state->navigation == request) state->navigation.reset();
+                    reply = std::move(request->reply);
                 }
-                if (request->reply) request->reply(accepted, accepted ? nullptr : "navigation_rejected");
+                if (reply) reply(accepted, accepted ? nullptr : "navigation_rejected");
                 if (state->executor.wake) state->executor.wake();
             };
             if (!state->executor.defer_navigation || !state->executor.defer_navigation(apply)) {
+                Reply reply;
                 {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     if (state->navigation == request) state->navigation.reset();
+                    reply = std::move(request->reply);
                 }
-                Reject(request->reply, "navigation_queue_full");
+                Reject(reply, "navigation_queue_full");
             }
             return;
         }
@@ -278,33 +342,58 @@ void RemoteInputController::ReadPointer(
         std::lock_guard<std::mutex> lock(state->mutex);
         state->PruneLocked();
         grant = state->grant;
-        if (grant && !state->navigation && !state->pointers.empty()) {
+        const bool cancelled = state->delivered_cancel_generation != state->pointer_cancel_generation;
+        if (cancelled) {
+            // LVGL reset does not clear prev_state. Deliver one release before
+            // dequeuing a replacement down so it starts a distinct gesture.
+            state->delivered_cancel_generation = state->pointer_cancel_generation;
+        } else if (grant && !state->navigation && !state->pointers.empty()) {
             event = std::move(state->pointers.front());
             state->pointers.pop_front();
             has_event = true;
             if (event.grant == grant) state->pointer = event.sample;
         }
         sample = state->pointer;
+        if (cancelled) sample.pressed = false;
+        sample.cancel_generation = state->pointer_cancel_generation;
     }
     bool admitted = grant && grant->TryApply([&]() { consume(sample); });
-    if (!admitted) consume({});
+    if (!admitted) {
+        // Revocation may race the sample above. Publish its cancellation before
+        // any fallback release, otherwise LVGL can interpret cleanup as a click.
+        RemotePointerSample released;
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->PruneLocked();
+            released.cancel_generation = state->pointer_cancel_generation;
+            state->delivered_cancel_generation = state->pointer_cancel_generation;
+        }
+        consume(released);
+    }
     if (has_event && event.reply) event.reply(admitted, admitted ? nullptr : "stale_control_lease");
 }
 
 void RemoteInputController::ResetForPageTransition() {
-    std::lock_guard<std::mutex> lock(state_->mutex);
-    state_->PruneLocked();
-    state_->pointer.pressed = false;
-    if (!state_->navigation) {
-        state_->actions.clear();
-        state_->pointers.clear();
+    CancelledReplies cancelled;
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->PruneLocked();
+        state_->CancelHeldPointerLocked();
+        if (!state_->navigation) state_->CancelPendingLocked(cancelled);
     }
+    // Replies may synchronously revoke or replace this grant. Never call them
+    // while holding the controller mutex or retain queued input after reset.
+    cancelled.ReplyAll("page_transition");
 }
 
 void RemoteInputController::OnLocalTouch() {
-    std::lock_guard<std::mutex> lock(state_->mutex);
-    state_->pointer.pressed = false;
-    state_->pointers.clear();
+    CancelledReplies cancelled;
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->CancelHeldPointerLocked();
+        state_->CancelPointersLocked(cancelled);
+    }
+    cancelled.ReplyAll("local_touch_active");
 }
 
 bool RemoteInputController::IsEnabled() const {

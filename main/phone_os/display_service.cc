@@ -1,6 +1,7 @@
 #include "phone_os/display_service.h"
 
 #include <algorithm>
+#include <array>
 #include <inttypes.h>
 #include <cstring>
 #include <memory>
@@ -20,6 +21,76 @@ constexpr uint8_t kJpegQuality = 65;
 constexpr size_t kJpegOutputCapacity = 100 * 1024;
 constexpr uint32_t kTaskStackSize = 8192;
 constexpr int64_t kJpegStatsIntervalUs = 5 * 1000 * 1000;
+constexpr std::array<const char*, 4> kEncoderHeapStages = {
+    "before_open", "after_open", "after_process", "after_close"};
+
+struct EncoderHeapSnapshot {
+    int64_t at_us = -1;
+    size_t dma_free = 0;
+    size_t dma_largest = 0;
+    size_t psram_free = 0;
+    size_t psram_largest = 0;
+};
+
+EncoderHeapSnapshot ReadEncoderHeap() {
+    return {esp_timer_get_time(),
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT),
+            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)};
+}
+
+struct EncoderHeapWindow {
+    EncoderHeapSnapshot minimum;
+    uint32_t samples = 0;
+    uint32_t lowest_dma_sequence = 0;
+
+    void Observe(const EncoderHeapSnapshot& sample, uint32_t sequence) {
+        if (sample.at_us < 0) return;
+        if (samples++ == 0) {
+            minimum = sample;
+            lowest_dma_sequence = sequence;
+            return;
+        }
+        if (sample.dma_largest < minimum.dma_largest) {
+            minimum.at_us = sample.at_us;
+            lowest_dma_sequence = sequence;
+        }
+        minimum.dma_free = std::min(minimum.dma_free, sample.dma_free);
+        minimum.dma_largest = std::min(minimum.dma_largest, sample.dma_largest);
+        minimum.psram_free = std::min(minimum.psram_free, sample.psram_free);
+        minimum.psram_largest = std::min(minimum.psram_largest, sample.psram_largest);
+    }
+};
+
+void LogEncoderHeapFirst(const std::array<EncoderHeapSnapshot, 4>& heap, uint32_t sequence) {
+    for (size_t stage = 0; stage < heap.size(); ++stage) {
+        const auto& sample = heap[stage];
+        if (sample.at_us < 0) continue;
+        ESP_LOGI(TAG, "JPEG heap first: seq=%" PRIu32 " stage=%s at_us=%" PRId64
+                 " dma_free=%u dma_largest=%u psram_free=%u psram_largest=%u",
+                 sequence, kEncoderHeapStages[stage], sample.at_us,
+                 static_cast<unsigned>(sample.dma_free), static_cast<unsigned>(sample.dma_largest),
+                 static_cast<unsigned>(sample.psram_free), static_cast<unsigned>(sample.psram_largest));
+    }
+}
+
+void LogEncoderHeapWindow(const std::array<EncoderHeapWindow, 4>& heap, const char* window) {
+    for (size_t stage = 0; stage < heap.size(); ++stage) {
+        const auto& sample = heap[stage];
+        if (sample.samples == 0) continue;
+        // 各项是独立最低值；时间和序号只关联 dma_largest，不能视作同一时刻快照。
+        ESP_LOGI(TAG, "JPEG heap min: window=%s stage=%s samples=%" PRIu32
+                 " dma_free=%u dma_largest=%u psram_free=%u psram_largest=%u"
+                 " dma_largest_at_us=%" PRId64 " dma_largest_seq=%" PRIu32,
+                 window, kEncoderHeapStages[stage], sample.samples,
+                 static_cast<unsigned>(sample.minimum.dma_free),
+                 static_cast<unsigned>(sample.minimum.dma_largest),
+                 static_cast<unsigned>(sample.minimum.psram_free),
+                 static_cast<unsigned>(sample.minimum.psram_largest),
+                 sample.minimum.at_us, sample.lowest_dma_sequence);
+    }
+}
 
 class SemaphoreLock {
 public:
@@ -72,6 +143,7 @@ struct DisplayService::EncodeMetrics {
     int64_t process_us = 0;
     int64_t close_us = 0;
     size_t output_size = 0;
+    std::array<EncoderHeapSnapshot, 4> heap;
 };
 
 namespace {
@@ -87,6 +159,7 @@ bool HasRgb565Frame(const DisplayFrame& frame) {
 
 bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
                                 std::vector<uint8_t>& jpeg, EncodeMetrics* metrics) {
+    if (metrics != nullptr) metrics->heap[0] = ReadEncoderHeap();
     const int64_t open_started_us = esp_timer_get_time();
     jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
     config.width = width;
@@ -100,20 +173,31 @@ bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int wid
     jpeg_enc_handle_t encoder = nullptr;
     const auto open_ret = jpeg_enc_open(&config, &encoder);
     if (metrics != nullptr) metrics->open_us = esp_timer_get_time() - open_started_us;
+    if (metrics != nullptr) metrics->heap[1] = ReadEncoderHeap();
     if (open_ret != JPEG_ERR_OK || encoder == nullptr) return false;
     Encoder owned_encoder(encoder);
+    const auto close_encoder = [&]() {
+        const int64_t close_started_us = esp_timer_get_time();
+        owned_encoder.reset();
+        if (metrics != nullptr) {
+            metrics->close_us = esp_timer_get_time() - close_started_us;
+            metrics->heap[3] = ReadEncoderHeap();
+        }
+    };
     // esp_new_jpeg 的 320x240 RGB888 示例使用 100 KiB 输出缓冲。屏幕帧实测约
     // 6-13 KiB，固定上限避免在 PNG 常驻时再申请一份 225 KiB 原始帧大小缓冲。
     HeapBuffer encoded(AllocAligned(kJpegOutputCapacity));
-    if (!encoded) return false;
+    if (!encoded) {
+        close_encoder();
+        return false;
+    }
     int output_size = 0;
     const int64_t process_started_us = esp_timer_get_time();
     const auto ret = jpeg_enc_process(encoder, input, static_cast<int>(input_size),
                                       encoded.get(), static_cast<int>(kJpegOutputCapacity), &output_size);
     if (metrics != nullptr) metrics->process_us = esp_timer_get_time() - process_started_us;
-    const int64_t close_started_us = esp_timer_get_time();
-    owned_encoder.reset();
-    if (metrics != nullptr) metrics->close_us = esp_timer_get_time() - close_started_us;
+    if (metrics != nullptr) metrics->heap[2] = ReadEncoderHeap();
+    close_encoder();
     if (ret != JPEG_ERR_OK || output_size <= 0 ||
         static_cast<size_t>(output_size) > kJpegOutputCapacity) {
         return false;
@@ -498,6 +582,8 @@ void DisplayService::JpegStreamTask() {
     int64_t stats_process_us = 0;
     int64_t stats_close_us = 0;
     size_t stats_output_bytes = 0;
+    bool heap_first_logged = false;
+    std::array<EncoderHeapWindow, 4> heap_window;
     while (true) {
         uint8_t fps = 0;
         std::shared_ptr<JpegFrameCallback> callback;
@@ -563,6 +649,13 @@ void DisplayService::JpegStreamTask() {
             } else {
                 ++stats_failed;
             }
+            if (!heap_first_logged && metrics.heap[0].at_us >= 0) {
+                LogEncoderHeapFirst(metrics.heap, sequence);
+                heap_first_logged = true;
+            }
+            for (size_t stage = 0; stage < heap_window.size(); ++stage) {
+                heap_window[stage].Observe(metrics.heap[stage], sequence);
+            }
             const int64_t now_us = esp_timer_get_time();
             // 复制或编码失败也消耗一次尝试，避免持续刷新在 OOM 时形成忙循环。
             last_attempt_at_us = now_us;
@@ -581,6 +674,8 @@ void DisplayService::JpegStreamTask() {
                          sample_count == 0 ? 0.0 : static_cast<double>(stats_close_us) / sample_count,
                          sample_count == 0 ? 0U
                                            : static_cast<unsigned>(stats_output_bytes / sample_count));
+                LogEncoderHeapWindow(heap_window, "periodic");
+                heap_window = {};
                 stats_started_us = now_us;
                 stats_attempts = 0;
                 stats_encoded = 0;
@@ -593,6 +688,7 @@ void DisplayService::JpegStreamTask() {
             }
         }
     }
+    LogEncoderHeapWindow(heap_window, "final");
     std::shared_ptr<JpegFrameCallback> callback_to_release;
     {
         SemaphoreLock lock(mutex_);

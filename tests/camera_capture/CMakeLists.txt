@@ -18,6 +18,9 @@ target_compile_features(rodakos_camera_capture_tests PRIVATE cxx_std_17)
 target_compile_options(rodakos_camera_capture_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(rodakos_camera_capture_tests PRIVATE Threads::Threads)
 target_link_options(rodakos_camera_capture_tests PRIVATE
+    # Wrap allocations inside std::string/std::function as well as inline vector
+    # code; dynamic libstdc++ calls would bypass the link-time wrappers.
+    -static-libstdc++
     -Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap
     -Wl,--wrap=_Znwm -Wl,--wrap=_ZdlPv -Wl,--wrap=_ZdlPvm
     -Wl,--wrap=time -Wl,--wrap=mkdir -Wl,--wrap=fwrite -Wl,--wrap=fflush -Wl,--wrap=fclose)
