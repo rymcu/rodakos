@@ -26,9 +26,12 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest package is 019, with a cancelled-gesture correction, successful guarded refresh/boot
-and a targeted device cancellation pass. End-to-end control timeouts and screen-first DMA failure
-still occurred. See
+The latest package is diagnostic 020. Pure Photos reproduces pre-callback input delay,
+and Camera/screen concurrency still exposes AES allocation failure. Final internal largest
+remains below the 8 KiB soak gate. Release is **NO_GO**; see
+[020 diagnostics](#2026-10-07-peer-timing-diagnostics-020).
+Package 019 passed targeted device cancellation checks, while end-to-end timeouts and
+screen-first DMA failure remained. See
 [cancelled-gesture correction](#2026-10-07-cancelled-gesture-correction-019).
 Package 018 retains its Camera-exit stall requiring controlled reset and a separate post-reset
 window with delayed/rejected control replies. See
@@ -875,3 +878,37 @@ The 2026-10-06 run against source baseline `2ed1e8c` plus the collector changes 
 Before the fix, two new regression cases incorrectly returned `pass-observed` for eight hours of
 health logs with missing or repeated uptime. The correction does not change the production-key,
 physical power-cut, complete LVGL exhaustion, or eight-hour hardware gates above.
+
+## 2026-10-07 peer timing diagnostics 020
+
+Source `92eb23878c7611ce4d06154851ad90cb50f386ec`, package `20261007-130521`,
+task `media-peer-timing-020`, version `0.1.2-dev.1`:
+
+- Main: **7,125,184 bytes**, SHA-256 `cf64d594ce3e8d785ecc2600d39ec15b3c55cd6d27067d06aec08592127d46bb`.
+- ZIP SHA-256: `f71e66f6dd66ff2b2f8610b891d62eca3c43dce16bfa5567806571eccd0c2b1c`.
+- Five immutable assets match 019; original development signing root retained. VerifyOnly,
+  NVS-preserving flash and Recovery/main/Home/local OTA confirmation passed.
+- ACK/timing 28 and production MQTT command/stream 57 each pass Debug and ASan/UBSan/leak;
+  independent source review and ESP-IDF 6.0.2 build pass. This is diagnostic software,
+  not a change to timeout, authorization, reliable ordering or JPEG allocation.
+
+Pure Photos reproduced 7,908/7,904 ms rejected replies and the later disable's 4,900 ms
+reply. Three device callback entries span only 3.092 ms; each entry-to-return is about
+1.5 ms. The relevant independent maxima are loop gap 80.100 ms, SDK 62.950 ms,
+service wait 24 us and API wait 6 us. No 100-ms MQTT slow-gate sample appeared.
+This narrows the measured wait to delivery before the application callback, not a proven
+UDP/WiFi/DTLS/SCTP cause. Browser/USB arrival/device clocks are distinct; nested phase
+maxima are not additive. Camera is not required to reproduce this timeout.
+
+Camera then ran 77.997 seconds / 1,197 frames and completed all exit stages, but a screen
+start during preview caused AES allocation failure, MQTT queue drops and reconnect.
+After Camera, static Photos produced one pre-open dropped frame and no usable screen;
+this failed attempt did not exercise remote pointer cancellation. Final Home/screen-off
+MQTT reports internal free 30,203 B / largest 7,680 B and PSRAM free 2,550,776 B /
+largest 2,359,296 B; historical internal minimum is 151 B. Original binding/token4
+remain, MQTT is connected, the voice connection is inactive and wake listening remains enabled; COM3 is released. **NO_GO** remains.
+
+Full sequence and boundaries are in the [media record](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md#020-控制入口分段与资源失败).
+Raw evidence: Rodak `.codex-temp/resource-window-020/`; build/package/verify/flash logs:
+`build/logs/media-peer-timing-020-*.log`. Neither this run nor its separate allocator
+proposal closes 018's stall, arbitrary OOM, physical touch/audio or eight-hour soak.

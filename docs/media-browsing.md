@@ -135,3 +135,16 @@ RemoteInput **30 项 Debug/ASan/UBSan/leak**、ACK **21 项 ASan**、Home **43 �
 下一次压力 Retry 仍触发桌面 timeout。设备在同一日志时间 **187,345 ms** 才处理 down99/up100/disable101；down/up 均拒绝 `control_disabled`（**3,870 / 3,869 ms**），disable101 accepted（**868 ms**）。没有第三次 PNG 加载，取消动作语义保持，但端到端时延没有收口。串口入口日志到达主机分别为发送后 **3,861 / 3,860 / 857 ms**，回执只晚于对应日志到达 **9–11 ms**，日志未记录 `control ACK retry`。这将主要等待范围收窄到 controller 入口之前，仍需进一步拆分 SDK、网络和调度；USB/日志缓冲包含在主机到达时间内，不能把它当成精确网络包时延，也不能归为发送端 ACK 有界重试或重新执行了点击。
 
 原始证据为 Rodak `.codex-temp/resource-window-019/serial.log`、`serial-timing.jsonl`、`control-final.json`、`result.json` 及 `device-final.json`。已记录周期 JPEG 合计 **148 attempts / 148 encoded / 0 failed**，不是完整逐帧账本；窗口无 panic/abort/reboot，收尾未另行重启。最终回到 Home 并停止 screen/remote，COM3 已释放；原 ID / bound / tokenVersion=4 保持、MQTT connected、voice inactive。两条 MQTT health 的 internal free **33,159 / 33,071 B**、largest **7,680 B**，PSRAM free **2,553,000 / 2,553,032 B**、largest **1,343,488 B**；MQTT stack_min **2,956 B**，wake enabled/listening=1、supervisor stack_min **2,424 B**，internal 历史最低 **467 B**。最终内部连续块仍低于 **8 KiB** soak 门槛；取消误点击的定向通过不覆盖控制迟到、018 Camera 退出故障、DMA 余量、物理触摸和全并发/soak 门禁。
+
+## 020 控制时延与并发资源诊断
+
+当前 020 未更改 JPEG 分配策略。ACK/timing28 和生产 MQTT57 分别通过 Debug/ASan；
+纯 Photos 在没有先运行 Camera 时复现约 7.9 秒回执，三条消息集中进入设备回调，
+回调各约 1.5 ms，对应 peer 循环/锁没有秒级阻塞。下一步定位 UDP/SCTP 交付，
+不能据此扩大超时或撤销可靠有序与授权语义。
+
+Camera 预览 77.997 秒/1,197 帧并完整退出，但启动屏幕流时出现 AES 分配失败和
+MQTT 断线后恢复；静态 Photos 后续首帧未就绪。最终内部连续块仍为 7,680 B，
+原绑定/tokenVersion=4 保持，NO_GO 不变。包身份、资源值和未执行项见
+[020 发布记录](ota-release-readiness.md#2026-10-07-peer-timing-diagnostics-020)及
+[联合媒体证据](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md#020-控制入口分段与资源失败)。
