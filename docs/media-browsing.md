@@ -2,7 +2,7 @@
 
 Photos 和 Files 将扫描失败与正常空列表分别显示。失败时清除旧列表和部分结果，保留明确错误及重试入口；缺失服务、SD 不可用、目录不可用和一般读取失败不再统一显示为空目录。没有足够错误信息时使用一般失败提示，不推断为文件损坏或内存不足。
 
-当前设备包为 023（`20261007-164049`）。静态 Photos 页在 offer 延迟 2.5 秒的两轮独立屏幕会话中均显示唯一首帧，正常 Stop 后重开也通过，控制全程关闭。022 的两轮正常 Camera 退出及其调试后 panic、021 的 STREAMOFF 停滞和迟到控制均保留为各自窗口的证据；Camera 根因、资源压力与长稳门禁仍未关闭，发布保持 **NO_GO**。见 [023 实测](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)、[022 诊断窗口](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)与[021 历史实测](#021-屏幕-jpeg-作用域-psram-分配与实测边界)。
+当前设备包为 024（`aebd5e6` / `20261007-180119`），新增 MQTT 丢弃原因诊断。普通信令突发下确认了 4 次入站队列拒绝和 10 次出站条数上限。临时 200 ms 对照之后，桌面主进程按 ACK 串行派送的独立生产路径实测也取得 19/19 ACK、真实 320×240 首帧，停流回 Home 后观察 79.967 秒且没有队列告警或 reset/panic 标记；该轮没有固定候选延时，仍有 8 条 SDK 候选超限日志。另一次桌面重启窗口出现固件凭据恢复重启及旧持久信令补发的 41 次队列拒绝，成功窗口不能覆盖这项失败，也不证明 SDK 接纳全部候选。023 首帧、022 Camera 窗口与 021 停滞历史保留，发布仍为 **NO_GO**。见 [024 诊断与对照](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024)、[023 首帧](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)、[022 窗口](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)与[021 历史实测](#021-屏幕-jpeg-作用域-psram-分配与实测边界)。
 
 ## 目录扫描
 
@@ -26,7 +26,7 @@ PNG 完整读取后直接通过真实 `lodepng_decode32` 生成像素，并由 L
 - `tests/file_manager_ui` 编译生产 Files、PhoneAppHost 与真实 LVGL；FileService 和图像结果为可控替身，单独验证目录/预览状态、路径、操作和释放顺序。
 - `tests/camera_capture` 使用生产 FileService 与真实临时主机目录，验证未挂载/缺失目录错误经过 adapter 传播；底层目录读取故障另由 `tests/file_directory` 覆盖。
 
-测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–021 的历史软件、启动与有限设备证据分别见下节，022–023 的后续窗口见上方链接，均不关闭这些门禁。
+测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–021 的历史软件、启动与有限设备证据分别见下节，022–024 的后续窗口见上方链接，均不关闭这些门禁。
 
 ## 2026-10-07 初始软件验证
 
