@@ -41,6 +41,10 @@ DRAM、IRAM recorder、真实指令字节、一次 CAS、无调用/循环/回跳
 RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host 通过不能替代它。
 该门禁范围限于记录器，不证明驱动关闭、IRQ 生命周期、cache 或硬件可读性。
 
+固件 CI 另保存四个实际编译入口、展开后的 response 参数、两个生成 C 文件及源码摘要，
+并将其关联到同次 ELF/sdkconfig 和链接报告。下载制品时可据此复核源码替换和原子选项范围，
+而不是只读取构建成功标志。
+
 ## 取证与当前边界
 
 先冻结已刷写包、源码、ELF、map 和校验 JSON 的 SHA-256，再从该 ELF 取得记录表地址。

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -144,6 +145,111 @@ def normal_flavor(build, *, main):
             "Fault injection is not explicitly disabled")
 
 
+def inspect_camera_teardown(build, config, commands, output):
+    """Retain this feature's actual compile inputs alongside the linked-ELF gate."""
+    build, config, output = Path(build).resolve(), Path(config).resolve(), Path(output)
+    require(config.is_file(), "Camera diagnostics sdkconfig is missing")
+    config_text = config.read_text()
+    for setting in ('CONFIG_IDF_TARGET="esp32s3"', 'CONFIG_IDF_TARGET_ESP32S3=y',
+                    'CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y'):
+        require(setting in config_text.splitlines(), f"Camera diagnostics configuration missing {setting}")
+    original_sources = [
+        ROOT / "managed_components/espressif__esp_video/src/device/esp_video_device_common.c",
+        ROOT / "managed_components/espressif__esp_cam_sensor/src/driver_dvp/esp_cam_ctlr_dvp_cam.c",
+    ]
+    paths = [ROOT / "main/phone_os/camera-teardown-diagnostics.cc",
+             ROOT / "main/phone_os/camera_service.cc",
+             build / "rodak_patches/camera_teardown/esp_video_device_common.c",
+             build / "rodak_patches/camera_teardown/esp_cam_ctlr_dvp_cam.c"]
+
+    def source_path(command):
+        source = Path(command["file"])
+        return (source if source.is_absolute() else Path(command["directory"]) / source).resolve()
+
+    compiled = [source_path(command) for command in commands]
+    require(all(path.resolve() not in compiled for path in original_sources),
+            "Camera managed source compiled instead of the reviewed overlay")
+    responses = {}
+
+    def expand(arguments, directory, stack=()):
+        expanded = []
+        for argument in arguments:
+            if not argument.startswith("@"):
+                expanded.append(argument)
+                continue
+            response = Path(argument[1:])
+            response = (response if response.is_absolute() else directory / response).resolve()
+            require(response.is_relative_to(build) and response.is_file(),
+                    "Camera response file must exist within this build directory")
+            require(response not in stack and len(stack) < 4, "Camera response cycle/depth refused")
+            require(response.stat().st_size <= 65536, "Camera response file is unexpectedly large")
+            text = response.read_text(encoding="utf-8")
+            responses[response.relative_to(ROOT.resolve()).as_posix()] = {
+                "sha256": digest(response), "text": text}
+            expanded.extend(expand(shlex.split(text), directory, (*stack, response)))
+        return expanded
+
+    selected, source_hashes = [], {}
+    native_flag, disabled_flag = "-mno-disable-hardware-atomics", "-mdisable-hardware-atomics"
+    for index, path in enumerate(paths):
+        path = path.resolve()
+        require(compiled.count(path) == 1, f"Camera source must be compiled exactly once: {path.name}")
+        require(path.is_file(), f"Camera compile source is missing: {path.name}")
+        command = commands[compiled.index(path)]
+        arguments = command.get("arguments") or shlex.split(command["command"])
+        arguments = expand(arguments, Path(command["directory"]).resolve())
+        atomics = [argument for argument in arguments if argument in (native_flag, disabled_flag)]
+        if index == 0:
+            require(atomics and atomics[-1] == native_flag, "Camera recorder needs final native-atomic override")
+        else:
+            require(atomics and atomics[-1] == disabled_flag and native_flag not in atomics,
+                    "Camera non-recorder translation unit must retain the global atomic workaround")
+        relative = path.relative_to(ROOT.resolve()).as_posix()
+        selected.append({**command, "sourceRelative": relative, "expandedArguments": arguments})
+        source_hashes[relative] = digest(path)
+
+    linked_path, elf = build / "camera-teardown-linked.json", build / "rodakos.elf"
+    require(linked_path.is_file() and elf.is_file(), "Camera final ELF evidence is missing")
+    linked = json.loads(linked_path.read_text())
+    require(linked.get("success") is True and linked.get("camera_teardown_link_verified") is True
+            and linked.get("target") == "esp32s3" and linked.get("idf_version") == "6.0.2",
+            "Camera linked gate identity/status mismatch")
+    require(linked.get("elf_sha256") == digest(elf) and linked.get("sdkconfig_sha256") == digest(config),
+            "Camera linked gate does not identify this ELF/sdkconfig")
+    storage, recorder, code = (linked.get(key, {}) for key in ("storage", "recorder", "generated_code"))
+    require(storage.get("size") == 536 and isinstance(storage.get("address"), int)
+            and storage["address"] % 4 == 0 and 0x3FC88000 <= storage["address"]
+            and storage["address"] + 536 <= 0x3FD00000, "Camera storage is not fixed internal DRAM")
+    require(isinstance(recorder.get("address"), int) and isinstance(recorder.get("size"), int)
+            and recorder["size"] > 0 and 0x40370000 <= recorder["address"]
+            and recorder["address"] + recorder["size"] <= 0x403E0000,
+            "Camera recorder is not internal IRAM")
+    require(code.get("native_cas_count") == 1 and code.get("calls") == []
+            and code.get("backward_branches") == [], "Camera recorder lost its bounded native-CAS contract")
+    inputs = ["main/phone_os/camera-teardown-diagnostics.cc", "main/phone_os/camera-teardown-diagnostics.h",
+              "main/phone_os/camera_service.cc", "tools/check_camera_teardown_diagnostics.py",
+              "tools/check_screen_jpeg_allocator.py", "tools/prepare_camera_teardown_patch.py",
+              "patches/camera_teardown/2.3.0/provenance.json"]
+    require(all((ROOT / name).is_file() for name in inputs), "Camera feature source evidence is missing")
+    output.mkdir(parents=True, exist_ok=True)
+    compile_path = output / "selected-camera-compile-commands.json"
+    write_json(compile_path, {"schemaVersion": 1, "entries": selected, "responseFiles": responses})
+    generated = {}
+    for source in paths[2:]:
+        destination = output / "camera-generated" / source.name
+        destination.parent.mkdir(exist_ok=True)
+        shutil.copyfile(source, destination)
+        generated["camera_teardown/" + source.name] = digest(destination)
+    evidence = {"schemaVersion": 1, "elfSha256": digest(elf), "sdkconfigSha256": digest(config),
+                "linkedReportSha256": digest(linked_path), "compiledSources": source_hashes,
+                "sourceHashes": {name: digest(ROOT / name) for name in inputs},
+                "generatedSources": generated, "selectedCompileCommandsSha256": digest(compile_path),
+                "nativeAtomicTranslationUnit": "main/phone_os/camera-teardown-diagnostics.cc",
+                "managedSourcesNotCompiled": [path.relative_to(ROOT).as_posix() for path in original_sources]}
+    write_json(output / "camera-teardown-build.json", evidence)
+    return evidence
+
+
 def inspect_builds(idf, output):
     main, recovery = ROOT / "build", ROOT / "recovery/build"
     journal = (ROOT / "components/rodak_ota_state/include/rodak_ota_state.h").read_text()
@@ -196,6 +302,8 @@ def inspect_builds(idf, output):
         "esp_codec_dev/platform/audio_codec_data_i2s.c": "espressif__esp_codec_dev/platform/audio_codec_data_i2s.c",
         "esp_mqtt/mqtt_client.c": "espressif__mqtt/mqtt_client.c",
         "esp_websocket_client/esp_websocket_client.c": "espressif__esp_websocket_client/esp_websocket_client.c",
+        "camera_teardown/esp_video_device_common.c": "espressif__esp_video/src/device/esp_video_device_common.c",
+        "camera_teardown/esp_cam_ctlr_dvp_cam.c": "espressif__esp_cam_sensor/src/driver_dvp/esp_cam_ctlr_dvp_cam.c",
     }
     patch_evidence = {}
     for generated_name, original_name in overlays.items():
@@ -205,6 +313,7 @@ def inspect_builds(idf, output):
                 f"Reviewed overlay is not the actual compiled source: {generated_name}")
         patch_evidence[generated_name] = digest(generated_path)
     write_json(output / "compiled-overlays.json", patch_evidence)
+    inspect_camera_teardown(main, Path(projects[0]["config_file"]), commands, output)
     shutil.copytree(generated, output / "generated-board")
     for build, label in ((main, "main"), (recovery, "recovery")):
         for name in ("project_description.json", "flasher_args.json", "CMakeCache.txt"):

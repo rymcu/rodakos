@@ -65,6 +65,7 @@ jobs:
             firmware-ci-results/*.json
             firmware-ci-results/*.txt
             firmware-ci-results/generated-board/
+            firmware-ci-results/camera-generated/
             firmware-ci-results/development-baseline/
             firmware-ci-results/development-refresh/
             build/rodakos.elf
