@@ -1,3 +1,19 @@
+#include "host_runtime.h"
+#include "phone_os/battery_monitor.h"
+#include "phone_os/light_service.h"
+#include "phone_os/mqtt_credential_refresh_policy.h"
+#include "phone_os/mqtt_volume_effect.h"
+#include "phone_os/mqtt_light_effect.h"
+#include "phone_os/mqtt_command_ledger.h"
+#include "phone_os/stream_lease.h"
+#include <array>
+#include <memory>
+#include <utility>
+
+// Only this test TU exposes the diagnostic snapshot and state-lock seam.
+#define private public
+#include "phone_os/unified_mqtt_service.h"
+#undef private
 #include "service_fixture.h"
 #include "phone_os/webrtc_display_service.h"
 
@@ -406,5 +422,85 @@ RODAK_TEST("MQTT display control captures exact lease and rejects stale data wit
     RODAK_CHECK(frames.back().empty());
     RODAK_CHECK_FALSE(old_lease->IsActive());
     RODAK_CHECK(new_lease->IsActive());
+    streams.mqtt.service.SetWebRtcDisplayControlCallback({});
+}
+
+RODAK_TEST("MQTT control gate snapshots real lock delay while preserving current and stale lease outcomes") {
+    for (bool stale : {false, true}) {
+        Streams streams;
+        rodakos::StreamLeasePtr original;
+        unsigned nonempty_calls = 0;
+        streams.mqtt.service.SetWebRtcDisplayControlCallback(
+            [&](const rodakos::StreamLeasePtr& lease, const std::string& payload,
+                rodakos::UnifiedMqttService::DisplayControlReply reply) {
+                if (!payload.empty()) { original = lease; ++nonempty_calls; }
+                if (reply) reply(true, nullptr);
+            });
+        streams.Start(true, "timing-first", "timing-session");
+        const auto control = streams.display.SavedControl();
+        control("warmup", {});
+        if (stale) {
+            Process("timing-stop", Request(true, "stop", "timing-session"));
+            streams.Start(true, "timing-new", "timing-session");
+        }
+        PauseDequeue(true);
+        Message(Topic("timing-pause"), "ping");
+        RODAK_CHECK(WaitDequeued());
+        auto& service = streams.mqtt.service;
+        std::unique_lock<std::mutex> state_lock(service.mqtt_mutex_);
+        std::atomic<bool> entered{false};
+        bool answered = false;
+        bool accepted = false;
+        std::thread input([&] {
+            clock_read_observed = &entered;
+            control("timed-control", [&](bool ok, const char*) { answered = true; accepted = ok; });
+            clock_read_observed = nullptr;
+        });
+        const bool waiting = WaitUntil([&] { return entered.load(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(130));
+        state_lock.unlock();
+        input.join();
+        RODAK_CHECK(waiting);
+        RODAK_CHECK(answered);
+        RODAK_CHECK_EQ(accepted, !stale);
+        RODAK_CHECK_EQ(nonempty_calls, stale ? 1u : 2u);
+        RODAK_CHECK(service.control_gate_timing_pending_);
+        const auto sample = service.control_gate_timing_;
+        RODAK_CHECK(sample.callback_no != 0);
+        RODAK_CHECK_EQ(sample.instance_nonce, original->instance_nonce);
+        RODAK_CHECK_EQ(sample.current, !stale);
+        RODAK_CHECK(sample.acquired_us - sample.started_us >= 100000);
+        RODAK_CHECK(sample.checked_us >= sample.acquired_us);
+        RODAK_CHECK_EQ(service.control_gate_next_log_us_, sample.checked_us + 5000000);
+        PauseDequeue(false);
+        streams.mqtt.Barrier();
+        RODAK_CHECK(WaitUntil([&] {
+            std::lock_guard<std::mutex> lock(service.mqtt_mutex_);
+            return !service.control_gate_timing_pending_;
+        }));
+        streams.mqtt.service.SetWebRtcDisplayControlCallback({});
+    }
+}
+
+RODAK_TEST("MQTT display control can revoke its lease inside dispatch without holding the state lock") {
+    Streams streams;
+    rodakos::StreamLeasePtr dispatched;
+    streams.mqtt.service.SetWebRtcDisplayControlCallback(
+        [&](const rodakos::StreamLeasePtr& lease, const std::string& payload,
+            rodakos::UnifiedMqttService::DisplayControlReply reply) {
+            if (payload.empty()) return;
+            dispatched = lease;
+            Disconnect();
+            if (reply) reply(lease->IsActive(), "revoked");
+        });
+    streams.Start(true, "reentrant-start", "reentrant-session");
+    bool answered = false;
+    bool accepted = true;
+    streams.display.SavedControl()("disconnect-during-dispatch",
+        [&](bool ok, const char*) { answered = true; accepted = ok; });
+    RODAK_CHECK(answered);
+    RODAK_CHECK_FALSE(accepted);
+    RODAK_CHECK(dispatched != nullptr);
+    RODAK_CHECK_FALSE(dispatched->IsActive());
     streams.mqtt.service.SetWebRtcDisplayControlCallback({});
 }

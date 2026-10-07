@@ -73,6 +73,14 @@ public:
     bool Publish(const std::string& topic, const std::string& payload);
 
 private:
+    struct ControlGateTiming {
+        uint64_t callback_no = 0;
+        uint64_t instance_nonce = 0;
+        int64_t started_us = 0;
+        int64_t acquired_us = 0;
+        int64_t checked_us = 0;
+        bool current = false;
+    };
     struct PublishedEvent {
         uint32_t client_generation = 0;
         uint64_t sequence = 0;
@@ -194,6 +202,9 @@ private:
     uint64_t display_latest_nonce_ = 0;
     bool stream_cleanup_pending_ = false;
     mutable std::mutex mqtt_mutex_;
+    ControlGateTiming control_gate_timing_{};
+    bool control_gate_timing_pending_ = false;
+    int64_t control_gate_next_log_us_ = 0;
     uint32_t client_generation_ = 0;
     uint64_t connection_epoch_ = 0;
     bool effect_authority_active_ = false;

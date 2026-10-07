@@ -5,12 +5,23 @@
 配置时生成的 `production-sources.json` 记录服务源码、服务头与 tracker 的 SHA-256；源码变化
 会触发 CMake 重新配置。测试不会修改生产文件。
 
-21 项用例覆盖：正常 ACK 的真实 JSON、peer 与 stream ID；显式和默认拒绝原因；Stop/Start
+28 项用例覆盖：正常 ACK 的真实 JSON、peer 与 stream ID；显式和默认拒绝原因；Stop/Start
 期间的旧 reply、旧排队结果和已经 `Take()` 的旧批次；新实例复用序号；等待发送锁时失效；
 已通过最终检查的发送与 Stop 并发；五种终止状态和通道关闭；解析/序号拒绝；临时发送压力的
 FIFO 重试、1 秒 / 50 次耗尽与致命错误终止、32 项队列溢出及分配失败；不完整 JSON 不发送、
 队首 reason 拷贝失败保留预算；压力下生产 peer loop 继续泵浦并暂停 JPEG；六个启动资源失败
 入口；服务析构后保留 reply 的弱引用失效。
+
+020 新增的 7 项回归通过实际占用 service mutex / peer API mutex、模拟 SDK 与发送耗时，
+验证锁等待与执行耗时分离；从真实 `OnPeerData` 入口捕获时间并绑定已解析的 seq；运行生产
+peer task 测量 start-to-start gap；验证 JPEG 内嵌泵浦、ACK 阶段与实例替换隔离。诊断使用
+16 项固定缓冲，正常 move 不逐条记录，溢出只累计丢弃数，批次快照在禁止 C++ 分配时仍可输出。
+
+`peer timing` / `peer phases` 每 5 秒汇总，慢事件也按 5 秒限频；停止前额外输出最终窗口。
+`control timing` 的时间是设备阶段捕获值，不是延后输出时刻，也不是网络数据包到达时刻。
+JPEG 内含 SDK / ACK 阶段，不能将它们相加。输出发生在 service / peer API 锁外，但仍占用
+peer task；`prior_log_us` 给出上一批诊断输出的实测耗时，下一轮 gap 可能包含这部分开销。
+这些测试不证明原设备延迟的根因，也不替代设备计时和屏幕验收。
 
 重试仅发送同一 peer instance 的 ACK，不重复设备动作，也不转移到重建的 peer。队首只有在
 SCTP 接受后出队；WOULD_BLOCK / NO_MEM 在后续主循环重试，其余错误或资源预算耗尽使用原

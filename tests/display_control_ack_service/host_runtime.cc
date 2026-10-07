@@ -34,6 +34,9 @@ bool cleanup_entered = false;
 std::atomic<int> send_result{ESP_PEER_ERR_NONE};
 std::atomic<int64_t> clock_offset_us{0};
 size_t main_loop_count = 0;
+size_t clock_reads = 0;
+std::atomic<int64_t> main_loop_cost_us{0};
+std::atomic<int64_t> send_cost_us{0};
 int open_result = ESP_PEER_ERR_NONE;
 bool default_impl_available = true;
 int connection_result = ESP_PEER_ERR_NONE;
@@ -55,6 +58,8 @@ void Reset() {
     send_result = open_result = ESP_PEER_ERR_NONE;
     clock_offset_us = 0;
     main_loop_count = 0;
+    clock_reads = 0;
+    main_loop_cost_us = send_cost_us = 0;
     connection_result = ESP_PEER_ERR_NONE;
     default_impl_available = task_creation_allowed = true;
 }
@@ -141,6 +146,16 @@ bool WaitForMainLoops(size_t minimum) {
     return host_condition.wait_for(lock, std::chrono::seconds(2),
         [&] { return main_loop_count >= minimum; });
 }
+size_t ClockReads() {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return clock_reads;
+}
+bool WaitForClockReads(size_t minimum) {
+    std::unique_lock<std::mutex> lock(host_mutex);
+    return host_condition.wait_for(lock, std::chrono::seconds(2), [&] { return clock_reads >= minimum; });
+}
+void SetMainLoopCostUs(int64_t value) { main_loop_cost_us = value; }
+void SetSendCostUs(int64_t value) { send_cost_us = value; }
 }
 
 BaseType_t xTaskCreateWithCaps(void (*entry)(void*), const char*, size_t, void* arg,
@@ -179,8 +194,12 @@ void vTaskDelay(TickType_t) {
 }
 void vTaskDeleteWithCaps(TaskHandle_t) {}
 int64_t esp_timer_get_time() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
+    const int64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count() + clock_offset_us.load();
+    std::lock_guard<std::mutex> lock(host_mutex);
+    ++clock_reads;
+    host_condition.notify_all();
+    return now;
 }
 
 extern "C" {
@@ -200,6 +219,7 @@ int esp_peer_open(esp_peer_cfg_t* config, const esp_peer_ops_t*, esp_peer_handle
 int esp_peer_new_connection(esp_peer_handle_t) { return connection_result; }
 int esp_peer_main_loop(esp_peer_handle_t) {
     std::lock_guard<std::mutex> lock(host_mutex);
+    clock_offset_us.fetch_add(main_loop_cost_us.load());
     ++main_loop_count;
     host_condition.notify_all();
     return ESP_PEER_ERR_NONE;
@@ -223,6 +243,7 @@ int esp_peer_send_data(esp_peer_handle_t handle, esp_peer_data_frame_t* frame) {
         host_condition.wait(lock, [] { return release_send; });
     }
     peer->sending = false;
+    clock_offset_us.fetch_add(send_cost_us.load());
     return send_result;
 }
 int esp_peer_close(esp_peer_handle_t handle) {
