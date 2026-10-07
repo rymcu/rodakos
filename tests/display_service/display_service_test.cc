@@ -1,5 +1,7 @@
 #include "test_framework.h"
 #include "host_runtime.h"
+#include "host_heap.h"
+#include "esp_heap_caps.h"
 #include "phone_os/display_service.h"
 
 #include <array>
@@ -63,6 +65,14 @@ void CheckReleased() {
     RODAK_CHECK_EQ(state.bytes, 0u);
     RODAK_CHECK_EQ(state.encoders, 0u);
     RODAK_CHECK_EQ(state.opens, state.closes);
+}
+void CheckOutsidePolicy() {
+    const auto before = host::Snapshot().original_allocator_calls[1];
+    auto* pointer = jpeg_calloc_inner(37);
+    const auto caps = AllocationCaps(pointer);
+    jpeg_free(pointer);
+    RODAK_CHECK_EQ(caps, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    RODAK_CHECK_EQ(host::Snapshot().original_allocator_calls[1], before + 1);
 }
 void CheckCadence(const std::vector<int64_t>& times) {
     RODAK_CHECK(times.size() >= 3);
@@ -199,7 +209,7 @@ RODAK_TEST("JPEG heap-caps peak uses one RGB888 snapshot and bounded scratch") {
     RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
     const auto state = host::Snapshot();
     RODAK_CHECK_EQ(state.last_output_capacity, host::kJpegScratchBytes);
-    RODAK_CHECK_EQ(state.peak_bytes, host::kRgbBytes + host::kJpegScratchBytes);
+    RODAK_CHECK_EQ(state.peak_bytes, host::kRgbBytes + host::kJpegScratchBytes + host::kCodecWorkspaceBytes);
     CheckReleased();
 }
 RODAK_TEST("reverse in-place expansion preserves first middle and last RGB888 pixels") {
@@ -245,6 +255,101 @@ RODAK_TEST("codec open and process failures release resources and can retry") {
     CheckReleased();
     host::ClearFailures();
     RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    CheckReleased();
+}
+RODAK_TEST("real EncodeJpeg keeps all codec allocations and close inside screen scope") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    std::vector<uint8_t> jpeg;
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    auto state = host::Snapshot();
+    RODAK_CHECK_EQ(state.codec_external_calls, 5u);
+    RODAK_CHECK_EQ(state.codec_internal_calls, 0u);
+    RODAK_CHECK_EQ(state.close_scope_checks, 1u);
+    for (auto calls : state.original_allocator_calls) RODAK_CHECK_EQ(calls, 0u);
+    CheckReleased();
+    CheckOutsidePolicy();
+}
+RODAK_TEST("each codec allocation OOM releases partial state and restores outside policy") {
+    for (size_t bytes : {host::kCodecContextBytes, size_t(128), size_t(1024), size_t(2048)}) {
+        Fixture fixture;
+        fixture.Start();
+        fixture.Publish();
+        host::FailHeap(bytes, 1);
+        std::vector<uint8_t> jpeg{9};
+        RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+        RODAK_CHECK(jpeg.empty());
+        RODAK_CHECK_EQ(host::Snapshot().heap_failures, 1u);
+        RODAK_CHECK_EQ(host::Snapshot().codec_internal_calls, 0u);
+        CheckReleased();
+        CheckOutsidePolicy();
+        RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+        CheckReleased();
+    }
+}
+RODAK_TEST("screen codec external exhaustion never consumes available internal heap") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    host::RejectCodecExternal(true);
+    std::vector<uint8_t> jpeg;
+    RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+    RODAK_CHECK_EQ(host::Snapshot().codec_internal_calls, 0u);
+    CheckReleased();
+    CheckOutsidePolicy();
+    host::ClearFailures();
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    CheckReleased();
+}
+RODAK_TEST("process exception closes encoder before restoring scope and a later encode works") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    host::ThrowEncoderProcess(true);
+    std::vector<uint8_t> jpeg{9};
+    RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+    RODAK_CHECK(jpeg.empty());
+    RODAK_CHECK_EQ(host::Snapshot().close_scope_checks, 1u);
+    RODAK_CHECK_EQ(host::Snapshot().codec_internal_calls, 0u);
+    for (auto calls : host::Snapshot().original_allocator_calls) RODAK_CHECK_EQ(calls, 0u);
+    CheckReleased();
+    CheckOutsidePolicy();
+    host::ClearFailures();
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    CheckReleased();
+}
+RODAK_TEST("scratch and compact failures restore codec allocation policy") {
+    for (bool scratch : {true, false}) {
+        Fixture fixture;
+        fixture.Start();
+        fixture.Publish();
+        if (scratch) host::FailHeap(host::kJpegScratchBytes, 2, true);
+        else host::FailNew(host::kJpegBytes);
+        std::vector<uint8_t> jpeg;
+        RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+        RODAK_CHECK_EQ(host::Snapshot().close_scope_checks, 1u);
+        RODAK_CHECK_EQ(host::Snapshot().codec_internal_calls, 0u);
+        CheckReleased();
+        CheckOutsidePolicy();
+        RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+        CheckReleased();
+    }
+}
+RODAK_TEST("worker callback runs after the codec scope has restored its task policy") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.Publish();
+    std::atomic<bool> finished{false}, original_policy{false};
+    RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&&, auto, auto) {
+        auto* pointer = jpeg_calloc_inner(37);
+        original_policy = AllocationCaps(pointer) == (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        jpeg_free(pointer);
+        finished = true;
+    }));
+    RODAK_CHECK(Wait([&] { return finished.load(); }));
+    fixture.service.StopJpegStream();
+    RODAK_CHECK(original_policy.load());
     CheckReleased();
 }
 RODAK_TEST("stream callback storage and task startup failures leave capture restartable") {

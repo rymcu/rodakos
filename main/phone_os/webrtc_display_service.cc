@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <inttypes.h>
 #include <utility>
 
 #include <esp_log.h>
@@ -35,6 +36,7 @@ constexpr int64_t kDataSendRetryTimeoutUs = 20000;
 constexpr int64_t kTransportStatsIntervalUs = 5000000;
 constexpr int64_t kControlAckRetryTimeoutUs = 1000000;
 constexpr uint32_t kControlAckMaxAttempts = 50;
+constexpr int64_t kSlowPeerPhaseUs = 100000;
 std::atomic<int64_t> next_control_retry_log_us{0};
 std::atomic<int64_t> next_control_recovery_log_us{0};
 bool AdmitControlDiagnostic(std::atomic<int64_t>& deadline, int64_t now_us) {
@@ -48,6 +50,60 @@ WebRtcDisplayService::WebRtcDisplayService(DisplayService* display_service)
     : display_service_(display_service) {}
 
 WebRtcDisplayService::~WebRtcDisplayService() { Stop(); }
+
+void WebRtcDisplayService::DurationStats::Observe(int64_t started_us, int64_t ended_us) {
+    const uint64_t duration = static_cast<uint64_t>(std::max<int64_t>(0, ended_us - started_us));
+    ++samples;
+    total_us += duration;
+    if (duration > maximum_us) {
+        maximum_us = duration;
+        maximum_at_us = started_us;
+    }
+}
+
+WebRtcDisplayService::ScopedDuration::ScopedDuration(
+    WebRtcDisplayService& service, DurationStats LoopDiagnostics::* observed)
+    : owner(service), field(observed), started_us(esp_timer_get_time()) {
+    std::lock_guard<std::recursive_mutex> lock(owner.mutex_);
+    owner.loop_diagnostics_.service_wait.Observe(started_us, esp_timer_get_time());
+    generation = owner.timing_generation_;
+}
+
+WebRtcDisplayService::ScopedDuration::~ScopedDuration() {
+    owner.RecordDuration(field, started_us, esp_timer_get_time(), generation);
+}
+
+void WebRtcDisplayService::RecordDuration(DurationStats LoopDiagnostics::* field,
+                                         int64_t started_us, int64_t ended_us, uint64_t generation) {
+    const int64_t waiting_us = esp_timer_get_time();
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (generation != timing_generation_) return;
+    loop_diagnostics_.service_wait.Observe(waiting_us, esp_timer_get_time());
+    (loop_diagnostics_.*field).Observe(started_us, ended_us);
+}
+
+int WebRtcDisplayService::PumpPeer(esp_peer_handle_t peer) {
+    uint64_t generation = 0;
+    const int64_t service_wait_us = esp_timer_get_time();
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        loop_diagnostics_.service_wait.Observe(service_wait_us, esp_timer_get_time());
+        generation = timing_generation_;
+    }
+    const int64_t waiting_us = esp_timer_get_time();
+    int64_t acquired_us = 0;
+    int64_t returned_us = 0;
+    int result = ESP_PEER_ERR_NONE;
+    {
+        std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
+        acquired_us = esp_timer_get_time();
+        result = esp_peer_main_loop(peer);
+        returned_us = esp_timer_get_time();
+    }
+    RecordDuration(&LoopDiagnostics::api_wait, waiting_us, acquired_us, generation);
+    RecordDuration(&LoopDiagnostics::sdk, acquired_us, returned_us, generation);
+    return result;
+}
 
 bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_signaling,
                                 StateCallback on_state, ControlCallback on_control) {
@@ -96,6 +152,13 @@ bool WebRtcDisplayService::Start(const Config& config, SignalingCallback on_sign
     stats_api_lock_max_wait_us_.store(0, std::memory_order_relaxed);
     stats_next_log_at_us_.store(esp_timer_get_time() + kTransportStatsIntervalUs,
                                 std::memory_order_relaxed);
+    loop_diagnostics_ = {};
+    ++timing_generation_;
+    timing_next_log_us_ = esp_timer_get_time() + kTransportStatsIntervalUs;
+    timing_next_slow_log_us_ = 0;
+    timing_previous_log_us_ = 0;
+    control_timing_count_ = 0;
+    control_timing_dropped_ = 0;
 
     if (!display_service_->StartCapture(normalized.width, normalized.height)) {
         signaling_callback_ = {};
@@ -403,22 +466,26 @@ int WebRtcDisplayService::OnPeerMessage(esp_peer_msg_t* message, void* ctx) {
 }
 
 int WebRtcDisplayService::OnPeerData(esp_peer_data_frame_t* frame, void* ctx) {
+    const int64_t entered_us = esp_timer_get_time();
     auto* service = static_cast<WebRtcDisplayService*>(ctx);
-    if (service != nullptr && frame != nullptr) service->HandleControlData(frame);
+    if (service != nullptr && frame != nullptr) service->HandleControlData(frame, entered_us);
     return ESP_PEER_ERR_NONE;
 }
 
-void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
+void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame, int64_t entered_us) {
     if (frame == nullptr || frame->data == nullptr || frame->size <= 0 || frame->size > 2048) {
         return;
     }
     ControlCallback callback;
     DisplayControlAckTracker::InstancePtr instance;
+    uint64_t timing_generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (stop_requested_ || frame->stream_id != control_stream_id_) return;
+        loop_diagnostics_.service_wait.Observe(entered_us, esp_timer_get_time());
         callback = control_callback_;
         instance = control_acks_->Current();
+        timing_generation = timing_generation_;
     }
     if (!callback) return;
     const std::string payload(reinterpret_cast<const char*>(frame->data),
@@ -442,6 +509,7 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
     }
     const cJSON* kind = cJSON_GetObjectItemCaseSensitive(root, "kind");
     const std::string kind_name = cJSON_IsString(kind) ? kind->valuestring : "";
+    bool is_move = false;
     if (kind_name == "pointer") {
         const cJSON* action = cJSON_GetObjectItemCaseSensitive(root, "action");
         const cJSON* x = cJSON_GetObjectItemCaseSensitive(root, "x");
@@ -457,6 +525,7 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
             return;
         }
         if (cJSON_IsString(action) && std::strcmp(action->valuestring, "move") == 0) {
+            is_move = true;
             const int64_t now = esp_timer_get_time();
             std::lock_guard<std::recursive_mutex> lock(mutex_);
             if (!control_acks_->IsCurrent(instance)) { cJSON_Delete(root); return; }
@@ -469,7 +538,18 @@ void WebRtcDisplayService::HandleControlData(esp_peer_data_frame_t* frame) {
         }
     }
     cJSON_Delete(root);
+    const uint16_t stream_id = frame->stream_id;
+    const int64_t dispatch_us = esp_timer_get_time();
     callback(payload, control_acks_->MakeReply(instance, sequence, kind_name));
+    const int64_t returned_us = esp_timer_get_time();
+    if (!is_move) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (timing_generation != timing_generation_) return;
+        if (control_timing_count_ < control_timings_.size()) {
+            control_timings_[control_timing_count_++] = {
+                timing_generation, sequence, stream_id, entered_us, dispatch_us, returned_us};
+        } else ++control_timing_dropped_;
+    }
 }
 
 bool WebRtcDisplayService::SendControlAck(const DisplayControlAckTracker::Ack& ack, int* error) {
@@ -558,23 +638,25 @@ void WebRtcDisplayService::PeerTask() {
         vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(1)));
     }
 
+    int64_t previous_loop_us = -1;
     while (true) {
+        const int64_t loop_us = esp_timer_get_time();
         esp_peer_handle_t peer = nullptr;
+        uint64_t timing_generation = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
+            loop_diagnostics_.service_wait.Observe(loop_us, esp_timer_get_time());
             if (stop_requested_ || peer_ == nullptr) {
                 break;
             }
             peer = peer_;
+            timing_generation = timing_generation_;
         }
-        int ret = ESP_PEER_ERR_NONE;
-        {
-            // The default implementation is driven by one thread. Serialize
-            // main_loop with signalling, data sends and close so no API call
-            // uses a handle while FinishStop is releasing it.
-            std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
-            ret = esp_peer_main_loop(peer);
-        }
+        if (previous_loop_us >= 0)
+            RecordDuration(&LoopDiagnostics::gap, previous_loop_us, loop_us, timing_generation);
+        previous_loop_us = loop_us;
+        // SDK main_loop, signalling, data sends and close retain one API lock.
+        const int ret = PumpPeer(peer);
         FlushControlAcks();
         // JPEG 编码回调只替换 pending latest frame；在 peer task 中发送，
         // 避免 JPEG worker 与 main_loop 争用 peer_api_mutex_。控制 ACK 仍
@@ -599,6 +681,7 @@ void WebRtcDisplayService::PeerTask() {
             FlushControlAcks();
         }
         MaybeLogTransportStats();
+        MaybeLogTimings();
         if (ret != ESP_PEER_ERR_NONE && ret != ESP_PEER_ERR_WOULD_BLOCK) {
             ESP_LOGW(TAG, "esp_peer_main_loop failed: %d", ret);
             RequestStop(ESP_PEER_STATE_CONNECT_FAILED);
@@ -606,6 +689,7 @@ void WebRtcDisplayService::PeerTask() {
         }
         vTaskDelay(pdMS_TO_TICKS(kPeerLoopDelayMs));
     }
+    MaybeLogTimings(true);
     FinishStop();
 }
 
@@ -615,6 +699,7 @@ void WebRtcDisplayService::QueueControlAck(const DisplayControlAckTracker::Insta
 }
 
 void WebRtcDisplayService::FlushControlAcks() {
+    ScopedDuration timing{*this, &LoopDiagnostics::ack};
     // Only ACKs are retried, never inputs. Keep FIFO ownership until SCTP accepts
     // the head; the next PeerTask loop pumps receive/close before trying again.
     std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
@@ -687,6 +772,7 @@ void WebRtcDisplayService::HandleJpeg(std::vector<uint8_t>&& jpeg, uint32_t sequ
 }
 
 bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
+    ScopedDuration timing{*this, &LoopDiagnostics::jpeg};
     const int64_t send_started_at_us = esp_timer_get_time();
     esp_peer_handle_t peer = nullptr;
     size_t chunk_size = kDefaultChunkSize;
@@ -787,11 +873,7 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
             // SendJpegChunks 现在由 PeerTask 执行；若底层仍报告缓存满，
             // 在同一发送状态机内主动跑一次 main_loop，避免等待 SCTP
             // 排空时只重试 send_data 而没有任何泵浦机会。
-            int loop_ret = ESP_PEER_ERR_NONE;
-            {
-                std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
-                loop_ret = esp_peer_main_loop(peer);
-            }
+            const int loop_ret = PumpPeer(peer);
             if (loop_ret != ESP_PEER_ERR_NONE && loop_ret != ESP_PEER_ERR_WOULD_BLOCK) {
                 stats_frames_dropped_.fetch_add(1, std::memory_order_relaxed);
                 stats_send_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -806,11 +888,7 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
         // 避免每帧额外一次 agent/SCTP 往返。跨多个分片时仍在分片之间
         // 泵浦，确保 pointer down/up 不被整帧发送阻塞。
         if (offset < jpeg.size()) {
-            int loop_ret = ESP_PEER_ERR_NONE;
-            {
-                std::lock_guard<std::recursive_mutex> api_lock(peer_api_mutex_);
-                loop_ret = esp_peer_main_loop(peer);
-            }
+            const int loop_ret = PumpPeer(peer);
             FlushControlAcks();
             if (control_acks_->HasPending()) {
                 // The partially sent latest-only frame may expire. Do not add
@@ -838,6 +916,70 @@ bool WebRtcDisplayService::SendJpegChunks(const std::vector<uint8_t>& jpeg) {
     }
     MaybeLogTransportStats();
     return true;
+}
+
+void WebRtcDisplayService::MaybeLogTimings(bool force) {
+    const int64_t now_us = esp_timer_get_time();
+    LoopDiagnostics stats;
+    std::array<ControlTiming, 16> controls;
+    size_t count = 0;
+    uint32_t dropped = 0;
+    uint64_t generation = 0;
+    bool periodic = false;
+    int64_t previous_log_us = 0;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        loop_diagnostics_.service_wait.Observe(now_us, esp_timer_get_time());
+        periodic = force || now_us >= timing_next_log_us_;
+        const uint64_t maximum = std::max({loop_diagnostics_.gap.maximum_us,
+            loop_diagnostics_.service_wait.maximum_us,
+            loop_diagnostics_.api_wait.maximum_us, loop_diagnostics_.sdk.maximum_us,
+            loop_diagnostics_.ack.maximum_us, loop_diagnostics_.jpeg.maximum_us});
+        if (!periodic && (maximum < kSlowPeerPhaseUs || now_us < timing_next_slow_log_us_)) return;
+        stats = loop_diagnostics_;
+        generation = timing_generation_;
+        previous_log_us = timing_previous_log_us_;
+        timing_next_slow_log_us_ = now_us + kTransportStatsIntervalUs;
+        if (periodic) {
+            controls = control_timings_;
+            count = control_timing_count_;
+            dropped = control_timing_dropped_;
+            control_timing_count_ = 0;
+            control_timing_dropped_ = 0;
+            loop_diagnostics_ = {};
+            timing_next_log_us_ = now_us + kTransportStatsIntervalUs;
+        }
+    }
+    const int64_t log_started_us = esp_timer_get_time();
+    const char* window = force ? "final" : periodic ? "periodic" : "slow";
+    ESP_LOGI(TAG, "peer timing: gen=%" PRIu64 " window=%s at_us=%" PRId64
+        " gaps=%" PRIu64 " gap_max_us=%" PRIu64 " gap_at_us=%" PRId64
+        " service_max_us=%" PRIu64 " service_at_us=%" PRId64
+        " pump_calls=%" PRIu64 " api_max_us=%" PRIu64 " api_at_us=%" PRId64
+        " sdk_max_us=%" PRIu64 " sdk_at_us=%" PRId64,
+        generation, window, now_us, stats.gap.samples, stats.gap.maximum_us, stats.gap.maximum_at_us,
+        stats.service_wait.maximum_us, stats.service_wait.maximum_at_us,
+        stats.sdk.samples, stats.api_wait.maximum_us, stats.api_wait.maximum_at_us,
+        stats.sdk.maximum_us, stats.sdk.maximum_at_us);
+    ESP_LOGI(TAG, "peer phases: gen=%" PRIu64 " window=%s"
+        " ack_calls=%" PRIu64 " ack_max_us=%" PRIu64 " ack_at_us=%" PRId64
+        " jpeg_calls=%" PRIu64 " jpeg_max_us=%" PRIu64 " jpeg_at_us=%" PRId64
+        " prior_log_us=%" PRId64 " control_samples=%u control_dropped=%u",
+        generation, window, stats.ack.samples, stats.ack.maximum_us, stats.ack.maximum_at_us,
+        stats.jpeg.samples, stats.jpeg.maximum_us, stats.jpeg.maximum_at_us, previous_log_us,
+        static_cast<unsigned>(count), static_cast<unsigned>(dropped));
+    // Buffered device timestamps are captured at their stages, not at this
+    // later log flush. SDK/ACK phases nested in JPEG are inclusive, not additive.
+    for (size_t i = 0; i < count; ++i) {
+        const auto& sample = controls[i];
+        ESP_LOGI(TAG, "control timing: gen=%" PRIu64 " seq=%u stream=%u"
+            " entered_us=%" PRId64 " dispatch_us=%" PRId64 " returned_us=%" PRId64,
+            sample.generation, static_cast<unsigned>(sample.sequence),
+            static_cast<unsigned>(sample.stream_id), sample.entered_us, sample.dispatch_us, sample.returned_us);
+    }
+    const int64_t log_finished_us = esp_timer_get_time();
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (generation == timing_generation_) timing_previous_log_us_ = log_finished_us - log_started_us;
 }
 
 void WebRtcDisplayService::MaybeLogTransportStats() {

@@ -218,6 +218,36 @@ sanitizers run through `tools/run_release_host_checks.sh`. See the
 [overlay contract and commands](../patches/esp_websocket_client/1.8.0/README.md).
 Real TLS handshakes and device reconnect behavior remain hardware gates.
 
+## Screen JPEG allocation boundary
+
+`DisplayService::EncodeJpeg` uses a task-local scope around the pinned
+`esp_new_jpeg` 0.6.1 encoder. Four allocator entry points are linked through
+wrappers: `jpeg_calloc`, `jpeg_calloc_inner`, `jpeg_calloc_align` and
+`jpeg_calloc_align_inner`. Inside the scope they require PSRAM/8BIT and return null
+on allocation failure; they do not fall back to internal SRAM. Builds with heap-abort
+enabled are rejected by compilation and preflight. Outside the scope
+they forward the original arguments and allocation policy. Existing codec free
+functions remain authoritative, and `task_enable=false` is preserved.
+
+This boundary covers those four codec entries only. DisplayService's RGB888 and
+output scratch allocations, its compact JPEG vector, Camera, decoders and other
+tasks retain their existing policies. The scope is constructed before the encoder
+owner and ends after cleanup; its trivial native TLS flag lives in each task's
+aligned TLS area. Record the final ELF's per-task alignment change when comparing
+resource measurements.
+
+`cmake/screen_jpeg_allocator.cmake` runs the ABI preflight and mandatory final
+ELF/map audit. It pins the target, IDF version, archive, headers, component manifest,
+lock identity and allocator signatures, and verifies retained codec call sites,
+wrappers and native TLS. The audit does not modify the flashable ELF or managed
+archive. A successful preflight alone does not pass the link gate. Dependency
+upgrades require a new ABI/call-site review, not just replacement hashes.
+
+Host tests, failure mutations and audit details are in
+[screen JPEG tests](../tests/screen_jpeg_allocator/README.md). Real codec output,
+DMA/PSRAM recovery, TLS concurrency and task-stack headroom require separately
+identified hardware evidence in [media browsing](media-browsing.md).
+
 ## Codec validation
 
 Resolve the pinned dependencies through the normal [firmware build](firmware-download.md) first.

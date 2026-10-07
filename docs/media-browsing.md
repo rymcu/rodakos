@@ -2,6 +2,8 @@
 
 Photos 和 Files 将扫描失败与正常空列表分别显示。失败时清除旧列表和部分结果，保留明确错误及重试入口；缺失服务、SD 不可用、目录不可用和一般读取失败不再统一显示为空目录。没有足够错误信息时使用一般失败提示，不推断为文件损坏或内存不足。
 
+当前设备包为 021（`20261007-134645`）。屏幕 JPEG 作用域内的 PSRAM 分配已取得首帧净 DMA 占用改善和 screen-first Camera 启动证据，但 Camera 退出停在 STREAMOFF 并需要重启；复位后仍有 3.2–3.5 秒控制迟到及拒绝。发布保持 **NO_GO**，见[021 实测](#021-屏幕-jpeg-作用域-psram-分配与实测边界)。
+
 ## 目录扫描
 
 Photos 通过 `ImageLibrary::ScanPhotoLibrary` 先读取根目录，确认可选的 `/photos`、`/DCIM` 是否存在，再按原有深度扫描相册。相册为空时仍使用根目录扫描回退；任一受扫描目录读取失败都会清除部分集合并显示错误，不使用 `Exists=false` 掩盖 I/O 失败。Photos 保留独立的列表和全屏页头。
@@ -24,7 +26,7 @@ PNG 完整读取后直接通过真实 `lodepng_decode32` 生成像素，并由 L
 - `tests/file_manager_ui` 编译生产 Files、PhoneAppHost 与真实 LVGL；FileService 和图像结果为可控替身，单独验证目录/预览状态、路径、操作和释放顺序。
 - `tests/camera_capture` 使用生产 FileService 与真实临时主机目录，验证未挂载/缺失目录错误经过 adapter 传播；底层目录读取故障另由 `tests/file_directory` 覆盖。
 
-测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–019 的软件、启动与有限设备证据分别见下节，不关闭这些门禁。
+测试截图中的字体/图标为 host 替身，不证明设备字体或 GT911 实体触摸。软件工作由 [#35](https://github.com/rymcu/rodakos/issues/35) 跟踪；真实 SD 缺失/拔卡/慢卡、功能恢复、任意 OOM、并发和资源归还、八小时 soak 由 [#28](https://github.com/rymcu/rodakos/issues/28) 保留。正常读取关闭不证明掉电持久性；012–021 的软件、启动与有限设备证据分别见下节，不关闭这些门禁。
 
 ## 2026-10-07 初始软件验证
 
@@ -135,3 +137,64 @@ RemoteInput **30 项 Debug/ASan/UBSan/leak**、ACK **21 项 ASan**、Home **43 �
 下一次压力 Retry 仍触发桌面 timeout。设备在同一日志时间 **187,345 ms** 才处理 down99/up100/disable101；down/up 均拒绝 `control_disabled`（**3,870 / 3,869 ms**），disable101 accepted（**868 ms**）。没有第三次 PNG 加载，取消动作语义保持，但端到端时延没有收口。串口入口日志到达主机分别为发送后 **3,861 / 3,860 / 857 ms**，回执只晚于对应日志到达 **9–11 ms**，日志未记录 `control ACK retry`。这将主要等待范围收窄到 controller 入口之前，仍需进一步拆分 SDK、网络和调度；USB/日志缓冲包含在主机到达时间内，不能把它当成精确网络包时延，也不能归为发送端 ACK 有界重试或重新执行了点击。
 
 原始证据为 Rodak `.codex-temp/resource-window-019/serial.log`、`serial-timing.jsonl`、`control-final.json`、`result.json` 及 `device-final.json`。已记录周期 JPEG 合计 **148 attempts / 148 encoded / 0 failed**，不是完整逐帧账本；窗口无 panic/abort/reboot，收尾未另行重启。最终回到 Home 并停止 screen/remote，COM3 已释放；原 ID / bound / tokenVersion=4 保持、MQTT connected、voice inactive。两条 MQTT health 的 internal free **33,159 / 33,071 B**、largest **7,680 B**，PSRAM free **2,553,000 / 2,553,032 B**、largest **1,343,488 B**；MQTT stack_min **2,956 B**，wake enabled/listening=1、supervisor stack_min **2,424 B**，internal 历史最低 **467 B**。最终内部连续块仍低于 **8 KiB** soak 门槛；取消误点击的定向通过不覆盖控制迟到、018 Camera 退出故障、DMA 余量、物理触摸和全并发/soak 门禁。
+
+## 020 控制时延与并发资源诊断
+
+历史 020 未更改 JPEG 分配策略。ACK/timing28 和生产 MQTT57 分别通过 Debug/ASan；
+纯 Photos 在没有先运行 Camera 时复现约 7.9 秒回执，三条消息集中进入设备回调，
+回调各约 1.5 ms，对应 peer 循环/锁没有秒级阻塞。下一步定位 UDP/SCTP 交付，
+不能据此扩大超时或撤销可靠有序与授权语义。
+
+Camera 预览 77.997 秒/1,197 帧并完整退出，但启动屏幕流时出现 AES 分配失败和
+MQTT 断线后恢复；静态 Photos 后续首帧未就绪。最终内部连续块仍为 7,680 B，
+原绑定/tokenVersion=4 保持，NO_GO 不变。包身份、资源值和未执行项见
+[020 发布记录](ota-release-readiness.md#2026-10-07-peer-timing-diagnostics-020)及
+[联合媒体证据](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md#020-控制入口分段与资源失败)。
+
+## 021 屏幕 JPEG 作用域 PSRAM 分配与实测边界
+
+源码 `6cb19f5bd3b0a50e30d6047c7edfc5673be876bc`，包 `20261007-134645`，taskNo
+`media-jpeg-psram-021`，version `0.1.2-dev.1`；main **7,125,712 B**，SHA-256
+**`702cdb576c2fce3092b0e8857439afcbbc77dd3f561b2c200d2ad65132d98d8b`**，ZIP SHA-256
+**`d7259288b9baed0c6cc223dcf7dd6e0eda8761de81348815a9c9afa5530eda3b`**。
+Build3、最终 ELF 门禁、VerifyOnly、保留 NVS 的刷写及启动确认通过；原开发签名根和五项
+immutable 制品保持，普通 production flavor，Home 测试人口及 fault injection OFF。
+
+`ScreenJpegAllocationScope` 仅在 `DisplayService::EncodeJpeg` 当前任务中把四个 JPEG
+allocator 路由至 PSRAM；不足时返回失败，不回退 INTERNAL。scope 外保留原策略，Camera/
+decoder 不建立该 scope，`task_enable=false` 不变。DisplayService **30**、Home **43**、
+allocator **10** 项分别通过 Debug/ASan/UBSan/leak；检查器 **26** 项、真实最终 ELF/map
+正向与 allocator bypass 负对照通过独立审查。native TLS 对齐总量仍为 **32 B/任务**，
+相对冻结 020 ELF 增量 **0 B**。这些不构成全量软件或硬件并发通过。
+
+首次屏幕 JPEG 的同 seq2 四阶段 DMA free 为 **14,527 → 14,527 → 14,563 → 14,563 B**，
+largest 均为 **8,192 B**；open 时 PSRAM 净减少 **38,688 B**，close 时净增加同量。
+这组点采样支持该帧 open 没有 DMA-free 净下降，但共享堆包含并发活动，不是排他的分配计量；
+`JPEG heap min` 仍为逐列独立最低值，不能相减为同帧成本。
+
+屏幕先开后，Camera 在 logger **69,689 ms** 成功启动，准入 DMA free/largest 为
+**32,311 / 16,384 B**，预览截图正常。切换 Photos 时，Photos 完成初始化，旧 Camera
+却停在 logger **133,299 ms / `CloseStream: STREAMOFF begin`**；随后串口静默
+**127.583 秒**，没有 STREAMOFF complete、device release 或 preview stopped，最终执行
+受控 RTS 重启。此为 **Camera 退出与 Photos 切换失败**，不能把初始化页面或旧截图当成功。
+第一窗口没有 pointer TX，不包含 Photos 点击/取消验收；该次启动的 internal 历史最低为 **59 B**。
+
+复位后的独立窗口中，A3 首次打开和一次 Retry 分别在 **188 / 187 ms** 解码成功。
+后续 down124/up125 在 **3,535 / 3,533 ms** 后被拒，没有多一次 PNG load。
+held down128 在 **117 ms** 获准，取消后的 up129 在 **22 ms** 被拒，同样没有多一次 load。
+重新授权131后，down132/up133仍在 **3,197 / 3,193 ms** 超时后被拒；因此没有取得
+“重新授权后正常 Retry 恢复”的证据。021 没有修复 UDP/SCTP 交付迟到或静态页面首帧门禁。
+
+收尾在 logger **170,618 ms** 回到 Home，停止屏幕/远控、恢复诊断 hooks，记录至
+**269,818 ms**（约99秒收尾观察）并释放 COM3。最终 MQTT health（246,478 ms）为
+internal free/largest **21,083 / 8,192 B**，DMA **19,307 / 8,192 B**，PSRAM
+**2,569,488 / 1,507,328 B**，MQTT stack_min **2,772 B**；main（244,838 ms）为
+internal **21,307 / 8,192 B**。wake（243,688 ms）enabled/listening=1、supervisor
+stack_min **2,424 B**，该次启动的 internal 历史最低 **651 B**。原设备 ID、bound、tokenVersion=4
+保持，MQTT 在线、voice 连接 inactive。重启前59 B与重启后651 B属不同历史，不能写成最低值改善。
+
+原始证据为 Rodak `.codex-temp/resource-window-021/first-window/` 冻结副本及
+`after-reset/` 的 `result.json`、控制日志和 serial/device final；127.583秒最终静默取自
+`first-window/stall-final.json`，不使用早期49秒观察替代。恢复窗口不覆盖前一窗口的停滞。
+021 只取得限定的 JPEG/DMA 改善，Camera STREAMOFF、迟到控制、静态首帧、任意 OOM/音频/TLS
+并发与八小时 soak 均保持开放，发布 **NO_GO**。

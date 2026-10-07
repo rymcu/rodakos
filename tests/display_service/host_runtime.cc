@@ -1,4 +1,5 @@
 #include "host_runtime.h"
+#include "host_heap.h"
 #include "esp_heap_caps.h"
 #include "esp_jpeg_enc.h"
 #include "esp_lvgl_port.h"
@@ -28,7 +29,8 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using rodakos_test::display_service_host::Resources;
 struct Task { std::thread thread; };
-struct Allocation { void* pointer = nullptr; size_t bytes = 0; };
+struct Allocation { void* pointer = nullptr; size_t bytes = 0; unsigned caps = 0; };
+struct HostEncoder { void* parts[3]; };
 struct Async { void (*callback)(void*) = nullptr; void* data = nullptr; };
 std::mutex host_mutex;
 std::recursive_timed_mutex ui_mutex;
@@ -44,6 +46,7 @@ bool new_worker_only = false;
 size_t heap_size = 0, heap_count = 0;
 bool heap_after_open = false;
 bool fail_open = false, fail_process = false, allow_tasks = true, allow_async = true;
+bool throw_process = false, reject_codec_external = false;
 size_t encoded_size = 4096;
 thread_local Task* current_task = nullptr;
 thread_local char external_task;
@@ -98,6 +101,7 @@ void Reset() {
     new_nth = new_count = heap_size = heap_count = 0;
     new_time_count = process_time_count = 0;
     new_worker_only = heap_after_open = fail_open = fail_process = false;
+    throw_process = reject_codec_external = false;
     encoded_size = 4096;
     allow_tasks = allow_async = true;
     async_calls = {};
@@ -120,9 +124,12 @@ void ClearFailures() {
     new_size.store(0);
     new_count = heap_count = 0;
     fail_open = fail_process = false;
+    throw_process = reject_codec_external = false;
 }
 void FailEncoderOpen(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); fail_open = fail; }
 void FailEncoderProcess(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); fail_process = fail; }
+void ThrowEncoderProcess(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); throw_process = fail; }
+void RejectCodecExternal(bool fail) { std::lock_guard<std::mutex> lock(host_mutex); reject_codec_external = fail; }
 void SetEncodedSize(size_t bytes) { std::lock_guard<std::mutex> lock(host_mutex); encoded_size = bytes; }
 void AllowTaskCreation(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_tasks = allow; }
 void AllowAsync(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_async = allow; }
@@ -203,8 +210,9 @@ void vTaskDelay(TickType_t ticks) { std::this_thread::sleep_for(std::chrono::mil
 void vTaskDeleteWithCaps(TaskHandle_t) {}
 int64_t esp_timer_get_time() { return Now(); }
 
-void* heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned) {
+void* heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned caps) {
     std::lock_guard<std::mutex> lock(host_mutex);
+    if (bytes == 0) return nullptr;
     if (heap_count && bytes == heap_size && (!heap_after_open || resources.encoders != 0)) {
         --heap_count;
         ++resources.heap_failures;
@@ -214,11 +222,38 @@ void* heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned) {
     if (posix_memalign(&pointer, alignment, bytes) != 0) return nullptr;
     auto slot = std::find_if(allocations.begin(), allocations.end(), [](const Allocation& value) { return value.pointer == nullptr; });
     if (slot == allocations.end()) std::abort();
-    *slot = {pointer, bytes};
+    *slot = {pointer, bytes, caps};
     ++resources.buffers;
     resources.bytes += bytes;
     resources.peak_bytes = std::max(resources.peak_bytes, resources.bytes);
     return pointer;
+}
+void NoteRealCall(size_t index, size_t, size_t, int) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    ++resources.original_allocator_calls.at(index);
+}
+unsigned AllocationCaps(void* pointer) {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    for (const auto& allocation : allocations)
+        if (allocation.pointer == pointer) return allocation.caps;
+    return 0;
+}
+extern "C" void* heap_caps_aligned_calloc(size_t alignment, size_t n, size_t size, unsigned caps) {
+    {
+        std::lock_guard<std::mutex> lock(host_mutex);
+        if (caps & MALLOC_CAP_SPIRAM) {
+            ++resources.codec_external_calls;
+            if (reject_codec_external) return nullptr;
+        } else ++resources.codec_internal_calls;
+    }
+    if (!alignment || (alignment & (alignment - 1)) || n == 0 || size == 0 || size > SIZE_MAX / n)
+        return nullptr;
+    auto* pointer = heap_caps_aligned_alloc(std::max(alignment, sizeof(void*)), n * size, caps);
+    if (pointer) std::memset(pointer, 0, n * size);
+    return pointer;
+}
+extern "C" void* heap_caps_calloc(size_t n, size_t size, unsigned caps) {
+    return heap_caps_aligned_calloc(alignof(std::max_align_t), n, size, caps);
 }
 void heap_caps_free(void* pointer) {
     if (!pointer) return;
@@ -234,11 +269,21 @@ size_t heap_caps_get_free_size(unsigned) { return 1024 * 1024; }
 size_t heap_caps_get_largest_free_block(unsigned) { return 512 * 1024; }
 
 jpeg_error_t jpeg_enc_open(jpeg_enc_config_t* config, jpeg_enc_handle_t* output) {
-    std::lock_guard<std::mutex> lock(host_mutex);
-    if (fail_open) return -1;
+    { std::lock_guard<std::mutex> lock(host_mutex); if (fail_open) return -1; }
     if (config->width != 320 || config->height != 240 || config->task_enable) return -1;
-    *output = std::malloc(1);
-    if (!*output) return -1;
+    auto* encoder = static_cast<HostEncoder*>(jpeg_calloc_inner(
+        rodakos_test::display_service_host::kCodecContextBytes));
+    if (!encoder) return -1;
+    encoder->parts[0] = jpeg_calloc(2, 64);
+    if (encoder->parts[0]) encoder->parts[1] = jpeg_calloc_align_inner(1024, 16);
+    if (encoder->parts[1]) encoder->parts[2] = jpeg_calloc_align(2048, 32);
+    if (!encoder->parts[2]) {
+        for (auto* part : encoder->parts) jpeg_free(part);
+        jpeg_free(encoder);
+        return -1;
+    }
+    *output = encoder;
+    std::lock_guard<std::mutex> lock(host_mutex);
     ++resources.opens;
     ++resources.encoders;
     return JPEG_ERR_OK;
@@ -247,6 +292,7 @@ jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t encoder, const uint8_t* input, i
                               uint8_t* output, int output_capacity, int* output_size) {
     std::lock_guard<std::mutex> lock(host_mutex);
     ++resources.processes;
+    if (throw_process) throw std::bad_alloc();
     resources.last_output_capacity = static_cast<size_t>(output_capacity);
     const auto pack_rgb = [](const uint8_t* pixel) {
         return (static_cast<uint32_t>(pixel[0]) << 16) |
@@ -268,9 +314,14 @@ jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t encoder, const uint8_t* input, i
     return JPEG_ERR_OK;
 }
 jpeg_error_t jpeg_enc_close(jpeg_enc_handle_t encoder) {
+    // 零大小探针不改变工作区峰值；原 allocator 计数可发现 scope 过早退出。
+    if (jpeg_calloc_inner(0) != nullptr) std::abort();
+    auto* workspace = static_cast<HostEncoder*>(encoder);
+    for (auto* part : workspace->parts) jpeg_free_align(part);
+    jpeg_free(workspace);
     std::lock_guard<std::mutex> lock(host_mutex);
     if (!encoder || !resources.encoders) std::abort();
-    std::free(encoder);
+    ++resources.close_scope_checks;
     --resources.encoders;
     ++resources.closes;
     return JPEG_ERR_OK;

@@ -118,6 +118,12 @@ jobs:
               2>&1 | tee "$RODAKOS_CHECKS/$suite-tests.log"
           done
 
+      - name: Verify JPEG allocator negative controls
+        run: |
+          python3 tests/screen_jpeg_allocator/run_negative.py \
+            --output "$RODAKOS_CHECKS/jpeg-negative" \
+            2>&1 | tee "$RODAKOS_CHECKS/jpeg-negative.log"
+
       - name: Upload host evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -127,6 +133,8 @@ jobs:
             host-check-results/*.log
             host-check-results/**/Testing/Temporary/*.log
             host-check-results/**/production-sources.json
+            host-check-results/jpeg-negative/*.json
+            host-check-results/jpeg-negative/*.log
           if-no-files-found: warn
           retention-days: 14
 

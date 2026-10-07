@@ -26,9 +26,17 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest package is 019, with a cancelled-gesture correction, successful guarded refresh/boot
-and a targeted device cancellation pass. End-to-end control timeouts and screen-first DMA failure
-still occurred. See
+The latest package is 021. With scoped JPEG PSRAM allocation, the first observed frame shows
+no net DMA loss during open, and screen-first Camera starts. Camera then stalls at STREAMOFF
+begin for 127.583 seconds and requires a controlled reset. The separate recovery window
+still has late rejected inputs and no successful post-reenable Retry. Final internal largest
+is 8,192 bytes, which does not establish sustained headroom or close the failed lifecycle gate.
+Release is **NO_GO**; see [021 validation](#2026-10-07-scoped-screen-jpeg-psram-validation-021).
+The previous 020 independently reproduces pre-callback input delay, AES allocation failure
+during Camera/screen concurrency, and static-page first-frame failure; retain its
+[diagnostic evidence](#2026-10-07-peer-timing-diagnostics-020).
+Package 019 passed targeted device cancellation checks, while end-to-end timeouts and
+screen-first DMA failure remained. See
 [cancelled-gesture correction](#2026-10-07-cancelled-gesture-correction-019).
 Package 018 retains its Camera-exit stall requiring controlled reset and a separate post-reset
 window with delayed/rejected control replies. See
@@ -84,10 +92,10 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | MQTT volume effects / lifecycle              | Production helper and actual UnifiedMqttService: correlation, ordering, authority ledger, real connection epoch, SDK callback/queue, Stop, refresh, unbind and scoped receipt publishing | Eighteen helper and fourteen service host regressions pass; hardware unverified |
 | RGB light patches / lifecycle               | Real LightService, board adapter, MQTT callback/worker and receipts: atomic merge/commit, driver failures, 64-result eviction, authority versions and cancellation | Thirteen native driver and seventeen MQTT light regressions pass; hardware unverified |
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
-| Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants, original-peer ACK retry and cancellation without synthetic click | 019 input 30 pass Debug/ASan, ACK 21 / Home 43 pass ASan. Device held-down cancellation caused no extra PNG load, and reenable worked; a later pressure click still timed out before the controller entry. Wider input/physical gates remain open |
+| Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants, original-peer ACK retry and cancellation without synthetic click | 021 held-down cancellation causes no extra PNG load, but the next reenabled Retry still times out at 3.197/3.193 s and is rejected. Earlier 019/020 software and device evidence retains its own identity. End-to-end delivery, static first frame and wider physical gates remain open |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
 | Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
-| Media PNG / display allocation | PNG ownership/inflate headroom, Camera frame release and selected allocation recovery, display capture/JPEG diagnostics | 019 screen-first DMA failure persists; after recovery, a 56.779 s / 792-frame Camera exit and two A3 loads passed. 018 exit stall remains unresolved, and final 7,680-byte internal largest misses the 8 KiB soak gate. Broader OOM/concurrency remains open |
+| Media PNG / display allocation | PNG ownership/inflate headroom, Camera frame release, scoped screen JPEG PSRAM allocation and final ELF gate | 021 Display 30 / Home 43 / allocator 10 pass Debug/ASan; checker 26 and real ELF positive/bypass-negative checks pass. First-frame open DMA net loss is zero and screen-first Camera starts, but STREAMOFF stalls for 127.583 s before reset. Two post-reset A3 loads pass; final 8,192-byte internal largest does not close OOM/concurrency or soak |
 | Other resource failures                     | Physical image/display coexistence, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                               | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
 | Signed appearance / display peers           | COM3 revision 14 and six display sessions are hardware-verified                                                                          | Functional gate passed; release limits remain |
@@ -875,3 +883,104 @@ The 2026-10-06 run against source baseline `2ed1e8c` plus the collector changes 
 Before the fix, two new regression cases incorrectly returned `pass-observed` for eight hours of
 health logs with missing or repeated uptime. The correction does not change the production-key,
 physical power-cut, complete LVGL exhaustion, or eight-hour hardware gates above.
+
+## 2026-10-07 peer timing diagnostics 020
+
+Source `92eb23878c7611ce4d06154851ad90cb50f386ec`, package `20261007-130521`,
+task `media-peer-timing-020`, version `0.1.2-dev.1`:
+
+- Main: **7,125,184 bytes**, SHA-256 `cf64d594ce3e8d785ecc2600d39ec15b3c55cd6d27067d06aec08592127d46bb`.
+- ZIP SHA-256: `f71e66f6dd66ff2b2f8610b891d62eca3c43dce16bfa5567806571eccd0c2b1c`.
+- Five immutable assets match 019; original development signing root retained. VerifyOnly,
+  NVS-preserving flash and Recovery/main/Home/local OTA confirmation passed.
+- ACK/timing 28 and production MQTT command/stream 57 each pass Debug and ASan/UBSan/leak;
+  independent source review and ESP-IDF 6.0.2 build pass. This is diagnostic software,
+  not a change to timeout, authorization, reliable ordering or JPEG allocation.
+
+Pure Photos reproduced 7,908/7,904 ms rejected replies and the later disable's 4,900 ms
+reply. Three device callback entries span only 3.092 ms; each entry-to-return is about
+1.5 ms. The relevant independent maxima are loop gap 80.100 ms, SDK 62.950 ms,
+service wait 24 us and API wait 6 us. No 100-ms MQTT slow-gate sample appeared.
+This narrows the measured wait to delivery before the application callback, not a proven
+UDP/WiFi/DTLS/SCTP cause. Browser/USB arrival/device clocks are distinct; nested phase
+maxima are not additive. Camera is not required to reproduce this timeout.
+
+Camera then ran 77.997 seconds / 1,197 frames and completed all exit stages, but a screen
+start during preview caused AES allocation failure, MQTT queue drops and reconnect.
+After Camera, static Photos produced one pre-open dropped frame and no usable screen;
+this failed attempt did not exercise remote pointer cancellation. Final Home/screen-off
+MQTT reports internal free 30,203 B / largest 7,680 B and PSRAM free 2,550,776 B /
+largest 2,359,296 B; historical internal minimum is 151 B. Original binding/token4
+remain, MQTT is connected, the voice connection is inactive and wake listening remains enabled; COM3 is released. **NO_GO** remains.
+
+Full sequence and boundaries are in the [media record](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md#020-控制入口分段与资源失败).
+Raw evidence: Rodak `.codex-temp/resource-window-020/`; build/package/verify/flash logs:
+`build/logs/media-peer-timing-020-*.log`. Neither this run nor its separate allocator
+proposal closes 018's stall, arbitrary OOM, physical touch/audio or eight-hour soak.
+
+## 2026-10-07 scoped screen JPEG PSRAM validation 021
+
+Source `6cb19f5bd3b0a50e30d6047c7edfc5673be876bc`, package `20261007-134645`,
+task `media-jpeg-psram-021`, version `0.1.2-dev.1`:
+
+- Main: **7,125,712 bytes**, SHA-256 `702cdb576c2fce3092b0e8857439afcbbc77dd3f561b2c200d2ad65132d98d8b`.
+- ZIP SHA-256: `d7259288b9baed0c6cc223dcf7dd6e0eda8761de81348815a9c9afa5530eda3b`.
+- Original development signing root and all five immutable assets are retained. Production
+  flavor, Home hardware-test population and fault injection OFF. ESP-IDF Build3, final
+  ELF/map gate, VerifyOnly, NVS-preserving flash and Recovery/main/Home/local OTA confirmation pass.
+- DisplayService **30**, Home **43** and allocator **10** cases each pass Debug/ASan/UBSan/leak;
+  checker **26** cases and independently reviewed real final-ELF positive/bypass-negative
+  checks pass. Native TLS is **32 aligned bytes per task**, delta **0** against frozen 020.
+  These focused checks do not replace 018's separately identified full host run.
+
+Only `DisplayService::EncodeJpeg` enters the task-local PSRAM-only allocation scope. All four
+codec allocator entrances are covered; PSRAM failure does not fall back to INTERNAL. Camera/
+decoder calls outside the scope retain their original behavior and `task_enable=false` stays
+unchanged. Final-link inspection verifies actual calls and archive identity; it is not a
+whole-program control-flow proof or a hardware resource guarantee.
+
+In the first hardware window, JPEG seq2 has same-frame DMA free samples of
+**14,527 → 14,527 → 14,563 → 14,563 bytes**, with largest **8,192 bytes** throughout.
+Open decreases sampled PSRAM free by **38,688 bytes**, and close increases it by the same amount.
+These shared-heap net samples support no DMA-free loss at this frame's open, not exclusive
+allocator accounting. Periodic `JPEG heap min` columns remain independent minima.
+
+With screen already active, Camera starts at logger **69,689 ms**, with DMA free/largest
+**32,311 / 16,384 bytes**, and its preview screenshot is normal. Switching to Photos initializes
+the new page, but Camera teardown stops at **133,299 ms / `CloseStream: STREAMOFF begin`**.
+The final observation records **127.583 seconds** of serial silence; no STREAMOFF completion,
+device release or preview-stopped marker follows. A controlled RTS reset is required.
+This is a **failed Camera exit and Photos transition**, not a successful exit inferred from
+page initialization or a previously captured image. The first window contains no pointer TX,
+so it does not verify Photos clicks/cancellation. Its boot's historical internal minimum is **59 bytes**.
+
+The separate post-reset window loads A3 successfully twice, in **188/187 ms**. A later Retry's
+down124/up125 are rejected after **3,535/3,533 ms**, with no additional PNG load. Held down128
+is accepted in **117 ms**; cancellation rejects up129 in **22 ms** without an extra load.
+After reenable131, down132/up133 still time out and are rejected after **3,197/3,193 ms**.
+There is no successful normal Retry after that reenable. The allocation change does not fix
+UDP/SCTP delivery latency or establish static-page first-frame availability.
+
+The recovery window returns Home at logger **170,618 ms**, stops screen/remote control,
+restores diagnostic hooks and captures through **269,818 ms** (about 99 seconds of closing
+observation); COM3 is released. Final MQTT health at **246,478 ms** reports internal
+free/largest **21,083 / 8,192 bytes**, DMA **19,307 / 8,192 bytes**, PSRAM
+**2,569,488 / 1,507,328 bytes**, and MQTT stack minimum **2,772 bytes**. Main health at
+244,838 ms reports internal **21,307 / 8,192 bytes**. Wake at 243,688 ms remains enabled/listening,
+with supervisor stack minimum **2,424 bytes** and this boot's historical internal minimum
+**651 bytes**. The original device ID, bound state and tokenVersion=4 remain; MQTT is online
+and the voice connection is inactive. The first boot's 59-byte and recovery boot's 651-byte
+minima are separate histories, not evidence of an improvement in a shared low-water mark.
+
+**NO_GO** remains. Recovery after reset does not erase the first-window stall. Camera STREAMOFF,
+late control, static first frame, arbitrary OOM, full audio/TLS/media concurrency, physical touch
+and eight-hour soak remain open. The bounded first-frame DMA observation and screen-first
+Camera startup are accepted only within this identified package's measured window.
+
+Raw evidence: Rodak `.codex-temp/resource-window-021/first-window/` frozen inputs and
+`after-reset/` final result/control/serial/device files. The final silence duration comes from
+`first-window/stall-final.json`, superseding the earlier 49-second observation without erasing
+it. Build/package/verify/flash logs are `build/logs/media-jpeg-psram-021-*.log`; linked evidence
+and host source hashes are in Rodak `.codex-temp/jpeg-allocator-020/integrated/` (the directory
+name reflects its proposal origin, not a claim that the change was present in 020).
+See [media browsing](media-browsing.md#021-屏幕-jpeg-作用域-psram-分配与实测边界).

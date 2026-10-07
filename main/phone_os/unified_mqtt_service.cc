@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <inttypes.h>
 #include <limits>
 #include <memory>
 #include <new>
@@ -571,11 +572,24 @@ void UnifiedMqttService::WorkerLoop() {
         }
         uint32_t generation = 0;
         bool connected_work = false;
+        ControlGateTiming control_timing;
+        bool log_control_timing = false;
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
             connected_work = connected_pending_;
             generation = connected_pending_generation_;
             connected_pending_ = false;
+            log_control_timing = control_gate_timing_pending_;
+            control_timing = control_gate_timing_;
+            control_gate_timing_pending_ = false;
+        }
+        if (log_control_timing) {
+            ESP_LOGW(TAG, "control gate slow: callback=%" PRIu64 " lease=%" PRIu64
+                " started_us=%" PRId64 " acquired_us=%" PRId64
+                " checked_us=%" PRId64 " current=%d",
+                control_timing.callback_no, control_timing.instance_nonce,
+                control_timing.started_us, control_timing.acquired_us,
+                control_timing.checked_us, control_timing.current);
         }
         if (connected_work) {
             OnConnected(generation);
@@ -1770,10 +1784,25 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                     WebRtcDisplayService::Config config;
                     configure(config, 20000);
                     auto on_control = [this, lease](const std::string& data, DisplayControlReply reply) {
+                        static std::atomic<uint64_t> next_callback{0};
+                        const uint64_t callback_no = next_callback.fetch_add(1, std::memory_order_relaxed) + 1;
+                        const int64_t started_us = esp_timer_get_time();
                         bool current = false;
                         {
                             std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                            const int64_t acquired_us = esp_timer_get_time();
                             current = IsStreamPublicationCurrentLocked(lease, false, true);
+                            const int64_t checked_us = esp_timer_get_time();
+                            if (!data.empty() && checked_us - started_us >= 100000 &&
+                                !control_gate_timing_pending_ && checked_us >= control_gate_next_log_us_) {
+                                // Peer callbacks retain the SDK API lock. Only snapshot here;
+                                // the existing MQTT worker emits the bounded sample outside locks.
+                                control_gate_timing_ = {
+                                    callback_no, lease->instance_nonce, started_us, acquired_us,
+                                    checked_us, current};
+                                control_gate_timing_pending_ = true;
+                                control_gate_next_log_us_ = checked_us + 5000000;
+                            }
                         }
                         // Teardown belongs to its captured owner even after revocation.
                         // The UI compares that lease before clearing control state.

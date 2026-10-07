@@ -601,3 +601,165 @@ RODAK_TEST("display ACK saved reply safely expires after full service destructio
         CheckFrame(frames[0], fixture.peer, 53, 1, true);
     }
 }
+
+RODAK_TEST("peer timing separates real API wait from SDK work without bypassing its lock") {
+    Fixture fixture;
+    fixture.Start();
+    host::SetMainLoopCostUs(200000);
+    std::unique_lock<std::recursive_mutex> api_lock(fixture.service.peer_api_mutex_);
+    const size_t reads = host::ClockReads();
+    int result = ESP_PEER_ERR_FAIL;
+    std::thread pump([&] { result = fixture.service.PumpPeer(fixture.peer); });
+    const bool waiting = host::WaitForClockReads(reads + 3);
+    host::AdvanceTimeUs(350000);
+    api_lock.unlock();
+    pump.join();
+    RODAK_CHECK(waiting);
+    RODAK_CHECK_EQ(result, ESP_PEER_ERR_NONE);
+    const auto stats = fixture.service.loop_diagnostics_;
+    RODAK_CHECK_EQ(stats.api_wait.samples, 1u);
+    RODAK_CHECK(stats.api_wait.maximum_us >= 350000);
+    RODAK_CHECK_EQ(stats.sdk.samples, 1u);
+    RODAK_CHECK(stats.sdk.maximum_us >= 200000);
+    RODAK_CHECK(stats.sdk.maximum_us < 300000);
+    RODAK_CHECK(stats.api_wait.maximum_at_us < stats.sdk.maximum_at_us);
+}
+
+RODAK_TEST("peer timing separates service lock wait from API wait and SDK work") {
+    Fixture fixture;
+    fixture.Start();
+    host::SetMainLoopCostUs(200000);
+    std::unique_lock<std::recursive_mutex> service_lock(fixture.service.mutex_);
+    const size_t reads = host::ClockReads();
+    int result = ESP_PEER_ERR_FAIL;
+    std::thread pump([&] { result = fixture.service.PumpPeer(fixture.peer); });
+    const bool waiting = host::WaitForClockReads(reads + 1);
+    host::AdvanceTimeUs(400000);
+    service_lock.unlock();
+    pump.join();
+    RODAK_CHECK(waiting);
+    RODAK_CHECK_EQ(result, ESP_PEER_ERR_NONE);
+    const auto stats = fixture.service.loop_diagnostics_;
+    RODAK_CHECK(stats.service_wait.maximum_us >= 400000);
+    RODAK_CHECK(stats.api_wait.maximum_us < 100000);
+    RODAK_CHECK(stats.sdk.maximum_us >= 200000);
+    RODAK_CHECK(stats.sdk.maximum_us < 300000);
+    RODAK_CHECK(stats.service_wait.maximum_at_us < stats.sdk.maximum_at_us);
+}
+
+RODAK_TEST("control timing begins before service lock and remains attached to parsed sequence") {
+    Fixture fixture;
+    fixture.Start(61);
+    fixture.input_handler = [](const std::string& payload, Service::ControlReply reply) {
+        if (!payload.empty()) host::AdvanceTimeUs(75000);
+        reply(true, nullptr);
+    };
+    std::unique_lock<std::recursive_mutex> service_lock(fixture.service.mutex_);
+    const size_t reads = host::ClockReads();
+    std::thread input([&] { fixture.Receive(7); });
+    const bool waiting = host::WaitForClockReads(reads + 1);
+    host::AdvanceTimeUs(250000);
+    service_lock.unlock();
+    input.join();
+    RODAK_CHECK(waiting);
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 1u);
+    const auto sample = fixture.service.control_timings_[0];
+    RODAK_CHECK_EQ(sample.sequence, 7u);
+    RODAK_CHECK_EQ(sample.stream_id, 61u);
+    RODAK_CHECK(sample.dispatch_us - sample.entered_us >= 250000);
+    RODAK_CHECK(sample.returned_us - sample.dispatch_us >= 75000);
+    RODAK_CHECK(fixture.service.loop_diagnostics_.service_wait.maximum_us >= 250000);
+    fixture.service.FlushControlAcks();
+    CheckFrame(host::SentFrames()[0], fixture.peer, 61, 7, true);
+}
+
+RODAK_TEST("diagnostic storage is bounded and ignores moves without changing admitted replies") {
+    Fixture fixture;
+    fixture.Start();
+    for (uint32_t seq = 1; seq <= 20; ++seq) {
+        fixture.Receive(seq);
+        fixture.Reply(seq - 1);
+    }
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 16u);
+    RODAK_CHECK_EQ(fixture.service.control_timing_dropped_, 4u);
+    host::Receive(fixture.peer, 11, R"({"version":1,"seq":21,"kind":"pointer","action":"move","x":1,"y":1})");
+    fixture.Reply(20);
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 16u);
+    RODAK_CHECK_EQ(fixture.service.control_timing_dropped_, 4u);
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK_EQ(host::SentFrames().size(), 21u);
+    // Periodic/final snapshot collection itself must not request C++ heap.
+    {
+        CppAllocationFailure failure;
+        fixture.service.MaybeLogTimings(true);
+    }
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 0u);
+    RODAK_CHECK_EQ(fixture.service.control_timing_dropped_, 0u);
+}
+
+RODAK_TEST("JPEG timing includes nested SDK pumps while ACK timing preserves send result") {
+    Fixture fixture;
+    fixture.Start();
+    fixture.service.channel_open_ = true;
+    fixture.service.video_stream_id_ = 3;
+    host::SetMainLoopCostUs(120000);
+    host::SetSendCostUs(30000);
+    RODAK_CHECK(fixture.service.SendJpegChunks(std::vector<uint8_t>(40001, 1)));
+    auto stats = fixture.service.loop_diagnostics_;
+    RODAK_CHECK_EQ(stats.jpeg.samples, 1u);
+    RODAK_CHECK(stats.jpeg.maximum_us >= 330000);
+    RODAK_CHECK_EQ(stats.sdk.samples, 2u);
+    RODAK_CHECK(stats.sdk.total_us >= 240000);
+    RODAK_CHECK_EQ(host::SentFrames().size(), 3u);
+    fixture.Receive(1);
+    fixture.Reply(0);
+    fixture.service.FlushControlAcks();
+    stats = fixture.service.loop_diagnostics_;
+    RODAK_CHECK(stats.ack.maximum_us >= 30000);
+    CheckFrame(host::SentFrames().back(), fixture.peer, 11, 1, true);
+}
+
+RODAK_TEST("control timing from replaced callback cannot populate the new peer generation") {
+    Fixture fixture;
+    fixture.Start();
+    const auto first_generation = fixture.service.timing_generation_;
+    bool replaced = false;
+    fixture.input_handler = [&](const std::string& payload, Service::ControlReply reply) {
+        if (!payload.empty() && !replaced) {
+            replaced = true;
+            fixture.Stop();
+            fixture.Start(63);
+        }
+        reply(true, nullptr);
+    };
+    fixture.Receive(1);
+    RODAK_CHECK(fixture.service.timing_generation_ > first_generation);
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 0u);
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK(host::SentFrames().empty());
+    fixture.Receive(1);
+    fixture.service.FlushControlAcks();
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 1u);
+    CheckFrame(host::SentFrames().back(), fixture.peer, 63, 1, true);
+}
+
+RODAK_TEST("production peer loop measures scheduling gaps and resets diagnostics on restart") {
+    Fixture fixture;
+    fixture.Start();
+    host::SetMainLoopCostUs(1000);
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(4));
+    Service::LoopDiagnostics snapshot;
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.service.mutex_);
+        snapshot = fixture.service.loop_diagnostics_;
+    }
+    RODAK_CHECK(snapshot.gap.samples >= 2u);
+    RODAK_CHECK(snapshot.gap.maximum_us >= 1000);
+    RODAK_CHECK(snapshot.sdk.samples >= 3u);
+    fixture.Stop();
+    fixture.Start(65);
+    RODAK_CHECK_EQ(fixture.service.loop_diagnostics_.sdk.samples, 0u);
+    RODAK_CHECK_EQ(fixture.service.loop_diagnostics_.gap.samples, 0u);
+    RODAK_CHECK_EQ(fixture.service.control_timing_count_, 0u);
+}

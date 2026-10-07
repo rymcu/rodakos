@@ -125,9 +125,12 @@ struct wifi_ap_record_t { int rssi = -40; };
 inline int esp_wifi_sta_get_ap_info(wifi_ap_record_t*) { return ESP_OK; }
 inline unsigned esp_get_free_heap_size() { return 1024 * 1024; }
 inline unsigned esp_get_minimum_free_heap_size() { return 1024 * 1024; }
+namespace mqtt_host { inline thread_local std::atomic<bool>* clock_read_observed = nullptr; }
 inline int64_t esp_timer_get_time() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
+    const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (mqtt_host::clock_read_observed) mqtt_host::clock_read_observed->store(true);
+    return now_us;
 }
 void esp_restart();
 constexpr unsigned MALLOC_CAP_INTERNAL = 1;

@@ -4,14 +4,14 @@
 不替换 RGB565 → RGB888 转换、`EncodeJpeg`、worker 或 Stop 路径。
 配置时将生产源码 SHA-256 写入构建目录 `production-sources.json`。
 
-24 个用例覆盖：
+30 个用例覆盖：
 
 - StartCapture 第一／第二份帧缓冲分配失败、初始刷新排队失败；失败后能取得锁并重新启动。
 - GetLatestFrame 复制失败清除调用方旧数据、释放锁并允许重试；没有新帧时不返回旧 JPEG。
 - RGB888 两级 heap-caps 分配、encoder 打开后的 100 KiB scratch 两级分配、紧凑 JPEG 的
   C++ 分配失败；encoder 与每个 heap-caps 缓冲都有独立的打开／关闭和分配／释放计数。
 - JPEG worker 在同一块 230400 字节缓冲中先复制 RGB565 快照，再反向原地扩展 RGB888；
-  首／中／末像素验证快照完整，heap-caps 峰值为 230400 + 102400 字节，不再分配
+  首／中／末像素验证快照完整，服务缓冲为 230400 + 102400 字节，不再分配
   153600 字节 `DisplayFrame` 深拷贝。100 KiB 输出越界会丢弃该帧并在新帧恢复。
 - codec 打开／处理失败；恢复后输出内容来自真实 RGB565 → RGB888 转换，交付 vector 的
   size/capacity 为 codec 实际输出 4096 字节，不保留 230400 字节 scratch。
@@ -25,6 +25,11 @@
   仅等待其捕获的 generation，callback 析构同步启动替代流时不会错误等待新 task。
 - 并发 StartCapture 只注册一次 LVGL event callback，注册与析构注销都持有 LVGL lock；
   `GetLatestFrame` 仍保留调用方深拷贝语义，`CaptureJpeg` 不再依赖该临时副本。
+- 真实 `EncodeJpeg` 通过生产 `screen_jpeg_allocation.cc` 包装四个 allocator 入口。
+  codec 替身在独立 allocator TU 上申请 6436/128/1024/2048 B 工作区，逐点 OOM 清理，
+  关闭时用零大小 allocator 探针验证 scope 尚未退出。测试峰值额外包括 9636 B 的模拟工作区。
+  外部堆耗尽不回退内部堆；process 抛出 `bad_alloc` 时 encoder RAII 仍先于 scope 析构。
+  scratch/紧凑输出失败、正常完成及 worker callback 都验证原策略已恢复。
 
 主机边界：LVGL 使用最小的 flush 事件、display buffer 和异步排队替身；初始异步刷新仅
 检查排队与注销，不运行真实绘制树。FreeRTOS 使用真实 C++ 线程、条件变量和互斥语义，
@@ -33,7 +38,7 @@
 codec 替身接受实际转换输入，产生带输入标记的固定长度字节；这不是
 有效 JPEG，不证明 ESP 编码器的图像质量或内部工作区行为。
 
-Linux 链接器仅包装全局 `operator new/new[]` 的入口，选中 size／次序／worker 线程后
+Linux 链接器包装四个 JPEG allocator 及全局 `operator new/new[]` 的入口，选中 size／次序／worker 线程后
 抛出真实 `std::bad_alloc`；其他分配仍交给原始 libstdc++／ASan 分配器。记录故障时间使用
 预分配数组，heap-caps 计数使用固定记录，不为故障采样再分配内存。失败重试的真实时间
 间隔容许 10 ms 调度误差；没有新帧时观察两个以上 FPS 周期。

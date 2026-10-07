@@ -1,4 +1,5 @@
 #include "phone_os/display_service.h"
+#include "phone_os/screen_jpeg_allocation.h"
 
 #include <algorithm>
 #include <array>
@@ -159,6 +160,8 @@ bool HasRgb565Frame(const DisplayFrame& frame) {
 
 bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
                                 std::vector<uint8_t>& jpeg, EncodeMetrics* metrics) {
+    // 先于 Encoder 构造，使失败和异常退出都先关闭编码器，再恢复当前任务策略。
+    ScreenJpegAllocationScope allocation_scope;
     if (metrics != nullptr) metrics->heap[0] = ReadEncoderHeap();
     const int64_t open_started_us = esp_timer_get_time();
     jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();

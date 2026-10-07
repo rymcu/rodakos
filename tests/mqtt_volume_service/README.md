@@ -85,9 +85,18 @@ epochs, ordinary token refresh and replacement bindings. Native driver tests als
 ## Independent command fixture and tests
 
 The same library also provides `rodakos_mqtt_command_fixture` and the separate CTest target
-`rodakos_mqtt_command_service` (55 cases). These exercise the production command handler, not
+`rodakos_mqtt_command_service` (57 cases). These exercise the production command handler, not
 the volume/light effect protocol. Build targets are `rodakos_mqtt_command_fixture` and
 `rodakos_mqtt_command_service_tests`.
+
+020 adds real state-mutex contention around the captured display-control callback: both current and
+revoked leases keep their original dispatch/rejection outcomes while recording wait/check timestamps.
+The fixed single sample admits at most one slow event per five seconds. The existing worker copies
+and clears it under that same mutex, then logs outside locks; a busy worker may delay output, so the
+output spacing is not the sampling interval. It never records payloads or adds a callback
+wrapper; the WebRTC timing separately covers dispatch duration. A reentrant-disconnect case verifies
+that UI dispatch still runs outside the MQTT state lock. These host checks do not locate the device's
+network or SDK latency.
 
 ```text
 rodakos_mqtt_command_fixture --device-key=device-1

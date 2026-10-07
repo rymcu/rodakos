@@ -36,4 +36,8 @@ void SetTaskCreationAllowed(bool allowed);
 void AdvanceTimeUs(int64_t delta);
 void RunPeerTasks();
 bool WaitForMainLoops(size_t minimum);
+size_t ClockReads();
+bool WaitForClockReads(size_t minimum);
+void SetMainLoopCostUs(int64_t value);
+void SetSendCostUs(int64_t value);
 }

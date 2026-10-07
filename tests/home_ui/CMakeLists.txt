@@ -25,6 +25,7 @@ add_executable(rodakos_home_ui_tests
     lvgl_creation_failures.cc
     remote_text_input_test.cc
     display_capture_test.cc
+    jpeg_allocator_host.cc
     fakes/test_fonts.cc
     "${RODAKOS_ROOT}/main/apps/home/home_app.cc"
     "${RODAKOS_ROOT}/main/apps/home/home_layout_model.cc"
@@ -39,6 +40,8 @@ add_executable(rodakos_home_ui_tests
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc"
     "${RODAKOS_ROOT}/main/phone_ui/soft_keyboard.cc"
     "${RODAKOS_ROOT}/main/phone_os/display_service.cc"
+    "${RODAKOS_ROOT}/main/phone_os/screen_jpeg_allocation.cc"
+    "${RODAKOS_ROOT}/tests/screen_jpeg_allocator/original_allocators.cc"
     "${RODAKOS_ROOT}/components/rodak_appearance/rodak_appearance.cc"
     "${RODAKOS_ROOT}/components/rodak_appearance/rodak_appearance_json.c"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson/cJSON.c"
@@ -47,6 +50,8 @@ add_executable(rodakos_home_ui_tests
 target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${RODAKOS_ROOT}/tests/screen_jpeg_allocator"
+    "${RODAKOS_ROOT}/tests/screen_jpeg_allocator/fakes"
     "${RODAKOS_ROOT}/main"
     "${RODAKOS_ROOT}/tests/app_model/third_party/cjson"
     "${RODAKOS_ROOT}/components/rodakos_fonts/include"
@@ -54,6 +59,9 @@ target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
 )
 
 target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl)
+foreach(symbol jpeg_calloc jpeg_calloc_inner jpeg_calloc_align jpeg_calloc_align_inner)
+    target_link_options(rodakos_home_ui_tests PRIVATE "-Wl,--wrap=${symbol}")
+endforeach()
 target_compile_definitions(rodakos_home_ui_tests PRIVATE RODAKOS_RELEASE_TESTS=1)
 
 if(UNIX)
