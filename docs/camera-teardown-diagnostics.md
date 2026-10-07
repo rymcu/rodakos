@@ -4,6 +4,7 @@
 127.583 秒。仅凭这条日志，不能确定 `ioctl` 尚未返回：实际使用的
 `esp_cam_sensor` 2.3.0 extended DVP 驱动会直接删除 worker，后续普通日志也可能阻塞。
 022 增加独立于日志的阶段记录，用于下一次故障取证；没有改变关闭顺序或修复任务生命周期。
+028 在同一受校验 overlay 中加入合作式 worker 退出，合同见下；027 故障与调试干预证据保留。
 
 ## 记录合同
 
@@ -41,9 +42,39 @@ DRAM、IRAM recorder、真实指令字节、一次 CAS、无调用/循环/回跳
 RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host 通过不能替代它。
 该门禁范围限于记录器，不证明驱动关闭、IRQ 生命周期、cache 或硬件可读性。
 
-固件 CI 另保存四个实际编译入口、展开后的 response 参数、两个生成 C 文件及源码摘要，
-并将其关联到同次 ELF/sdkconfig 和链接报告。下载制品时可据此复核源码替换和原子选项范围，
-而不是只读取构建成功标志。
+构建证据须保留四个实际编译入口、展开后的 response 参数、两个生成 C 文件及源码摘要，
+并关联到同次 ELF/sdkconfig 和链接报告。历史 CI 制品可在其原范围内复核；当前交付通过
+本地构建与包核验保存这些证据，不依赖或修复 GitHub Actions。
+
+## 028 worker 生命周期修正
+
+实际 extended DVP 仍使用 8,192 B ring 配置（当前几何生成 7,680 B）、3,072 B worker 栈、
+优先级 23 和长度 3 的队列。构造仅将 worker stack 改为
+`xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`，不回退内部栈；TCB、
+controller、ring、descriptor 和 queue 保持原内部内存要求。目标 ELF DWARF 的 controller
+从 144 B 增至 148 B；3,072 B 栈迁移与 4 B 结构增量不是实机 free/largest 净收益。
+
+owner 在原 spinlock 内发布 shutdown，再非阻塞地向队列前端写 STOP；队列已满时已有事件
+能够唤醒 worker。worker 在接收前后复查请求，等待已进入的回调、日志或处理分支结束，
+然后在同一锁内发布 quiesced。最后解锁后不再访问 controller、queue、ring、回调或日志，
+只进入 suspend。owner 用同一锁观察到确认后，调用 `vTaskDeleteWithCaps(saved_handle)`，
+再执行原 GPIO/capture/GDMA/内存清理。不能只读一个未同步的标志后提前释放。
+
+worker 回调尝试删除自身时，在获取锁和输出日志之前拒绝，避免等待自己的退出。
+不使用 WithCaps 自删，因为当前 IDF 的该路径会再创建内部清理任务，低内存下可能失败。
+构造失败保持配套清理，managed 源文件不修改；输入源码、IDF WithCaps 实现及生成 C 都受
+provenance 约束。
+
+等待 quiesced 没有“超时即成功”分支。若第三方回调或日志本身一直不返回，owner 仍可能
+等待；本修正不承诺任意外部死锁可恢复。host 的受控日志锁、队列空/满、最后解锁、任务
+handle 发布前运行及处理中关闭回归，与实际 GPIO ISR drain、cache-off/NVS/OTA 并发、
+无线调度和资源回收仍是不同证据。最终记录器 ELF 门禁及 ioctl/日志区别回归继续保留。
+
+本地 Debug 与 ASan/UBSan/leak 各通过新 worker 13 正向案例 / 6 个源码负控、原 overlay
+26 CTest、Camera capture 33 案例及 4 个独立 ioctl/日志进程案例、诊断 13 CTest。
+旧 027 的真实生成 worker 在持有日志锁时直接进入删除，明确触发指定断言；不以超时或
+sanitizer 崩溃冒充红例。028 的 ESP-IDF 6.0.2 编译及 recorder/JPEG 最终 ELF 门禁通过；
+实机结果须以相应已刷具名包的独立记录为准。
 
 ## 取证与当前边界
 
@@ -68,8 +99,35 @@ WHQL 或 kernel-policy 校验通过。
 自动恢复。后续 observer 应避免额外逐核 resume，并将采集后的任何新 halt 视为恢复未成立；
 仅删掉一次 resume 不能承诺无扰动。原 observer/raw 保留不变，详见
 [022 取证记录](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)。
-当前设备为 023，其[静态首帧定向通过](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)
-没有修改 Camera 释放生命周期，也不关闭这里的根因调查。
+023 的[静态首帧定向通过](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)
+没有修改 Camera 释放生命周期。后续 027 的故障阶段记录见下，原始窗口仍分别保留。
+
+### 027：ioctl 返回后的日志边界
+
+源码 `3ff55ab7ec3d46cd7a1e2c41fca5d700505c0a06`、包 `20261008-004814` 的正常 Camera
+窗口没有远端画面。在 native preview 后、peer open 前 DMA free/largest 已降至
+1,907/1,792 B，open 后为 943/832 B；900 设备毫秒后 AES 分配失败、TLS 写 `-0x0084`，
+MQTT 断开。最后一条 STREAMOFF begin 后至请求关闭原始串口采集共 492.499 秒无新字节。
+此时桌面 Stop 为 unknown；内部首帧 87 ms 不表示远端视频成功。
+
+关闭上述未干预窗口后，独立 JTAG 从该包 ELF 的 `0x3fca84e8` 读取 134 words：
+23 committed、0 pending、0 drop，所有记录 core/status 为 0。最后阶段为
+`... 24, 12, 2, 3`，其中 2 明确证明 ioctl 返回 0，3 为完成日志前，4 缺失。
+冻结 ELF 机器码确认 3 与 4 之间调用 `esp_log_timestamp/esp_log`，因此本次不能继续判为
+ioctl 未返回；这仍未直接证明具体锁持有者。旧 worker 在回调或日志内被直接删除的源码风险
+与这一边界相符，须通过受控回归和后续实机修复分别验证。
+
+暂停时双核 PC 均为 `esp_cpu_wait_for_intr`，采集后仅一次 SMP resume 仍进入
+semihosting/cache-error panic 路径。原故障与调试干预后的 panic 分开记录，OpenOCD exit 0
+不代表恢复。随后直接 RTS 尝试留下 90 秒空日志、MQTT 仍离线；官方 esptool USB reset
+则恢复同一已安装 027 的 main/Home/OTA/MQTT，没有重新刷写或擦除。首启脚本 exit 5 只因
+缺少 Recovery 标记，不适用于已确认镜像直接 main 启动；新快照确认原 ID、bound、token4。
+
+证据位于相邻 Rodak 仓库 `.codex-temp/candidate-capacity-027/`：`normal-camera/`、
+`camera-post-debug/`、`usb-reset-recovery/` 和 `independent-review/fault-dram/analysis.json`
+（SHA-256 `e685929a360c7629132afec2306c85a7f93137515782e070943c0968401c106c`）。
+完整窗口与制品身份见
+[跨仓验证](https://github.com/rymcu/rodak/blob/master/docs/video-candidate-resource-verification.md)。
 
 软件验证分别覆盖记录发布协议、真实 C 驱动函数的原语义与漂移拒绝，以及生产
 CameraService 在 ioctl 内和返回后日志处受控阻塞的区别。它们不关闭 Camera 退出、

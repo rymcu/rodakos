@@ -14,6 +14,12 @@ typedef int esp_err_t;
 typedef void *gdma_channel_handle_t;
 typedef void *esp_cam_ctlr_handle_t;
 typedef int cam_hal_context_t;
+typedef void* TaskHandle_t;
+typedef int portMUX_TYPE;
+typedef struct { int type; } dvp_cam_event_t;
+#define DVP_CAM_EVENT_SHUTDOWN 2
+#define portENTER_CRITICAL(p) ((void)(p))
+#define portEXIT_CRITICAL(p) ((void)(p))
 typedef struct dvp_cam_ctlr {
     void *task_handle;
     int vsync_pin;
@@ -22,6 +28,9 @@ typedef struct dvp_cam_ctlr {
     void *dma_desc;
     void *dma_buffer;
     void *event_queue;
+    portMUX_TYPE spinlock;
+    bool shutdown_requested;
+    bool worker_quiesced;
 } dvp_cam_ctlr_t;
 typedef struct esp_video_device_common esp_video_device_common_t;
 typedef struct {
@@ -35,6 +44,8 @@ struct esp_video_device_common {
 struct esp_video { esp_video_device_common_t *common; };
 #define VIDEO_DEVICE_COMMON(video) ((video)->common)
 #define ESP_OK 0
+#define ESP_ERR_INVALID_ARG 258
+#define ESP_ERR_INVALID_STATE 259
 #define ESP_CAM_SENSOR_IOC_S_STREAM 123
 #define ESP_RETURN_ON_ERROR(call, tag, message) do { \
     esp_err_t fake_return = (call); \
@@ -53,6 +64,10 @@ esp_err_t gdma_disconnect(gdma_channel_handle_t);
 esp_err_t gdma_del_channel(gdma_channel_handle_t);
 esp_err_t gdma_stop(gdma_channel_handle_t);
 void vTaskDelete(void *);
+void vTaskDeleteWithCaps(void *);
+TaskHandle_t xTaskGetCurrentTaskHandle(void);
+int xQueueSendToFront(void *,const void *,unsigned);
+void vTaskDelay(unsigned);
 esp_err_t gpio_intr_disable(int);
 esp_err_t gpio_isr_handler_remove(int);
 void cam_hal_stop_streaming(cam_hal_context_t *);

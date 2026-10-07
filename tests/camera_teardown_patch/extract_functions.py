@@ -24,7 +24,7 @@ def main():
     video = (args.output_dir / "esp_video_device_common.c").read_text()
     sensor = (args.output_dir / "esp_cam_ctlr_dvp_cam.c").read_text()
     functions = '\n\n'.join(overlay.function_text(sensor, name) for name in
-                            ("dvp_dma_deinit", "dvp_stop_capturing", "dvp_cam_ctlr_del"))
+                            ("dvp_dma_deinit", "dvp_stop_capturing", "dvp_worker_quiesce", "dvp_cam_ctlr_del"))
     functions += "\n\n" + overlay.function_text(video, "common_video_stop")
     wrappers = """
 esp_err_t run_common_stop(struct esp_video *video) { return common_video_stop(video, 0); }

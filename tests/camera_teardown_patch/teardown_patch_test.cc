@@ -24,7 +24,7 @@ int queue;
 int task;
 int channel;
 int sensor;
-dvp_cam_ctlr_t controller{&task, 7, &channel, 0, &descriptor, &buffer, &queue};
+dvp_cam_ctlr_t controller{&task, 7, &channel, 0, &descriptor, &buffer, &queue, 0, false, false};
 
 void check(bool condition, const char *message) {
     if (!condition) { std::fprintf(stderr, "FAIL: %s\n", message); ++failures; }
@@ -87,6 +87,10 @@ esp_err_t gdma_disconnect(gdma_channel_handle_t handle) { check(handle == &chann
 esp_err_t gdma_del_channel(gdma_channel_handle_t handle) { check(handle == &channel, "DMA delete handle"); return called("dma_delete"); }
 esp_err_t gdma_stop(gdma_channel_handle_t handle) { check(handle == &channel, "DMA stop handle"); return called("capture"); }
 void vTaskDelete(void *handle) { check(handle == &task, "task handle"); (void)called("task"); }
+void vTaskDeleteWithCaps(void *handle) { vTaskDelete(handle); }
+TaskHandle_t xTaskGetCurrentTaskHandle() { return &sensor; }
+int xQueueSendToFront(void *, const void *, unsigned) { controller.worker_quiesced = true; return 1; }
+void vTaskDelay(unsigned) {}
 esp_err_t gpio_intr_disable(int pin) { check(pin == 7, "GPIO disable pin"); return called("gpio_disable"); }
 esp_err_t gpio_isr_handler_remove(int pin) { check(pin == 7, "GPIO remove pin"); return called("gpio_remove"); }
 void cam_hal_stop_streaming(cam_hal_context_t *hal) { check(hal == &controller.hal, "capture HAL"); (void)called("hal_stop"); }

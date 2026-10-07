@@ -1,4 +1,4 @@
-"""Generate pinned Camera STREAMOFF diagnostics without editing managed sources."""
+"""Generate pinned Camera diagnostics and cooperative DVP shutdown without editing managed sources."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 from ruamel.yaml import YAML
@@ -53,9 +54,9 @@ def replace_exact(source: str, original: str, replacement: str, count: int = 1) 
 
 
 def function_text(source: str, name: str) -> str:
-    signature = f"static esp_err_t {name}("
-    require(source.count(signature) == 1, f"Expected one function definition: {name}")
-    start = source.index(signature)
+    definitions = list(re.finditer(r'(?m)^static (?:IRAM_ATTR )?\w+\s+' + re.escape(name) + r'\(', source))
+    require(len(definitions) == 1, f"Expected one function definition: {name}")
+    start = definitions[0].start()
     opening = source.index("{", start)
     depth = 0
     for end in range(opening, len(source)):
@@ -136,6 +137,99 @@ def instrument_sensor(source: str) -> str:
     source = replace_exact(source, original, patched)
     require(source.count("rodak_camera_teardown_record(") == 12, "DVP mark budget changed")
     require(source.count("dvp_dma_deinit(") == 4, "DVP cleanup call sites changed")
+    return instrument_worker_lifecycle(source)
+
+
+def instrument_worker_lifecycle(source: str) -> str:
+    source = replace_exact(source, '#include "freertos/task.h"\n',
+                           '#include "freertos/task.h"\n#include "freertos/idf_additions.h"\n')
+    source = replace_exact(source, '    DVP_CAM_EVENT_RECV_DATA = 1,',
+                           '    DVP_CAM_EVENT_SHUTDOWN = 2,\n    DVP_CAM_EVENT_RECV_DATA = 1,')
+    source = replace_exact(source, '    TaskHandle_t task_handle;                           /*!< DVP task handle */',
+        '    TaskHandle_t task_handle;                           /*!< DVP task handle */\n'
+        '    bool shutdown_requested;                         /*!< Protected by spinlock */\n'
+        '    bool worker_quiesced;                            /*!< Last controller access completed */')
+    helpers = '''static bool dvp_worker_shutdown_requested(dvp_cam_ctlr_t *ctlr)
+{
+    portENTER_CRITICAL(&ctlr->spinlock);
+    bool requested = ctlr->shutdown_requested;
+    portEXIT_CRITICAL(&ctlr->spinlock);
+    return requested;
+}
+
+static void dvp_worker_quiesce(dvp_cam_ctlr_t *ctlr)
+{
+    portENTER_CRITICAL(&ctlr->spinlock);
+    ctlr->shutdown_requested = true;
+    portEXIT_CRITICAL(&ctlr->spinlock);
+
+    // A full queue already wakes the worker. Never wait for another slot while
+    // the worker may still be finishing an admitted callback or logging call.
+    dvp_cam_event_t event = {.type = DVP_CAM_EVENT_SHUTDOWN};
+    (void)xQueueSendToFront(ctlr->event_queue, &event, 0);
+    while (true) {
+        portENTER_CRITICAL(&ctlr->spinlock);
+        bool quiesced = ctlr->worker_quiesced;
+        portEXIT_CRITICAL(&ctlr->spinlock);
+        if (quiesced) {
+            break;
+        }
+        vTaskDelay(1);
+    }
+}
+
+'''
+    anchor = 'static esp_err_t dvp_cam_ctlr_del(esp_cam_ctlr_handle_t handle)'
+    source = replace_exact(source, anchor, helpers + anchor)
+    original = function_text(source, 'dvp_cam_ctlr_del')
+    patched = replace_exact(original, '    dvp_cam_ctlr_t *ctlr = (dvp_cam_ctlr_t *)handle;',
+        '''    dvp_cam_ctlr_t *ctlr = (dvp_cam_ctlr_t *)handle;
+    if (ctlr == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    TaskHandle_t worker = ctlr->task_handle;
+    // Callbacks can run with this spinlock held. Reject self deletion before
+    // taking any lock or logging; waiting for our own final access would deadlock.
+    if (worker == NULL || worker == xTaskGetCurrentTaskHandle()) {
+        return ESP_ERR_INVALID_STATE;
+    }''')
+    patched = replace_exact(patched, '    vTaskDelete(ctlr->task_handle);',
+        '''    dvp_worker_quiesce(ctlr);
+    // Delete from the owner: WithCaps self-deletion allocates an internal
+    // cleanup task and may abort when memory is already exhausted.
+    vTaskDeleteWithCaps(worker);
+    ctlr->task_handle = NULL;''')
+    source = replace_exact(source, original, patched)
+    signature = 'static IRAM_ATTR void dvp_task(void *p)'
+    start = source.index(signature)
+    end = source.index('\n/**', start)
+    original = source[start:end]
+    patched = replace_exact(original, '''    while (1) {
+        if (xQueueReceive(ctlr->event_queue, &event, portMAX_DELAY) != pdPASS) {''',
+        '''    while (1) {
+        if (dvp_worker_shutdown_requested(ctlr)) {
+            break;
+        }
+        BaseType_t received = xQueueReceive(ctlr->event_queue, &event, portMAX_DELAY);
+        if (dvp_worker_shutdown_requested(ctlr)) {
+            break;
+        }
+        if (received != pdPASS) {''')
+    require(patched.endswith('    }\n}\n'), 'Worker terminal boundary drifted')
+    patched = patched[:-2] + '''    portENTER_CRITICAL(&ctlr->spinlock);
+    ctlr->worker_quiesced = true;
+    portEXIT_CRITICAL(&ctlr->spinlock);
+    // The owner reads quiesced under the same lock. Do not access ctlr, its
+    // queue, callbacks or logs after releasing it; the owner may now free them.
+    for (;;) {
+        vTaskSuspend(NULL);
+    }
+}
+'''
+    source = replace_exact(source, original, patched)
+    source = replace_exact(source,
+        '    ret = xTaskCreate(dvp_task, DVP_CAM_TASK_NAME, DVP_CAM_TASK_STACK_SIZE, ctlr, DVP_CAM_TASK_PRIORITY, &ctlr->task_handle);',
+        '    ret = xTaskCreateWithCaps(dvp_task, DVP_CAM_TASK_NAME, DVP_CAM_TASK_STACK_SIZE, ctlr, DVP_CAM_TASK_PRIORITY, &ctlr->task_handle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);')
     return source
 
 
