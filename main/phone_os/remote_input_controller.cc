@@ -10,9 +10,28 @@
 #include <vector>
 
 #include <cJSON.h>
+#include <esp_log.h>
 
 namespace rodakos {
 namespace {
+constexpr const char* TAG = "RemoteInput";
+void LogControlInput(const cJSON* json, const std::string& kind) {
+    const auto* action = cJSON_GetObjectItemCaseSensitive(json, "action");
+    const char* action_name = "-";
+    if (cJSON_IsString(action)) {
+        if (std::strcmp(action->valuestring, "move") == 0) return;
+        for (const auto* known : {"down", "up", "enable", "disable"}) {
+            if (std::strcmp(action->valuestring, known) == 0) action_name = known;
+        }
+    }
+    if (kind != "pointer" && kind != "control" && kind != "text" && kind != "shortcut") return;
+    const auto* sequence = cJSON_GetObjectItemCaseSensitive(json, "seq");
+    const uint32_t seq = cJSON_IsNumber(sequence) && sequence->valuedouble >= 1 &&
+        sequence->valuedouble <= UINT32_MAX ? static_cast<uint32_t>(sequence->valuedouble) : 0;
+    ESP_LOGI(TAG, "control input: seq=%u kind=%s action=%s",
+             static_cast<unsigned>(seq), kind.c_str(), action_name);
+}
+
 bool IsValidUtf8(const char* text) {
     if (text == nullptr) return false;
     const auto* p = reinterpret_cast<const unsigned char*>(text);
@@ -88,6 +107,15 @@ struct RemoteInputController::State {
     std::deque<Pointer> pointers;
     std::shared_ptr<Action> navigation;
     RemotePointerSample pointer;
+    uint64_t pointer_cancel_generation = 0;
+    uint64_t delivered_cancel_generation = 0;
+
+    void CancelHeldPointerLocked() {
+        // An up may already have been dequeued but not yet admitted. Every
+        // cancellation advances the epoch; the LVGL bridge filters local input.
+        ++pointer_cancel_generation;
+        pointer.pressed = false;
+    }
 
     void CancelPointersLocked(CancelledReplies& replies) {
         for (auto& item : pointers) replies.Add(item.reply);
@@ -99,6 +127,7 @@ struct RemoteInputController::State {
         CancelPointersLocked(replies);
     }
     void ClearLocked(CancelledReplies* cancelled = nullptr) {
+        CancelHeldPointerLocked();
         if (grant) grant->enabled.store(false);
         grant.reset();
         if (cancelled) {
@@ -147,6 +176,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
         Reject(reply, "control_disabled_or_invalid"); return;
     }
     const std::string kind = kind_json->valuestring;
+    LogControlInput(json.get(), kind);
     bool accepted = false;
     const char* reason = "control_disabled_or_invalid";
     bool immediate_reply = true;
@@ -160,7 +190,7 @@ void RemoteInputController::Handle(const StreamLeasePtr& lease, const std::strin
             const auto* action = cJSON_GetObjectItemCaseSensitive(json.get(), "action");
             if (cJSON_IsString(action) && std::strcmp(action->valuestring, "enable") == 0) {
                 if (!state->grant || state->grant->lease != lease) {
-                    state->ClearLocked();
+                    if (state->grant) state->ClearLocked();
                     state->grant = std::make_shared<ControlGrant>(lease);
                 }
                 state->pointer.enabled = true;
@@ -312,16 +342,34 @@ void RemoteInputController::ReadPointer(
         std::lock_guard<std::mutex> lock(state->mutex);
         state->PruneLocked();
         grant = state->grant;
-        if (grant && !state->navigation && !state->pointers.empty()) {
+        const bool cancelled = state->delivered_cancel_generation != state->pointer_cancel_generation;
+        if (cancelled) {
+            // LVGL reset does not clear prev_state. Deliver one release before
+            // dequeuing a replacement down so it starts a distinct gesture.
+            state->delivered_cancel_generation = state->pointer_cancel_generation;
+        } else if (grant && !state->navigation && !state->pointers.empty()) {
             event = std::move(state->pointers.front());
             state->pointers.pop_front();
             has_event = true;
             if (event.grant == grant) state->pointer = event.sample;
         }
         sample = state->pointer;
+        if (cancelled) sample.pressed = false;
+        sample.cancel_generation = state->pointer_cancel_generation;
     }
     bool admitted = grant && grant->TryApply([&]() { consume(sample); });
-    if (!admitted) consume({});
+    if (!admitted) {
+        // Revocation may race the sample above. Publish its cancellation before
+        // any fallback release, otherwise LVGL can interpret cleanup as a click.
+        RemotePointerSample released;
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->PruneLocked();
+            released.cancel_generation = state->pointer_cancel_generation;
+            state->delivered_cancel_generation = state->pointer_cancel_generation;
+        }
+        consume(released);
+    }
     if (has_event && event.reply) event.reply(admitted, admitted ? nullptr : "stale_control_lease");
 }
 
@@ -330,7 +378,7 @@ void RemoteInputController::ResetForPageTransition() {
     {
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->PruneLocked();
-        state_->pointer.pressed = false;
+        state_->CancelHeldPointerLocked();
         if (!state_->navigation) state_->CancelPendingLocked(cancelled);
     }
     // Replies may synchronously revoke or replace this grant. Never call them
@@ -342,7 +390,7 @@ void RemoteInputController::OnLocalTouch() {
     CancelledReplies cancelled;
     {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        state_->pointer.pressed = false;
+        state_->CancelHeldPointerLocked();
         state_->CancelPointersLocked(cancelled);
     }
     cancelled.ReplyAll("local_touch_active");

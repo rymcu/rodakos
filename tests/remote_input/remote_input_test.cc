@@ -8,10 +8,30 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 #include <lvgl.h>
 #include <src/others/test/lv_test.h>
 
-namespace { thread_local bool reject_cpp_allocations = false; }
+namespace {
+thread_local bool reject_cpp_allocations = false;
+#if defined(__linux__)
+thread_local void (*after_mutex_unlock)(void*) = nullptr;
+thread_local void* after_mutex_unlock_context = nullptr;
+#endif
+}
+#if defined(__linux__)
+extern "C" int __real_pthread_mutex_unlock(pthread_mutex_t* mutex);
+extern "C" int __wrap_pthread_mutex_unlock(pthread_mutex_t* mutex) {
+    const int result = __real_pthread_mutex_unlock(mutex);
+    if (auto hook = after_mutex_unlock) {
+        after_mutex_unlock = nullptr;
+        hook(after_mutex_unlock_context);
+    }
+    return result;
+}
+#endif
 void* operator new(size_t size) {
     if (reject_cpp_allocations) throw std::bad_alloc();
     if (auto* value = std::malloc(size == 0 ? 1 : size)) return value;
@@ -78,11 +98,88 @@ struct Fixture {
         lv_indev_data_t result{};
         controller.ReadPointer([&](const rodakos::RemotePointerSample& sample) {
             pointer.Read(false, {0, 0}, sample.pressed,
-                         {static_cast<lv_coord_t>(sample.x), static_cast<lv_coord_t>(sample.y)}, result);
+                         {static_cast<lv_coord_t>(sample.x), static_cast<lv_coord_t>(sample.y)}, result,
+                         sample.cancel_generation);
         });
         return result;
     }
     std::string Text() { return lv_textarea_get_text(textarea); }
+};
+
+struct PointerFixture {
+    RemoteInputController controller{{}};
+    StreamLeasePtr lease = std::make_shared<StreamLease>(1, 1, 1, "pointer-instance");
+    rodakos::TouchPointerState pointer;
+    lv_indev_t* indev = nullptr;
+    lv_obj_t* remote_button = nullptr;
+    lv_obj_t* local_button = nullptr;
+    bool local_pressed = false;
+    lv_point_t local_point{205, 55};
+    int remote_clicks = 0;
+    int local_clicks = 0;
+    int remote_releases = 0;
+    int resets = 0;
+    std::vector<std::string> reasons;
+
+    PointerFixture() {
+        lv_obj_clean(lv_screen_active());
+        lv_obj_clean(lv_layer_top());
+        remote_button = lv_button_create(lv_screen_active());
+        lv_obj_set_pos(remote_button, 10, 10);
+        lv_obj_set_size(remote_button, 100, 100);
+        local_button = lv_button_create(lv_screen_active());
+        lv_obj_set_pos(local_button, 160, 10);
+        lv_obj_set_size(local_button, 100, 100);
+        const auto event = [](lv_event_t* value) {
+            auto* self = static_cast<PointerFixture*>(lv_event_get_user_data(value));
+            const bool remote = lv_event_get_target(value) == self->remote_button;
+            const auto code = lv_event_get_code(value);
+            if (code == LV_EVENT_CLICKED) {
+                if (remote) ++self->remote_clicks;
+                else ++self->local_clicks;
+            }
+            if (code == LV_EVENT_RELEASED && remote) ++self->remote_releases;
+            if (code == LV_EVENT_INDEV_RESET) ++self->resets;
+        };
+        lv_obj_add_event_cb(remote_button, event, LV_EVENT_ALL, this);
+        lv_obj_add_event_cb(local_button, event, LV_EVENT_ALL, this);
+        lv_obj_update_layout(lv_screen_active());
+        indev = lv_indev_create();
+        lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_user_data(indev, this);
+        lv_indev_set_read_cb(indev, [](lv_indev_t* device, lv_indev_data_t* data) {
+            auto* self = static_cast<PointerFixture*>(lv_indev_get_user_data(device));
+            self->controller.ProcessActions();
+            bool cancelled = false;
+            self->controller.ReadPointer([&](const rodakos::RemotePointerSample& sample) {
+                const lv_point_t point{static_cast<lv_coord_t>(sample.x), static_cast<lv_coord_t>(sample.y)};
+                if (self->pointer.Read(self->local_pressed, self->local_point, sample.pressed,
+                                       point, *data, sample.cancel_generation)) {
+                    lv_indev_reset(device, nullptr);
+                    cancelled = true;
+                }
+            });
+            data->continue_reading = cancelled;
+        });
+        Input(kEnable);
+    }
+    ~PointerFixture() {
+        lv_indev_delete(indev);
+        lv_obj_clean(lv_screen_active());
+    }
+    void Input(const char* payload) {
+        controller.Handle(lease, payload, [&](bool accepted, const char* reason) {
+            reasons.emplace_back(accepted ? "accepted" : reason ? reason : "rejected");
+        });
+    }
+    void Read() { lv_indev_read(indev); }
+    void PressWithQueuedUp() {
+        Input(kDown);
+        Input(kUp);
+        Read();
+        RODAK_CHECK_EQ(remote_clicks, 0);
+        RODAK_CHECK(lv_obj_has_state(remote_button, LV_STATE_PRESSED));
+    }
 };
 }
 
@@ -185,6 +282,8 @@ RODAK_TEST("old empty cleanup cannot release the replacement held pointer") {
     auto next = f.Lease(2);
     f.Input(next, kEnable);
     f.Input(next, kDown);
+    // Replacement first retires the old gesture, then admits its own down.
+    RODAK_CHECK_EQ(f.Read().state, LV_INDEV_STATE_RELEASED);
     RODAK_CHECK_EQ(f.Read().state, LV_INDEV_STATE_PRESSED);
     f.Input(old, "");
     RODAK_CHECK(f.controller.IsEnabled());
@@ -363,6 +462,184 @@ RODAK_TEST("full-queue cancellation delivers all replies without heap allocation
         RODAK_CHECK_EQ(f.Text(), "");
     }
 }
+
+RODAK_TEST("real LVGL normal remote up clicks exactly once without cancelling") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.Read();
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 1);
+    RODAK_CHECK_EQ(f.remote_releases, 1);
+    RODAK_CHECK_EQ(f.resets, 0);
+    RODAK_CHECK_FALSE(lv_obj_has_state(f.remote_button, LV_STATE_PRESSED));
+}
+
+RODAK_TEST("real LVGL disable rejects queued up without synthesizing a click") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.Input(kDisable);
+    f.Read();
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.remote_releases, 0);
+    RODAK_CHECK_EQ(f.resets, 1);
+    RODAK_CHECK_EQ(f.reasons[f.reasons.size() - 2], "control_disabled");
+    RODAK_CHECK_FALSE(lv_obj_has_state(f.remote_button, LV_STATE_PRESSED));
+    f.Input(kEnable);
+    f.PressWithQueuedUp();
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 1);
+}
+
+RODAK_TEST("real LVGL stream revocation or cleanup cancels an admitted held pointer") {
+    for (bool cleanup : {false, true}) {
+        PointerFixture f;
+        f.PressWithQueuedUp();
+        f.lease->Revoke();
+        if (cleanup) f.Input("");
+        f.Read();
+        RODAK_CHECK_EQ(f.remote_clicks, 0);
+        RODAK_CHECK_EQ(f.remote_releases, 0);
+        RODAK_CHECK_EQ(f.resets, 1);
+        RODAK_CHECK_FALSE(lv_obj_has_state(f.remote_button, LV_STATE_PRESSED));
+    }
+}
+
+RODAK_TEST("real LVGL page transition cancels a held remote gesture without an up click") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.controller.ResetForPageTransition();
+    f.controller.ResetForPageTransition();
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.remote_releases, 0);
+    RODAK_CHECK_EQ(f.resets, 1);
+    RODAK_CHECK_EQ(f.reasons.back(), "page_transition");
+    f.PressWithQueuedUp();
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 1);
+}
+
+RODAK_TEST("real LVGL local takeover cancels only remote gesture and keeps physical click") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.local_pressed = true;
+    f.controller.OnLocalTouch();
+    f.Read();
+    for (int i = 0; i < 4; ++i) {
+        f.controller.OnLocalTouch();
+        f.Read();
+    }
+    f.local_pressed = false;
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.remote_releases, 0);
+    RODAK_CHECK_EQ(f.local_clicks, 1);
+    RODAK_CHECK_EQ(f.resets, 1);
+    RODAK_CHECK_EQ(f.reasons.back(), "local_touch_active");
+}
+
+RODAK_TEST("real LVGL local publication before controller cancellation cannot inherit remote press") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.local_pressed = true;
+    // Match TouchPollTask: publish the physical sample, then call OnLocalTouch.
+    f.Read();
+    f.controller.OnLocalTouch();
+    f.Read();
+    f.local_pressed = false;
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.remote_releases, 0);
+    RODAK_CHECK_EQ(f.local_clicks, 1);
+    RODAK_CHECK_EQ(f.resets, 1);
+}
+
+RODAK_TEST("real LVGL reenable before next read cannot complete the cancelled old gesture") {
+    for (bool replacement : {false, true}) {
+        PointerFixture f;
+        f.PressWithQueuedUp();
+        const auto old_lease = f.lease;
+        f.Input(kDisable);
+        if (replacement) f.lease = std::make_shared<StreamLease>(1, 2, 2, "pointer-instance");
+        f.Input(kEnable);
+        f.Read();
+        RODAK_CHECK_EQ(f.remote_clicks, 0);
+        f.PressWithQueuedUp();
+        if (replacement) f.controller.Handle(old_lease, "", {});
+        f.Read();
+        RODAK_CHECK_EQ(f.remote_clicks, 1);
+        RODAK_CHECK_EQ(f.resets, 1);
+    }
+}
+
+RODAK_TEST("real LVGL a queued new press starts independently after cancellation") {
+    PointerFixture f;
+    f.PressWithQueuedUp();
+    f.Input(kDisable);
+    f.Input(kEnable);
+    f.Input(kDown);
+    f.Input(kUp);
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.resets, 1);
+    f.Read();
+    RODAK_CHECK_EQ(f.remote_clicks, 1);
+    RODAK_CHECK_EQ(f.remote_releases, 1);
+}
+
+RODAK_TEST("real LVGL remote disable does not cancel a physical-only gesture") {
+    PointerFixture f;
+    f.local_pressed = true;
+    f.Read();
+    f.Input(kDown);
+    f.Read();
+    f.Input(kDisable);
+    f.Read();
+    f.local_pressed = false;
+    f.Read();
+    RODAK_CHECK_EQ(f.local_clicks, 1);
+    RODAK_CHECK_EQ(f.remote_clicks, 0);
+    RODAK_CHECK_EQ(f.resets, 0);
+}
+
+#if defined(__linux__)
+RODAK_TEST("real LVGL cancellation between dequeue up and final admission cannot click") {
+    for (bool revoke : {false, true}) {
+        PointerFixture f;
+        f.PressWithQueuedUp();
+        struct Race {
+            PointerFixture* fixture;
+            bool revoke;
+        } race{&f, revoke};
+        // ProcessActions takes the first controller lock in the indev callback;
+        // arm only for ReadPointer's dequeue unlock using a dedicated read cb.
+        lv_indev_set_read_cb(f.indev, [](lv_indev_t* device, lv_indev_data_t* data) {
+            auto* self = static_cast<PointerFixture*>(lv_indev_get_user_data(device));
+            self->controller.ReadPointer([&](const rodakos::RemotePointerSample& sample) {
+                const lv_point_t point{static_cast<lv_coord_t>(sample.x), static_cast<lv_coord_t>(sample.y)};
+                if (self->pointer.Read(false, {0, 0}, sample.pressed, point, *data,
+                                       sample.cancel_generation)) lv_indev_reset(device, nullptr);
+            });
+            data->continue_reading = false;
+        });
+        after_mutex_unlock_context = &race;
+        after_mutex_unlock = [](void* context) {
+            auto* current = static_cast<Race*>(context);
+            if (current->revoke) current->fixture->lease->Revoke();
+            else current->fixture->Input(kDisable);
+        };
+        f.Read();
+        RODAK_CHECK_EQ(after_mutex_unlock, nullptr);
+        after_mutex_unlock_context = nullptr;
+        RODAK_CHECK_EQ(f.remote_clicks, 0);
+        RODAK_CHECK_EQ(f.remote_releases, 0);
+        RODAK_CHECK_EQ(f.resets, 1);
+        RODAK_CHECK_EQ(f.reasons.back(), "stale_control_lease");
+        RODAK_CHECK_FALSE(lv_obj_has_state(f.remote_button, LV_STATE_PRESSED));
+    }
+}
+#endif
 
 RODAK_TEST("late production ACK callback cannot reach a new peer or reuse its sequence") {
     auto tracker = std::make_shared<DisplayControlAckTracker>();

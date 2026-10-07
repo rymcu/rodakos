@@ -12,7 +12,7 @@ cmake --build /tmp/rodakos-remote-input
 ctest --test-dir /tmp/rodakos-remote-input --output-on-failure
 ```
 
-The 20 scenarios cover explicit control enable, real text/key application,
+The 30 Linux/WSL scenarios cover explicit control enable, real text/key application,
 pointer down/up ordering, revoked queued input, session-name reuse, separate
 authorization grants after disable/enable, deferred navigation ownership,
 pointer release without waiting for cleanup, stale cleanup against a new held
@@ -22,6 +22,24 @@ They also verify cancellation replies for page transitions, local touch and
 disable; synchronous reentry from those replies; exactly-once navigation results
 when disable races admitted execution; and cancellation of all 49 bounded pending
 replies with C++ heap allocation disabled.
+
+The 019 extension drives real LVGL pointer devices and button event callbacks,
+rather than treating a RELEASED sample as proof that cancellation is harmless.
+After a down was accepted, disable, stream revocation/cleanup, local takeover and
+page transition reset the remote gesture without RELEASED/CLICKED. A cancellation
+epoch survives rapid disable/enable and peer replacement; the controller delivers
+a cancellation release before dequeuing a new down because LVGL reset alone does
+not clear its previous input state. Normal remote up still clicks exactly once.
+Tests cover both physical-publication/OnLocalTouch orders and repeated physical
+polling, preserving the new local gesture and unrelated physical-only clicks.
+
+A Linux link wrapper intercepts the production controller's mutex unlock once,
+then disables/revokes between dequeuing up and its final admission. This does not
+patch the production source. It proves that cancellation advances even when the
+cached pointer was already changed to up; otherwise the fallback release clicks.
+The expected sequence is INDEV_RESET followed by a fresh press/release, not a
+late action from the cancelled gesture. Logs print only seq/kind and a fixed
+action name for non-move input, never text content.
 
 The controller checks the captured stream lease and authorization grant at final
 execution. Revocation is nonblocking: one operation admitted before revocation

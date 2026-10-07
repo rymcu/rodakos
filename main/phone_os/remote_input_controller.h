@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -18,6 +19,8 @@ struct RemotePointerSample {
     bool pressed = false;
     int x = 0;
     int y = 0;
+    // A cancelled held gesture must reset LVGL instead of synthesizing an up.
+    uint64_t cancel_generation = 0;
 };
 
 class RemoteInputController {
