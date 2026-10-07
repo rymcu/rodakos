@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <sys/mman.h>
 #include <thread>
@@ -32,6 +33,9 @@ thread_local bool is_preview_task = false;
 constexpr size_t kPreviewFrameBytes = 2 * 2 * 2;
 std::mutex preview_allocations_mutex;
 std::array<void*, 32> preview_allocations{};
+std::mutex failure_mutex;
+size_t failure_bytes = 0, failure_nth = 0, failure_count = 0;
+camera_host::AllocationThread failure_thread = camera_host::AllocationThread::kCaller;
 std::string mount_path;
 sdmmc_card_t card;
 dev_fs_fat_handle_t board_handle{&card, nullptr};
@@ -46,6 +50,19 @@ void ForgetPreviewAllocation(void* pointer) {
         }
     }
 }
+
+bool RejectNew(size_t bytes) {
+    std::lock_guard<std::mutex> lock(failure_mutex);
+    const auto thread = current_task == nullptr ? camera_host::AllocationThread::kCaller
+        : is_preview_task ? camera_host::AllocationThread::kPreview
+                          : camera_host::AllocationThread::kJpeg;
+    if (failure_count == 0 || (failure_bytes != SIZE_MAX && bytes != failure_bytes) ||
+        thread != failure_thread) return false;
+    if (failure_nth > 1) { --failure_nth; return false; }
+    --failure_count;
+    ++camera_host::new_failures;
+    return true;
+}
 }
 
 namespace camera_host {
@@ -53,21 +70,47 @@ std::atomic<bool> fail_mount{false}, fail_directory{false}, fail_write{false}, f
 std::atomic<bool> fail_encoder_open{false}, fail_encoder_process{false}, fail_allocation{false}, empty_encoded{false};
 std::atomic<bool> collide_on_create{false};
 std::atomic<bool> fail_dequeue{false};
+std::atomic<bool> pause_frames{false}, frames_paused{false};
 std::atomic<unsigned> encoder_handles{0}, frame_mappings{0};
 std::atomic<size_t> preview_frame_bytes{0};
+std::atomic<unsigned> new_failures{0}, aligned_buffers{0}, dequeued_buffers{0}, requeued_buffers{0};
 std::function<void()> write_hook;
 std::function<void()> preview_state_query_hook;
 std::string collision_path;
 void Reset(const std::string& path) {
+    ClearNewFailures();
+    new_failures = dequeued_buffers = requeued_buffers = 0;
     mount_path = path;
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
     fail_encoder_open = fail_encoder_process = fail_allocation = empty_encoded = false;
     collide_on_create = false;
     fail_dequeue = false;
+    pause_frames = frames_paused = false;
     write_hook = {};
     preview_state_query_hook = {};
     collision_path.clear();
+}
+void FailNew(size_t bytes, size_t nth, size_t count, AllocationThread thread) {
+    std::lock_guard<std::mutex> lock(failure_mutex);
+    failure_bytes = bytes;
+    failure_nth = nth;
+    failure_count = count;
+    failure_thread = thread;
+}
+void ClearNewFailures() {
+    std::lock_guard<std::mutex> lock(failure_mutex);
+    failure_count = 0;
+}
+void* AllocateAligned(size_t alignment, size_t bytes) {
+    if (fail_allocation) return nullptr;
+    void* pointer = nullptr;
+    if (posix_memalign(&pointer, alignment, bytes) != 0) return nullptr;
+    ++aligned_buffers;
+    return pointer;
+}
+void FreeAligned(void* pointer) {
+    if (pointer != nullptr) { --aligned_buffers; std::free(pointer); }
 }
 bool IsCameraConfigured() {
     if (is_preview_task && preview_state_query_hook) preview_state_query_hook();
@@ -137,6 +180,7 @@ void __real__ZdlPv(void*);
 void __real__ZdlPvm(void*, size_t);
 
 void* __wrap__Znwm(size_t size) {
+    if (RejectNew(size)) throw std::bad_alloc();
     void* pointer = __real__Znwm(size);
     // Track the fake device's RGB565 allocations made by the production preview
     // worker, including buffers retained by the service after the worker exits.
@@ -204,6 +248,10 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         if (camera_host::fail_dequeue) { errno = EIO; return -1; }
         auto* buffer = static_cast<v4l2_buffer*>(argument);
         buffer->index = 0; buffer->bytesused = 8; buffer->flags = V4L2_BUF_FLAG_DONE;
+        if (camera_host::pause_frames) { buffer->flags = 0; camera_host::frames_paused = true; }
+        ++camera_host::dequeued_buffers;
+    } else if (request == VIDIOC_QBUF) {
+        ++camera_host::requeued_buffers;
     }
     return 0;
 }

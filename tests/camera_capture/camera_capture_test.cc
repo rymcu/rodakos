@@ -3,7 +3,9 @@
 #include "phone_os/camera_service.h"
 #include "rodakos_adapters/file_service.h"
 
+#include <array>
 #include <chrono>
+#include <new>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
@@ -32,6 +34,7 @@ struct Fixture {
         camera = std::make_unique<CameraService>(files.get());
     }
     ~Fixture() {
+        camera_host::ClearNewFailures();
         camera.reset();
         camera_host::JoinTasks();
         files.reset();
@@ -456,4 +459,229 @@ RODAK_TEST("directory reader preserves missing-directory errno through adapter l
     RODAK_CHECK_FALSE(f.files->ListDirectory("/missing-folder", entries));
     RODAK_CHECK_EQ(errno, ENOENT);
     RODAK_CHECK(entries.empty());
+}
+
+namespace {
+template <typename F> bool WaitFor(F&& predicate) {
+    for (unsigned attempt = 0; attempt < 1000; ++attempt) {
+        if (predicate()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
+using AllocationThread = camera_host::AllocationThread;
+}
+
+RODAK_TEST("preview allocation failures requeue buffers and recover without revoking owners") {
+    Fixture f; f.Preview();
+    RODAK_CHECK(f.camera->StartPreview(CameraService::PreviewOwner::kRemote, 2, 2));
+    CameraFrame held;
+    RODAK_CHECK(f.camera->GetLatestFrame(held));
+    const auto original = held.rgb565;
+    camera_host::FailNew(8, 1, SIZE_MAX, AllocationThread::kPreview);
+    RODAK_CHECK(WaitFor([] { return camera_host::new_failures >= 3; }));
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    RODAK_CHECK(f.camera->GetState().has_frame);
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    f.camera->StopPreview(CameraService::PreviewOwner::kLocal);
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    camera_host::ClearNewFailures();
+    const auto count = f.camera->GetState().frame_count;
+    RODAK_CHECK(WaitFor([&] { return f.camera->GetState().frame_count > count; }));
+    f.camera->StopPreview(CameraService::PreviewOwner::kRemote);
+    camera_host::JoinTasks();
+    RODAK_CHECK_EQ(held.rgb565, original);
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::requeued_buffers.load(), camera_host::dequeued_buffers.load() + 2u);
+    f.Preview();
+}
+
+RODAK_TEST("first preview frame allocation failures recover on a later driver buffer") {
+    Fixture f;
+    camera_host::FailNew(8, 1, 3, AllocationThread::kPreview);
+    f.Preview();
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 3u);
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::requeued_buffers.load(), camera_host::dequeued_buffers.load() + 2u);
+}
+
+RODAK_TEST("snapshot allocation failure releases the lock and preserves caller owned pixels") {
+    Fixture f; f.Preview();
+    CameraFrame held;
+    held.width = held.height = 1;
+    held.stride = 2;
+    held.rgb565 = {0xab, 0xcd};
+    held.sequence = 7;
+    const auto sequence = held.sequence;
+    const auto pixels = held.rgb565;
+    // Continue rejecting allocations while the catch records its short error.
+    camera_host::FailNew(SIZE_MAX, 1, SIZE_MAX, AllocationThread::kCaller);
+    const bool copied = f.camera->GetLatestFrame(held);
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_FALSE(copied);
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(held.sequence, sequence);
+    RODAK_CHECK_EQ(held.rgb565, pixels);
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    RODAK_CHECK(f.camera->GetLatestFrame(held));
+    f.camera->StopPreview();
+}
+
+RODAK_TEST("camera JPEG allocation failures release encoder input and preserve preview") {
+    Fixture f; f.Preview();
+    for (const auto& [bytes, nth] : {std::pair<size_t, size_t>{8, 1}, {8, 2}, {65536, 1}}) {
+        Bytes jpeg{1, 2, 3};
+        camera_host::FailNew(bytes, nth, 1, AllocationThread::kCaller);
+        const bool encoded = f.camera->CaptureJpeg(jpeg);
+        camera_host::ClearNewFailures();
+        RODAK_CHECK_FALSE(encoded);
+        RODAK_CHECK(jpeg.empty());
+        RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+        RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+        RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+        RODAK_CHECK(f.camera->GetState().preview_running);
+        RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
+    }
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 3u);
+}
+
+RODAK_TEST("camera state and error snapshots keep locks usable during repeated allocation failure") {
+    Fixture f; f.Preview(); f.Save();
+    camera_host::FailNew(SIZE_MAX, 1, SIZE_MAX, AllocationThread::kCaller);
+    auto state = f.camera->GetState();
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(state.preview_running);
+    RODAK_CHECK(state.has_frame);
+    RODAK_CHECK(state.last_saved_path.empty());
+    RODAK_CHECK_EQ(state.last_error, "Camera OOM");
+    f.camera->StopPreview();
+    Bytes jpeg;
+    RODAK_CHECK_FALSE(f.camera->CaptureJpeg(jpeg));
+    camera_host::FailNew(SIZE_MAX, 1, SIZE_MAX, AllocationThread::kCaller);
+    auto error = f.camera->last_error();
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_EQ(error, "Camera OOM");
+    f.Preview();
+}
+
+RODAK_TEST("camera JPEG worker recovers from callback copy allocation failure without holding its lock") {
+    Fixture f; f.Preview();
+    std::atomic<unsigned> delivered{0};
+    struct Callback {
+        std::array<uint8_t, 128> storage{};
+        std::atomic<unsigned>* delivered;
+        void operator()(Bytes&&, uint32_t, int64_t) const { ++*delivered; }
+    };
+    camera_host::FailNew(sizeof(Callback), 1, 3, AllocationThread::kJpeg);
+    RODAK_CHECK(f.camera->StartJpegStream(30, Callback{{}, &delivered}));
+    RODAK_CHECK(WaitFor([&] { return delivered > 0; }));
+    f.camera->StopJpegStream();
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 3u);
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+}
+
+RODAK_TEST("camera JPEG callback bad_alloc consumes its sequence and permits later frames") {
+    Fixture f; f.Preview();
+    camera_host::pause_frames = true;
+    RODAK_CHECK(WaitFor([] { return camera_host::frames_paused.load(); }));
+    std::atomic<unsigned> attempts{0}, delivered{0};
+    std::atomic<uint32_t> rejected{0}, accepted{0};
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t sequence, int64_t) {
+        if (attempts++ == 0) { rejected = sequence; throw std::bad_alloc(); }
+        accepted = sequence;
+        ++delivered;
+    }));
+    RODAK_CHECK(WaitFor([&] { return attempts > 0; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    const auto attempts_before_new_frame = attempts.load();
+    camera_host::pause_frames = false;
+    RODAK_CHECK(WaitFor([&] { return delivered > 0; }));
+    f.camera->StopJpegStream();
+    RODAK_CHECK_EQ(attempts_before_new_frame, 1u);
+    RODAK_CHECK(accepted > rejected);
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    RODAK_CHECK(f.camera->GetState().preview_running);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+}
+
+RODAK_TEST("camera JPEG stop remains observable during persistent callback copy failure") {
+    Fixture f; f.Preview();
+    struct Callback {
+        std::array<uint8_t, 128> storage{};
+        void operator()(Bytes&&, uint32_t, int64_t) const {}
+    };
+    camera_host::FailNew(sizeof(Callback), 1, SIZE_MAX, AllocationThread::kJpeg);
+    RODAK_CHECK(f.camera->StartJpegStream(30, Callback{}));
+    RODAK_CHECK(WaitFor([] { return camera_host::new_failures >= 3; }));
+    const auto start = std::chrono::steady_clock::now();
+    f.camera->StopJpegStream();
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
+    RODAK_CHECK(f.camera->GetState().preview_running);
+}
+
+RODAK_TEST("camera video buffer table allocation failure closes the device and permits retry") {
+    Fixture f;
+    camera_host::FailNew(2 * (sizeof(void*) + sizeof(size_t)), 1, 1, AllocationThread::kCaller);
+    const bool started = f.camera->StartPreview(2, 2);
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_FALSE(started);
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    RODAK_CHECK_FALSE(f.camera->GetState().preview_running);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+    f.Preview();
+}
+
+RODAK_TEST("camera successful file write publishes results without allocating afterward") {
+    Fixture f; f.Preview();
+    camera_host::write_hook = [] {
+        camera_host::FailNew(SIZE_MAX, 1, SIZE_MAX, AllocationThread::kCaller);
+    };
+    std::string path;
+    const bool saved = f.camera->CapturePhoto(path);
+    camera_host::ClearNewFailures();
+    camera_host::write_hook = {};
+    RODAK_CHECK(saved);
+    RODAK_CHECK_FALSE(path.empty());
+    RODAK_CHECK_EQ(f.camera->GetState().last_saved_path, path);
+    RODAK_CHECK_EQ(f.Read(path), camera_host::EncodedBytes());
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 0u);
+    RODAK_CHECK_FALSE(f.Save().empty());
+}
+
+RODAK_TEST("camera save allocation rejection preserves historical result and permits retry") {
+    Fixture f; f.Preview();
+    const auto previous = f.Save();
+    camera_host::FailNew(previous.size() + 1, 1, 1, AllocationThread::kCaller);
+    std::string path;
+    const bool saved = f.camera->CapturePhoto(path);
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_FALSE(saved);
+    RODAK_CHECK(path.empty());
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(f.camera->GetState().last_saved_path, previous);
+    RODAK_CHECK_EQ(f.PhotoCount(), 1u);
+    RODAK_CHECK_EQ(f.Read(previous), camera_host::EncodedBytes());
+    RODAK_CHECK_FALSE(f.Save().empty());
+}
+
+RODAK_TEST("camera JPEG worker snapshot OOM drops attempts then recovers with resources released") {
+    Fixture f; f.Preview();
+    std::atomic<unsigned> delivered{0};
+    camera_host::FailNew(8, 1, 3, AllocationThread::kJpeg);
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) { ++delivered; }));
+    RODAK_CHECK(WaitFor([&] { return delivered > 0; }));
+    f.camera->StopJpegStream();
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 3u);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+    RODAK_CHECK(f.camera->GetState().preview_running);
 }
