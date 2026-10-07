@@ -10,6 +10,7 @@ set(WAKE "${ROOT}/tests/voice_wake_service")
 
 add_library(voice_identity_integration_host STATIC
     "${MQTT}/host_runtime.cc"
+    "${MQTT}/diagnostics_support.cc"
     "${ROOT}/tests/light_service/host_driver.cc"
     "${ROOT}/managed_components/espressif__cjson/cJSON/cJSON.c"
     "${MAIN}/phone_os/unified_mqtt_service.cc"
