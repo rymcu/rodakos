@@ -21,15 +21,24 @@ public:
         uint64_t authority = 0;
         uint64_t sequence = 0;
     };
+    // A zero nonce leaves ordinary/legacy results unscoped without another
+    // allocation. Exact stream Stop results retain their original instance.
+    struct CompletionScope {
+        uint32_t client_generation = 0;
+        uint64_t connection_epoch = 0;
+        uint64_t stream_instance_nonce = 0;
+    };
     enum class Disposition { kExecute, kReplay, kPending, kReject };
     struct Admission {
         Disposition disposition = Disposition::kReject;
         Ticket ticket;
         std::string acknowledgement;
+        CompletionScope completion_scope{};
     };
 
     Admission Begin(const std::string& command_no, const std::string& payload);
     bool Complete(Ticket ticket, const std::string& acknowledgement);
+    bool Complete(Ticket ticket, const std::string& acknowledgement, CompletionScope scope);
     void ResetAuthority();
 
 private:
@@ -40,6 +49,7 @@ private:
         bool complete = false;
         bool has_response = false;
         std::string response;
+        CompletionScope completion_scope{};
     };
     std::deque<Entry> entries_;
     uint64_t authority_ = 1;

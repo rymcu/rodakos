@@ -47,6 +47,11 @@ std::string Request(bool display, const std::string& action, const std::string& 
     return "{\"command\":\"" + std::string(display ? "display" : "camera") + ".stream." +
         action + "\",\"sessionId\":\"" + session + "\",\"type\":\"candidate\",\"data\":\"aWNl\"}";
 }
+std::string ExactStop(bool display, const std::string& session, const std::string& start) {
+    auto request = Request(display, "stop", session);
+    request.insert(request.size() - 1, ",\"startCommandNo\":\"" + start + "\"");
+    return request;
+}
 void Process(const std::string& number, const std::string& payload) {
     Message(Topic(number), payload, true);
     RODAK_CHECK(WaitWorkerProcessed(LastQueuedMessage()));
@@ -91,9 +96,247 @@ struct Streams {
     void Start(bool is_display, const std::string& number, const std::string& session) {
         Process(number, Request(is_display, "start", session));
         RODAK_CHECK_EQ(Status(Ack(number)), "ok");
+        RODAK_CHECK_EQ(std::string(Get(Get(Ack(number).get(), "result"), "startCommandNo")->valuestring), number);
         RODAK_CHECK(Peer(is_display).running);
     }
 };
+
+void CheckStop(const std::string& number, const std::string& session,
+               const std::string& start, const char* outcome) {
+    const auto ack = Ack(number);
+    RODAK_CHECK_EQ(Status(ack), "ok");
+    const auto* result = Get(ack.get(), "result");
+    RODAK_CHECK_EQ(std::string(Get(result, "sessionId")->valuestring), session);
+    RODAK_CHECK_EQ(std::string(Get(result, "startCommandNo")->valuestring), start);
+    RODAK_CHECK_EQ(std::string(Get(result, "stopOutcome")->valuestring), outcome);
+}
+
+void CheckNotFound(bool display, const std::string& number) {
+    const auto ack = Ack(number);
+    RODAK_CHECK_EQ(Status(ack), "error");
+    RODAK_CHECK_EQ(std::string(Get(ack.get(), "errorCode")->valuestring),
+                   std::string(display ? "display" : "camera") + "_stream_not_found");
+}
+}
+
+RODAK_TEST("MQTT exact Stop recognizes its successfully started peer after terminal cleanup") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        auto& peer = streams.Peer(display);
+        streams.Start(display, "closed-start", "closed-session");
+        peer.SavedCallbacks().state(ESP_PEER_STATE_DISCONNECTED);
+        RODAK_CHECK(WaitUntil([&]() { return !peer.running; }));
+        streams.mqtt.Barrier();
+        const auto stops = peer.stop_calls.load();
+        Process("late-stop", ExactStop(display, "closed-session", "closed-start"));
+        CheckStop("late-stop", "closed-session", "closed-start", "already_stopped");
+        Process("later-stop", ExactStop(display, "closed-session", "closed-start"));
+        CheckStop("later-stop", "closed-session", "closed-start", "already_stopped");
+        RODAK_CHECK_EQ(peer.stop_calls.load(), stops);
+        Process("legacy-late-stop", Request(display, "stop", "closed-session"));
+        CheckNotFound(display, "legacy-late-stop");
+    }
+}
+
+RODAK_TEST("MQTT exact Stop freezes its original outcome and new requests observe already stopped") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        streams.Start(display, "exact-start", "exact-session");
+        const auto request = ExactStop(display, "exact-session", "exact-start");
+        Process("exact-stop", request);
+        CheckStop("exact-stop", "exact-session", "exact-start", "stopped");
+        const auto original = Wire("exact-stop").back().payload;
+        const auto stops = streams.Peer(display).stop_calls.load();
+        Process("exact-stop", request);
+        CheckStop("exact-stop", "exact-session", "exact-start", "stopped");
+        RODAK_CHECK_EQ(Wire("exact-stop").back().payload, original);
+        Process("new-exact-stop", request);
+        CheckStop("new-exact-stop", "exact-session", "exact-start", "already_stopped");
+        RODAK_CHECK_EQ(streams.Peer(display).stop_calls.load(), stops);
+    }
+}
+
+RODAK_TEST("MQTT old precise Stop cannot close a same-session replacement or replay success for it") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        auto& peer = streams.Peer(display);
+        streams.Start(display, "precise-first", "reused-session");
+        const auto first = ExactStop(display, "reused-session", "precise-first");
+        Process("old-precise-stop", first);
+        CheckStop("old-precise-stop", "reused-session", "precise-first", "stopped");
+        streams.Start(display, "precise-second", "reused-session");
+        const auto stops = peer.stop_calls.load();
+        Process("late-old-precise-stop", first);
+        CheckNotFound(display, "late-old-precise-stop");
+        Process("old-precise-stop", first);
+        CheckNotFound(display, "old-precise-stop");
+        RODAK_CHECK_EQ(peer.stop_calls.load(), stops);
+        RODAK_CHECK(peer.running);
+        Process("second-precise-stop", ExactStop(display, "reused-session", "precise-second"));
+        CheckStop("second-precise-stop", "reused-session", "precise-second", "stopped");
+    }
+}
+
+RODAK_TEST("MQTT exact Stop rejects unknown identities and the other stream kind without native calls") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        Process("unknown-stop", ExactStop(display, "unknown", "unknown-start"));
+        CheckNotFound(display, "unknown-stop");
+        streams.Start(display, "known-start", "known-session");
+        Process("wrong-start-stop", ExactStop(display, "known-session", "other-start"));
+        CheckNotFound(display, "wrong-start-stop");
+        Process("wrong-session-stop", ExactStop(display, "other-session", "known-start"));
+        CheckNotFound(display, "wrong-session-stop");
+        Process("wrong-kind-stop", ExactStop(!display, "known-session", "known-start"));
+        CheckNotFound(!display, "wrong-kind-stop");
+        RODAK_CHECK(streams.Peer(display).running);
+        RODAK_CHECK_EQ(streams.Peer(display).stop_calls.load(), 0u);
+        RODAK_CHECK_EQ(streams.Peer(!display).stop_calls.load(), 0u);
+    }
+}
+
+RODAK_TEST("MQTT failed and synchronously terminated Start never create successful Stop proof") {
+    for (bool display : {false, true}) for (bool synchronous : {false, true}) {
+        Streams streams;
+        auto& peer = streams.Peer(display);
+        peer.start_result = synchronous;
+        peer.synchronous_terminal_state = synchronous;
+        Process("unaccepted-start", Request(display, "start", "unaccepted-session"));
+        RODAK_CHECK_EQ(Status(Ack("unaccepted-start")), "error");
+        Process("unaccepted-stop", ExactStop(display, "unaccepted-session", "unaccepted-start"));
+        CheckNotFound(display, "unaccepted-stop");
+    }
+}
+
+RODAK_TEST("MQTT exact Stop proof and cached success expire on connection epoch and authority reset") {
+    for (bool display : {false, true}) for (bool authority : {false, true}) {
+        Streams streams;
+        streams.Start(display, "scope-start", "scope-session");
+        const auto request = ExactStop(display, "scope-session", "scope-start");
+        Process("scope-stop", request);
+        CheckStop("scope-stop", "scope-session", "scope-start", "stopped");
+        const auto stops = streams.Peer(display).stop_calls.load();
+        if (authority) {
+            std::lock_guard<std::mutex> lock(streams.mqtt.service.mqtt_mutex_);
+            streams.mqtt.service.ResetEffectAuthorityLocked();
+        } else {
+            Disconnect();
+            Connect();
+        }
+        Process("scope-stop", request);
+        CheckNotFound(display, "scope-stop");
+        Process("scope-new-stop", request);
+        CheckNotFound(display, "scope-new-stop");
+        RODAK_CHECK_EQ(streams.Peer(display).stop_calls.load(), stops);
+    }
+}
+
+RODAK_TEST("MQTT cleanup cannot publish closed proof before native Stop returns or after epoch change") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        auto& peer = streams.Peer(display);
+        streams.Start(display, "held-proof-start", "held-proof-session");
+        BlockPoint stop;
+        peer.before_stop_return = [&]() { stop.Enter(); };
+        peer.SavedCallbacks().state(ESP_PEER_STATE_CLOSED);
+        RODAK_CHECK(stop.Wait());
+        {
+            std::lock_guard<std::mutex> lock(streams.mqtt.service.mqtt_mutex_);
+            RODAK_CHECK((display ? streams.mqtt.service.display_closed_lease_ : streams.mqtt.service.camera_closed_lease_) == nullptr);
+        }
+        Message(Topic("held-proof-stop"), ExactStop(display, "held-proof-session", "held-proof-start"), true);
+        RODAK_CHECK(Wire("held-proof-stop").empty());
+        Disconnect();
+        Connect();
+        stop.Release();
+        RODAK_CHECK(WaitWorkerProcessed(LastQueuedMessage()));
+        peer.before_stop_return = {};
+        Process("after-held-proof-stop", ExactStop(display, "held-proof-session", "held-proof-start"));
+        CheckNotFound(display, "after-held-proof-stop");
+        RODAK_CHECK(Wire("held-proof-stop").empty());
+    }
+}
+
+RODAK_TEST("MQTT cached precise Stop remains bound after start-number eviction and instance reuse") {
+    for (bool display : {false, true}) for (bool reconnect : {false, true}) {
+        Streams streams;
+        auto& peer = streams.Peer(display);
+        streams.Start(display, "reused-start-number", "reused-session");
+        for (unsigned i = 0; i < 62; ++i) {
+            const auto number = "fill-" + std::to_string(i);
+            Process(number, "ping");
+            RODAK_CHECK_EQ(Status(Ack(number)), "ok");
+        }
+        const auto request = ExactStop(display, "reused-session", "reused-start-number");
+        Process("retained-old-stop", request);
+        CheckStop("retained-old-stop", "reused-session", "reused-start-number", "stopped");
+        Process("evict-start-only", "ping");
+        RODAK_CHECK_EQ(Status(Ack("evict-start-only")), "ok");
+        if (reconnect) { Disconnect(); Connect(); }
+        streams.Start(display, "reused-start-number", "reused-session");
+        RODAK_CHECK_EQ(peer.start_calls.load(), 2u);
+        Process("new-instance-stop", request);
+        CheckStop("new-instance-stop", "reused-session", "reused-start-number", "stopped");
+        const auto stops = peer.stop_calls.load();
+        Process("retained-old-stop", request);
+        CheckNotFound(display, "retained-old-stop");
+        RODAK_CHECK_EQ(peer.stop_calls.load(), stops);
+        Process("retained-old-stop", request + " ");
+        const auto conflict = Ack("retained-old-stop");
+        RODAK_CHECK_EQ(std::string(Get(conflict.get(), "errorCode")->valuestring), "command_conflict");
+    }
+}
+
+RODAK_TEST("MQTT exact Stop preserves cached errors and refuses malformed instance identities") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        const auto request = ExactStop(display, "failure-session", "failure-start");
+        Process("frozen-failure", request);
+        CheckNotFound(display, "frozen-failure");
+        streams.Start(display, "failure-start", "failure-session");
+        Process("frozen-failure", request);
+        CheckNotFound(display, "frozen-failure");
+        unsigned malformed_index = 0;
+        for (const auto& encoded : {std::string("null"), std::string("1"), std::string("\"\""),
+                                    std::string("\"") + std::string(129, 'x') + "\""}) {
+            auto malformed = Request(display, "stop", "failure-session");
+            malformed.insert(malformed.size() - 1, ",\"startCommandNo\":" + encoded);
+            const auto number = "malformed-" + std::to_string(malformed_index++);
+            Process(number, malformed);
+            RODAK_CHECK_EQ(Status(Ack(number)), "error");
+        }
+        auto nul = Request(display, "stop", "failure-session");
+        nul.insert(nul.size() - 1, ",\"startCommandNo\":\"failure-start\\u0000other\"");
+        Process("nul-start-identity", nul);
+        RODAK_CHECK_EQ(Status(Ack("nul-start-identity")), "error");
+        RODAK_CHECK(streams.Peer(display).running);
+        RODAK_CHECK_EQ(streams.Peer(display).stop_calls.load(), 0u);
+    }
+}
+
+RODAK_TEST("MQTT stream commands consume the full JSON input and retain bare ping compatibility") {
+    for (bool display : {false, true}) {
+        Streams streams;
+        const auto start = Request(display, "start", "strict-session");
+        Process("trailing-start", start + " trailing");
+        RODAK_CHECK_EQ(Status(Ack("trailing-start")), "error");
+        Process("nul-start", start + std::string("\0hidden", 7));
+        RODAK_CHECK_EQ(Status(Ack("nul-start")), "error");
+        RODAK_CHECK_EQ(streams.Peer(display).start_calls.load(), 0u);
+        Process("strict-start", start + " \r\n\t");
+        RODAK_CHECK_EQ(Status(Ack("strict-start")), "ok");
+        const auto stop = ExactStop(display, "strict-session", "strict-start");
+        Process("trailing-stop", stop + "{}");
+        RODAK_CHECK_EQ(Status(Ack("trailing-stop")), "error");
+        Process("nul-stop", stop + std::string("\0hidden", 7));
+        RODAK_CHECK_EQ(Status(Ack("nul-stop")), "error");
+        RODAK_CHECK(streams.Peer(display).running);
+        RODAK_CHECK_EQ(streams.Peer(display).stop_calls.load(), 0u);
+        Process("bare-ping", "ping");
+        RODAK_CHECK_EQ(Status(Ack("bare-ping")), "ok");
+        Process("strict-stop", stop + " \n");
+        CheckStop("strict-stop", "strict-session", "strict-start", "stopped");
+    }
 }
 
 RODAK_TEST("MQTT revoked queued camera and display starts never enter native peers") {

@@ -205,8 +205,49 @@ Camera/display failures use `camera_stream_unavailable` / `display_stream_unavai
 `camera_signal_rejected` / `display_signal_rejected`. Shared validation codes are
 `invalid_payload`, `missing_session_id`, `invalid_signal` and `invalid_signal_encoding`.
 Service availability is checked before session validation. Successful stream commands return
-`result.sessionId`; start also returns `result.transport: webrtc-datachannel`. These are ordinary
+`result.sessionId`; start also returns `result.transport: webrtc-datachannel` and
+`result.startCommandNo`, the original Start command number. These are ordinary
 command replies, without effect ID/hash, configuration revision, persistence or physical evidence.
+
+### Exact stream Stop (026)
+
+New clients identify the instance using the original Start command number:
+
+```json
+{"command":"display.stream.stop","sessionId":"preview-session","startCommandNo":"start-command-1"}
+```
+
+`camera.stream.stop` uses the same fields. A successful response contains
+`result: {sessionId, startCommandNo, stopOutcome}`. `stopOutcome: stopped` means this request
+revoked the matching active instance and its native Stop returned; `already_stopped` means the
+latest successfully started instance had already completed that cleanup in the same MQTT
+generation, connection epoch and authority. Neither outcome proves physical/DMA/idle-task
+resource return. Native joins keep their existing blocking limits; no hard timeout is promised.
+
+Each stream kind retains at most one volatile completed-cleanup proof. It is created only after
+native Stop returns, for the captured owner of a successful Start. Revocation or a terminal callback
+alone is insufficient; failed/synchronously terminated starts cannot create a successful proof.
+A replacement Start invalidates the previous proof for that stream kind, while epoch/authority
+changes clear both. Late cleanup cannot repopulate a newer scope. Unknown sessions, wrong
+`startCommandNo`, the other stream kind and stale proofs return the existing `_stream_not_found`
+error without stopping a replacement. A present `startCommandNo` must be a nonempty string of
+at most 128 bytes; invalid values return `invalid_start_command_no`. Ambiguous duplicate JSON
+keys or embedded JSON NULs in stream requests return `invalid_payload`.
+
+An exact Stop's cached success is replayed only while its saved generation/epoch/instance nonce
+still matches the latest completed-cleanup proof and current connection. Otherwise this delivery
+returns `_stream_not_found`; the original final ledger record is not overwritten and no native
+operation is repeated. Cached failures remain conservative failures, and changed raw payloads
+still produce `command_conflict`. This is a response-scope restriction for exact Stop, not a
+renewal of an old authorization.
+
+For compatibility, a Stop with no `startCommandNo` can stop the current matching `sessionId`,
+returning the actual start identity and `stopOutcome: stopped`. It does not receive the new
+`already_stopped` behavior; its existing cached-response behavior is unchanged. Such a legacy
+request cannot distinguish an old logical session from a same-named replacement. New clients
+must use a fresh Start command number for each instance and preserve it with the session.
+The existing 64-command replay window and reboot/eviction limits still apply; intentionally
+reusing an evicted Start command number is not an unbounded exactly-once identity guarantee.
 
 Rodak now records native `status: error` replies as `failed`, retaining the first ACK body,
 timestamp and failure detail. Its first terminal command result is frozen: duplicate or conflicting
@@ -230,6 +271,7 @@ in-flight duplicate neither executes nor emits an additional result; the origina
 Completed records are immutable. Reconnects,
 ordinary token refresh and Stop/Start on the same service object retain the window; authority
 replacement clears it, and old completion tickets cannot enter the new authority.
+Exact Stop successes additionally obey the completed-instance response-scope check described above.
 
 Command numbers are limited to 128 bytes and input payloads to 256 KiB. Cached reply bodies share
 a 64 KiB budget; if a body cannot be retained, its recent completed ID stays as a tombstone and

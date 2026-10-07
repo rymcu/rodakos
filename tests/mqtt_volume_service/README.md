@@ -115,6 +115,27 @@ text uses one complete frame. Initial reports and the internal ping barrier are 
 and display services are not injected, so their commands return production `_stream_unavailable`
 errors. The fixture accepts its own command topics and reserves `host-barrier` for synchronization.
 
+026 adds the explicit `--video-streams` option for command conformance. It injects the existing
+camera/display peer fakes; without this option the unavailable behavior stays unchanged. Start,
+Stop, lease cleanup, instance matching, command deduplication and ACK creation still execute the
+production `UnifiedMqttService`. Normal transport inputs are unchanged. A Start success returns
+its original `startCommandNo`; exact Stop includes that value and returns
+`result.stopOutcome: stopped | already_stopped`. See the [wire contract](../../docs/rodak-aiot-contract-v1.md).
+
+To reproduce a peer closing before the supplementary Stop, send this fixture-only control line
+after a successful display Start:
+
+```json
+{"fixtureEvent":"peer-terminal","streamKind":"display"}
+```
+
+`streamKind: camera` is also accepted. This invokes the saved native peer terminal callback and
+waits for production worker cleanup. Its stdout line has `processed`, `fixtureEvent` and
+`streamKind`; it is a synchronization marker without `topic`/`payload`, not a device ACK. Send the
+subsequent exact Stop through the ordinary `{topic,payload}` wrapper to obtain the real captured
+production ACK. Peer/JPEG hardware, a real SDK close, DMA return and physical resource recovery
+are not exercised by these peer fakes.
+
 The independent command cases cover four ping shapes, malformed/unsupported requests, all six
 camera/display unavailable paths, replaying cached command results and rejecting raw-payload conflicts, and rejecting an old
 queued command after a same-client reconnect. Additional cases inject successful fake streams,

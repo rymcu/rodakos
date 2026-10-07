@@ -60,6 +60,27 @@ bool HasUniqueJsonKeys(const cJSON* object) {
     return true;
 }
 
+bool HasCommandJsonNul(const std::string& json) {
+    for (size_t i = 0; i < json.size(); ++i) {
+        if (json[i] == '\0') return true;
+        if (json[i] == '\\') {
+            if (json.compare(i, 6, "\\u0000") == 0) return true;
+            ++i;
+        }
+    }
+    return false;
+}
+
+cJSON* ParseCommandJson(const std::string& payload) {
+    const char* end = nullptr;
+    cJSON* result = cJSON_ParseWithLengthOpts(payload.c_str(), payload.size() + 1, &end, true);
+    if (end != payload.c_str() + payload.size()) {
+        cJSON_Delete(result);
+        return nullptr;
+    }
+    return result;
+}
+
 std::string EncodeJson(cJSON* root) {
     char* text = cJSON_PrintUnformatted(root);
     if (text == nullptr) {
@@ -224,7 +245,7 @@ bool ExtractCommandNo(const std::string& topic, const std::string& wildcard,
 }
 
 bool IsPingCommand(const std::string& payload) {
-    cJSON* root = cJSON_Parse(payload.c_str());
+    cJSON* root = ParseCommandJson(payload);
     if (root == nullptr) {
         return payload == "ping";
     }
@@ -1062,6 +1083,8 @@ void UnifiedMqttService::AdvanceConnectionEpochLocked() {
     effect_receipts_.clear();
     command_publications_.clear();
     command_publication_bytes_ = 0;
+    camera_closed_lease_.reset();
+    display_closed_lease_.reset();
     if (camera_lease_ != nullptr) camera_lease_->Revoke();
     if (display_lease_ != nullptr) display_lease_->Revoke();
     stream_cleanup_pending_ = camera_lease_ != nullptr || display_lease_ != nullptr;
@@ -1071,6 +1094,8 @@ void UnifiedMqttService::ResetEffectAuthorityLocked() {
     volume_effect_.ResetAuthority();
     light_effect_.ResetAuthority();
     command_ledger_.ResetAuthority();
+    camera_closed_lease_.reset();
+    display_closed_lease_.reset();
 }
 
 bool UnifiedMqttService::IsCommandContextCurrentLocked(
@@ -1099,6 +1124,18 @@ void UnifiedMqttService::RevokeStreamLease(const StreamLeasePtr& lease) {
     if (lease == camera_lease_ || lease == display_lease_) stream_cleanup_pending_ = true;
 }
 
+StreamLeasePtr UnifiedMqttService::FindClosedStreamLocked(
+    bool display, const std::string& session_id, const std::string& start_command_no) const {
+    const auto& closed = display ? display_closed_lease_ : camera_closed_lease_;
+    if (!started_.load() || !connected_.load() || !effect_authority_active_ || client_ == nullptr ||
+        closed == nullptr || (display ? display_lease_ : camera_lease_) != nullptr ||
+        !closed->WasStartAccepted() || closed->IsActive() || start_command_no.empty() ||
+        closed->session_id != session_id || closed->start_command_no != start_command_no ||
+        closed->client_generation != client_generation_ || closed->connection_epoch != connection_epoch_ ||
+        closed->instance_nonce != (display ? display_latest_nonce_ : camera_latest_nonce_)) return {};
+    return closed;
+}
+
 void UnifiedMqttService::CleanupRevokedStreams() {
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
@@ -1119,14 +1156,29 @@ void UnifiedMqttService::CleanupRevokedStreamsLocked() {
             if (current != nullptr && !current->IsActive()) lease = current;
         }
         if (lease == nullptr) continue;
+        bool stop_completed = false;
         if (display) {
-            if (web_rtc_display_service_ != nullptr) web_rtc_display_service_->Stop();
+            if (web_rtc_display_service_ != nullptr) {
+                web_rtc_display_service_->Stop();
+                stop_completed = true;
+            }
         } else if (web_rtc_camera_service_ != nullptr) {
             web_rtc_camera_service_->Stop();
+            stop_completed = true;
         }
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         auto& current = display ? display_lease_ : camera_lease_;
-        if (current == lease) current.reset();
+        if (current == lease) {
+            // Only the completed native join is evidence; revocation/terminal
+            // callbacks alone cannot make a delayed Stop successful.
+            if (stop_completed && lease->WasStartAccepted() && started_.load() && connected_.load() &&
+                effect_authority_active_ && client_ != nullptr && lease->client_generation == client_generation_ &&
+                lease->connection_epoch == connection_epoch_ &&
+                lease->instance_nonce == (display ? display_latest_nonce_ : camera_latest_nonce_)) {
+                (display ? display_closed_lease_ : camera_closed_lease_) = lease;
+            }
+            current.reset();
+        }
     }
     std::lock_guard<std::mutex> lock(mqtt_mutex_);
     stream_cleanup_pending_ = (camera_lease_ != nullptr && !camera_lease_->IsActive()) ||
@@ -1689,7 +1741,7 @@ void UnifiedMqttService::StopWebRtcDisplayStream() {
 void UnifiedMqttService::HandleCommand(const std::string& command_no,
                                        const std::string& payload,
                                        const CommandPublishContext& context) {
-    cJSON* request = cJSON_Parse(payload.c_str());
+    cJSON* request = ParseCommandJson(payload);
     std::string command;
     if (cJSON_IsObject(request)) {
         const cJSON* command_json = cJSON_GetObjectItemCaseSensitive(request, "command");
@@ -1707,6 +1759,14 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
         command == "camera.stream.stop" || command == "camera.stream.signal";
     const bool display_command = command == "display.stream.start" ||
         command == "display.stream.stop" || command == "display.stream.signal";
+    const bool stream_stop = command == "camera.stream.stop" || command == "display.stream.stop";
+    const cJSON* start_command_json = cJSON_GetObjectItemCaseSensitive(request, "startCommandNo");
+    const bool exact_stop = stream_stop && start_command_json != nullptr;
+    const std::string stop_start_command = cJSON_IsString(start_command_json) && start_command_json->valuestring != nullptr
+        ? start_command_json->valuestring : std::string();
+    const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
+    const std::string session_id = cJSON_IsString(session_json) && session_json->valuestring != nullptr
+        ? session_json->valuestring : std::string();
     std::unique_lock<std::mutex> operation_lock(stream_operation_mutex_, std::defer_lock);
     if (camera_command || display_command) {
         operation_lock.lock();
@@ -1722,6 +1782,25 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
         admission = command_ledger_.Begin(command_no, payload);
     }
     if (admission.disposition != MqttCommandLedger::Disposition::kExecute) {
+        if (exact_stop && admission.disposition == MqttCommandLedger::Disposition::kReplay) {
+            cJSON* cached = cJSON_Parse(admission.acknowledgement.c_str());
+            const cJSON* status = cJSON_GetObjectItemCaseSensitive(cached, "status");
+            if (cJSON_IsString(status) && std::strcmp(status->valuestring, "ok") == 0) {
+                std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                const auto closed = FindClosedStreamLocked(display_command, session_id, stop_start_command);
+                const auto& scope = admission.completion_scope;
+                if (!IsCommandContextCurrentLocked(context) || closed == nullptr ||
+                    scope.client_generation != context.client_generation ||
+                    scope.connection_epoch != context.connection_epoch ||
+                    scope.stream_instance_nonce != closed->instance_nonce) {
+                    // Keep the frozen ledger result; an old success cannot be
+                    // reissued as current-scope completion of another instance.
+                    admission.acknowledgement = std::string("{\"status\":\"error\",\"errorCode\":\"") +
+                        (display_command ? "display" : "camera") + "_stream_not_found\"}";
+                }
+            }
+            cJSON_Delete(cached);
+        }
         cJSON_Delete(request);
         if (operation_lock.owns_lock()) operation_lock.unlock();
         if (admission.disposition != MqttCommandLedger::Disposition::kPending) {
@@ -1732,6 +1811,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
 
     bool handled = false;
     bool success = false;
+    MqttCommandLedger::CompletionScope completion_scope;
     std::string error_code;
     cJSON* result = cJSON_CreateObject();
     if (camera_command || display_command) {
@@ -1743,18 +1823,19 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
             admitted = IsCommandContextCurrentLocked(context) && effect_authority_active_;
         }
-        const cJSON* session_json = cJSON_GetObjectItemCaseSensitive(request, "sessionId");
-        const std::string session_id =
-            cJSON_IsString(session_json) && session_json->valuestring != nullptr
-                ? session_json->valuestring : std::string();
         if (!admitted) {
             error_code = "command_scope_expired";
         } else if (display ? web_rtc_display_service_ == nullptr : web_rtc_camera_service_ == nullptr) {
             error_code = prefix + "_stream_unavailable";
         } else if (!cJSON_IsObject(request)) {
             error_code = "invalid_payload";
+        } else if (!HasUniqueJsonKeys(request) || HasCommandJsonNul(payload)) {
+            error_code = "invalid_payload";
         } else if (session_id.empty()) {
             error_code = "missing_session_id";
+        } else if (exact_stop && (stop_start_command.empty() ||
+                   stop_start_command.size() > MqttCommandLedger::kMaxCommandNoBytes)) {
+            error_code = "invalid_start_command_no";
         } else if (command == prefix + ".stream.start") {
             StreamLeasePtr lease;
             {
@@ -1768,9 +1849,10 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                 } else {
                     ++next_stream_instance_nonce_;
                     lease = std::make_shared<StreamLease>(context.client_generation,
-                        context.connection_epoch, next_stream_instance_nonce_, session_id);
+                        context.connection_epoch, next_stream_instance_nonce_, session_id, command_no);
                     (display ? display_lease_ : camera_lease_) = lease;
                     (display ? display_latest_nonce_ : camera_latest_nonce_) = lease->instance_nonce;
+                    (display ? display_closed_lease_ : camera_closed_lease_).reset();
                 }
             }
             if (lease != nullptr) {
@@ -1863,7 +1945,9 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                 {
                     std::lock_guard<std::mutex> lock(mqtt_mutex_);
                     success = peer_started && IsStreamPublicationCurrentLocked(lease, false, display);
-                    if (!success) {
+                    if (success) {
+                        lease->MarkStartAccepted();
+                    } else {
                         lease->Revoke();
                         stream_cleanup_pending_ = true;
                         error_code = peer_started ? "command_scope_expired" : prefix + "_stream_start_failed";
@@ -1871,29 +1955,43 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
                 }
                 if (success) {
                     cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                    cJSON_AddStringToObject(result, "startCommandNo", lease->start_command_no.c_str());
                     cJSON_AddStringToObject(result, "transport", "webrtc-datachannel");
                 }
             }
         } else if (command == prefix + ".stream.stop") {
             StreamLeasePtr lease;
+            StreamLeasePtr closed;
             {
                 std::lock_guard<std::mutex> lock(mqtt_mutex_);
                 const auto& current = display ? display_lease_ : camera_lease_;
                 if (!IsCommandContextCurrentLocked(context) || !effect_authority_active_) {
                     error_code = "command_scope_expired";
                 } else if (current != nullptr && current->session_id == session_id &&
+                           (!exact_stop || current->start_command_no == stop_start_command) &&
                            IsStreamPublicationCurrentLocked(current, false, display)) {
                     lease = current;
                     lease->Revoke();
                     stream_cleanup_pending_ = true;
+                } else if (exact_stop && (closed = FindClosedStreamLocked(display, session_id, stop_start_command))) {
+                    success = true;
                 } else {
                     error_code = prefix + "_stream_not_found";
                 }
             }
             if (lease != nullptr) {
                 CleanupRevokedStreamsLocked();
-                success = true;
+                std::lock_guard<std::mutex> lock(mqtt_mutex_);
+                closed = FindClosedStreamLocked(display, session_id, lease->start_command_no);
+                success = IsCommandContextCurrentLocked(context) && closed == lease;
+                if (!success) error_code = "command_scope_expired";
+            }
+            if (success) {
                 cJSON_AddStringToObject(result, "sessionId", session_id.c_str());
+                cJSON_AddStringToObject(result, "startCommandNo", closed->start_command_no.c_str());
+                cJSON_AddStringToObject(result, "stopOutcome", lease != nullptr ? "stopped" : "already_stopped");
+                if (exact_stop) completion_scope = {
+                    context.client_generation, context.connection_epoch, closed->instance_nonce};
             }
         } else {
             const cJSON* type_json = cJSON_GetObjectItemCaseSensitive(request, "type");
@@ -1964,7 +2062,7 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         // A completed operation remains replayable after a transport epoch
         // changes. The ledger ticket rejects completion after authority reset.
-        command_ledger_.Complete(admission.ticket, ack_payload);
+        command_ledger_.Complete(admission.ticket, ack_payload, completion_scope);
     }
 
     if (QueueCommandPublication(context, ack_payload)) {

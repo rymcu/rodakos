@@ -25,7 +25,7 @@ MqttCommandLedger::Admission MqttCommandLedger::Begin(
         if (entry.payload_hash != digest) return Reject("command_conflict");
         if (!entry.complete) return {Disposition::kPending, entry.ticket, {}};
         if (!entry.has_response) return Reject("command_result_unavailable");
-        return {Disposition::kReplay, entry.ticket, entry.response};
+        return {Disposition::kReplay, entry.ticket, entry.response, entry.completion_scope};
     }
     if (next_sequence_ == std::numeric_limits<uint64_t>::max())
         return Reject("command_capacity_exceeded");
@@ -42,12 +42,18 @@ MqttCommandLedger::Admission MqttCommandLedger::Begin(
 }
 
 bool MqttCommandLedger::Complete(Ticket ticket, const std::string& acknowledgement) {
+    return Complete(ticket, acknowledgement, {});
+}
+
+bool MqttCommandLedger::Complete(Ticket ticket, const std::string& acknowledgement,
+                                 CompletionScope scope) {
     if (ticket.authority != authority_) return false;
     const auto current = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
         return entry.ticket.sequence == ticket.sequence;
     });
     if (current == entries_.end() || current->complete) return false;
     current->complete = true;
+    current->completion_scope = scope;
     if (acknowledgement.empty() || acknowledgement.size() > kResponseBudgetBytes) return true;
     // Preserve remembered command IDs even when large replies consume the byte
     // budget. Replaying such a tombstone cannot re-enter the side-effect handler.

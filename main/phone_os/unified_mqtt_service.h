@@ -161,6 +161,8 @@ private:
     bool IsStreamPublicationCurrentLocked(const StreamLeasePtr& lease,
                                          bool terminal, bool display) const;
     void RevokeStreamLease(const StreamLeasePtr& lease);
+    StreamLeasePtr FindClosedStreamLocked(bool display, const std::string& session_id,
+                                          const std::string& start_command_no) const;
     void CleanupRevokedStreams();
     void CleanupRevokedStreamsLocked();
     std::string CopyTopic(const std::string DeviceCloudConfig::*member) const;
@@ -215,6 +217,8 @@ private:
     std::mutex stream_operation_mutex_;
     StreamLeasePtr camera_lease_;
     StreamLeasePtr display_lease_;
+    StreamLeasePtr camera_closed_lease_;
+    StreamLeasePtr display_closed_lease_;
     uint64_t next_stream_instance_nonce_ = 0;
     uint64_t camera_latest_nonce_ = 0;
     uint64_t display_latest_nonce_ = 0;

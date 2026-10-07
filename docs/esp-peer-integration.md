@@ -50,6 +50,14 @@ CONFIG_MBEDTLS_X509_CREATE_C=y
 再在 worker 中停止旧 peer。旧同名 session 回调不能清除替换实例；已经进入 SDK 的单次操作
 允许完成，随后收尾，不代表物理撤回。
 
+026 的精确 Stop 使用原 Start 命令号 `startCommandNo`，与 `sessionId` 一起指向实例。
+成功结果以 `stopOutcome: stopped / already_stopped` 区分本次完成停止和此前已完成清理；
+后者要求当前 generation/epoch/authority 内最新已完成实例的证明，未知或不匹配身份仍失败。
+证明只在成功 Start 对应的原生 Stop 返回后建立，不把 terminal 回调、撤销或 UI 已关闭当成
+清理完成。精确 Stop 缓存成功还核验原实例和连接作用域；原记录不改写。未传启动身份的
+旧客户端仅保留活跃 session 的 Stop，无法对同名重用提供强实例隔离。字段、错误、去重
+窗口与软件/物理边界统一见 [Exact stream Stop 合同](rodak-aiot-contract-v1.md#exact-stream-stop-026)。
+
 屏幕输入由生产 `RemoteInputController` 管理，文本/按键/指针/延迟导航在最终 LVGL 入口
 复查 stream lease 和独立 enable grant；旧 cleanup 不释放新 owner 的指针，析构使遗留回调
 失效。`DisplayControlAckTracker` 用实际 peer 实例标识隔离旧 reply、旧已取出批次和新实例

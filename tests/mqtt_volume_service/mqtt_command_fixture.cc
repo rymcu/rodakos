@@ -1,13 +1,18 @@
 #include "service_fixture.h"
+#include "phone_os/webrtc_display_service.h"
 #include <iostream>
 
 int main(int argc, char** argv) {
     try {
+        rodakos::WebRtcCameraService camera;
+        rodakos::WebRtcDisplayService display;
         mqtt_host::Fixture fixture;
         std::string device_key = "test-device";
+        bool video_streams = false;
         for (int index = 1; index < argc; ++index) {
             const std::string option = argv[index];
             if (option.rfind("--device-key=", 0) == 0) device_key = option.substr(13);
+            else if (option == "--video-streams") video_streams = true;
             else throw std::runtime_error("unknown command fixture argument");
         }
         if (device_key.empty() || device_key.find_first_of("/+#") != std::string::npos)
@@ -26,11 +31,38 @@ int main(int argc, char** argv) {
             (config.*member).replace(0, old_prefix.size(), prefix);
         }
         mqtt_host::SetConfig(config);
+        if (video_streams) {
+            camera.start_result = display.start_result = true;
+            camera.remote_result = display.remote_result = true;
+            fixture.service.SetWebRtcCameraService(&camera);
+            fixture.service.SetWebRtcDisplayService(&display);
+        }
         fixture.Start();
         size_t processed = 0;
         std::string line;
         while (std::getline(std::cin, line)) {
             const auto input = mqtt_host::Parse(line);
+            const auto* fixture_event = mqtt_host::Get(input.get(), "fixtureEvent");
+            if (fixture_event != nullptr) {
+                const auto* kind = mqtt_host::Get(input.get(), "streamKind");
+                if (!video_streams || !cJSON_IsString(fixture_event) ||
+                    std::string(fixture_event->valuestring) != "peer-terminal" || !cJSON_IsString(kind))
+                    throw std::runtime_error("invalid video fixture control event");
+                const std::string stream_kind = kind->valuestring;
+                if (stream_kind != "camera" && stream_kind != "display")
+                    throw std::runtime_error("invalid video fixture stream kind");
+                auto& peer = stream_kind == "display" ? static_cast<rodakos::WebRtcCameraService&>(display) : camera;
+                if (!peer.running || peer.start_calls.load() == 0)
+                    throw std::runtime_error("video fixture has no running peer");
+                // This is only SDK stimulus. The following command response is
+                // still produced by the real worker, lease and ledger path.
+                peer.SavedCallbacks(peer.start_calls.load() - 1).state(ESP_PEER_STATE_DISCONNECTED);
+                RODAK_CHECK(mqtt_host::WaitUntil([&]() { return !peer.running; }));
+                fixture.Barrier();
+                std::cout << "{\"processed\":" << ++processed << ",\"fixtureEvent\":\"peer-terminal\",\"streamKind\":\""
+                          << stream_kind << "\"}" << std::endl;
+                continue;
+            }
             const auto* topic_json = mqtt_host::Get(input.get(), "topic");
             const auto* payload_json = mqtt_host::Get(input.get(), "payload");
             if (!cJSON_IsString(topic_json) || !cJSON_IsString(payload_json))
