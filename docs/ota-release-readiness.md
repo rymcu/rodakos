@@ -984,3 +984,50 @@ it. Build/package/verify/flash logs are `build/logs/media-jpeg-psram-021-*.log`;
 and host source hashes are in Rodak `.codex-temp/jpeg-allocator-020/integrated/` (the directory
 name reflects its proposal origin, not a claim that the change was present in 020).
 See [media browsing](media-browsing.md#021-屏幕-jpeg-作用域-psram-分配与实测边界).
+
+## 2026-10-07 Camera teardown diagnostics 022
+
+Source `dc847b203af53ff25d1fabcf266d442fa2f063d7`, development package
+`20261007-150728`, task `media-camera-teardown-022`, version `0.1.2-dev.1`:
+
+- Main: **7,126,768 bytes**, SHA-256 `f5253bdc01060be93a76b315599c4bba590475700de91efb2d112e7567ba0dda`.
+- ZIP SHA-256: `96631f18d121ee92d6609bb1b61003c83722b618e54227afef1cb8a800d7d6ae`.
+- ELF SHA-256: `a610db7144e48058306f8fc90123a6d399f2e1ddd153b66ab977c0d133e66db4`.
+- All five immutable assets match 021; original development signing root, production flavor,
+  authority-v3 implementation and disabled fault/Home-test flags remain.
+
+ESP-IDF 6.0.2 Build3 and the post-commit build pass both final-ELF gates. The new recorder
+uses a **536-byte internal-DRAM object at 0x3fca84e8** and a 95-byte IRAM function with
+37 reachable instructions, one CAS, no calls or backward branches. This exact address is
+valid only for the frozen ELF above. Three analysis-only ELF mutations are rejected.
+
+Focused Debug/ASan/UBSan/leak checks pass: the original 33 Camera tests plus four service
+blocking cases, 12 recorder/ABI cases, and 26 driver-overlay CTests including 11 generator
+tests. The linked checker has 18 Python cases. Recorder TSan passes with process-local
+`setarch x86_64 -R` after the initial WSL runtime-mapping failures; no firmware or global
+system setting changed. See the [diagnostic contract](camera-teardown-diagnostics.md).
+
+The complete local release runner and four additional suites pass **37 independent suites /
+91 CTests** under ASan/UBSan/leak. Python checks total **107**: 55 inside CTest (camera checker
+18, overlay 11, JPEG checker 26) and 52 standalone. All four JPEG source-negative controls
+are detected. Eight isolated cold-downloaded components pass content hashes without changing
+the lock or project manifest. The original run identity records the pre-commit HEAD; separate
+source/manifest checks tie the tested code to `dc847b2`, without rewriting that earlier identity.
+
+COM3 `VerifyOnly` matches the installed Bootloader, partition table and Recovery digests.
+It enters ROM/stub and resets the device, but does not write Flash. **022 is not flashed**;
+the device still runs 021. The separate 07:07:57 UTC server snapshot has fresh 07:07:46 UTC
+MQTT state, original device ID, bound/tokenVersion=4 and inactive voice connection.
+This confirms post-verification connectivity, not 022 boot or Camera fault acceptance.
+
+Live JTAG capture remains pending: Windows MI02 lacks its interface GUID and OpenOCD init
+cannot open it. The official candidate driver and bounded repair script are prepared, but
+the current process is not elevated and kernel-policy validation of that candidate failed.
+No installation, target halt or live DRAM/PC read has passed. Do not repeat a silent Camera
+exit as evidence until the observation path works. Debugger halt changes watchdog state;
+resume does not restore a normal watchdog evidence window.
+
+Frozen positive artifacts, package/immutable comparison, raw build/VerifyOnly logs and
+offline diagnostics are in Rodak `.codex-temp/resource-window-022/`. No NVS erase,
+unbind or credential rotation occurred. **NO_GO** remains for Camera teardown, resource
+recovery, late control, static first frame, audio/TLS/media concurrency and eight-hour soak.
