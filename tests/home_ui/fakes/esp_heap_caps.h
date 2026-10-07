@@ -6,6 +6,7 @@
 #define MALLOC_CAP_INTERNAL 0x01
 #define MALLOC_CAP_8BIT 0x02
 #define MALLOC_CAP_SPIRAM 0x04
+#define MALLOC_CAP_DMA 0x08
 
 inline void* heap_caps_aligned_alloc(size_t alignment, size_t size, unsigned) {
     void* pointer = nullptr;
