@@ -19,15 +19,19 @@ RodakOS keeps `lvgl/lvgl` pinned at 9.3.0. Its bundled LodePNG integration alloc
 ARGB8888 row width before PNG unfiltering. A 16-bit RGB or RGBA source needs six or eight bytes per
 pixel during that earlier step, so the upstream buffer can be too small even though the final image
 is four bytes per pixel. The project-owned overlay allocates the larger raw/final stride, rejects
-dimensions or strides that cannot fit LVGL's 16-bit image fields, and then preserves the existing
-conversion to compact ARGB8888 output. Normal and Adam7 inputs remain supported.
+dimensions or strides that cannot fit LVGL's 16-bit image fields, and preserves the existing
+conversion to compact ARGB8888 output. For non-interlaced RGBA8 input with matching raw output, it
+instead unfilters and compacts in the decompression allocation, then adopts that allocation as the
+LVGL draw buffer. Normal and Adam7 inputs remain supported.
 
 This reviewed decoder defect is separate from the package-013 `A3.PNG` incident. The recorded Retry
 abort terminated in the `DisplayService` JPEG path on `std::bad_alloc`. The package-014 hardware
 rerun later established that `A3.PNG` is a 69,200-byte, 471 x 423, 8-bit color-type-6 (RGBA) image.
 Its first open and two Retry attempts all returned LodePNG error 83 while the display JPEG stream
 continued and the device stayed running. The 16-bit correction therefore does not describe this
-input or explain its remaining decode failure.
+input. Package 015 then used the RGBA8 in-place path: first open and two Retries displayed `A3.PNG`,
+but the retained image left the old display JPEG allocation peak unable to encode sustained frames.
+Package 016 keeps that decoder path and corrects the separate display-stream peak.
 
 `patches/lvgl/9.3.0/provenance.json` records LF-normalized SHA-256 values for exactly 11 reviewed
 upstream files:
@@ -49,19 +53,27 @@ stops configuration instead of compiling an unchecked fallback.
 
 The focused software evidence passes in Debug and ASan/UBSan with leak detection: 8 valid PNG
 variants plus 2 geometry rejections in `tests/lodepng_decode`, 24 production Photos/ImageLibrary
-cases, 43 existing Home/LVGL cases, and 21 production `DisplayService` allocation/lifecycle cases.
-The last suite covers the package-013 abort boundary but is not a decoder-provenance test. The
-release host runner includes all four targets. Package 014 adds bounded device evidence: the same
-screen session accepted the open and two Retry inputs, kept producing JPEG frames, reported a
-stable memory error, and did not abort, panic or reboot. It still did not render `A3.PNG`.
+cases, 43 existing Home/LVGL cases, and 24 production `DisplayService` allocation/lifecycle cases.
+The last suite covers the package-013 abort boundary and the package-016 allocation layout, but is
+not a decoder-provenance test. The complete release host runner passes 30 suites and 42 CTest cases,
+plus four Python groups of 17, 15, 8 and 12 cases. ESP-IDF 6.0.2 also builds successfully.
 
-For this RGBA8 image, the decoder can hold about 797 kB of decompressed scanlines at the same time as
-a 796,932-byte (778 KiB) final ARGB8888 buffer, in addition to compressed input and concurrent
-display-stream allocations. The first failure reported 1,728,656 bytes of free PSRAM but a largest
-PSRAM block of 1,605,632 bytes. The current high-confidence diagnosis is therefore the two-full-frame
-decode peak and fragmentation, not the 16-bit stride defect. Keep that as a diagnostic conclusion
-until an allocator-level trace or a later reduced-peak implementation proves the cause and displays
-the image successfully.
+`DisplayService` no longer allocates a 153,600-byte JPEG-worker `DisplayFrame` copy. It allocates one
+230,400-byte buffer, copies the RGB565 snapshot into its first 153,600 bytes while holding the
+service lock, then expands RGB565 to RGB888 backwards in place after releasing the lock. The JPEG
+output scratch is fixed at 100 KiB, matching the upstream 320 x 240 RGB888 example; output beyond
+that bound safely drops the frame and a later frame can recover. The application-owned heap-caps
+peak therefore falls from about 614,400 bytes to 332,800 bytes. The real codec uses about another
+46,080 bytes of PSRAM outside that application peak.
+
+Package 016 adds bounded device evidence after a clean restart: five `A3.PNG` decodes completed in
+186, 180, 202, 191 and 184 ms, and screenshots confirmed the first open, two Retries and two extra
+pressure repetitions. Display JPEG statistics accumulated 34 attempts, 34 encoded frames and zero
+failures, with no abort, panic or reboot. With the PNG resident, PSRAM free was about 532 KiB and the
+largest block was usually 360-426 KiB. One pre-replacement sample was only 229,376 bytes, below the
+230,400-byte RGB888 allocation. The current result therefore validates the targeted sequence, but
+does not close arbitrary resource pressure, camera/voice/MQTT concurrency or soak. The retained PNG
+remains ARGB8888; RGB565 retention is not part of this change.
 
 For an intentional LVGL upgrade:
 
@@ -73,8 +85,9 @@ For an intentional LVGL upgrade:
    the generated output outside `managed_components/` and require exactly one target substitution.
 4. Run `tests/lodepng_decode`, `tests/photos_ui`, `tests/home_ui` and `tests/display_service` in Debug
    and ASan/UBSan, then run the release host checks and an ESP-IDF 6.0.2 firmware build. Record the
-   resulting image size/hash and keep the device gate open until an identified package displays
-   `A3.PNG` successfully across first open and Retry with display JPEG capture active.
+   resulting image size/hash and repeat first-open/Retry display with JPEG capture active on an
+   identified package. Keep the wider resource, concurrency and soak gates open after that bounded
+   sequence passes.
 
 Remove the overlay only when a reviewed LVGL release preserves the same raw-row safety and geometry
 rejection semantics. Keep the host regressions when switching their default source to that release.
