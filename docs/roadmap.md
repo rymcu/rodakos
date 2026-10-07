@@ -15,10 +15,16 @@ fixed candidate delay, displays a 320×240 frame and continues observing Home fo
 with no queue warnings or detected reset/panic markers in that window. Eight SDK candidate-limit
 messages remain. Preserve the earlier desktop-restart window separately: firmware credential
 recovery restarts the device, then old persistent signaling replay causes 41 queue rejections.
-The successful ACK-paced session predates the legacy-replay cleanup and does not validate it.
+That first successful ACK-paced session predates the legacy-replay cleanup. The later desktop
+fix changes 41 historical delivered signals to failed without replay, preserving 274 existing
+terminal records; a new 19/19-ACK session renders a frame and observes Home for 98.936 s with
+no queue-drop/reset/panic markers. Credential-refresh isolation restart and SDK candidate
+capacity remain separate open items; this does not close the resource gates.
 Directed MQTT tests pass 115 positive cases and six source-negative controls in each Debug and
 ASan/UBSan/leak build (five CTests per build). A fresh complete 024 local runner and new CI
-acceptance are not established here; the earlier 023 totals do not substitute for them.
+acceptance are not established here; the earlier 023 totals do not substitute for them. The
+first 024 CI candidate exposes a missing diagnostic support object in the shared host runtime
+of `voice_identity_integration`; its exact failure and required rerun are recorded below.
 See [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024).
 
 The preceding source `8238a5022724f1562c22bae6c3669717ab988a4b`,
