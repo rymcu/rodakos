@@ -6,6 +6,22 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
+026 source `cc776c1d007abe7e415ce9b386dea887eefe304e` adds exact-instance Stop confirmation
+using the original Start command number. A successfully started instance is remembered only
+after its native Stop returns; `stopped` and `already_stopped` are software results, while unknown
+or stale instances still fail. Cached successes retain their original MQTT generation, epoch and
+nonce. Original-root package `20261007-231703` has passed the NVS-preserving flash and limited
+Display/Camera Stop windows with the existing binding/token version 4. A desktop automatic-terminal
+display omission was found and fixed in a separate renderer window. Camera's short preview lowered
+the boot-cumulative internal minimum to 331 B: resource, candidate-capacity and release gates remain
+open. The six separate windows include the original automatic-terminal UI failure, a corrected
+renderer rerun, and an outage where the old Stop remains unknown before a new session receives
+`stopped`. Targeted MQTT and four shared-consumer Debug/ASan checks pass; they are not a new
+38-suite full run. The final outage capture continues 483.903 seconds after Home completes,
+without closing the resource or eight-hour soak gates. See
+[026 evidence](ota-release-readiness.md#2026-10-07-exact-stream-stop-026) and the
+[Stop contract](rodak-aiot-contract-v1.md#exact-stream-stop-026).
+
 025 source `8d5cf99f95b59d45b0a1e66fc3a02d1a502618a6` implements complete SDK-client
 replacement for automatic MQTT credential refresh within the existing authority boundary.
 The worker revokes the old connection, confirms stop/destroy, reloads current credentials

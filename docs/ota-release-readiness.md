@@ -14,6 +14,11 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
+The latest recorded device package is `20261007-231703`, built from
+`cc776c1d007abe7e415ce9b386dea887eefe304e`, with the existing development root and preserved
+NVS/binding/token version 4. Exact Stop and the remaining resource limits are recorded in
+[026](#2026-10-07-exact-stream-stop-026); earlier dated windows retain their own firmware identity.
+
 Evidence review updated on 2026-10-07. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
 recorded appearance-gate package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
@@ -33,7 +38,7 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest installed package is 025 (`20261007-200215`, source `8d5cf99`), with the original
+The preceding installed package was 025 (`20261007-200215`, source `8d5cf99`), with the original
 development signing root and immutable Recovery preserved. Same-authority MQTT refresh now
 replaces its SDK client; its bounded validation is recorded in
 [025 evidence](#2026-10-07-mqtt-credential-client-replacement-025).
@@ -1374,3 +1379,87 @@ Evidence is Rodak `.codex-temp/mqtt-refresh-025/` and
 keeps each window separate. The 024 restart failures remain historical failures. SDK candidate
 capacity, Camera STREAMOFF, late control, real SD/touch/audio, arbitrary OOM, production root,
 OTA power-cut and eight-hour soak remain **NO_GO**.
+
+## 2026-10-07 exact stream Stop 026
+
+Firmware source `cc776c1d007abe7e415ce9b386dea887eefe304e` adds exact-instance Stop using
+the original `startCommandNo` and `sessionId`. The latest successfully started instance can
+produce `already_stopped` only after its native Stop returns in the same MQTT generation,
+epoch and authority. Cached successes additionally retain the original instance nonce; an
+unknown or replaced instance still fails without stopping a new peer. Legacy Stop without
+the start identity retains its active-session behavior and cannot claim same-name isolation.
+See the [wire contract](rodak-aiot-contract-v1.md#exact-stream-stop-026).
+
+The original-development-root package is `20261007-231703`, task `stream-stop-026`, version
+`0.1.2-dev.1`:
+
+- Main: **7,134,160 B**, SHA-256 `d1748efc4019da8df6257999b7248563accb85a0e9b6d9ebb607ef038de66ced`.
+- ZIP: **9,483,957 B**, SHA-256 `56314f048f9ba242104b209c33e0fa14153d3d206d7b775527ab460bf02773ed`.
+- Frozen ELF: `024d49ec2a1cdb353ee10952b5da09ffd76fa88eae88fd30ed67e644ba36c669`.
+- ESP-IDF 6.0.2 build, partition fit, signature, ZIP contents and allocator/Camera final-ELF
+  gates pass independent checks. The image embeds the same frozen ELF hash. Five immutable
+  files are byte-identical to 025; Home-test and fault-injection flags are off.
+- The Recovery-safe COM3 refresh writes the OTA data and main slots without erasing NVS or
+  replacing Recovery, bootloader, partition table or trust root. Recovery/main/OTA confirmation/
+  Home checks pass. Original device ID `c78845a8-06c9-4dcd-b7ff-d33e599f23ff`, bound state and
+  tokenVersion=4 remain. A production application flavor is not a production signing root.
+
+Local MQTT tests pass **143 positive cases / 7 CTests per Debug and ASan/UBSan/leak build**,
+including 70 command cases. Separately, six existing diagnostic source negatives and four
+credential source negatives pass per build. The four affected shared consumers separately pass **7 CTests / 85 normal
+cases and 3 embedded Python cases per build**: real MQTT/Cloud 6, voice integration 4, remote
+input 30 and display ACK 45. Two Cloud, five display and one header-compile negative controls
+are independently checked. Cloud/voice use the final core-v2 service; their earlier core-v1
+runs are retained as intermediate evidence. Remote-input/display checks use the unchanged
+StreamLease header. This targeted matrix is not another complete 38-suite run.
+
+The initial desktop main/preload implementation is
+`41c96efeb7e1ff2a5d5c438a6dd862e9be379063`. The later automatic-terminal renderer correction
+is `25b8a41f07b348fd33792372ccabc1d43fd9a65b`; its frozen production inputs match the last two
+device windows below. The initial local coverage result and later renderer/test-fixture changes
+are separate runs. Final desktop test/build outcomes belong to the paired
+[Stop verification record](https://github.com/rymcu/rodak/blob/master/docs/video-stop-confirmation.md);
+the earlier full-run pass must not be represented as a pass of every later change.
+
+Six independent captures use the same 026 package and preserve their own action, identity,
+serial timing and result records:
+
+| Window | Direct result and boundary |
+| --- | --- |
+| Display active Stop | No browser peer was created. Stop API waiting was 1.116 s and returned the matching `stopped`; a repeated API call returned the same desktop record, not a second device command. Serial observation continues 56.786 s after Stop response queuing. |
+| UI Stop | A real 320×240 Home frame is displayed. With control enabled, Stop removes the image in 22 ms and confirmation is observed in 1.361 s; the matching result is `stopped`. Later control is off and no image remains; observation after response queuing is 76.196 s. Eight SDK candidate-limit messages remain. |
+| Initial peer-terminal UI failure | The experiment closes the connected browser peer without intercepting MQTT Stop. The matching device result is `already_stopped`, but the automatic renderer terminal path does not display it; the 18 s UI wait exits with failure. The 94.082 s post-response observation and successful device audit do not turn this UI failure into a pass. |
+| Camera active Stop | No browser camera peer was created. Stop API waiting is 1.257 s; native logs show a first frame, four frames in a short 311 ms preview, STREAMOFF and worker exit, with a matching `stopped`. Worker exit follows Stop request by 100 ms and observation continues 69.573 s after response queuing. This is not remote camera-image acceptance or closure of the older intermittent STREAMOFF stall. |
+| Corrected peer-terminal UI | The separate renderer correction is exercised by closing the browser peer again. The page now displays the matching `already_stopped` confirmation, with control off and zero images. The capture spans 193.004 s, including 145.520 s after the Stop audit; eight candidate-limit and connection-negotiation warnings remain. The original failed window stays unchanged. |
+| Server outage and new-session Stop | The server is down for 5.046 s. The old Stop becomes `unknown`, not success. Two generation-1 authentication rejections lead to one bootstrap/enrollment, coalesced old work, confirmed stop/destroy and generation 3; disconnect-to-CONNECT is 12.090 s, and server return to received CONNECT is 7.081 s. This is credential replacement, not a simple reconnect. A new session obtains `stopped`; image removal is 32 ms and UI confirmation 1.373 s. The complete capture is 657.728 s, with 509.943 s after the new Stop and 483.903 s after Home completes. |
+
+The last window has contiguous serial byte offsets/timestamps and retains original identity,
+bound/tokenVersion=4, final available telemetry uptime **1,703,356 ms** and shadow **1055**.
+Its serial log and 287 relevant events from the latest-2,000-event snapshot show no identifiable
+old command requeued after generation 3. This is a bounded observation, not proof that no old
+packet existed anywhere; two incomplete MQTT fragment warnings are preserved. Captured windows
+have no detected reset/panic marker, but the post-flash boot is new: older 025 uptimes are excluded.
+Touch-poll health and wake listening do not establish physical touch or real speech acceptance.
+
+Camera lowers the boot-cumulative `internal_min` from **5,079 B to 331 B**; that historical
+minimum persists in later windows. The Camera window's last MQTT sample is
+`internal_free=15215`, `internal_largest=7680`, `dma_free=14319`. These are sampled values,
+not a sustained free-memory floor, leak classification or proof of complete resource return.
+The target ABI adds 24 B per ledger entry (104→128 B; 1,536 B for 64 entry payloads), while
+StreamLease grows 56→80 B. Two closed slots add 16 B of members and can retain two leases;
+shared-pointer control blocks, strings, deque blocks and allocator overhead are additional.
+
+026 does not change candidate capacity. Read-only inspection finds the current ESP32-S3
+library default is 10, despite the header comment of 16. A future explicit capacity of 32 would
+add 5,984 B per peer for candidate/pair tables, including 176 B extra internal-preferred sort
+storage; pair capacity remains 64 and allocation fallback can consume internal memory.
+No such expansion was implemented or deployed. MQTT signal ACKs do not prove that all
+candidates entered the SDK's ICE table.
+
+Evidence resides in Rodak `.codex-temp/stream-stop-026/`: the separate MQTT and shared-consumer
+summaries, independent package verification, frozen firmware and six sealed hardware analyses.
+All Stop results are software acknowledgements (`physicalVerified=false`); native joins retain
+their blocking limits. Production-root migration, physical power-cut, Camera STREAMOFF,
+late control, full resource recovery, real SD/touch/audio and eight-hour soak remain **NO_GO**.
+The current workflow remains local tests/builds/device evidence: no new Actions dependency,
+repair, rerun, billing or required-check work is introduced, and historical CI retains its own scope.
