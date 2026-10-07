@@ -4,6 +4,9 @@
 `main` push 和手动触发时运行。这是 [#26](https://github.com/rymcu/rodakos/issues/26)
 的主机测试阶段；已验证的候选 SHA、Actions 与下载工件记录见下文。
 
+下文带 SHA 的早期记录保留为历史基线。025 的本地完整结果见[发布记录](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)；
+最新 main/PR 的精确候选、Actions 与下载工件核验统一在 [#26](https://github.com/rymcu/rodakos/issues/26) 更新，不能沿用旧候选绿灯。
+
 ## 环境与依赖
 
 - Linux job 使用 `ubuntu-24.04` runner 上的 `debian:13-slim` 容器，安装 Debian 的
@@ -39,6 +42,13 @@ OTA/采集器、codec 和 MQTT 补丁生成器的 Python 测试。
 媒体浏览新增 `photos_ui` 与 `file_manager_ui`：前者编译生产 Photos / ImageLibrary，
 后者编译生产 Files / PhoneAppHost，均使用真实 LVGL。图片解码、FileService 和硬件
 替身范围见各测试 README；界面/读取失败回归不代表真实 SD、触摸或 OOM 验收。
+
+025 新增完整 MQTT 与 DeviceCloud 的[组合测试](../tests/mqtt_cloud_integration/README.md)，
+验证真实语音刷新、精确凭据附着、USB 代次、持久化失败及 legacy MQTT-only 合同。
+MQTT suite 同时增加完整客户端替换、旧回调/outbox 隔离、外部 Stop 和失败重试测试。
+CI 保存 4 个凭据生命周期与 2 个 Cloud fence 完整源码负变体的源码、构建/断言日志及哈希。
+release runner 现有 34 个 suite，额外列表中 `voice_volume_service` 重复，合计 38 个独立 suite。
+各候选的实际结果与工件身份须绑定其 commit；历史统计不能替代新候选验证。
 
 工作流额外编译并运行已有的 `voice_volume_service`、`remote_input`、
 `display_control_ack_service`、`light_service`、`appearance` 五个 CMake 测试目录。
@@ -122,7 +132,7 @@ CI。artifact 内容和 PR 检查展示仍应随发布验收检查。
 与 WebSocket redirect。该历史 run 不包含随后新增的 authority v3 与真实 NVS Storage
 suite；新增入口仍需新提交上的 CI 结果。
 
-### 2026-10-07 当前候选与工件复核
+### 2026-10-07 authority v3 历史候选与工件复核
 
 候选 `9a093c57b8f3026c2f9e1c5523e4d600181593b1` 的
 [Actions 37514192380](https://github.com/rymcu/rodakos/actions/runs/37514192380)

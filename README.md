@@ -69,6 +69,10 @@ Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
   `effects/receipt`. The device preserves bounded deduplication across same-authority reconnects
   while connection epochs cancel old queued work/results. Plain reported volume remains state
   only. See [MQTT volume effects](docs/mqtt-volume-effects.md).
+- Automatic same-authority MQTT credential refresh now replaces the complete SDK client and
+  checks the current persisted credentials at attachment. Old callbacks/outbox entries cannot
+  enter the new generation; changed authority or unconfirmed SDK stop retain restart isolation.
+  See [credential refresh](docs/mqtt-credential-refresh.md) for validation and remaining limits.
 - Ordinary command ACKs and video signal/state results are bound to their original MQTT connection
   and sent without a replayable SDK outbox item. Stale queued results and late callbacks are dropped.
   Stream-instance cleanup, final remote-input grants and delayed ACK ownership now use revocable

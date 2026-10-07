@@ -26,12 +26,18 @@ evidence are [trusted provisioning](https://github.com/rymcu/rodak/blob/master/d
 and [network verification](https://github.com/rymcu/rodak/blob/master/docs/trusted-network-verification.md).
 These newer development-signed network runs do not replace the appearance baseline above or
 close production-key deployment, physical power-cut or eight-hour signed-OTA soak gates.
-The latest package is 021. With scoped JPEG PSRAM allocation, the first observed frame shows
+The latest installed package is 025 (`20261007-200215`, source `8d5cf99`), with the original
+development signing root and immutable Recovery preserved. Same-authority MQTT refresh now
+replaces its SDK client; its bounded validation is recorded in
+[025 evidence](#2026-10-07-mqtt-credential-client-replacement-025).
+Release remains **NO_GO**: this does not close production-root, power-cut, resource or soak gates.
+
+The earlier 021 package's scoped JPEG PSRAM allocation shows
 no net DMA loss during open, and screen-first Camera starts. Camera then stalls at STREAMOFF
 begin for 127.583 seconds and requires a controlled reset. The separate recovery window
 still has late rejected inputs and no successful post-reenable Retry. Final internal largest
 is 8,192 bytes, which does not establish sustained headroom or close the failed lifecycle gate.
-Release is **NO_GO**; see [021 validation](#2026-10-07-scoped-screen-jpeg-psram-validation-021).
+See the retained [021 validation](#2026-10-07-scoped-screen-jpeg-psram-validation-021).
 The previous 020 independently reproduces pre-callback input delay, AES allocation failure
 during Camera/screen concurrency, and static-page first-frame failure; retain its
 [diagnostic evidence](#2026-10-07-peer-timing-diagnostics-020).
@@ -1292,3 +1298,72 @@ builds both link the test and fixture executables, pass **four cases / one CTest
 expected fixture snapshot. Evidence is Rodak
 `.codex-temp/mqtt-diagnostics-024/voice-identity-ci-fix/test-evidence.json`. This focused repair
 does not turn the earlier failed runs green; the next exact main/PR candidates need fresh CI.
+
+## 2026-10-07 MQTT credential client replacement 025
+
+Production source `8d5cf99f95b59d45b0a1e66fc3a02d1a502618a6` replaces the full SDK client
+for automatic refresh within the existing effect authority. It revokes the old generation,
+confirms SDK stop/destroy, then checks exact current persisted credentials before attaching
+and starting the next instance. Old-generation rejection work is coalesced; a new-generation
+rejection survives. The normal recovery path no longer requires a device restart merely because
+its old client was connected or had an outbox. Changed authority and unconfirmed SDK stop
+retain restart isolation. Stop remains subject to SDK/media blocking limits; FreeRTOS task
+storage may await idle reclamation. See the [contract](mqtt-credential-refresh.md).
+
+The named original-development-root package is `20261007-200215`, task
+`mqtt-credential-refresh-025`, version `0.1.2-dev.1`:
+
+- Main: **7,132,272 B**, SHA-256 `938de5fadbaf3181c9b8e885e93055d53ad5485210804e9d4c641c8ba991039e`.
+- ZIP: `8a46f46a664fe2da3834252e5fdaf465f6a5ee4292e4c644b931358c2c4ff971`.
+- Frozen ELF: `2fdb73706ead914c7bb5907d42c4b7b3ea7be369a84be3c946b49fd794790416`.
+- ESP-IDF 6.0.2 build, partition fit, allocator/Camera final-ELF gates and package verification pass.
+  Five immutable files match 024; Home-test and fault-injection flags remain off.
+- NVS-preserving COM3 flash passes Recovery/main/OTA-confirmation/Home. It preserves original
+  device ID `c78845a8-06c9-4dcd-b7ff-d33e599f23ff`, bound state and tokenVersion=4.
+
+Fresh local full-repository validation passes **38 unique suites / 98 CTests**, with
+ASan/UBSan/leak checks, **107 Python cases** (52 standalone, 55 embedded), and **21** separately
+counted CI-helper cases. MQTT has 133 positive cases including 18 replacement cases; its four
+new complete-service negative variants and six existing diagnostic variants fail their intended
+assertions. Real Cloud has 44 cases, and the combined real MQTT/Cloud target has six cases and
+two full-Cloud negative variants. Shared voice integration passes four cases. Directed Debug
+and sanitizer builds are recorded separately. Source checks confirm 28 compilation manifests,
+82 raw hashes and 76 freezes; 15 recorded production paths match the commit after explicit LF
+normalization. This is local software validation; current exact main/PR GitHub artifacts are
+tracked by [#26](https://github.com/rymcu/rodakos/issues/26), without borrowing earlier green runs.
+
+The valid-token window stops the same desktop server for **5.044 s**. Generation 1 reconnects
+**1.454 s** after server restart without replacement. Telemetry uptime advances
+4,970 → 36,935 → 66,966 ms, shadow advances 1042 → 1044, and identity/binding remain unchanged.
+Serial capture spans **128.158 s** with continuous log ticks and no detected boot/reset/panic;
+the final device snapshot is earlier than capture end. This is normal reconnect evidence,
+not proof of an authentication-triggered replacement.
+
+The independent authentication window keeps the existing 600-second server TTL. Initial enrollment
+to rejection spans 694.810 s; this matches the expiry background, but JWT iat/exp and the per-token
+server rejection reason were not exported. The directly verified event is SDK credential rejection.
+Generation 1 rejects at log ticks 700581 and 703651 ms, with the second inside HTTP refresh
+(702631–704821). The old request is coalesced at retirement 704851; stop/destroy completes 705661,
+generation 3 attaches 705701 and connects 706721. There is one HTTP refresh, no follow-up refresh
+in the window, and 94.922 s of post-CONNECT serial observation. New telemetry uptime
+705073/735136/765116 ms continues from 666966 ms, with shadow 1044→1046 and original identity.
+Server restart to CONNECT takes 8.099 s; retirement to CONNECT takes 1.870 s, without a hard-bound claim.
+
+A separate 65.042 s outage triggers one HTTP attempt after three TCP failures. HTTP fails while
+the server is down; generation 3 reconnects 3.721 s after it returns, with four new telemetry
+events and 129.326 s of subsequent serial observation. This does not repeat the client-replacement
+proof. Final MQTT internal/DMA free samples are each 4,988 B below the authentication-window
+samples; no leak or full-resource-return conclusion is drawn.
+
+The following screen window renders real 320×240 Home pixels and records 19 waiting/acknowledged
+signal pairs. UI Stop closes the peer first; final JPEG/peer cleanup precedes processing the
+supplementary Stop, which returns `display_stream_not_found`. Preserve this failed receipt rather
+than claiming a successful Stop ACK. Home completes, the UI has no active screen and control stays
+off, while MQTT/wake remain live. Candidate limits and resource gates remain open.
+
+Evidence is Rodak `.codex-temp/mqtt-refresh-025/` and
+`.codex-temp/project5-mqtt-refresh-025/hardware-analysis/`; the paired
+[hardware record](https://github.com/rymcu/rodak/blob/master/docs/mqtt-credential-refresh-verification.md)
+keeps each window separate. The 024 restart failures remain historical failures. SDK candidate
+capacity, Camera STREAMOFF, late control, real SD/touch/audio, arbitrary OOM, production root,
+OTA power-cut and eight-hour soak remain **NO_GO**.

@@ -68,6 +68,18 @@ void RespondVoice() {
     trust_test::replies[url].body = json;
     cJSON_free(json); cJSON_Delete(root);
 }
+
+void RespondRotatedToken(const std::string& token) {
+    trust_test::RespondBound();
+    const auto url = rodakos::ServerTrustUrlOrigin(trust_test::BootstrapUrl()) +
+                     "/api/v1/aiot/devices/auth/token";
+    auto* root = cJSON_Parse(trust_test::replies[url].body.c_str());
+    auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    cJSON_ReplaceItemInObjectCaseSensitive(data, "accessToken", cJSON_CreateString(token.c_str()));
+    char* json = cJSON_PrintUnformatted(root);
+    trust_test::replies[url].body = json;
+    cJSON_free(json); cJSON_Delete(root);
+}
 }  // namespace
 
 RODAK_TEST("USB trust derives the stable identity from certificate SPKI") {
@@ -847,4 +859,161 @@ RODAK_TEST("Cooperative credential deadline exhaustion is a refresh failure rath
     RODAK_CHECK_EQ(failure, rodakos::CloudDiagnosticCode::kRefreshFailed);
     RODAK_CHECK_EQ(service.diagnostic(), failure);
     RODAK_CHECK_EQ(config.aiot_token_expires_at_ms, 0);
+}
+
+RODAK_TEST("Automatic refresh reloads the latest same authority token for a deferred consumer") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    const auto authority = trust_test::strings["device_cloud/server_auth"];
+    DeviceCloudConfig deferred;
+    RespondRotatedToken("rotation-one");
+    RODAK_CHECK(service.Refresh(deferred));
+    RODAK_CHECK_EQ(deferred.mqtt_password, "rotation-one");
+    DeviceCloudConfig newer;
+    RespondRotatedToken("rotation-two");
+    RODAK_CHECK(service.Refresh(newer));
+    RODAK_CHECK(service.Load(deferred));
+    RODAK_CHECK_EQ(deferred.mqtt_password, "rotation-two");
+    RODAK_CHECK_EQ(deferred.aiot_access_token, newer.aiot_access_token);
+    RODAK_CHECK_EQ(deferred.server_authority_record, authority);
+    RODAK_CHECK_EQ(deferred.aiot_device_secret, "existing-device-secret");
+    RODAK_CHECK(deferred.aiot_registered && deferred.aiot_activated);
+    for (const auto& request : trust_test::requests) {
+        RODAK_CHECK(request.url.find("binding/request") == std::string::npos);
+    }
+}
+
+RODAK_TEST("Automatic refresh rejects cross namespace persistence and uncertain rollback") {
+    for (bool rollback_fails : {false, true}) {
+        trust_test::Reset(); trust_test::SeedBoundLegacy();
+        DeviceCloudConfigService service; Activate(service);
+        const auto before_strings = trust_test::strings;
+        const auto before_booleans = trust_test::booleans;
+        const auto before_integers = trust_test::integers;
+        RespondRotatedToken("must-not-attach");
+        trust_test::write_error_key = "unified_mqtt/password";
+        if (!rollback_fails) trust_test::write_error_remaining = 1;
+        DeviceCloudConfig rejected;
+        RODAK_CHECK_FALSE(service.Refresh(rejected));
+        RODAK_CHECK_EQ(service.last_error(), rollback_fails
+            ? "AIoT credentials state is uncertain after persistence failure"
+            : "Failed to persist AIoT credentials");
+        RODAK_CHECK_EQ(trust_test::strings, before_strings);
+        RODAK_CHECK_EQ(trust_test::booleans, before_booleans);
+        RODAK_CHECK_EQ(trust_test::integers, before_integers);
+        RODAK_CHECK_EQ(rejected.mqtt_password, "new-token");
+        RODAK_CHECK_EQ(rejected.aiot_access_token, "new-token");
+        trust_test::write_error_key.clear();
+        DeviceCloudConfigService reboot;
+        DeviceCloudConfig persisted;
+        RODAK_CHECK(reboot.Load(persisted));
+        RODAK_CHECK_EQ(persisted.mqtt_password, "new-token");
+    }
+}
+
+RODAK_TEST("Automatic refresh cancelled during token HTTP cannot overwrite the new generation") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service;
+    DeviceCloudConfig config;
+    service.Load(config);
+    const auto original = config;
+    const auto old_origin = rodakos::ServerTrustUrlOrigin(config.provisioning_url);
+    trust_test::RespondBound(9443, "mqtt");
+    const auto trusted_origin = rodakos::ServerTrustUrlOrigin(trust_test::BootstrapUrl());
+    trust_test::replies[config.provisioning_url] = trust_test::replies[trust_test::BootstrapUrl()];
+    trust_test::replies[old_origin + "/api/v1/aiot/devices/auth/token"] =
+        trust_test::replies[trusted_origin + "/api/v1/aiot/devices/auth/token"];
+    const std::string replacement = "http://192.168.137.2:9080/api/v1/aiot/devices/bootstrap";
+    bool superseded = false;
+    trust_test::on_http_open = [&](const auto& url) {
+        if (url.find("/auth/token") == std::string::npos) return;
+        superseded = true;
+        RODAK_CHECK_EQ(service.SaveProvisioningUrl(replacement), ProvisioningUrlSaveResult::kSaved);
+    };
+    RODAK_CHECK_FALSE(service.Refresh(config));
+    RODAK_CHECK(superseded);
+    RODAK_CHECK_EQ(config.provisioning_url, replacement);
+    RODAK_CHECK(config.cloud_generation != original.cloud_generation);
+    RODAK_CHECK_FALSE(config.has_mqtt_config);
+    RODAK_CHECK(config.aiot_access_token.empty());
+    RODAK_CHECK_EQ(config.aiot_device_secret, "existing-device-secret");
+    RODAK_CHECK_EQ(trust_test::requests.size(), 2U);
+    RODAK_CHECK_EQ(trust_test::discovery_calls, 0U);
+    RODAK_CHECK_EQ(service.diagnostic(), rodakos::CloudDiagnosticCode::kUnconfigured);
+}
+
+RODAK_TEST("MQTT admission fence rejects a same generation token replaced after snapshot load") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    DeviceCloudConfig old;
+    RODAK_CHECK(service.Load(old));
+    RespondRotatedToken("newer-fenced-token");
+    DeviceCloudConfig current;
+    RODAK_CHECK(service.Refresh(current));
+    RODAK_CHECK_EQ(current.cloud_generation, old.cloud_generation);
+    RODAK_CHECK(service.IsVoiceConfigCurrent(old));
+    bool admitted = false;
+    RODAK_CHECK_FALSE(service.ApplyIfMqttConfigCurrent(old, [&] { admitted = true; return true; }));
+    RODAK_CHECK_FALSE(admitted);
+    RODAK_CHECK(service.ApplyIfMqttConfigCurrent(current, [&] { admitted = true; return true; }));
+    RODAK_CHECK(admitted);
+    RODAK_CHECK_FALSE(service.ApplyIfMqttConfigCurrent(current, [] { return false; }));
+}
+
+RODAK_TEST("MQTT admission fence compares credential identity routing and transaction boundaries") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    DeviceCloudConfig current;
+    RODAK_CHECK(service.Load(current));
+    for (const auto& mutate : std::vector<std::function<void(DeviceCloudConfig&)>>{
+        [](auto& value) { ++value.cloud_generation; },
+        [](auto& value) { value.mqtt_password = "different"; },
+        [](auto& value) { value.aiot_access_token = "different"; },
+        [](auto& value) { value.aiot_device_secret = "different"; },
+        [](auto& value) { value.server_authority_record = "different"; },
+        [](auto& value) { value.server_connect_address = "192.168.137.2"; },
+        [](auto& value) { value.server_trust.ca_pem += "\n"; },
+        [](auto& value) { value.mqtt_topic_commands += "different"; },
+        [](auto& value) { ++value.mqtt_keepalive; },
+        [](auto& value) { value.unbind_pending = true; },
+        [](auto& value) { value.aiot_pending = true; }
+    }) {
+        auto stale = current;
+        mutate(stale);
+        bool admitted = false;
+        RODAK_CHECK_FALSE(service.ApplyIfMqttConfigCurrent(stale, [&] { admitted = true; return true; }));
+        RODAK_CHECK_FALSE(admitted);
+    }
+}
+
+RODAK_TEST("MQTT admission preserves legacy MQTT only cache without treating Load false as read failure") {
+    trust_test::Reset();
+    trust_test::strings["unified_mqtt/broker_address"] = "192.168.137.1";
+    trust_test::strings["unified_mqtt/username"] = "legacy-device";
+    trust_test::strings["unified_mqtt/password"] = "legacy-mqtt-token";
+    trust_test::strings["unified_mqtt/device_key"] = "legacy-device";
+    DeviceCloudConfigService service;
+    DeviceCloudConfig current;
+    RODAK_CHECK_FALSE(service.Load(current));
+    RODAK_CHECK(current.has_mqtt_config);
+    bool admitted = false;
+    RODAK_CHECK(service.ApplyIfMqttConfigCurrent(current, [&] { admitted = true; return true; }));
+    RODAK_CHECK(admitted);
+    trust_test::strings.erase("unified_mqtt/password");
+    admitted = false;
+    RODAK_CHECK_FALSE(service.ApplyIfMqttConfigCurrent(current, [&] { admitted = true; return true; }));
+    RODAK_CHECK_FALSE(admitted);
+}
+
+RODAK_TEST("MQTT admission rejects incomplete AIoT credentials when the pinned authority requires binding") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    trust_test::strings.erase("device_cloud/access_token");
+    DeviceCloudConfig current;
+    RODAK_CHECK_FALSE(service.Load(current));
+    RODAK_CHECK(current.has_mqtt_config);
+    RODAK_CHECK(current.server_requires_bound_identity);
+    bool admitted = false;
+    RODAK_CHECK_FALSE(service.ApplyIfMqttConfigCurrent(current, [&] { admitted = true; return true; }));
+    RODAK_CHECK_FALSE(admitted);
 }

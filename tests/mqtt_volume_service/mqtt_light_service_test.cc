@@ -313,6 +313,7 @@ RODAK_TEST("MQTT light Stop invalidates dequeued writes and drops pending receip
 RODAK_TEST("MQTT light ordinary credential refresh keeps cached outcome but new binding resets it") {
     Fixture f;
     f.Start();
+    auto* original = CurrentClient();
     f.Send(LightRequest());
     const auto first = f.Receipt();
     Disconnect();
@@ -320,7 +321,7 @@ RODAK_TEST("MQTT light ordinary credential refresh keeps cached outcome but new 
     config.mqtt_password = "rotated-token";
     SetConfig(config);
     RejectCredentials();
-    RODAK_CHECK(WaitUntil([&]() { return CredentialRevision() == 1 && f.service.IsConnected(); }));
+    f.CheckRefreshedClient(original, "rotated-token");
     f.Send(LightRequest());
     RODAK_CHECK_EQ(f.Receipt(1), first);
     RODAK_CHECK_EQ(fake_light::refresh_calls.load(), 1u);

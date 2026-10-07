@@ -18,6 +18,7 @@ std::vector<Request> requests;
 std::vector<Discovery> discoveries;
 std::string read_error_key;
 std::string write_error_key;
+unsigned write_error_remaining = std::numeric_limits<unsigned>::max();
 size_t authority_write_capacity = 4000;
 unsigned discovery_calls = 0;
 std::function<void(const std::string&)> on_http_open;
@@ -27,6 +28,7 @@ void Reset() {
     fake_clock_us = 100000;
     strings.clear(); booleans.clear(); integers.clear(); replies.clear(); requests.clear();
     discoveries.clear(); read_error_key.clear(); write_error_key.clear(); discovery_calls = 0;
+    write_error_remaining = std::numeric_limits<unsigned>::max();
     on_http_open = {}; on_discovery = {};
     authority_write_capacity = 4000;
 }
@@ -82,6 +84,14 @@ void RespondBoundAt(const std::string& address, int port, const std::string& tra
 }
 }  // namespace trust_test
 
+namespace {
+bool FailWrite(const std::string& name) {
+    if (trust_test::write_error_key != name || trust_test::write_error_remaining == 0) return false;
+    --trust_test::write_error_remaining;
+    return true;
+}
+}  // namespace
+
 Settings::Settings(const std::string& ns, bool read_write) : ns_(ns), read_write_(read_write) {}
 Settings::~Settings() = default;
 bool Settings::Commit() { return true; }
@@ -102,7 +112,7 @@ std::string Settings::GetString(const std::string& key, const std::string& fallb
 }
 SettingsStringWriteStatus Settings::WriteString(const std::string& key, const std::string& value) {
     const auto name = ns_ + "/" + key;
-    if (trust_test::write_error_key == name) return SettingsStringWriteStatus::kError;
+    if (FailWrite(name)) return SettingsStringWriteStatus::kError;
     if (value.size() + 1 > 4000 ||
         (name == "device_cloud/server_auth" && value.size() + 1 > trust_test::authority_write_capacity)) {
         return SettingsStringWriteStatus::kError;
@@ -119,7 +129,7 @@ int32_t Settings::GetInt(const std::string& key, int32_t fallback) {
 }
 bool Settings::SetInt(const std::string& key, int32_t value) {
     const auto name = ns_ + "/" + key;
-    if (trust_test::write_error_key == name) return false;
+    if (FailWrite(name)) return false;
     trust_test::integers[name] = value;
     return true;
 }
@@ -137,7 +147,7 @@ bool Settings::GetBool(const std::string& key, bool fallback) {
 }
 bool Settings::SetBool(const std::string& key, bool value) {
     const auto name = ns_ + "/" + key;
-    if (trust_test::write_error_key == name) return false;
+    if (FailWrite(name)) return false;
     trust_test::booleans[name] = value;
     return true;
 }

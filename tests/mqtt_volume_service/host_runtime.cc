@@ -3,8 +3,10 @@
 #include "phone_os/battery_monitor.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <stdexcept>
+#include <tuple>
 
 struct HostMqttClient {
     std::recursive_mutex api_mutex;
@@ -16,9 +18,12 @@ struct HostMqttClient {
     unsigned dropped_native_events = 0;
     esp_event_handler_t callback = nullptr;
     void* context = nullptr;
-    bool running = false;
-    bool destroyed = false;
-    bool connected = false;
+    std::atomic<bool> running{false};
+    std::atomic<bool> destroyed{false};
+    std::atomic<bool> connected{false};
+    std::atomic<bool> exited{true};
+    bool wait_reconnect = false;
+    std::string credential;
     unsigned transport_epoch = 0;
     std::deque<mqtt_host::Publication> outbox;
     unsigned id = 0;
@@ -57,6 +62,31 @@ bool direct_paused = false;
 bool direct_entered = false;
 thread_local void (*before_depth_sample)(QueueHandle_t, void*) = nullptr;
 thread_local void* before_depth_context = nullptr;
+std::mutex control_mutex;
+std::mutex refresh_mutex;
+std::array<bool, 7> sdk_failures{};
+std::function<void(mqtt_host::SdkOperation, esp_mqtt_client_handle_t)> sdk_hook;
+std::function<bool(unsigned, rodakos::DeviceCloudConfig&)> refresh_hook;
+std::atomic<unsigned> refresh_calls{0};
+std::vector<mqtt_host::LifecycleEvent> lifecycle_events;
+
+void RecordLifecycle(HostMqttClient* client, const char* action) {
+    std::lock_guard<std::mutex> lock(control_mutex);
+    lifecycle_events.push_back({client == nullptr ? 0u : client->id, action});
+}
+bool SdkEntry(mqtt_host::SdkOperation operation, HostMqttClient* client) {
+    std::function<void(mqtt_host::SdkOperation, esp_mqtt_client_handle_t)> hook;
+    bool fail = false;
+    {
+        std::lock_guard<std::mutex> lock(control_mutex);
+        hook = sdk_hook;
+        auto& pending = sdk_failures[static_cast<size_t>(operation)];
+        fail = pending;
+        pending = false;
+    }
+    if (hook) hook(operation, client);
+    return fail;
+}
 
 void FlushOutbox(HostMqttClient* client) {
     // 调用者持 SDK API 锁；断线期间保留 outbox，重连才再次出线。
@@ -75,9 +105,13 @@ void QueueEvent(HostMqttClient* client, esp_mqtt_event_id_t id) {
     std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
     if (id == MQTT_EVENT_CONNECTED) {
         client->connected = true;
+        client->wait_reconnect = false;
         ++client->transport_epoch;
     }
-    if (id == MQTT_EVENT_DISCONNECTED) client->connected = false;
+    if (id == MQTT_EVENT_DISCONNECTED) {
+        client->connected = false;
+        client->wait_reconnect = true;
+    }
     std::lock_guard<std::mutex> lock(client->events_mutex);
     esp_mqtt_event_t event;
     event.client = client;
@@ -116,9 +150,13 @@ void PostNativeAndRun(esp_mqtt_event_t event) {
     std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
     if (event.event_id == MQTT_EVENT_CONNECTED) {
         client->connected = true;
+        client->wait_reconnect = false;
         ++client->transport_epoch;
     }
-    if (event.event_id == MQTT_EVENT_DISCONNECTED) client->connected = false;
+    if (event.event_id == MQTT_EVENT_DISCONNECTED) {
+        client->connected = false;
+        client->wait_reconnect = true;
+    }
     {
         std::lock_guard<std::mutex> lock(client->events_mutex);
         // 原 SDK 会忽略满队列时 lifecycle post 的错误，再运行已有队列。
@@ -211,26 +249,51 @@ int xQueueReceive(QueueHandle_t queue, void* output, TickType_t wait) {
 void esp_restart() { ++restart_count; }
 
 esp_mqtt_client_handle_t esp_mqtt_client_init(const esp_mqtt_client_config_t* config) {
+    if (SdkEntry(mqtt_host::SdkOperation::kInit, nullptr)) {
+        RecordLifecycle(nullptr, "init-failed");
+        return nullptr;
+    }
     std::lock_guard<std::mutex> lock(state_mutex);
     tls_uri = config->broker.address.uri;
     tls_certificate = config->broker.verification.certificate;
     tls_common_name = config->broker.verification.common_name;
     auto client = std::make_unique<HostMqttClient>();
     client->id = static_cast<unsigned>(clients.size() + 1);
+    client->credential = config->credentials.authentication.password == nullptr
+        ? "" : config->credentials.authentication.password;
     HostMqttClient* pointer = client.get();
     clients.push_back(std::move(client));
     current_client = pointer;
+    RecordLifecycle(pointer, "init");
     return pointer;
 }
 int esp_mqtt_client_register_event(HostMqttClient* client, esp_mqtt_event_id_t,
                                    esp_event_handler_t callback, void* context) {
+    if (SdkEntry(mqtt_host::SdkOperation::kRegister, client)) {
+        RecordLifecycle(client, "register-failed");
+        return ESP_FAIL;
+    }
     client->callback = callback;
     client->context = context;
     return ESP_OK;
 }
 int esp_mqtt_client_start(HostMqttClient* client) {
-    client->running = true;
+    if (SdkEntry(mqtt_host::SdkOperation::kStart, client)) {
+        RecordLifecycle(client, "start-failed");
+        return ESP_FAIL;
+    }
+    if (client->running || client->thread.joinable() || client->destroyed) return ESP_FAIL;
+    RecordLifecycle(client, "start");
+    client->exited = false;
+    {
+        std::lock_guard<std::mutex> lock(client->events_mutex);
+        // 与实际 overlay 一致：新一轮 SDK task 不继承旧 custom-event 唤醒。
+        client->custom_events.clear();
+    }
     client->thread = std::thread([client]() {
+        (void)SdkEntry(mqtt_host::SdkOperation::kTaskEnter, client);
+        client->running = true;
+        QueueEvent(client, MQTT_EVENT_CONNECTED);
         while (true) {
             {
                 std::unique_lock<std::mutex> lock(client->events_mutex);
@@ -239,7 +302,7 @@ int esp_mqtt_client_start(HostMqttClient* client) {
                         (!client->events.empty() && (!hold_user_events || client->events.front().event_id != MQTT_USER_EVENT)) ||
                         (!client->custom_events.empty() && !hold_user_events);
                 });
-                if (!client->running) return;
+                if (!client->running) break;
             }
             std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
             bool native_ready = false;
@@ -251,14 +314,36 @@ int esp_mqtt_client_start(HostMqttClient* client) {
             if (native_ready) RunNativeEvents(client);
             else if (!hold_user_events) RunOneCustomEvent(client);
         }
+        (void)SdkEntry(mqtt_host::SdkOperation::kTaskExit, client);
+        {
+            std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+            std::lock_guard<std::mutex> event_lock(client->events_mutex);
+            client->connected = false;
+            client->outbox.clear();
+            client->custom_events.clear();
+            client->events.clear();
+            client->exited = true;
+        }
+        RecordLifecycle(client, "sdk-exit");
     });
-    QueueEvent(client, MQTT_EVENT_CONNECTED);
     return ESP_OK;
 }
 int esp_mqtt_client_stop(HostMqttClient* client) {
+    if (SdkEntry(mqtt_host::SdkOperation::kStop, client)) {
+        RecordLifecycle(client, "stop-failed");
+        return ESP_FAIL;
+    }
+    {
+        std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+        if (in_sdk_callback || !client->running) {
+            RecordLifecycle(client, "stop-not-running-or-callback");
+            return ESP_FAIL;
+        }
+        RecordLifecycle(client, "stop");
+        client->running = false;
+    }
     {
         std::lock_guard<std::mutex> lock(client->events_mutex);
-        client->running = false;
         client->changed.notify_all();
     }
     if (client->thread.joinable()) client->thread.join();
@@ -270,16 +355,36 @@ int esp_mqtt_client_stop(HostMqttClient* client) {
     return ESP_OK;
 }
 int esp_mqtt_client_destroy(HostMqttClient* client) {
+    // SDK destroy 会先 stop 活跃任务；这里保留同样的调用路径并检测 callback 误用。
+    if (client->running && esp_mqtt_client_stop(client) != ESP_OK) return ESP_FAIL;
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    if (!client->exited || client->destroyed) {
+        RecordLifecycle(client, "unsafe-destroy-attempt");
+        return ESP_FAIL;
+    }
     client->destroyed = true;
     client->connected = false;
     client->outbox.clear();
+    HostMqttClient* expected = client;
+    current_client.compare_exchange_strong(expected, nullptr);
+    RecordLifecycle(client, "destroy");
     return ESP_OK;
 }
-int esp_mqtt_client_reconnect(HostMqttClient* client) { QueueEvent(client, MQTT_EVENT_CONNECTED); return ESP_OK; }
-int esp_mqtt_set_config(HostMqttClient* client, const esp_mqtt_client_config_t*) {
+int esp_mqtt_client_reconnect(HostMqttClient* client) {
     std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    if (!client->running || client->destroyed || !client->wait_reconnect) return ESP_FAIL;
+    RecordLifecycle(client, "reconnect");
+    QueueEvent(client, MQTT_EVENT_CONNECTED);
+    return ESP_OK;
+}
+int esp_mqtt_set_config(HostMqttClient* client, const esp_mqtt_client_config_t* config) {
+    if (SdkEntry(mqtt_host::SdkOperation::kSetConfig, client)) return ESP_FAIL;
+    std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+    if (client->destroyed) throw std::runtime_error("set_config used destroyed MQTT client");
+    client->credential = config->credentials.authentication.password == nullptr
+        ? "" : config->credentials.authentication.password;
     ++client->credential_revision;
+    RecordLifecycle(client, "set-config");
     return ESP_OK;
 }
 int esp_mqtt_client_get_outbox_size(HostMqttClient* client) {
@@ -355,19 +460,132 @@ int esp_mqtt_dispatch_custom_event(HostMqttClient* client, esp_mqtt_event_t* eve
 }
 
 namespace rodakos {
-bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) { config = mqtt_host::Config(); return true; }
-bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) { config = mqtt_host::Config(); return true; }
+#ifndef RODAK_MQTT_REAL_CLOUD
+bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
+    config = mqtt_host::Config();
+    return config.has_aiot_config;
+}
+bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& config) const {
+    return config.cloud_generation == mqtt_host::Config().cloud_generation;
+}
+bool DeviceCloudConfigService::ApplyIfMqttConfigCurrent(
+    const DeviceCloudConfig& snapshot, const std::function<bool()>& apply) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    if (!apply || !stored_config.has_mqtt_config || stored_config.unbind_pending ||
+        stored_config.server_trust_error || stored_config.server_trust_pending ||
+        (stored_config.server_requires_bound_identity && !stored_config.has_aiot_config)) return false;
+    // Mirror the full guarded snapshot contract; real persistence is tested by the separate Cloud TU.
+    const auto fields = [](const DeviceCloudConfig& config) {
+        return std::tie(config.cloud_generation, config.provisioning_url,
+            config.server_trust.version, config.server_trust.server_id,
+            config.server_trust.tls_name, config.server_trust.ca_pem,
+            config.server_connect_address, config.server_trust_error,
+            config.server_trust_pending, config.server_requires_bound_identity,
+            config.server_authority_record, config.aiot_device_secret,
+            config.aiot_access_token, config.aiot_registered, config.aiot_activated,
+            config.aiot_pending, config.unbind_pending, config.unbind_server_acknowledged,
+            config.mqtt_protocol_version, config.mqtt_broker_address, config.mqtt_broker_port,
+            config.mqtt_username, config.mqtt_password, config.mqtt_keepalive,
+            config.mqtt_device_key, config.mqtt_home_enabled, config.mqtt_http_base_url,
+            config.mqtt_topic_telemetry, config.mqtt_topic_shadow_report,
+            config.mqtt_topic_shadow_desired, config.mqtt_topic_ota_notify,
+            config.mqtt_topic_ota_progress, config.mqtt_topic_commands,
+            config.mqtt_topic_pc_status, config.mqtt_topic_home_prefix, config.has_mqtt_config);
+    };
+    return fields(snapshot) == fields(stored_config) && apply();
+}
+bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
+    std::lock_guard<std::mutex> serialized(refresh_mutex);
+    config = mqtt_host::Config();
+    const unsigned call = ++refresh_calls;
+    std::function<bool(unsigned, DeviceCloudConfig&)> hook;
+    {
+        std::lock_guard<std::mutex> lock(control_mutex);
+        hook = refresh_hook;
+    }
+    return !hook || hook(call, config);
+}
 std::string DeviceCloudConfigService::last_error() const { return "host config unavailable"; }
+#endif
 BatteryMonitor::~BatteryMonitor() = default;
 BatterySnapshot BatteryMonitor::Read() { return {}; }
 }
 
 namespace mqtt_host {
+void FailNextSdk(SdkOperation operation) {
+    if (operation == SdkOperation::kStop || operation == SdkOperation::kTaskEnter ||
+        operation == SdkOperation::kTaskExit)
+        throw std::invalid_argument("use SDK task gates and BeginSdkExit for lifecycle failures");
+    std::lock_guard<std::mutex> lock(control_mutex);
+    sdk_failures[static_cast<size_t>(operation)] = true;
+}
+void SetSdkHook(std::function<void(SdkOperation, esp_mqtt_client_handle_t)> hook) {
+    std::lock_guard<std::mutex> lock(control_mutex);
+    sdk_hook = std::move(hook);
+}
+void SetRefreshHook(std::function<bool(unsigned, rodakos::DeviceCloudConfig&)> hook) {
+    std::lock_guard<std::mutex> lock(control_mutex);
+    refresh_hook = std::move(hook);
+}
+unsigned RefreshCalls() { return refresh_calls.load(); }
+std::vector<LifecycleEvent> LifecycleEvents() {
+    std::lock_guard<std::mutex> lock(control_mutex);
+    return lifecycle_events;
+}
+std::vector<ClientSnapshot> ClientSnapshots() {
+    std::vector<HostMqttClient*> copy;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        for (const auto& client : clients) copy.push_back(client.get());
+    }
+    std::vector<ClientSnapshot> result;
+    for (auto* client : copy) {
+        std::lock_guard<std::recursive_mutex> lock(client->api_mutex);
+        std::lock_guard<std::mutex> events_lock(client->events_mutex);
+        result.push_back({client->id, client->running.load(), client->connected.load(),
+            client->exited.load(), client->destroyed.load(), client->outbox.size(),
+            client->custom_events.size(), client->credential});
+    }
+    return result;
+}
+void DeliverTo(esp_mqtt_client_handle_t client, esp_mqtt_event_t event) {
+    event.client = client;
+    PostNativeAndRun(event);
+}
+void RejectCredentialsOn(esp_mqtt_client_handle_t client) {
+    esp_mqtt_error_codes_t error;
+    error.error_type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+    error.connect_return_code = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+    esp_mqtt_event_t event;
+    event.event_id = MQTT_EVENT_ERROR;
+    event.error_handle = &error;
+    DeliverTo(client, event);
+}
+void BeginSdkExit(esp_mqtt_client_handle_t client) {
+    std::lock_guard<std::recursive_mutex> api_lock(client->api_mutex);
+    client->running = false;
+    RecordLifecycle(client, "unrecoverable-exit");
+    std::lock_guard<std::mutex> lock(client->events_mutex);
+    client->changed.notify_all();
+}
+void JoinExitedSdkForCleanup(esp_mqtt_client_handle_t client) {
+    if (!client->exited.load()) throw std::runtime_error("test cleanup cannot join a live SDK task");
+    if (client->thread.joinable()) client->thread.join();
+    RecordLifecycle(client, "test-cleanup-join");
+}
 void Reset() {
     ResetDiagnosticLogs();
     before_depth_sample = nullptr;
     before_depth_context = nullptr;
     JoinWorkers();
+    {
+        std::lock_guard<std::mutex> lock(control_mutex);
+        sdk_failures.fill(false);
+        sdk_hook = {};
+        refresh_hook = {};
+        lifecycle_events.clear();
+    }
+    refresh_calls = 0;
     std::lock_guard<std::mutex> lock(state_mutex);
     clients.clear();
     publications.clear();
@@ -382,8 +600,10 @@ void Reset() {
     stored_config.mqtt_device_key = "test-device";
     stored_config.mqtt_password = "test-token-1";
     stored_config.aiot_device_secret = "test-binding-1";
+    stored_config.aiot_access_token = "test-token-1";
     stored_config.aiot_registered = true;
     stored_config.aiot_activated = true;
+    stored_config.has_aiot_config = true;
     stored_config.mqtt_http_base_url = "http://host-broker";
     stored_config.provisioning_url = "http://host-broker/bootstrap";
     stored_config.mqtt_topic_shadow_desired = "devices/test-device/shadow/desired";

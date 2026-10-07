@@ -1,84 +1,32 @@
 # RodakOS Roadmap
 
-The trusted-server transport history starts from `7101282`.
-The current device runs source `aebd5e6c60886ab1245220dcde880cd1f4a7f4cd`,
-package 024 (`20261007-180119`, task `media-mqtt-diagnostics-024`). NVS-preserving flash
-and Recovery/main/OTA-confirmation/Home checks pass; the original ID, binding and tokenVersion=4
-remain. New diagnostics distinguish inbound object allocation from queue rejection and outbound
-count from byte limits, while keeping all capacities, zero-timeout admission and ownership rules.
-The ordinary 024 signaling burst records four `queue_send_rejected` and ten `count_limit` events,
-with no `object_alloc_failed` event. A separate same-firmware 200 ms candidate-pacing experiment
-gets 19/19 ACKs and no queue warnings but still eight SDK remote-candidate-limit messages.
-This fixed delay is an experiment, not a production policy or proof of candidate acceptance.
-The separate production desktop ACK-paced path then passes 19/19 sequential ACKs without a
-fixed candidate delay, displays a 320×240 frame and continues observing Home for 79.967 s,
-with no queue warnings or detected reset/panic markers in that window. Eight SDK candidate-limit
-messages remain. Preserve the earlier desktop-restart window separately: firmware credential
-recovery restarts the device, then old persistent signaling replay causes 41 queue rejections.
-That first successful ACK-paced session predates the legacy-replay cleanup. The later desktop
-fix changes 41 historical delivered signals to failed without replay, preserving 274 existing
-terminal records; a new 19/19-ACK session renders a frame and observes Home for 98.936 s with
-no queue-drop/reset/panic markers. Credential-refresh isolation restart and SDK candidate
-capacity remain separate open items; this does not close the resource gates.
-Directed MQTT tests pass 115 positive cases and six source-negative controls in each Debug and
-ASan/UBSan/leak build (five CTests per build). A fresh complete 024 local runner and new CI
-acceptance are not established here; the earlier 023 totals do not substitute for them. The
-first 024 CI candidate exposes a missing diagnostic support object in the shared host runtime
-of `voice_identity_integration`; its exact failure and required rerun are recorded below.
-See [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024).
+025 source `8d5cf99f95b59d45b0a1e66fc3a02d1a502618a6` implements complete SDK-client
+replacement for automatic MQTT credential refresh within the existing authority boundary.
+The worker revokes the old connection, confirms stop/destroy, reloads current credentials
+and attaches a new generation through an atomic Cloud credential check. Late old-generation
+rejections are coalesced; a new-generation rejection remains actionable. Changed authority
+and unconfirmed SDK stop retain conservative restart isolation. See
+[MQTT credential refresh](mqtt-credential-refresh.md). Package `20261007-200215` has passed
+NVS-preserving flash and boot confirmation. The device then merges a second old-generation
+rejection during HTTP, confirms generation 1 stop/destroy and connects generation 3 without
+restarting; uptime, binding and tokenVersion=4 remain. Separate short/65-second outages and
+screen/peer cleanup retain their own results, including the late Stop not-found receipt.
+Fresh local checks pass 38 suites / 98 CTests, Python 107 and helper 21. See
+[025 evidence](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025).
 
-The preceding source `8238a5022724f1562c22bae6c3669717ab988a4b`,
-package 023 (`20261007-164049`, task `media-static-first-frame-023`), passed NVS-preserving flash
-and boot checks retain the original ID, bound state and tokenVersion=4. With the same static
-Photos page and configured 2.5-second offer delay, two sessions each receive and render one
-320×240 frame, 39.9/77.0 ms after video open. The 022 baseline opened both channels but
-dropped its sole source frame and reached the first-frame timeout. Normal Stop separates
-the two 023 sessions; remote control remains disabled and no JTAG is attached. After final
-screen stop/Home, logs continue for 323.086 s with no detected reset/panic markers. Fifteen
-`MQTT message dropped: worker queue full or allocation failed` messages remain. This closes the measured static
-first-frame regression, not Camera teardown, resource pressure, late control or soak.
-Directed WebRTC 45-case/5-negative and MQTT 104-case checks pass. The complete 023 host
-regression totals 37 unique suites / 92 CTests, 107 Python cases and 21 separately counted
-CI-helper cases; the same-source final ACK ASan suite is reused without double-counting.
-See [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023).
+The preceding 024 evidence remains independent. It distinguishes MQTT allocation/queue/count/byte failures and the production desktop uses
+ACK-paced, nonpersistent signaling. Its final window passes 19/19 ACKs and a 320×240 frame,
+then observes Home for 98.936 s. Eight SDK remote-candidate-limit messages remain; ACKs do not
+prove all candidates were accepted. The two credential-recovery restart windows are preserved
+as failures. See [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024).
 
-The preceding package 022 (`dc847b2`, `20261007-150728`) passed NVS-preserving flash
-and Recovery/main/OTA-confirmation/Home checks with the original signing root,
-immutable assets and binding/tokenVersion=4. Its two bounded Camera runs exit normally
-after 28.300 s / 380 frames and 88.744 s / 1,171 frames. The first run's later JTAG capture
-has all 24 committed teardown marks, but subsequent halt/resume enters cache-error panic
-paths; final core `running` states do not prove healthy recovery. An empty second-window
-RTS attempt is not another Camera reproduction. A standard USB ROM/stub reset restores
-operation without writing Flash. The third window has no JTAG attach and continues logging
-for 147.311 s after the Home command following screen stop, with fresh MQTT evidence.
-
-Preserve the preceding 021 failure: scoped screen JPEG allocation uses PSRAM;
-its first same-frame open sample has no net DMA loss, and screen-first Camera starts with
-a 16,384-byte largest DMA block. Camera exit then stalls at STREAMOFF begin for at least
-127.583 seconds and requires a controlled RTS reset. In the separate recovery window,
-A3 decodes twice, but 3.2–3.5-second control replies still time out and are rejected;
-reenabling control does not establish a successful later Retry. Final Home/screen-off
-internal largest is 8,192 bytes, with recovery-boot historical minimum 651 bytes.
-This bounded allocation improvement does not fix Camera STREAMOFF, pre-callback delivery
-latency or the static-page first-frame gate; preserve 018/020's independent failures.
-Release remains **NO_GO**; exact hashes, host checks and limits are in
-[024 release evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024),
-[023 release evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023),
-[022 release evidence](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022),
-[021 failure history](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021)
-and [media verification](https://github.com/rymcu/rodak/blob/master/docs/media-browsing-verification.md).
-Earlier network packages retain their own evidence identity.
-
-022 adds boot-local Camera teardown phase diagnostics, with checked build-local
-overlays for the actual extended-DVP driver and a mandatory final-ELF gate.
-Local host validation (37 suites / 91 CTests) and ESP-IDF 6.0.2 Build3 pass; the 536-byte DRAM recorder has
-one native CAS and no calls or backward branches. This is observation support,
-not a lifecycle repair; two normal exits do not resolve 021's intermittent stall.
-Administrator driver installation now exposes MI02's debug interface and the exact uppercase
-serial passes the capability probe. The historical candidate `/kp` signature-policy check
-still failed; installation success is not WHQL/kernel-policy acceptance. Do not repeat JTAG
-on healthy windows or use debugger-perturbed operation as an unmodified baseline.
-See [Camera diagnostics](camera-teardown-diagnostics.md).
+The tested static Photos first-frame regression was closed in
+[023](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023).
+The [021 STREAMOFF stall](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021),
+late control, resource recovery, actual SD/touch/audio, production-root, power-cut and eight-hour
+soak gates remain **NO_GO**. [022 Camera diagnostics](camera-teardown-diagnostics.md) and the
+repaired MI02 JTAG interface do not close the stall; the debugger-perturbed panic window is
+not evidence of healthy recovery. Earlier packages retain their own identities and bounded results.
 
 This is the active work list. Completed implementation details live in
 [architecture](architecture.md) and the linked feature documents. The former Milestone 0–7

@@ -3,6 +3,28 @@
 #include "phone_os/device_cloud_config.h"
 
 namespace mqtt_host {
+enum class SdkOperation { kInit, kRegister, kStart, kStop, kSetConfig, kTaskEnter, kTaskExit };
+struct ClientSnapshot {
+    unsigned id;
+    bool running;
+    bool connected;
+    bool exited;
+    bool destroyed;
+    size_t outbox_count;
+    size_t custom_event_count;
+    std::string credential;
+};
+struct LifecycleEvent { unsigned client_id; std::string action; };
+void FailNextSdk(SdkOperation operation);
+void SetSdkHook(std::function<void(SdkOperation, esp_mqtt_client_handle_t)> hook);
+void SetRefreshHook(std::function<bool(unsigned, rodakos::DeviceCloudConfig&)> hook);
+unsigned RefreshCalls();
+std::vector<ClientSnapshot> ClientSnapshots();
+std::vector<LifecycleEvent> LifecycleEvents();
+void DeliverTo(esp_mqtt_client_handle_t client, esp_mqtt_event_t event);
+void RejectCredentialsOn(esp_mqtt_client_handle_t client);
+void BeginSdkExit(esp_mqtt_client_handle_t client);
+void JoinExitedSdkForCleanup(esp_mqtt_client_handle_t client);
 struct BrokerTlsSnapshot {
     std::string uri;
     std::string certificate;

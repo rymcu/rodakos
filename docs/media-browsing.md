@@ -2,7 +2,7 @@
 
 Photos 和 Files 将扫描失败与正常空列表分别显示。失败时清除旧列表和部分结果，保留明确错误及重试入口；缺失服务、SD 不可用、目录不可用和一般读取失败不再统一显示为空目录。没有足够错误信息时使用一般失败提示，不推断为文件损坏或内存不足。
 
-当前设备包为 024（`aebd5e6` / `20261007-180119`），新增 MQTT 丢弃原因诊断。普通信令突发下确认了 4 次入站队列拒绝和 10 次出站条数上限。临时 200 ms 对照之后，桌面主进程按 ACK 串行派送的独立生产路径实测也取得 19/19 ACK、真实 320×240 首帧，停流回 Home 后观察 79.967 秒且没有队列告警或 reset/panic 标记；该轮没有固定候选延时，仍有 8 条 SDK 候选超限日志。另一次桌面重启窗口出现固件凭据恢复重启及旧持久信令补发的 41 次队列拒绝，成功窗口不能覆盖这项失败，也不证明 SDK 接纳全部候选。023 首帧、022 Camera 窗口与 021 停滞历史保留，发布仍为 **NO_GO**。见 [024 诊断与对照](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024)、[023 首帧](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)、[022 窗口](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)与[021 历史实测](#021-屏幕-jpeg-作用域-psram-分配与实测边界)。
+当前设备已更新至 025，见[凭据刷新与后续屏幕验证](ota-release-readiness.md#2026-10-07-mqtt-credential-client-replacement-025)。以下保留媒体基线 024（`aebd5e6` / `20261007-180119`），新增 MQTT 丢弃原因诊断。普通信令突发下确认了 4 次入站队列拒绝和 10 次出站条数上限。临时 200 ms 对照之后，桌面主进程按 ACK 串行派送的独立生产路径实测也取得 19/19 ACK、真实 320×240 首帧，停流回 Home 后观察 79.967 秒且没有队列告警或 reset/panic 标记；该轮没有固定候选延时，仍有 8 条 SDK 候选超限日志。另一次桌面重启窗口出现固件凭据恢复重启及旧持久信令补发的 41 次队列拒绝，成功窗口不能覆盖这项失败，也不证明 SDK 接纳全部候选。023 首帧、022 Camera 窗口与 021 停滞历史保留，发布仍为 **NO_GO**。见 [024 诊断与对照](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024)、[023 首帧](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023)、[022 窗口](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022)与[021 历史实测](#021-屏幕-jpeg-作用域-psram-分配与实测边界)。
 
 ## 目录扫描
 
