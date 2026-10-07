@@ -94,11 +94,15 @@ struct HostQueue {
     size_t capacity;
     struct Entry { void* value; uint64_t sequence; };
     std::deque<Entry> items;
+    size_t send_attempts = 0;
+    size_t send_accepted = 0;
+    TickType_t last_send_wait = 0;
 };
 using QueueHandle_t = HostQueue*;
 QueueHandle_t xQueueCreate(unsigned capacity, unsigned);
 int xQueueSend(QueueHandle_t queue, const void* item, TickType_t);
 int xQueueReceive(QueueHandle_t queue, void* output, TickType_t wait);
+UBaseType_t uxQueueMessagesWaiting(QueueHandle_t queue);
 inline void vQueueDelete(QueueHandle_t value) { delete value; }
 
 struct HostTimer { void* id; };
@@ -137,9 +141,14 @@ constexpr unsigned MALLOC_CAP_INTERNAL = 1;
 constexpr unsigned MALLOC_CAP_SPIRAM = 2;
 constexpr unsigned MALLOC_CAP_8BIT = 4;
 constexpr unsigned MALLOC_CAP_DMA = 8;
-inline unsigned heap_caps_get_free_size(unsigned) { return 1024 * 1024; }
+constexpr unsigned MALLOC_CAP_DEFAULT = 16;
+inline unsigned heap_caps_get_free_size(unsigned caps) {
+    return caps == MALLOC_CAP_DEFAULT ? 131072 : 1024 * 1024;
+}
 inline unsigned heap_caps_get_minimum_free_size(unsigned) { return 1024 * 1024; }
-inline unsigned heap_caps_get_largest_free_block(unsigned) { return 1024 * 1024; }
+inline unsigned heap_caps_get_largest_free_block(unsigned caps) {
+    return caps == MALLOC_CAP_DEFAULT ? 16384 : 1024 * 1024;
+}
 
 struct HostMqttClient;
 using esp_mqtt_client_handle_t = HostMqttClient*;

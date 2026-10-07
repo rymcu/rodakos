@@ -1174,9 +1174,15 @@ bool UnifiedMqttService::QueueCommandPublication(const CommandPublishContext& co
         ESP_LOGW(TAG, "Dropping command output: original MQTT connection is no longer current");
         return false;
     }
-    if (command_publications_.size() >= kMaxCommandPublications ||
+    const bool count_limit_reached = command_publications_.size() >= kMaxCommandPublications;
+    if (count_limit_reached ||
         payload.size() > kMaxCommandPublicationBytes - command_publication_bytes_) {
-        ESP_LOGW(TAG, "Dropping command output: publication queue is full");
+        ESP_LOGW(TAG, "Dropping command output: publication queue is full reason=%s "
+                     "publication_count=%u publication_bytes=%u request_bytes=%u",
+                 count_limit_reached ? "count_limit" : "byte_limit",
+                 static_cast<unsigned>(command_publications_.size()),
+                 static_cast<unsigned>(command_publication_bytes_),
+                 static_cast<unsigned>(payload.size()));
         return false;
     }
     command_publications_.push_back(
@@ -1376,6 +1382,8 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                 break;
             }
             {
+                const size_t topic_bytes = completed_topic.size();
+                const size_t payload_bytes = completed_payload.size();
                 auto context = std::unique_ptr<PendingMessage>(
                     new (std::nothrow) PendingMessage{
                         event_generation,
@@ -1384,8 +1392,27 @@ void UnifiedMqttService::HandleMqttEvent(esp_mqtt_event_handle_t event) {
                         std::move(completed_payload),
                     });
                 PendingMessage* pending = context.get();
-                if (pending == nullptr || xQueueSend(message_queue_, &pending, 0) != pdTRUE) {
-                    ESP_LOGE(TAG, "MQTT message dropped: worker queue full or allocation failed");
+                const char* drop_reason = nullptr;
+                if (pending == nullptr) {
+                    drop_reason = "object_alloc_failed";
+                } else if (xQueueSend(message_queue_, &pending, 0) != pdTRUE) {
+                    drop_reason = "queue_send_rejected";
+                }
+                if (drop_reason != nullptr) {
+                    // The worker and allocator can progress between these failure-adjacent samples.
+                    const int64_t at_us_sample = esp_timer_get_time();
+                    const UBaseType_t queue_depth_sample = uxQueueMessagesWaiting(message_queue_);
+                    const size_t default_free = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+                    const size_t default_largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+                    ESP_LOGE(TAG, "MQTT message dropped: reason=%s topic_bytes=%u payload_bytes=%u "
+                                 "object_bytes=%u queue_depth_sample=%u at_us_sample=%" PRId64
+                                 " default_free=%u default_largest=%u",
+                             drop_reason, static_cast<unsigned>(topic_bytes),
+                             static_cast<unsigned>(payload_bytes),
+                             static_cast<unsigned>(sizeof(PendingMessage)),
+                             static_cast<unsigned>(queue_depth_sample), at_us_sample,
+                             static_cast<unsigned>(default_free),
+                             static_cast<unsigned>(default_largest));
                 } else {
                     context.release();
                 }

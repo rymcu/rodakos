@@ -1,8 +1,28 @@
 # RodakOS Roadmap
 
 The trusted-server transport history starts from `7101282`.
-The current device runs source `8238a5022724f1562c22bae6c3669717ab988a4b`,
-package 023 (`20261007-164049`, task `media-static-first-frame-023`). NVS-preserving flash
+The current device runs source `aebd5e6c60886ab1245220dcde880cd1f4a7f4cd`,
+package 024 (`20261007-180119`, task `media-mqtt-diagnostics-024`). NVS-preserving flash
+and Recovery/main/OTA-confirmation/Home checks pass; the original ID, binding and tokenVersion=4
+remain. New diagnostics distinguish inbound object allocation from queue rejection and outbound
+count from byte limits, while keeping all capacities, zero-timeout admission and ownership rules.
+The ordinary 024 signaling burst records four `queue_send_rejected` and ten `count_limit` events,
+with no `object_alloc_failed` event. A separate same-firmware 200 ms candidate-pacing experiment
+gets 19/19 ACKs and no queue warnings but still eight SDK remote-candidate-limit messages.
+This fixed delay is an experiment, not a production policy or proof of candidate acceptance.
+The separate production desktop ACK-paced path then passes 19/19 sequential ACKs without a
+fixed candidate delay, displays a 320×240 frame and continues observing Home for 79.967 s,
+with no queue warnings or detected reset/panic markers in that window. Eight SDK candidate-limit
+messages remain. Preserve the earlier desktop-restart window separately: firmware credential
+recovery restarts the device, then old persistent signaling replay causes 41 queue rejections.
+The successful ACK-paced session predates the legacy-replay cleanup and does not validate it.
+Directed MQTT tests pass 115 positive cases and six source-negative controls in each Debug and
+ASan/UBSan/leak build (five CTests per build). A fresh complete 024 local runner and new CI
+acceptance are not established here; the earlier 023 totals do not substitute for them.
+See [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024).
+
+The preceding source `8238a5022724f1562c22bae6c3669717ab988a4b`,
+package 023 (`20261007-164049`, task `media-static-first-frame-023`), passed NVS-preserving flash
 and boot checks retain the original ID, bound state and tokenVersion=4. With the same static
 Photos page and configured 2.5-second offer delay, two sessions each receive and render one
 320×240 frame, 39.9/77.0 ms after video open. The 022 baseline opened both channels but
@@ -36,6 +56,7 @@ internal largest is 8,192 bytes, with recovery-boot historical minimum 651 bytes
 This bounded allocation improvement does not fix Camera STREAMOFF, pre-callback delivery
 latency or the static-page first-frame gate; preserve 018/020's independent failures.
 Release remains **NO_GO**; exact hashes, host checks and limits are in
+[024 release evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024),
 [023 release evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023),
 [022 release evidence](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022),
 [021 failure history](ota-release-readiness.md#2026-10-07-scoped-screen-jpeg-psram-validation-021)
@@ -228,7 +249,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 023 returns pending JPEG capacity before Stop completes; its finite Home observation has internal largest 8,192 B and boot minimum 2,311 B, with MQTT queue/allocation errors still present. This is not a controlled heap comparison with 022. Keep 022's two normal Camera exits and separate post-JTAG panic, and 021's 127.583 s STREAMOFF stall/reset. Camera root cause, arbitrary OOM, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023), [022 evidence](ota-release-readiness.md#2026-10-07-camera-teardown-diagnostics-022) |
+| Resource recovery | 024 identifies inbound queue rejection and outbound count-limit pressure. The separate production ACK-paced session passes 19/19 ACKs without queue warnings, but still reaches the SDK remote-candidate limit. Preserve the earlier credential-recovery restart and 41 old-signaling-replay queue rejections; this pass predates legacy-replay cleanup. Default-heap samples do not establish general capacity. Keep 023's pending-JPEG return evidence, 022's separate normal Camera exits/post-JTAG panic and 021's STREAMOFF stall/reset. Camera root cause, arbitrary OOM, media/audio/TLS concurrency and eight-hour soak remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [024 evidence](ota-release-readiness.md#2026-10-07-mqtt-queue-diagnostics-and-pacing-comparison-024), [023 evidence](ota-release-readiness.md#2026-10-07-static-screen-first-frame-validation-023) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

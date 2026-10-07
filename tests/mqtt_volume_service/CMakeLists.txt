@@ -5,12 +5,21 @@ find_package(Threads REQUIRED)
 find_library(MBEDCRYPTO_LIBRARY mbedcrypto REQUIRED)
 set(APP_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/../app_model")
 set(MAIN "${CMAKE_CURRENT_SOURCE_DIR}/../../main")
+set(RODAK_MQTT_SERVICE_SOURCE "${MAIN}/phone_os/unified_mqtt_service.cc" CACHE FILEPATH
+    "Complete MQTT service translation unit for baseline and negative host controls")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${RODAK_MQTT_SERVICE_SOURCE}" "${MAIN}/phone_os/unified_mqtt_service.h")
+file(SHA256 "${RODAK_MQTT_SERVICE_SOURCE}" service_sha)
+file(SHA256 "${MAIN}/phone_os/unified_mqtt_service.h" header_sha)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/production-sources.json"
+    "{\n  \"mode\": \"complete-service-translation-unit\",\n  \"unified_mqtt_service.cc\": \"${service_sha}\",\n  \"unified_mqtt_service.h\": \"${header_sha}\"\n}\n")
 
 add_library(mqtt_volume_host STATIC
     host_runtime.cc
+    diagnostics_support.cc
     ../light_service/host_driver.cc
     "${APP_MODEL}/third_party/cjson/cJSON.c"
-    "${MAIN}/phone_os/unified_mqtt_service.cc"
+    "${RODAK_MQTT_SERVICE_SOURCE}"
     "${MAIN}/phone_os/server_trust_route.cc"
     "${MAIN}/phone_os/mqtt_command_ledger.cc"
     "${MAIN}/phone_os/mqtt_volume_effect.cc"
@@ -63,3 +72,22 @@ add_executable(rodakos_mqtt_voice_identity_tests mqtt_voice_identity_test.cc "${
 target_link_libraries(rodakos_mqtt_voice_identity_tests PRIVATE mqtt_volume_host)
 add_test(NAME rodakos_mqtt_voice_identity COMMAND rodakos_mqtt_voice_identity_tests)
 set_tests_properties(rodakos_mqtt_voice_identity PROPERTIES TIMEOUT 40)
+
+add_executable(rodakos_mqtt_queue_diagnostics_tests
+    mqtt_queue_diagnostics_test.cc allocation_probe.cc diagnostic_test_main.cc)
+target_link_libraries(rodakos_mqtt_queue_diagnostics_tests PRIVATE mqtt_volume_host)
+target_link_options(rodakos_mqtt_queue_diagnostics_tests PRIVATE
+    "-Wl,--wrap=_ZdlPv" "-Wl,--wrap=_ZdlPvm")
+add_test(NAME rodakos_mqtt_queue_diagnostics COMMAND rodakos_mqtt_queue_diagnostics_tests)
+set_tests_properties(rodakos_mqtt_queue_diagnostics PROPERTIES TIMEOUT 40)
+get_filename_component(selected_service "${RODAK_MQTT_SERVICE_SOURCE}" ABSOLUTE)
+get_filename_component(production_service "${MAIN}/phone_os/unified_mqtt_service.cc" ABSOLUTE)
+if(selected_service STREQUAL production_service)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME rodakos_mqtt_diagnostic_negative_controls
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_negative.py"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/negative-controls"
+        --c-flags=${CMAKE_C_FLAGS} --cxx-flags=${CMAKE_CXX_FLAGS}
+        --link-flags=${CMAKE_EXE_LINKER_FLAGS})
+    set_tests_properties(rodakos_mqtt_diagnostic_negative_controls PROPERTIES TIMEOUT 480)
+endif()

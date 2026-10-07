@@ -1141,3 +1141,115 @@ arbitrary resource pressure, audio/TLS/media concurrency and eight-hour soak rem
 Evidence: Rodak `.codex-temp/resource-window-023/` contains `package-evidence.json`,
 `directed-test-evidence.json`, `hardware-result.json`, flash/build records,
 `baseline-static-022/`, and `static-023/` with its independent `restart/` browser records.
+
+## 2026-10-07 MQTT queue diagnostics and pacing comparison 024
+
+Flashed firmware source is `aebd5e6c60886ab1245220dcde880cd1f4a7f4cd`, package
+`20261007-180119`, task `media-mqtt-diagnostics-024`, version `0.1.2-dev.1`:
+
+- Main: **7,128,640 B**, SHA-256 `cfc4cc731fe4927f54fed085af1e57b8672d3e9ee9d53b34f6347456cd53a795`.
+- ZIP SHA-256: `aecb34038688e70d1418083d5c52ab523bd6e3dbc91d3b7ee2be13bdbd9ea478`.
+- Frozen ELF SHA-256: `db19c4221768c39921105b27f210548c2284ccda62fed86f8d7c9306e3bcdf04`.
+- The five immutable assets and original development signing root match 023. Production flavor
+  does not mean production signing; Home-test and fault-injection flags remain disabled.
+- `flash-024.log` confirms NVS-preserving flash and Recovery/main/OTA-confirmation/Home checks.
+  The original device ID, bound state and tokenVersion=4 remain. `package-evidence.json` was
+  frozen before flashing and retains its original `firmwareFlashed=false`; the later flash log
+  and identified device windows supply the hardware evidence.
+
+The firmware change adds diagnostics only. Inbound drops distinguish `object_alloc_failed`
+from `queue_send_rejected`, using the actual nothrow allocation and single zero-timeout send
+results. Topic/payload byte lengths are captured before move. Object size, monotonic timestamp,
+queue depth and default-heap free/largest are failure-adjacent samples, not one atomic snapshot
+or a guarantee of allocator capacity. Outbound diagnostics distinguish `count_limit` from
+`byte_limit` under the existing lock, retaining count-first precedence. The 8-slot inbound
+queue, 8-item/128 KiB publication budget, 64 KiB single-publication limit, RAII, connection
+epoch and stream-lease checks are unchanged. Logs contain no message body or credentials.
+
+Directed MQTT validation passes **115 positive cases** in each Debug and ASan/UBSan/leak
+build, with **five CTests per build** and all **six source-negative controls** detected.
+The 11 new cases exercise exact object-allocation failure, real queue saturation, a worker
+drain before the depth sample, successful admission without false drop logs, release/recovery,
+and outbound count/byte limits. Host object size is not assumed to equal the ESP32-S3 size.
+These are focused checks: a fresh complete 024 local release runner has not been run, and no
+new 024 GitHub CI acceptance is claimed here. Earlier 023 full-run totals remain attached to
+023; later CI-only commits do not change the identity of the flashed 024 firmware.
+
+Four separate static-Photos sessions use the complete browser candidate set: **18 candidates
+(9 UDP, 9 TCP) plus one SDP command**, retaining candidate order. The paced experiments only
+insert a temporary **200 ms** candidate interval; no candidate, interface, address family or
+port is filtered. The 023 pair shares its 023 boot; the 024 pair is a separate 024 boot.
+
+| Window | Command snapshot: ACK / only delivered | Inbound drops | Outbound full-limit logs | Failed-to-ACK logs | SDK remote-candidate-limit logs |
+| --- | --- | --- | --- | ---: | ---: |
+| `baseline-023` ordinary burst | 10 / 9 | 8 legacy combined warnings; reason unknown | 1 legacy combined limit warning | 1 | 0 |
+| `paced-023` temporary 200 ms | 19 / 0 | 0 | 0 | 0 | 8 |
+| `burst-024` ordinary burst | 8 / 11 | 4 `queue_send_rejected`; 0 `object_alloc_failed` | 10 `count_limit`; 0 `byte_limit` | 7 | 4 |
+| `paced-024` temporary 200 ms | 19 / 0 | 0 | 0 | 0 | 8 |
+
+All four windows render a complete **320×240** image and contain no detected reset/panic
+markers. `delivered` is the saved command status at the snapshot, not a successful device ACK
+or an inferred final failure. Counts come from each exact session; the larger unfiltered
+command collections also contain other sessions and are not used as the table denominator.
+
+In `burst-024`, every inbound rejection has an adjacent depth sample of **8**, with
+`object_bytes=64`, default free **1,659,204–1,662,780 B** and largest **1,474,560 B**. The four
+events are queue-send failures by their actual branch, not object allocation failures inferred
+from heap values. The ten outbound events record count **8** and only **820 or 837 B** of
+queued payload, confirming the count limit rather than the 128 KiB budget for those events.
+This does not reclassify historical 023 merged warnings or rule out other allocation failures.
+
+The paced windows support investigating backpressure, but fixed 200 ms is an experimental
+control, not the product solution. Nineteen ACKs prove control-plane software handling;
+`Remote candidate over limited 10` still appears eight times, so SDK candidate admission and
+capability remain a separate unresolved boundary. No protocol/address/port filtering is
+inferred from these tests. The independent production-path result is recorded below.
+
+The `paced-024` final snapshot at **10:14:15 UTC** has fresh **10:13:53 UTC** MQTT state,
+original ID/bound/tokenVersion=4 and inactive voice. Late Main internal free/largest is
+**20,927 / 8,192 B**, DMA **16,179 / 8,192 B**; the separate Voice sample has boot internal
+minimum **1,979 B**. These bounded observations are not a controlled heap comparison across
+boots or proof of sufficient concurrent headroom. Camera teardown, delayed remote input,
+arbitrary OOM, audio/TLS/media concurrency and eight-hour soak remain **NO_GO**.
+
+Evidence: Rodak `.codex-temp/mqtt-diagnostics-024/` contains `package-evidence.json`,
+`test-evidence.json`, build/flash logs, `baseline-paced-comparison.json`, and the four named
+windows with `summary.json`, browser images, serial logs and device snapshots. Exact command
+records are in each identified window's `exact-session-commands.json` where present; the 023
+pair's scoped count comparison is also frozen in `baseline-paced-comparison.json`.
+
+### Production ACK-paced session and separate restart failure
+
+The unique desktop instance was restarted to load the identified main bundle SHA-256
+`3e6a279760b75c7f707902d0076d5cffbc3f17d7ddf11e1805707285db1a374f`, based on Rodak
+`02b8b81dff55f5cd2214ffb6ce4a2d9f52e6c679` plus the files in `desktop-production-freeze.json`.
+This bundle identity is separate from the unchanged device firmware `aebd5e6`.
+
+The initial desktop-restart window `production-024` must remain a failure record. MQTT
+credential recovery logs `MQTT client reconnected during refresh; restart required` and
+`Restarting to isolate refreshed MQTT session`; the device restarts itself and old persistent
+signaling commands are replayed after reconnect, producing **41 `queue_send_rejected`** events.
+There is no new flash or manual reset in that window, and binding/tokenVersion=4 remain.
+This is separate from the four earlier comparisons and the following fresh signaling session.
+
+`ack-bound-024`, session `97fbf71e-2c53-40fb-95e7-2b403d9b7599`, uses the production
+main-process queue with **zero test candidate delay**. It retains all 18 candidates
+(9 UDP, 9 TCP) and one SDP. Metadata records **19 waiting / 19 acknowledged** and confirms
+each previous ACK precedes or equals the next waiting timestamp, with one request in flight.
+The sequence runs from **10:23:11.051 UTC** to **10:23:30.400 UTC**, or **19.349 s**.
+A complete **320×240** frame is actually rendered. This is not a general latency bound.
+
+That window has no inbound/outbound queue-limit, object-allocation-failure or failed-ACK log,
+but still has **eight** SDK `Remote candidate over limited 10` messages. After Stop and Home,
+serial observation continues for **79.967 s**, with no detected reset/panic markers. Remote
+control stays disabled, no JTAG is attached and COM3 is released. The final **10:25:29 UTC**
+snapshot has new **10:25:11 UTC** MQTT state, original ID/bound/tokenVersion=4 and inactive voice.
+Late MQTT health reports internal free/largest **20,295 / 8,192 B** and PSRAM free/largest
+**2,567,820 / 2,490,368 B**; Voice reports this restarted boot's internal minimum **2,131 B**.
+That low-water mark must not be compared with older boot histories as an improvement.
+
+Evidence is `ack-bound-024/hardware-result.json`, `exact-session-signals.json`, the metadata-only
+ephemeral audit, browser image and serial records. This bundle does **not** include the later
+legacy persistent-signal replay cleanup. Its 19/19 result verifies the new session's bounded
+control-plane delivery, not historical replay removal, SDK support for all candidates,
+physical control/audio, Camera teardown or long-duration capacity. **NO_GO** remains.
