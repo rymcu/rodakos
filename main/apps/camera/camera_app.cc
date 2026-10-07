@@ -210,6 +210,7 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
 }
 
 void CameraApp::OnDestroy() {
+    ESP_LOGI(TAG, "Destroy: capture guard begin");
     if (capture_guard_) {
         std::lock_guard<std::mutex> lock(capture_guard_->mutex);
         capture_guard_->revoked = true;
@@ -217,7 +218,9 @@ void CameraApp::OnDestroy() {
         capture_guard_->result.reset();
         capture_guard_->running = false;
     }
+    ESP_LOGI(TAG, "Destroy: capture guard complete");
 
+    ESP_LOGI(TAG, "Destroy: UI cleanup begin");
     if (ui_ != nullptr) {
         // Timer callbacks own `this` until removed. A teardown timeout cannot abandon them.
         PhoneUiLock lock(*ui_, 0);
@@ -239,11 +242,16 @@ void CameraApp::OnDestroy() {
             }
         }
     }
+    ESP_LOGI(TAG, "Destroy: UI cleanup complete");
 
+    ESP_LOGI(TAG, "Destroy: preview stop begin");
     if (camera_ != nullptr) {
         camera_->StopPreview();
     }
+    ESP_LOGI(TAG, "Destroy: preview stop complete");
+    ESP_LOGI(TAG, "Destroy: audio release begin");
     ReleaseAudioResources();
+    ESP_LOGI(TAG, "Destroy: audio release complete");
 
     root_ = nullptr;
     preview_box_ = nullptr;

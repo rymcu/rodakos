@@ -349,6 +349,7 @@ bool CameraService::StartPreview(PreviewOwner owner, int width, int height) {
 }
 
 void CameraService::StopPreview(PreviewOwner owner) {
+    ESP_LOGI(TAG, "StopPreview: begin");
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     if (mutex_ == nullptr) {
         return;
@@ -364,7 +365,9 @@ void CameraService::StopPreview(PreviewOwner owner) {
     }
     xSemaphoreGive(mutex_);
 
+    if (should_wait) ESP_LOGI(TAG, "StopPreview: stop requested");
     if (!should_wait || task == xTaskGetCurrentTaskHandle()) {
+        ESP_LOGI(TAG, "StopPreview: no worker wait");
         return;
     }
 
@@ -377,6 +380,7 @@ void CameraService::StopPreview(PreviewOwner owner) {
         const bool running = preview_task_ != nullptr;
         xSemaphoreGive(mutex_);
         if (!running) {
+            ESP_LOGI(TAG, "StopPreview: worker stopped");
             break;
         }
     }
@@ -814,7 +818,9 @@ void CameraService::PreviewTask() {
     }
 #endif
 
+    ESP_LOGI(TAG, "Preview exit: CloseStream begin");
     CloseStream();
+    ESP_LOGI(TAG, "Preview exit: CloseStream complete");
     const auto state = GetState();
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int64_t stopped_at_us = esp_timer_get_time();
@@ -963,7 +969,9 @@ void CameraService::CloseStream() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     if (fd_ >= 0) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ESP_LOGI(TAG, "CloseStream: STREAMOFF begin");
         ioctl(fd_, VIDIOC_STREAMOFF, &type);
+        ESP_LOGI(TAG, "CloseStream: STREAMOFF complete");
     }
     for (auto& buffer : buffers_) {
         if (buffer.data != nullptr && buffer.data != MAP_FAILED) {
@@ -973,10 +981,14 @@ void CameraService::CloseStream() {
     }
     buffers_.clear();
     if (fd_ >= 0) {
+        ESP_LOGI(TAG, "CloseStream: fd close begin");
         close(fd_);
         fd_ = -1;
+        ESP_LOGI(TAG, "CloseStream: fd close complete");
     }
+    ESP_LOGI(TAG, "CloseStream: device release begin");
     camera_device_.Release();
+    ESP_LOGI(TAG, "CloseStream: device release complete");
     active_width_ = 0;
     active_height_ = 0;
     active_stride_ = 0;
