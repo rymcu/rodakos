@@ -14,17 +14,18 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-035 source `b5c17a9e5d35e07714b8f3b07e9160be0a319512` adds AFE producer-stage,
-return-to-publication and closed-gap observations in both ordinary and TEST flavors.
-The full-TU suite passes 49 Debug and 49 sanitizer/leak tests plus 14 precise negative
-controls. Both packages are independently verified. Closed captures retain four TEST
-running warnings and one ordinary-OFF warmup warning, with all five gaps recovered;
-ordinary OFF is restored with the original binding and idle MQTT/Wake state.
-Independent hardware review passes the limited closed-window scope. Long API-boundary,
-consumer-observation and between-read intervals do not establish a common cause.
-Actual heap/stack headroom, physical-resource return, acoustics, concurrency and soak
-remain **NO_GO**. Earlier source/package/session results retain their original identities.
-See [035 evidence](#2026-10-08-afe-stall-observability-035) and the retained [034 evidence](#2026-10-08-afe-output-readiness-and-voice-recovery-034).
+036 source `7aa58fc54bfc5f7f487e96d07f577860c3c0235f` is pushed. Its TEST-only
+dual-core tick/scheduler/cache observer uses 320 B of internal DRAM and a fixed
+20-second deadline per generation. Debug and sanitizer/leak checks each pass
+49 full OFF-AFE cases plus 11 independent observer-module groups; 18 precise
+negative controls pass. Two test-contract corrections do not fix physical gaps.
+Both packages and closed device evidence have independent reviews. Three TEST
+gaps and one ordinary gap recover before their corresponding WSS-ready records.
+Ordinary package `20261008-173328` is restored with the original binding/token4
+and idle MQTT/Wake state. Published approximately 10 ms tick maxima only narrow
+the long tick-non-service hypothesis; they do not prove task execution or absence
+of pauses. Root cause, resource headroom and production remain **NO_GO**.
+See [036 evidence](#2026-10-08-bounded-tick-and-cache-observation-036); earlier evidence retains its original identities.
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -2465,3 +2466,92 @@ TEST/OFF观测internal最小值分别4499/4743B；既有USB诊断worker的生命
 区分API执行前抢占、内部等待、返回后发布及两次read之间的producer推进；先定义成本和
 退出条件，不调整100ms、TTL600、优先级、核绑定或缓冲参数来消除日志。全PCM声学、
 实际heap/stack余量、完整物理资源、任意OOM、并发与长稳尚未关闭，资源/生产继续**NO_GO**。
+
+## 2026-10-08 Bounded tick and cache observation 036
+
+源码 [`7aa58fc54bfc5f7f487e96d07f577860c3c0235f`](https://github.com/rymcu/rodakos/commit/7aa58fc54bfc5f7f487e96d07f577860c3c0235f) 已推送。在 035 的 API 边界、消费者观察与 `between_reads` 墙钟记录之上，036 增加仅 TEST 编译的双核 tick/scheduler/cache 摘要；不调整 100ms、TTL600、优先级、核绑定、credit/reset/terminal 合同，也未修复或关闭既有真实 gap。
+
+独立模块占 320B 内部 DRAM（两核各 128B，控制 64B），不新增任务或 frontend 条件成员。每 generation 从 AFE 起始计固定 20 秒 deadline，轮窗和 epoch 切换不续期。20 秒到期不会注销 tick hook；inactive/expired 仍有回调前置开销，只有普通 OFF 完全缺席。ISR 用真实 timer 记录相邻入口间隔及 getter 包络，单次 try-lock 发布失败仍推进私有 predecessor；前景三锁任一失败不部分切窗。异常计数、最后异常 sample-end、已发布端点及 prefix/crossing/drop/deadline 等标志保留，冻结后才打印。双核非同时采样；零异常、零已发布 drops 或区间相交均不能推出完整覆盖或根因。
+
+### 软件闭合范围
+
+| 检查 | 结果 |
+| --- | --- |
+| 完整 OFF AFE TU | Debug 49 / ASan、UBSan、leak 49；Debug 五组 CTest 通过 |
+| 真实 TEST observer 模块 | Debug 11 组 / ASan、UBSan、leak 11 组 |
+| 精确负控 | 原 AFE 14 + observer 4 = 18，均命中特定断言 |
+| 隔离 OFF 目标对象 | 全部 ALLOC sections/relocations、undefined symbols 与 035 基线一致，observer 引用缺席 |
+| OFF/TEST ABI | frontend ABI 对象一致，实例保持 640B；observer 内部状态 320B |
+
+60+60 是两套 host suite 的合计，不代表完整 TEST frontend 跑过 60 项集成测试。隔离对象不代替最终 linked ELF 或实机 HWM。
+
+两处旧断言经固定 035/036 OFF 受控对照后修正：gap-stop 用例只禁止旧 generation 被 recovered，同时强制新代确实恢复；非法 feed 返回用例明确门控 resync 排空，核验允许的 partial drain、lease 退出后 reset 和后续完整帧，保留零返回、不重叠 reset 与保守 discontinuity/VAD 约束。两版本对照行为一致。原失败报告保留，初次 `/tmp` 二进制未留存的限制已记录；不将它们改写为设备 gap 修复。
+
+软件总报告 SHA-256 为 `e78e99a3b0ad90fc58fa83a13afc56e1c7b80b5ef3fc8f2d5c8a5e530089fff0`，构建/实机前的软件独审快照标识为 `PASS_SOFTWARE_CANDIDATE_HARDWARE_PENDING`，其后制品与硬件按下文独立报告闭合。证据根为 `D:/workspace/rodak/.codex-temp/voice-scheduling-036/`；observer 原 seal 继续保持 `PASS_NEW_OBSERVER_MODULE_ONLY` 与原历史备注。
+
+### 两份制品与普通 OFF 恢复
+
+两份制品均来自已推送源码 `7aa58fc54bfc5f7f487e96d07f577860c3c0235f`，沿用原开发签名根及不可变 Recovery/bootloader/partition。TEST 与普通 OFF 的源码、包、签名、ZIP、不可变区和最终 ELF 分别独审；不将 TEST 结果移植为普通运行结果。
+
+| 制品 | 主镜像 bytes / SHA-256 | 最终 ELF SHA-256 | 制品独审 SHA-256 |
+| --- | --- | --- | --- |
+| TEST `20261008-171300` | 7,164,672 / `1c32425498554a5f3ba1e8134f39c2b443028130d5e6f44e2442228d124fcfc2` | `cd1ab22805510ae76584c2b4fc8ddb4f0b7ccd5bc6e0af4ade0c04e0a10a32d7` | `f5762a930ff38959a90c092dc1fd28f1b1a33120d8d8d83efbef92dbe89d264b` |
+| 普通 OFF `20261008-173328` | 7,154,016 / `456fcebb08ebf585d1803bbfa9f63926442519ae73e751db9ccd45d33de6ae5e` | `5caf5d1e97ade369679a8d6ff838b7dc6295c3e88f3f176d6398d181de6d1a13` | `0af24528d20b5c9a3c89a59044da81cd376f18bebefcd7f296647676accd40e6` |
+
+最终 linked 审查 TEST/OFF SHA-256 分别为 `51180e0bb95a703fcafc504d5d0481930da085eea93c6fd97adc2069de84f979`、`b28cc85eb026002fdbb90bcedf6003191fc12a175aecf79a986439fe4a8389c7`。普通 OFF 的 observer 符号/状态缺席，已核静态布局、语音实例及 heap 边界相对 035 普通 OFF 差值均为零；设备 AEC 仍启用。
+
+TEST 相对 035 普通 OFF 的 `.iram0.text` +768B、`.dram0.data` +320B、`.dram0.bss` +64B、`_heap_start` +1152B。64B 属既有 TEST flavor 差，不归 observer；320B 仅是模块静态存储，不能当作全部链接成本或净运行时 heap 减少。静态布局与有界正常调用链审查均不代表实际 HWM、完整 SDK/ROM 错误路径或安全余量。
+
+### 闭合设备窗口与全部 gap
+
+TEST 保留未到期和自然到期后新 wake 两次独立尝试，普通 OFF 恢复后另做一次 wake。均为 USB 受控静音语音流程，各自建立唯一 WSS 后显式停止；不代表真人唤醒或声学验收。四个 gap 均为 epoch0、scope=current，各有一次 W 并以完整 fetch recovered。它们都在所属 wake 尝试的后续 WSS ready 之前，session GUID 用于尝试关联，不表示 gap 发生于已 ready 的 WSS 内。
+
+| 尝试 / generation / gap | W phase | wait → closed elapsed（µs） | W 时 API 边界 / 闭合后 epoch 最大值 |
+| --- | --- | --- | --- |
+| TEST 未到期 / 3 / 1 | warmup | 118653 → 151138 | seq3 age71525；闭合补齐 seq3 API80520 |
+| TEST 自然到期新 wake / 7 / 1 | running | 647269 → 689558 | seq59 age627884；闭合补齐 seq59 API645948 |
+| TEST 自然到期新 wake / 7 / 2 | running | 725060 → 750279 | seq87 age634464；epoch 最大 API645948 仍属先前 seq59，不能归成本 gap 的 API 耗时 |
+| 普通 OFF / 3 / 1 | running | 301677 → 329477 | seq4 age301179；闭合补齐 seq4 API308486 |
+
+对应 session：TEST 未到期 `ba61bc36-f0d6-4db2-a10b-63c4700a2282`、TEST 到期后 `d9a8827c-b069-4885-83f0-274f007733ae`、普通 OFF `2a6c5cd2-8257-4e5e-aa98-3f13dfc4d95d`。第二次 TEST wake 的凭据年龄资格与首 stop 后 idle 覆盖分开记录，不把包含首会话的年龄区间写成连续 idle，也不声称同一 WSS 存活 TTL600。
+
+闭合 raw/QPC 核验确认 TTL600 资格的凭据年龄下界为 **635.2226713s**，其中首 stop 后 idle 实际 RX 为 **573.4262774s**；保守 anchor 至到期后新 wake 为 **636.4128038s**。anchor 与资格点均在闭合原始记录中，期间没有捕获到 reset/refresh；新 wake 后实际发生凭据刷新和 enrollment。enrollment 本身早于该采集，资格来自更晚 MQTT-online 快照和实际 RX，不假称测得签发时刻。
+
+| 独立尝试 | 显式 stop 后实际 RX（s） | Wake rearm 后实际 RX（s） |
+| --- | --- | --- |
+| TEST 未到期 | 507.6622954 | 507.2146613 |
+| TEST 自然到期新 wake | 98.1242954 | 97.3238611 |
+| 普通 OFF | 92.2071903 | 91.4694239 |
+
+以上均严格截止到下一条任何 TX 之前，不将后续命令后的串口时间加入；普通 OFF 首命令前 cold 实际 RX 另为 **78.0303288s**。TEST 9 条、普通 5 条命令均匹配发送/完成/成功原始 ACK；未执行 `voice_cycle`。四条串口 W 及刷写启动日志的 19 条 W/E 全部保留，不以 gap 恢复或会话窗口结果掩盖 boot 告警。
+
+### 双核摘要能缩小什么
+
+TEST 实际捕获一次成功 registration（mask3、320B、20,000,000µs）及 token1—8 的八个双核窗口，均保留各核记录；token3 与 token8 是 `flow_stop/status=4`，表示固定 deadline 已到，不能解释为整段停止前仍有连续覆盖。
+
+| token / 事件 | generation / gap | CPU0 / CPU1 最大相邻入口间隔（µs） | 该最大区间与 gap 的关系 |
+| --- | --- | --- | --- |
+| 1 / stall | 3 / 1 | 10003 / 10000 | 两核最大值均早于 gap |
+| 2 / recovered | 3 / 1 | 10005 / 10001 | 均相交；CPU0 只有 7714µs 与 gap 重叠 |
+| 3 / flow_stop expired | 3 / 0 | 10013 / 10037 | 无 gap，deadline 后尾段未覆盖 |
+| 4 / stall | 7 / 1 | 10007 / 10000 | 两核最大值均早于 gap |
+| 5 / recovered | 7 / 1 | 10003 / 10000 | 均相交 |
+| 6 / stall | 7 / 2 | 10007 / 10000 | CPU0 相交，CPU1 最大值早于 gap |
+| 7 / recovered | 7 / 2 | 10001 / 10000 | 均相交 |
+| 8 / flow_stop expired | 7 / 0 | 10020 / 10012 | 无 gap，deadline 后尾段未覆盖 |
+
+getter 最大采样包络为 1—2µs，全部已发布 drops 差值为零，仍不能排除未发表的 private 丢样。token3 两核 last accepted sample-end 至 freeze 的尾段约 4.572/4.577 秒，token8 约 1.022/1.017 秒；这些时间不能填成正常 tick 覆盖。首部、跨窗前驱、freeze 前尾部和双核非同时采样限制继续保留。
+
+摘要确实记录到 scheduler suspended 与 cache disabled 端点，不能把“最大间隔约 10ms”写成状态一直正常。例如 token6 的 CPU0 suspended/cache 计数为 4/2，末次异常点 `666317339µs` 位于第二个 gap 内；这些是离散 getter 端点，不量出 cache 持续关闭时间，也不能归因 NVS。token4 CPU0 的末次 cache-disabled 点 `664867339µs` 早于其 gap 起点 `665188092µs`；不能把整个窗口计数归成本 gap 的异常。
+
+已发表区间中未见与数百毫秒 gap 同量级的相邻 tick hook 空档，因此只缩小“相应已观测范围内长时间不服务 tick”这一假说。tick hook 被服务不证明 Capture/Fetch 或目标任务获得执行，不排除任务饥饿、SDK 内部等待、两次采样间短停或未覆盖区间；cache-enabled 端点也不能证明无 cache freeze/总线停顿。普通 OFF 没有 tick 行与其最终编译审查相符，但无日志本身不能证明 OFF 身份，也不能将 TEST 的观测结论移植给普通 gap。根因仍开放。
+
+### 关闭与终态
+
+TEST/普通两采集均 `portClosed=true`，无未完成 TX、写错误或尾部残行。TEST raw 为 77,954B，SHA-256 `bb483380d928506af3c9f2424f978c87e53eed799b08e704cec285f0be977df0`；普通 raw 为 20,744B，SHA-256 `4623754998750d90862f0f4589ef4987aa58da25554f04d99e6b1e0752bcecdf`。parser 冻结 SHA-256 `852b5ad18d599ce53a6bef91a838d44b30a2c864baa1ec01db8ff4cecf63ae10`，17 项合成自检与 16 项独审通过；真实日志先后与包/boot 身份仍由硬件独审分别核对。
+
+普通包 `20261008-173328` 已恢复。`2026-10-08T09:57:41.302Z` 设备快照保持原 ID `c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、MAC `44:1b:f6:c3:b4:30`、bound、activated、tokenVersion4、MQTT=true、voice=false、sessions=[]、shadow1134。UI 快照 `09:57:41.961Z` 为串口 disconnected、屏幕未播放、无 stop 按钮/摄像头帧；串口进程检查在 `09:57:42.2527094Z` 为 owners=[]，不回填成更早设备快照时刻的结果。
+
+综合硬件独审为 `CONSISTENT_CLOSED_TEST_AND_ORDINARY_RESTORATION_EVIDENCE_NO_GO`，报告 `hardware-independent-review/review.json` 的 SHA-256 为 `8fa3833e8d04e1cc1f53aa3a8311a5c5f4e1e5d330033b27d00c74091564b355`。独审确认上述闭合证据与普通恢复一致，不给出根因或资源验收。TEST USB 诊断 worker 累计最小栈为 1308B、internal minimum 为 3751B；普通包对应观测为 2460B、4787B。它们分属不同 boot，不能相减为探针成本或净收益，也没有测得真实 ISR HWM 和所有任务余量。
+
+035 及更早 gap、失败、水位与制品保持原身份。完整物理资源归还、实际 heap/stack 安全余量、声学、更多取消/并发、任意 OOM 和长稳仍开放，资源与生产继续 **NO_GO**。

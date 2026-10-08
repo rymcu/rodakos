@@ -7,17 +7,18 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-035 source `b5c17a9e5d35e07714b8f3b07e9160be0a319512` adds AFE producer-stage,
-return-to-publication and closed-gap observations in both ordinary and TEST flavors.
-The full-TU suite passes 49 Debug and 49 sanitizer/leak tests plus 14 precise negative
-controls. Both packages are independently verified. Closed captures retain four TEST
-running warnings and one ordinary-OFF warmup warning, with all five gaps recovered;
-ordinary OFF is restored with the original binding and idle MQTT/Wake state.
-Independent hardware review passes the limited closed-window scope. Long API-boundary,
-consumer-observation and between-read intervals do not establish a common cause.
-Actual heap/stack headroom, physical-resource return, acoustics, concurrency and soak
-remain **NO_GO**. Earlier source/package/session results retain their original identities.
-See [035 evidence](docs/ota-release-readiness.md#2026-10-08-afe-stall-observability-035) and the retained [034 evidence](docs/ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
+036 source `7aa58fc54bfc5f7f487e96d07f577860c3c0235f` is pushed. Its TEST-only
+dual-core tick/scheduler/cache observer uses 320 B of internal DRAM and a fixed
+20-second deadline per generation. Debug and sanitizer/leak checks each pass
+49 full OFF-AFE cases plus 11 independent observer-module groups; 18 precise
+negative controls pass. Two test-contract corrections do not fix physical gaps.
+Both packages and closed device evidence have independent reviews. Three TEST
+gaps and one ordinary gap recover before their corresponding WSS-ready records.
+Ordinary package `20261008-173328` is restored with the original binding/token4
+and idle MQTT/Wake state. Published approximately 10 ms tick maxima only narrow
+the long tick-non-service hypothesis; they do not prove task execution or absence
+of pauses. Root cause, resource headroom and production remain **NO_GO**.
+See [036 evidence](docs/ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036); earlier evidence retains its original identities.
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

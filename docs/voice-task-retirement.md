@@ -20,7 +20,7 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
-当前035：035源码 `b5c17a9e5d35e07714b8f3b07e9160be0a319512` 新增AFE阶段、返回记账和等待闭合观测；49项Debug、49项ASan/UBSan/leak及14个精确负控通过。TEST与普通OFF制品已核，闭合窗口分别保留4次running与1次warmup W，五个gap均recovered；普通OFF已恢复原绑定与MQTT/Wake终态，闭合硬件独审通过有限窗口检查。API边界、消费者观察和between_reads的长墙钟尚无统一根因，实际余量及资源/生产NO_GO保持；034及更早历史不改写。
+当前 036：036 源码 `7aa58fc54bfc5f7f487e96d07f577860c3c0235f` 已推送，新增仅 TEST 编译的 320B 双核 tick/scheduler/cache 摘要，每 generation 固定 20 秒。Debug 与 ASan/UBSan/leak 各通过 49 项完整 OFF AFE 用例及 11 组独立 observer 测试，另有 18 个精确负控；两个测试合同修正不代表真实 gap 修复。两份制品及闭合设备证据已独审，TEST 三个 gap、普通 OFF 一个 gap 均在各自 WSS ready 前 recovered。普通 `20261008-173328` 已恢复原绑定、token4 与 MQTT/Wake 终态。约 10ms 的已发布 tick 最大间隔仅缩小长时间不服务 tick 的假说，不证明任务在运行或无暂停；根因与资源/生产 **NO_GO** 保持。见[036 证据](ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036)。
 
 ## 修复的退出边界
 
@@ -180,12 +180,19 @@ raw gap、epoch、有限重同步与terminal准入完全保留。
 不把恢复输出等同根因已解，也不改写034历史。
 当前根因和资源/生产**NO_GO**见[035证据](ota-release-readiness.md#2026-10-08-afe-stall-observability-035)。
 
+## 036 TEST 调度与 cache 观察边界
+
+独立 `voice_tick_observer` 模块只在 `RODAKOS_RELEASE_TESTS` 下编译，内部 DRAM 为两核各 128B 加控制 64B，共 320B。frontend ABI 仍为 640B，不新增任务或条件成员。每 generation 固定 20 秒 deadline；轮窗、resync 与 epoch 切换不延长窗口。20 秒到期不会注销 tick hook；inactive/expired 仍有回调前置开销，只有普通 OFF 完全缺席。ISR 单次 try-lock，发布失败仍推进私有前驱；前景三锁失败不部分切换，旧 generation/epoch/token 不能关闭新窗。
+
+摘要保留真实相邻 ISR 入口间隔、getter 包络、异常计数/末次异常点及未覆盖前缀/尾段，不把 tick 次数乘 10ms，也不把 scheduler/cache 端点状态当作完整区间状态。AFE 事件时间与冻结包络分开，双核非同时采样。普通 OFF 隔离对象的 ALLOC sections/relocations 与 035 基线一致，最终 OFF 制品也已独审，observer 符号/状态缺席，已核静态布局与 035 普通 OFF 一致。
+
+完整 OFF AFE 49 项与独立 observer 11 组分别在 Debug 和 ASan/UBSan/leak 下通过，精确负控共 18 个。gap-stop 的 generation 范围与非法 feed 的合法 resync 排空断言经固定 035/036 对照修正；没有改写真实 gap 或资源验收。模块合同见[observer 测试说明](../tests/voice_tick_observer/README.md)；两份制品及闭合硬件/普通恢复证据见[036 证据](ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036)；四个真实 gap 均 recovered，根因与资源/生产 NO_GO 仍开放。
+
 ## 仍未关闭的门禁
 
 不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
 安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
 没有硬性延迟期限；Capture 内存分配异常等业务失败也不属于本轮已验证的恢复保证。
 
-资源和生产发布继续 **NO_GO**。034 generation15的running stall和实际余量仍待验，
-不得由SDK empty消失替代输入健康。031 软件记录与
+资源和生产发布继续 **NO_GO**。034/035 的真实 gap 与资源边界按原身份保留；036 四个 gap 虽 recovered，双核摘要也未关闭任务执行、内部等待、物理资源和实际余量门禁。031 软件记录与
 [030 已部署视频证据](task-retirement.md#030-制品与有限设备证据) 分开保留。
