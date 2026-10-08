@@ -7,18 +7,17 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-036 source `7aa58fc54bfc5f7f487e96d07f577860c3c0235f` is pushed. Its TEST-only
-dual-core tick/scheduler/cache observer uses 320 B of internal DRAM and a fixed
-20-second deadline per generation. Debug and sanitizer/leak checks each pass
-49 full OFF-AFE cases plus 11 independent observer-module groups; 18 precise
-negative controls pass. Two test-contract corrections do not fix physical gaps.
-Both packages and closed device evidence have independent reviews. Three TEST
-gaps and one ordinary gap recover before their corresponding WSS-ready records.
-Ordinary package `20261008-173328` is restored with the original binding/token4
-and idle MQTT/Wake state. Published approximately 10 ms tick maxima only narrow
-the long tick-non-service hypothesis; they do not prove task execution or absence
-of pauses. Root cause, resource headroom and production remain **NO_GO**.
-See [036 evidence](docs/ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036); earlier evidence retains its original identities.
+037 source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` adds TEST-only per-feed
+identity and accepted task-getter endpoints. Separate OFF-AFE, observer-module
+and complete TEST-frontend host suites, 30 precise negative controls, both final
+packages and bounded closed hardware evidence have independent reviews. The
+fresh TEST window records no gap; two post-TTL TEST gaps and one ordinary OFF
+gap recover. The 639598us seq3 bracket contains one target and 63 aggregate
+non-target endpoints; this does not establish Ready/Blocked state or CPU time.
+The earlier 681147us seq4 call is not the second gap. Ordinary package
+`20261008-202609` is restored with the original binding/token4 and idle MQTT/Wake
+state. Root cause remains unresolved; resource and production remain **NO_GO**.
+See [037 evidence](docs/ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037); earlier evidence retains its original identities.
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

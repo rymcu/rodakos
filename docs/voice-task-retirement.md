@@ -20,7 +20,7 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
-当前 036：036 源码 `7aa58fc54bfc5f7f487e96d07f577860c3c0235f` 已推送，新增仅 TEST 编译的 320B 双核 tick/scheduler/cache 摘要，每 generation 固定 20 秒。Debug 与 ASan/UBSan/leak 各通过 49 项完整 OFF AFE 用例及 11 组独立 observer 测试，另有 18 个精确负控；两个测试合同修正不代表真实 gap 修复。两份制品及闭合设备证据已独审，TEST 三个 gap、普通 OFF 一个 gap 均在各自 WSS ready 前 recovered。普通 `20261008-173328` 已恢复原绑定、token4 与 MQTT/Wake 终态。约 10ms 的已发布 tick 最大间隔仅缩小长时间不服务 tick 的假说，不证明任务在运行或无暂停；根因与资源/生产 **NO_GO** 保持。见[036 证据](ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036)。
+当前 037：037 源码 `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` 的逐 feed 身份观察已完成分层软件验证、30 个精确负控、两份制品和有限闭合硬件独审。TEST fresh 未记录 gap；自然 TTL600 后两个 gap、普通 OFF 一个 gap 均 recovered。seq3 的 639598us 包络接受 target1/other63 端点，但不能区分 Ready/Blocked 或换算 CPU 时间；先前 seq4 的 681147us 不属于第二个 gap。普通 `20261008-202609` 已恢复原绑定/token4 与 MQTT/Wake 空闲终态。根因未定，资源与生产 **NO_GO** 保持。见[037 证据](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)。
 
 ## 修复的退出边界
 
@@ -188,11 +188,43 @@ raw gap、epoch、有限重同步与terminal准入完全保留。
 
 完整 OFF AFE 49 项与独立 observer 11 组分别在 Debug 和 ASan/UBSan/leak 下通过，精确负控共 18 个。gap-stop 的 generation 范围与非法 feed 的合法 resync 排空断言经固定 035/036 对照修正；没有改写真实 gap 或资源验收。模块合同见[observer 测试说明](../tests/voice_tick_observer/README.md)；两份制品及闭合硬件/普通恢复证据见[036 证据](ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036)；四个真实 gap 均 recovered，根因与资源/生产 NO_GO 仍开放。
 
+## 037 TEST 逐 feed 身份与进度观察边界
+
+`voice_feed_progress_observer` 与 036 tick observer 同为 TEST-only，不新增任务或 frontend
+条件成员。Capture 在 SDK feed 之前 arm，在返回之后、等待业务 mutex 之前 close；完整
+generation / epoch / feed seq / ticket / opaque owner 身份控制当前 slot。Fetch 只在真实
+current `api_boundary` 域关联 slot，不能以相同数字把 read / between_reads seq 借作 feed。
+
+每 generation 固定 20 秒 deadline，epoch、轮窗和 resync 不续期；open 与 complete 共用
+8 条日志额度，flow_stop 另有 summary。Close 在完整 immutable 身份匹配后、可能失败的
+try-lock 之前撤销采样许可；flow_stop 最先 retire 当前 generation，先于外部 owner 回收
+Capture。失败 Close 保留 unfinished slot，retired 记录不能伪装成成功完成，也不能继续把
+后来相同 opaque 数值的句柄计入已退役 Capture。这个合同依赖既定 core0 单 writer 和
+生命周期顺序；没有扩大为任意并发 task-handle 的通用所有权方案。
+
+open 没有已知 arm upper；post-return、clock invalid、drop、saturated、retired、日志
+抑制及未覆盖尾段都保留。`strict_counts_known` 仅说明被接受 getter 端点位于 API marker
+到返回包络中，不推断 Ready/Blocked、连续 Running、调度次数、SDK 指令进度或 CPU/PCM
+时长。getter 返回 opaque identity，不能将 target 命中当作整个前后区间都在运行，也不能把
+other 命中解释成特定 Ready 或 Blocked 状态。
+
+两个模块目标静态存储为 tick 320B + feed 144B = 464B。最终 TEST linked 静态独审已核
+getter 的 IRAM 布局和新增观察路径；已知局部 Fetch 链 1072B、Capture 链 736B、所审 ISR
+分支 208B 均尚未计入完整 SDK/logger/ROM/context/nesting 和实际 HWM，不能称为安全余量。
+20 秒到期与日志额度耗尽不会去掉全部前景/ISR 前置开销；普通 OFF 才编译隔离 observer。
+
+软件验证按 49 项完整 OFF、23 组模块和 7 项真实 TEST frontend 分层，不合并成一个没有
+边界的总套件。30 个负控分别为 14 个旧 OFF、4 个 tick、8 个 feed、4 个 frontend 整合。
+037 双包及闭合硬件独审已完成：fresh TEST 未记录 gap，自然到期 TEST 两个 gap、
+普通 OFF 一个 gap 均 recovered，普通 `20261008-202609` 已恢复。seq3 的 target1 / other63
+是有限 getter 端点，other 聚合所有非 target；第二 gap 缺 seq13 complete，不借先前 seq4
+的 681147us。实际 heap/stack 余量、物理资源、声学与生产仍 **NO_GO**。
+
 ## 仍未关闭的门禁
 
 不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
 安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
 没有硬性延迟期限；Capture 内存分配异常等业务失败也不属于本轮已验证的恢复保证。
 
-资源和生产发布继续 **NO_GO**。034/035 的真实 gap 与资源边界按原身份保留；036 四个 gap 虽 recovered，双核摘要也未关闭任务执行、内部等待、物理资源和实际余量门禁。031 软件记录与
+资源和生产发布继续 **NO_GO**。034—036 的 gap 与资源边界按原身份保留；037 的三个 gap 均 recovered，有限端点观察仍未区分 Ready/Blocked 或证明实际余量、全部物理资源归还。031 软件记录与
 [030 已部署视频证据](task-retirement.md#030-制品与有限设备证据) 分开保留。
