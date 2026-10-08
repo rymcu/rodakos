@@ -3071,5 +3071,7 @@ RecordingService **17/17** 和 voice-volume/focus **30/30**。Music 新增用例
 审查发现 `dev_camera_sub_dvp_deinit()` 在 `esp_video_deinit()` 失败后仍会释放 I2C 引用并
 free board-manager handle，使失败状态可能留下悬空句柄，下一次初始化/重试存在 UAF 风险。
 `29aaacd` 已修复为：底层视频或 I2C 引用释放失败时保留句柄和引用，只有两步都成功才释放；
-新增 4 项 host source-contract 回归全部通过。当前 COM3 运行的旧包未包含此修复，必须重新构建、
-核验并在新的设备窗口复验 Camera 重复启动/关闭；本条观察保持资源/生产 **NO_GO**。
+随后 `4e08efa` 让 `CameraDevice::Release()` 返回失败并保留 `release_retry_required_`，
+由下一次 `Acquire()` 先重试释放再重新初始化。当前 8 项 host source-contract 回归全部通过。
+当前 COM3 运行的旧包未包含这些修复，必须重新构建、核验并在新的设备窗口复验 Camera 重复
+启动/关闭；本条观察保持资源/生产 **NO_GO**。
