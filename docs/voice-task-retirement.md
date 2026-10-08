@@ -22,6 +22,11 @@
 
 当前 040：已完成 TEST 固件四点准备优先级观察和一次真实 USB wake 取证；普通 OFF 已恢复。真实记录为 `prepare_begin → open_acquired → cloud_returned → open_released`，四点有效优先级均为 4、`flags=0`，同一任务 handle，串口完整收集。该观察只覆盖端点，不证明整个等待区间的优先级继承、锁归属、CPU 使用或 stall 根因；根因 **INCONCLUSIVE**，资源与生产 **NO_GO**。
 
+040 恢复后的普通 OFF 又完成了一次六轮同 session 合成语音观察：设备端单一 session、六次
+`input.start`、五个 follow-up 和六组非零播放统计均闭合；Rodak 端的 VAD 分段仍额外留下
+一个短的最终 `listen-stop` 片段，服务端停止归属尚未收口。完整窗口、边界和本地证据见
+[OTA readiness 的六轮记录](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察)。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本

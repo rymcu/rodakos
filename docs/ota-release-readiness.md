@@ -2944,3 +2944,29 @@ MQTT 在线、语音连接关闭，普通 OFF boot confirmation 成功。
 `lifecycle.json` 使用采集器 SHA-256
 `e2bbe7a7dfc409964de67c8152a1d70d5b0f136aa862feb991d1f8e707b70586`。根因仍
 **INCONCLUSIVE**，资源与生产继续 **NO_GO**。
+
+## 2026-10-09 六轮同 session 合成语音观察
+
+本轮没有刷写或复位，沿用 040 恢复后的普通 OFF 包 `20261009-014905`。通过新增的
+`tools/run_serial_voice_test.py --turns 6` 在 COM3 注入同一段 16 kHz PCM：首轮执行一次
+`audio_begin`、`audio_chunk` 与 `wake`，后五轮只在设备报告 follow-up listening 后执行
+`audio_replay`，第六轮播放统计收到后才发送 `stop`，最后执行 `audio_clear`。
+
+设备串口记录了一个完整的 realtime voice session：session ID 为
+`5d18440a-a694-4341-bb70-4bfed30127b3`；`Sent speech input start` 六次均使用该 ID，
+`Follow-up listening started` 的 `completed_turns` 依次为 1—5，六次
+`Playback audio stats` 均有非零 packets/decoded_frames/pcm_bytes 且 `write_failures=0`。
+窗口内无 reset、panic、watchdog、内存失败或 transport failure；stop 后出现
+`Interaction stopped`、Voice websocket cleanup 完成和 wake monitoring rearm。原始串口与
+工具摘要保存在 `D:/workspace/rodakos/.codex-temp/voice-six-turn-20261009/`。
+
+通过本地 Electron 的 `window.api.server.listEvents(4000)` 复核同一时间窗，得到一次
+`session.open` 响应、一次 `wake.detected`、六次 `input.start`、最终 `input.stop`、两条
+断开事件以及 `window.api.agentRuntime.listSessions()` 为空。服务端的实时 VAD 会在一个
+逻辑 turn 内切分音频，因此同一 session 下保存了六个 `reason=vad-end` 片段和一个很短的
+最终 `reason=listen-stop` 片段；这不是七轮对话，也不是六次显式 `input.stop`。该边界
+证明了同 session 的设备生命周期与播放恢复，但服务端分段/停止归属仍需专门收口，不能
+扩大为真实收音、声学 barge-in、音乐/Recorder 抢占、长稳或生产发布通过。
+
+本轮只使用本地串口、Electron IPC 和 SQLite 只读取证，没有查询、依赖、修复或重跑
+GitHub Actions；资源与生产 **NO_GO** 保持。

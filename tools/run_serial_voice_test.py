@@ -79,7 +79,14 @@ def main():
     parser.add_argument("--port", default="COM3")
     parser.add_argument("--wav", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
-    parser.add_argument("--cycles", type=int, default=2)
+    cycles_group = parser.add_mutually_exclusive_group()
+    cycles_group.add_argument("--cycles", type=int, default=None)
+    cycles_group.add_argument(
+        "--turns",
+        type=int,
+        default=None,
+        help="Keep one realtime voice session and replay the fixture for this many turns",
+    )
     parser.add_argument("--seconds", type=float, default=45)
     parser.add_argument("--lead-in-ms", type=int, default=1000,
                         help="Silent pre-roll lets AFE and WebSocket startup settle")
@@ -96,9 +103,15 @@ def main():
         parser.error("barge-in injection and live-mic playback are separate tests")
     if args.late_follow_up and (args.barge_in or args.live_mic_playback):
         parser.error("late follow-up must run separately from playback interruption tests")
-    if (args.cycles < 1 or args.seconds <= 0 or not math.isfinite(args.seconds)
+    cycles = 2 if args.cycles is None and args.turns is None else args.cycles
+    turns = args.turns
+    if cycles is not None and cycles < 1:
+        parser.error("cycles must be positive")
+    if turns is not None and turns < 1:
+        parser.error("turns must be positive")
+    if (args.seconds <= 0 or not math.isfinite(args.seconds)
             or not 0 <= args.lead_in_ms <= 5000 or not 1 <= args.interruptions <= 3):
-        parser.error("cycles and seconds must be positive")
+        parser.error("cycles/turns and seconds must be positive")
     pcm = bytes(args.lead_in_ms * 32) + load_pcm(args.wav)
     if len(pcm) > 320000:
         parser.error("Audio including silent pre-roll must fit within ten seconds")
@@ -114,35 +127,51 @@ def main():
             port.open()
             session = Session(port, log)
             session.observe(2)
-            for cycle in range(args.cycles):
-                print(f"Cycle {cycle + 1}: uploading synthetic microphone input", flush=True)
+            if turns is not None:
+                print(f"Same session: uploading synthetic microphone input for {turns} turns", flush=True)
                 session.command(f"audio_begin {len(pcm) // 2}")
                 for offset in range(0, len(pcm), 512):
                     session.command(f"audio_chunk {offset // 2} {pcm[offset:offset + 512].hex()}")
                 session.command("wake")
-                if args.live_mic_playback:
-                    session.wait_for("Playback started: playback_epoch=", 45)
-                    session.command("audio_live")
-                if args.barge_in:
-                    for interruption in range(args.interruptions):
-                        session.wait_for("Playback started: playback_epoch=", 45)
-                        session.observe(0.4)
+                for turn in range(turns):
+                    session.wait_for("Playback started: playback_epoch=", 90)
+                    session.wait_for("Playback audio stats:", 90)
+                    if turn + 1 < turns:
+                        session.wait_for("Follow-up listening started:", 90)
                         session.command("audio_replay")
-                        session.wait_for("TTS interrupted:", 15)
-                if args.late_follow_up:
-                    session.wait_for("Playback started: playback_epoch=", 45)
-                    session.wait_for("Follow-up listening started:", 90)
-                    session.observe(28)
-                    session.command("audio_replay")
-                    session.wait_for("Playback started: playback_epoch=", 45)
-                    session.wait_for("Follow-up listening started:", 90)
-                    session.wait_for("Follow-up window timed out", 35)
-                    session.observe(5)
-                else:
-                    session.observe(args.seconds)
                 session.command("stop")
                 session.observe(5)
-                completed += 1
+                completed = 1
+            else:
+                for cycle in range(cycles or 0):
+                    print(f"Cycle {cycle + 1}: uploading synthetic microphone input", flush=True)
+                    session.command(f"audio_begin {len(pcm) // 2}")
+                    for offset in range(0, len(pcm), 512):
+                        session.command(f"audio_chunk {offset // 2} {pcm[offset:offset + 512].hex()}")
+                    session.command("wake")
+                    if args.live_mic_playback:
+                        session.wait_for("Playback started: playback_epoch=", 45)
+                        session.command("audio_live")
+                    if args.barge_in:
+                        for interruption in range(args.interruptions):
+                            session.wait_for("Playback started: playback_epoch=", 45)
+                            session.observe(0.4)
+                            session.command("audio_replay")
+                            session.wait_for("TTS interrupted:", 15)
+                    if args.late_follow_up:
+                        session.wait_for("Playback started: playback_epoch=", 45)
+                        session.wait_for("Follow-up listening started:", 90)
+                        session.observe(28)
+                        session.command("audio_replay")
+                        session.wait_for("Playback started: playback_epoch=", 45)
+                        session.wait_for("Follow-up listening started:", 90)
+                        session.wait_for("Follow-up window timed out", 35)
+                        session.observe(5)
+                    else:
+                        session.observe(args.seconds)
+                    session.command("stop")
+                    session.observe(5)
+                    completed += 1
             session.command("audio_clear")
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -155,12 +184,22 @@ def main():
                     pass
         finally:
             port.close()
+    text = args.log.read_text(encoding="utf-8", errors="replace")
+    expected_turns = turns if turns is not None else cycles
+    input_sessions = re.findall(r"Sent speech input start: session=([^\s]+)", text)
+    ready_sessions = re.findall(r"Realtime voice session ready: session=([^\s]+)", text)
+    follow_up_turns = [int(value) for value in re.findall(
+        r"Follow-up listening started: completed_turns=(\d+)", text)]
     summary = {"synthetic_microphone": True, "acoustic_wake_test": False,
                "late_follow_up": args.late_follow_up,
                "physical_microphones_during_playback": args.live_mic_playback,
+               "same_session_turns": turns,
+               "expected_turns": turns if turns is not None else cycles,
                "completed_cycles": completed, "error": error,
                **parse_log(args.log.read_bytes())}
-    text = args.log.read_text(encoding="utf-8", errors="replace")
+    summary["speech_input_start_sessions"] = input_sessions
+    summary["voice_ready_sessions"] = ready_sessions
+    summary["follow_up_completed_turns"] = follow_up_turns
     summary["vad_interruptions"] = text.count("TTS interrupted:")
     summary["afe_vad_confirmations"] = text.count("AFE VAD confirmed:")
     summary["vad_ends"] = text.count("VAD end sent:")
@@ -171,20 +210,34 @@ def main():
             if fields:
                 stats.append({k: int(v) for k, v in fields.items()})
     summary["playback_audio_stats"] = stats
-    summary["session_gate_passed"] = (
+    same_session_gate = turns is not None and (
+        not error
+        and not summary["failure"]
+        and not summary["failure_flags"]["reset"]
+        and len(input_sessions) == turns
+        and len(set(input_sessions)) == 1
+        and len(ready_sessions) == 1
+        and follow_up_turns == list(range(1, turns))
+        and len(stats) >= turns
+        and all(s.get("packets", 0) > 0 and s.get("decoded_frames", 0) > 0
+                and s.get("pcm_bytes", 0) > 0 and s.get("write_failures", 1) == 0
+                for s in stats[:turns])
+    )
+    cycle_gate = turns is None and (
         not error and not summary["failure"]
         and not summary["failure_flags"]["reset"]
-        and summary["interaction_started"] >= args.cycles
-        and summary["interaction_stopped"] >= args.cycles
+        and summary["interaction_started"] >= (cycles or 0)
+        and summary["interaction_stopped"] >= (cycles or 0)
         and (not args.live_mic_playback or summary["vad_interruptions"] == 0)
         and (not args.barge_in or (
-            summary["vad_interruptions"] == args.cycles * args.interruptions
-            and summary["afe_vad_confirmations"] == args.cycles * args.interruptions
-            and summary["vad_ends"] == args.cycles * args.interruptions))
-        and len(stats) >= args.cycles
+            summary["vad_interruptions"] == (cycles or 0) * args.interruptions
+            and summary["afe_vad_confirmations"] == (cycles or 0) * args.interruptions
+            and summary["vad_ends"] == (cycles or 0) * args.interruptions))
+        and len(stats) >= (cycles or 0)
         and all(s.get("packets", 0) > 0 and s.get("decoded_frames", 0) > 0
                 and s.get("pcm_bytes", 0) > 0 and s.get("write_failures", 1) == 0 for s in stats)
     )
+    summary["session_gate_passed"] = same_session_gate or cycle_gate
     args.log.with_suffix(".summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))

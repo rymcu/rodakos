@@ -25,6 +25,15 @@ inheritance, resource headroom, or acoustic behavior. Ordinary OFF was restored 
 binding/tokenVersion4 and MQTT connection. Root cause remains **INCONCLUSIVE** and resource/
 production remain **NO_GO**. See [040 evidence](ota-release-readiness.md#2026-10-09-准备阶段优先级观察与-testoff-恢复-040).
 
+After the 040 recovery, one ordinary-OFF USB diagnostic run completed six logical turns on the
+same realtime voice session. Device evidence showed one session ID, six `input.start` markers,
+follow-up counts 1—5, six non-empty playback-stat groups and zero playback write failures; the
+session then stopped, cleaned up and re-armed wake monitoring. Local Electron events confirmed one
+`session.open`, one `wake.detected`, six `input.start` events, disconnect and an empty runtime
+session list. Server VAD split the same session into six `vad-end` files plus one short final
+`listen-stop` file, so this is a bounded same-session lifecycle result rather than complete
+server-segmentation, acoustic or production acceptance. See [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察).
+
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
 PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,
