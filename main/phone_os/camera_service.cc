@@ -953,8 +953,13 @@ void CameraService::CloseStream() {
         ESP_LOGI(TAG, "CloseStream: fd close complete");
     }
     ESP_LOGI(TAG, "CloseStream: device release begin");
-    camera_device_.Release();
-    ESP_LOGI(TAG, "CloseStream: device release complete");
+    const esp_err_t release_ret = camera_device_.Release();
+    if (release_ret == ESP_OK) {
+        ESP_LOGI(TAG, "CloseStream: device release complete");
+    } else {
+        ESP_LOGW(TAG, "CloseStream: device release deferred for retry: %s",
+                 esp_err_to_name(release_ret));
+    }
     active_width_ = 0;
     active_height_ = 0;
     active_stride_ = 0;

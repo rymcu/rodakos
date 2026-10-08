@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "components/esp_board_manager/devices/dev_camera/dev_camera_sub_dvp.c"
 CAMERA_DEVICE_HEADER = ROOT / "main/rodakos_adapters/camera_device.h"
 CAMERA_DEVICE_SOURCE = ROOT / "main/rodakos_adapters/camera_device.cc"
+CAMERA_SERVICE_SOURCE = ROOT / "main/phone_os/camera_service.cc"
 
 
 def function_body(source: str, name: str) -> str:
@@ -107,6 +108,20 @@ class CameraDeviceRetryContractTest(unittest.TestCase):
         reset = self.release.index("acquired_ = false")
         self.assertLess(self.release.index("esp_board_manager_deinit_device_by_name"), reset)
         self.assertLess(reset, self.release.index("return ESP_OK"))
+
+
+class CameraServiceReleaseLogContractTest(unittest.TestCase):
+    def test_close_stream_does_not_report_failed_release_as_complete(self) -> None:
+        source = CAMERA_SERVICE_SOURCE.read_text(encoding="utf-8")
+        close_stream = function_body(source, "CameraService::CloseStream")
+        release = close_stream.index("camera_device_.Release()")
+        self.assertIn("const esp_err_t release_ret", close_stream[release - 40 : release + 80])
+        self.assertIn("release_ret == ESP_OK", close_stream)
+        self.assertIn("release deferred for retry", close_stream)
+        self.assertLess(
+            close_stream.index("release_ret == ESP_OK"),
+            close_stream.index('"CloseStream: device release complete"')
+        )
 
 
 if __name__ == "__main__":
