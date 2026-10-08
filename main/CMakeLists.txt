@@ -6,7 +6,7 @@ option(
 
 set(RODAK_OTA_FAULT_INJECTION_PHASE "" CACHE STRING
     "Main OTA reset-injection phase for journal recovery tests")
-option(RODAKOS_RELEASE_TESTS "Enable one-shot serial resource failure injection" OFF)
+option(RODAKOS_RELEASE_TESTS "Enable serial release diagnostics and one-shot resource failure injection" OFF)
 
 set(SOURCES
     "main.cc"
@@ -134,6 +134,10 @@ if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
     list(APPEND SOURCES "apps/home/home_hardware_test_population.cc")
 endif()
 
+if(RODAKOS_RELEASE_TESTS)
+    list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc")
+endif()
+
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS "." "rodakos_adapters" "phone_os" "phone_ui" "apps"
@@ -186,6 +190,7 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 
 if(RODAKOS_RELEASE_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_RELEASE_TESTS=1)
+    message(WARNING "RodakOS serial release diagnostics are ENABLED; this is not a production build")
 endif()
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)

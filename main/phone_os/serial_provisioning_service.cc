@@ -1,5 +1,8 @@
 #include "phone_os/resource_failure_injection.h"
 #include "phone_os/serial_provisioning_service.h"
+#ifdef RODAKOS_RELEASE_TESTS
+#include "phone_os/voice_lifecycle_diagnostic.h"
+#endif
 
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_protocol.h"
@@ -341,6 +344,14 @@ void SerialProvisioningService::Run() {
 
 bool SerialProvisioningService::HandleLine(const std::string& line) {
 #ifdef RODAKOS_RELEASE_TESTS
+    if (voice_lifecycle_diagnostic_ != nullptr) {
+        if (voice_lifecycle_diagnostic_->HandleSerialLine(line)) return true;
+        if (voice_lifecycle_diagnostic_->BlocksSerialMutation(line)) {
+            std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"accepted\":false,\"reason\":\"voice_cycle_busy\"}\n");
+            std::fflush(stdout);
+            return false;
+        }
+    }
     constexpr char kResourceTestPrefix[] = "RODAK_RELEASE_TEST_V1 fail_alloc ";
     if (line.rfind(kResourceTestPrefix, 0) == 0) {
         const bool armed = ArmResourceFailure(line.substr(sizeof(kResourceTestPrefix) - 1).c_str());

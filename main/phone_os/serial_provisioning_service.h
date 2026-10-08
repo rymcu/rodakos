@@ -16,6 +16,9 @@ class WiFiAdapter;
 namespace rodakos {
 
 class DeviceCloudConfigService;
+#ifdef RODAKOS_RELEASE_TESTS
+class VoiceLifecycleDiagnostic;
+#endif
 
 // Receives the operator-side WiFi/cloud provisioning frame from the USB
 // Serial/JTAG driver used by the active console. Logs and input remain on one
@@ -40,6 +43,12 @@ public:
     void Stop();
     bool IsRunning() const { return running_.load(); }
     void SetAppLaunchCallback(AppLaunchCallback callback);
+#ifdef RODAKOS_RELEASE_TESTS
+    // Configure once before Start; the controller outlives this service.
+    void SetVoiceLifecycleDiagnostic(VoiceLifecycleDiagnostic* diagnostic) {
+        voice_lifecycle_diagnostic_ = diagnostic;
+    }
+#endif
 
     // Clear a provisioning transaction left behind by an interrupted boot.
     // Recovery is deliberately conservative: an incomplete transaction is
@@ -71,6 +80,9 @@ private:
     CloudRefreshCallback cloud_refresh_callback_;
     VoiceTestCallback voice_test_callback_;
     AppLaunchCallback app_launch_callback_;
+#ifdef RODAKOS_RELEASE_TESTS
+    VoiceLifecycleDiagnostic* voice_lifecycle_diagnostic_ = nullptr;
+#endif
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> cloud_refresh_pending_{false};

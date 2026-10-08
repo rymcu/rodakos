@@ -34,6 +34,10 @@
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_wake_service.h"
+#ifdef RODAKOS_RELEASE_TESTS
+#include "phone_os/voice_lifecycle_diagnostic.h"
+#include <esp_timer.h>
+#endif
 #include "phone_os/wake_on_lan_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_os/realtime_voice_transport.h"
@@ -630,6 +634,58 @@ extern "C" void app_main(void) {
     });
     ESP_LOGI(TAG, "WebRTC display service ready - starts on MQTT display.stream.start");
 
+#ifdef RODAKOS_RELEASE_TESTS
+    static rodakos::VoiceLifecycleDiagnostic voice_lifecycle_diagnostic({
+        .busy_reason = [](void*) -> const char* {
+            if (ota_update_service.IsBusy()) return "ota_busy";
+            if (camera_service.GetState().preview_running || web_rtc_camera_service.IsRunning())
+                return "camera_busy";
+            if (web_rtc_display_service.IsRunning()) return "display_busy";
+            const auto recording = recording_service.GetState().status;
+            if (recording == rodakos::RecordingStatus::kStarting ||
+                recording == rodakos::RecordingStatus::kRecording ||
+                recording == rodakos::RecordingStatus::kStopping) return "recording_busy";
+            if (audio_service.IsBusy()) return "music_busy";
+            const auto focus = audio_focus_service.GetState();
+            if (focus.active && focus.owner != "voice-assistant") return "audio_focus_busy";
+            // An active assistant session is the intended three-task test target.
+            return nullptr;
+        },
+        .snapshot = [](void*) {
+            rodakos::VoiceLifecycleSnapshot snapshot;
+            snapshot.tasks.assistant = xTaskGetHandle("assistant_io") != nullptr;
+            snapshot.tasks.capture = xTaskGetHandle("voice_frontend") != nullptr;
+            snapshot.tasks.supervisor = xTaskGetHandle("voice_wake") != nullptr;
+            const auto assistant = voice_assistant_service.GetState();
+            snapshot.assistant_stopping = assistant.stopping;
+            using DiagnosticPhase = rodakos::VoiceLifecycleAssistantPhase;
+            switch (assistant.phase) {
+                case rodakos::VoiceAssistantPhase::kIdle: snapshot.assistant_phase = DiagnosticPhase::kIdle; break;
+                case rodakos::VoiceAssistantPhase::kConnecting: snapshot.assistant_phase = DiagnosticPhase::kConnecting; break;
+                case rodakos::VoiceAssistantPhase::kListening: snapshot.assistant_phase = DiagnosticPhase::kListening; break;
+                case rodakos::VoiceAssistantPhase::kSpeaking: snapshot.assistant_phase = DiagnosticPhase::kSpeaking; break;
+                case rodakos::VoiceAssistantPhase::kError: snapshot.assistant_phase = DiagnosticPhase::kError; break;
+            }
+            snapshot.uptime_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000);
+            snapshot.internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            snapshot.internal_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            snapshot.internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            snapshot.psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            snapshot.psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            return snapshot;
+        },
+        .wake_state = [](void*) {
+            const auto state = voice_wake_service.GetState();
+            return rodakos::VoiceLifecycleWakeState{state.enabled, state.listening};
+        },
+        .deinit = [](void*) { voice_wake_service.Deinit(); },
+        .restart = [](void*) { return voice_wake_service.Start(); },
+        .emit = rodakos::PrintVoiceLifecycleEvent
+    });
+    serial_provisioning_service.SetVoiceLifecycleDiagnostic(&voice_lifecycle_diagnostic);
+    ESP_LOGW(TAG, "RODAKOS_RELEASE_TESTS active: USB voice lifecycle diagnostic enabled");
+#endif
+
     static PhoneServices services;
     services.SetAppearance(&appearance_service);
     services.SetBacklight(&backlight);
@@ -744,6 +800,10 @@ extern "C" void app_main(void) {
     uint32_t appearance_retry_ticks = 0;
     uint32_t main_health_ticks = 0;
     while (true) {
+#ifdef RODAKOS_RELEASE_TESTS
+        // Outside all service/UI/serial locks, on the permanent internal-stack task.
+        voice_lifecycle_diagnostic.Pump();
+#endif
         rodakos::PumpTaskRetirements();
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
