@@ -99,7 +99,9 @@ per result are inspected; at most six distinct address/port combinations are tri
 each with a six-second shared bootstrap/token deadline. This bounds candidate HTTP
 attempts to 36 seconds, in addition to the initial attempt and discovery query.
 IPv4 and non-scoped IPv6 addresses are supported. Unspecified, loopback, multicast,
-IPv4-mapped IPv6 and link-local/scoped IPv6 routes are rejected. Scoped IPv6 needs a
+IPv4-mapped IPv6, IPv4 link-local `169.254/16`, and link-local/scoped IPv6 routes are rejected.
+The persisted route stores only a plain address, so IPv4 link-local candidates cannot be
+accepted without an interface-scope contract. Scoped IPv6 needs a
 separate interface-lifetime contract and remains open.
 
 Each candidate uses its numeric address directly while retaining the installed

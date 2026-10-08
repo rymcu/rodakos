@@ -581,6 +581,16 @@ RODAK_TEST("Discovery deduplicates address-port pairs and bounds invalid or scop
     RODAK_CHECK(rodakos::DiscoverServerTrustRoutes(trust).empty());
 }
 
+RODAK_TEST("Discovery rejects link-local IPv4 without an interface scope") {
+    trust_test::Reset();
+    const auto trust = trust_test::TestTrust();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443,
+                                {"169.254.1.2", "192.168.137.9"}}};
+    const auto routes = rodakos::DiscoverServerTrustRoutes(trust);
+    RODAK_CHECK_EQ(routes.size(), 1U);
+    RODAK_CHECK_EQ(routes.front().connect_address, "192.168.137.9");
+}
+
 RODAK_TEST("Compact authority keeps one trust and rejects conflicting or ambiguous identities") {
     rodakos::ServerAuthority authority;
     authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};
