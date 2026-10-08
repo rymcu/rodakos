@@ -137,7 +137,8 @@ endif()
 set(VOICE_OBSERVER_LDFRAGMENTS)
 if(RODAKOS_RELEASE_TESTS)
     list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc" "phone_os/voice_tick_observer.cc"
-        "phone_os/voice_feed_progress_observer.cc")
+        "phone_os/voice_feed_progress_observer.cc" "phone_os/voice_prepare_priority_observer.cc"
+        "phone_os/voice_prepare_priority_diagnostic.cc")
     list(APPEND VOICE_OBSERVER_LDFRAGMENTS "voice_feed_progress.lf")
 endif()
 

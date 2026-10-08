@@ -224,6 +224,37 @@ the GCC 15 transition. Both compatibility fixes stay in `main/CMakeLists.txt`.
 
 ## Verification Gates
 
+### TEST 固件的准备阶段优先级快照
+
+`RODAKOS_RELEASE_TESTS=ON` 时，`PrepareInteraction` 只在当前任务采四个有效优先级端点：
+开始准备、取得外层 open mutex、完整 `PrepareVoiceConfig` 返回、外层锁释放后。
+Start/取锁失败以 `exit_no_open` 结束；取得锁后提前取消可只有三点。普通 OFF 固件不编译
+观察模块和串口读取命令。此诊断不增加任务、轮询或实时日志，不改变优先级、亲和性、
+音频缓冲、100 ms 调度合同、凭据 TTL 或 AEC 配置。
+
+单槽最多四条；active 和未读取的 ready 均不覆盖。完成后显式发送：
+
+```text
+RODAK_RELEASE_TEST_V1 voice_prepare_take
+```
+
+成功读取会消费 ready 诊断记录；active/empty 返回 `unavailable`。`voice_cycle` 忙碌时
+沿用串口互斥限制。读取不修改业务配置，但输出失败或 UART 丢行后无法重读原记录。
+`RODAK_VOICE_PREPARE_TRACE` 的 `ok` 只表示读取结果，不能充当有效性或验收结论。
+接收端必须在同一 boot/固件/捕获窗口中核对 snapshot、全部连续 index 的 sample、complete
+三部分的 scope/count/self，并检查 flags、阶段顺序和单调时间；单独一行 complete 不足以
+证明完整快照。任务名按字节 hex 编码，记录的 handle 仅为身份标量，不能解引用其它 TCB。
+
+每个优先级值只代表其 `before_us` 与 `after_us` 包络内的一次自身查询；即使四点均为相同
+优先级，也不排除区间中间发生继承。释放锁与退出采样之间仍可能被抢占，不能由端点推断
+持续 CPU 使用、具体 waiter、锁归属或 stall 根因。软件测试分别见
+[observer](../tests/voice_prepare_priority_observer/README.md)、
+[真实 transport 接线](../tests/voice_prepare_priority_transport/README.md) 和
+[串口输出](../tests/voice_prepare_priority_diagnostic/README.md)。它们不替代目标栈余量、
+真实 RTOS 调度或声学验收。
+
+### 构建与设备门禁
+
 Before hardware testing:
 
 1. `idf.py build` succeeds with ESP-IDF 6.0.2.

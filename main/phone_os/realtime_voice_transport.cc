@@ -1,5 +1,8 @@
 #include "phone_os/realtime_voice_transport.h"
 #include "phone_os/realtime_voice_contract.h"
+#ifdef RODAKOS_RELEASE_TESTS
+#include "phone_os/voice_prepare_priority_observer.h"
+#endif
 
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
@@ -157,10 +160,19 @@ bool RodakRealtimeVoiceTransport::Start() {
 }
 
 bool RodakRealtimeVoiceTransport::PrepareInteraction(VoiceOpenGuard can_continue) {
+#ifdef RODAKOS_RELEASE_TESTS
+    // Destruction must follow open_lock's release, including every early return.
+    VoicePreparePriorityScope priority_scope;
+#endif
     if (!Start()) {
         return false;
     }
     SemaphoreLock open_lock(open_mutex_);
+#ifdef RODAKOS_RELEASE_TESTS
+    if (open_lock.locked()) {
+        priority_scope.Mark(VoicePreparePriorityStage::kOpenAcquired);
+    }
+#endif
     if (!open_lock.locked() || (can_continue && !can_continue())) {
         SetFailure(VoiceTransportFailureKind::kCancelled,
                    "prepare_cancelled", "Voice preparation cancelled", false);
@@ -177,7 +189,13 @@ bool RodakRealtimeVoiceTransport::PrepareInteraction(VoiceOpenGuard can_continue
     // New wakes run on wake_notify's internal stack; reconnect runs in PSRAM.
     // Keep HTTP/NVS work here and use only this RAM snapshot for reconnect.
     CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kRefreshFailed;
+#ifdef RODAKOS_RELEASE_TESTS
+    const bool prepared = config_service_.PrepareVoiceConfig(config_, can_continue, &diagnostic);
+    priority_scope.Mark(VoicePreparePriorityStage::kCloudReturned);
+    if (!prepared) {
+#else
     if (!config_service_.PrepareVoiceConfig(config_, can_continue, &diagnostic)) {
+#endif
         const auto kind = diagnostic == CloudDiagnosticCode::kCancelled
             ? VoiceTransportFailureKind::kCancelled
             : diagnostic == CloudDiagnosticCode::kNetworkUnavailable

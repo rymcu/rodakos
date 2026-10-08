@@ -2,6 +2,7 @@
 #include "phone_os/serial_provisioning_service.h"
 #ifdef RODAKOS_RELEASE_TESTS
 #include "phone_os/voice_lifecycle_diagnostic.h"
+#include "phone_os/voice_prepare_priority_diagnostic.h"
 #endif
 
 #include "phone_os/device_cloud_config.h"
@@ -351,6 +352,10 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
             std::fflush(stdout);
             return false;
         }
+    }
+    if (line == "RODAK_RELEASE_TEST_V1 voice_prepare_take") {
+        PrintVoicePreparePrioritySnapshot();
+        return true;
     }
     constexpr char kResourceTestPrefix[] = "RODAK_RELEASE_TEST_V1 fail_alloc ";
     if (line.rfind(kResourceTestPrefix, 0) == 0) {
