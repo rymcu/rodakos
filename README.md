@@ -7,16 +7,16 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
-their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
-pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
-their exact assertions. This round performs no signing, hardware, serial or reset
-operations. The recorded device remains on ordinary 037 package `20261008-202609`
-(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
-forward from 037, not remeasured. Root cause remains unresolved and resource/production
-remain **NO_GO**. See [038 software evidence](docs/ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
-[037 hardware record](docs/ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
-retains its original identities.
+Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
+comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
+All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
+forwarded zero over 110.1013822 seconds; the target PC stream is not necessary for this Q stall.
+Other MQTT/TLS/logging/PI candidates remain unresolved. Original publish, serial capture and
+temporary inspector cleanup are complete; binding/tokenVersion4 remain. These bounded USB
+synthetic-input observations do not establish physical or acoustic acceptance. Root cause is
+**INCONCLUSIVE** and resource/production remain **NO_GO**. See
+[039 evidence](docs/ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039) and the separately preserved
+[038 software evidence](docs/ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038).
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

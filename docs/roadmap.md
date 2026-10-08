@@ -6,16 +6,16 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
-038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
-their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
-pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
-their exact assertions. This round performs no signing, hardware, serial or reset
-operations. The recorded device remains on ordinary 037 package `20261008-202609`
-(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
-forward from 037, not remeasured. Root cause remains unresolved and resource/production
-remain **NO_GO**. See [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
-[037 hardware record](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
-retains its original identities.
+Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
+comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
+All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
+forwarded zero over 110.1013822 seconds; the target PC stream is not necessary for this Q stall.
+Other MQTT/TLS/logging/PI candidates remain unresolved. Original publish, serial capture and
+temporary inspector cleanup are complete; binding/tokenVersion4 remain. These bounded USB
+synthetic-input observations do not establish physical or acoustic acceptance. Root cause is
+**INCONCLUSIVE** and resource/production remain **NO_GO**. See
+[039 evidence](ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039) and the separately preserved
+[038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038).
 
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
@@ -315,7 +315,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 038 moves existing TEST snapshots before logs; 13 TEST / 49 OFF cases pass in Debug and sanitizers, with six exact previous-order controls. No device operations were performed; ordinary 037 package `20261008-202609` and its terminal-state record remain the last device evidence. The 037 recovered gaps and root cause remain unresolved. Remaining gates are actual heap/stack/ISR margin, physical resource return, acoustic/concurrent/OOM and soak acceptance; resource/production **NO_GO** | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038), [037 hardware evidence](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037), [voice contract](voice-task-retirement.md) |
+| Resource recovery | 039 same-boot normal/quiet/normal completed; each window has two recovered gaps. Q suppressed36/forwarded0, so the target PC stream is not necessary for this Q stall. Original publish/serial/temporary inspector restored or closed. Root cause INCONCLUSIVE; resource/production NO_GO. Actual heap/stack/ISR margin, physical return, acoustic/concurrent/OOM and soak acceptance remain open | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [039 evidence](ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

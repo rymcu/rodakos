@@ -1,6 +1,6 @@
 # 语音任务回收合同与分层验证
 
-更新：2026-10-08。031 把 Assistant I/O、前端采集和唤醒 supervisor 的三个 WithCaps
+更新：2026-10-09。031 把 Assistant I/O、前端采集和唤醒 supervisor 的三个 WithCaps
 任务接入 [030 共享回收器](task-retirement.md)。032 保持这三条服务及回收器源码不变，新增
 测试专用 USB lifecycle cycle；软件、测试包和普通 OFF 包分别验证。独审确认测试镜像下
 一次 idle、三次 Listening 的有限任务退出与恢复观察。随后恢复普通 OFF 包，完成受保护
@@ -20,7 +20,7 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
-当前 038：源码 `6c807b87d164c38794b48a97b1632c8c1788ee4c` 将 TEST 既有快照移到首条相关日志之前；13 项 TEST、49 项 OFF 分别通过 Debug 与 ASan/UBSan/leak，6 个旧顺序负控精确检出。本轮无签包、硬件、串口或复位操作，设备固件与终态沿用 037 普通 `20261008-202609` 记录，未重新实测。根因未定，资源与生产 **NO_GO** 保持。见[038 软件证据](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038)。
+当前 039：已完成同 boot 普通 037 固件的 normal→quiet→normal 三格取证：三格均各有两个 recovered gap，Q 在 110.1013822 秒内抑制 36 次目标 PC 发布、转发 0 次。目标 PC 消息流不是这格 stall 的必要条件，其他 MQTT/TLS、日志与 PI 候选未排除。原 publish、串口和临时 inspector 已收尾，原绑定/tokenVersion4 保留；根因 **INCONCLUSIVE**，资源与生产 **NO_GO**。
 
 ## 修复的退出边界
 
@@ -233,11 +233,25 @@ flow-stop采时阶段、Retire/summary顺序保持。独立时间包络和stale�
 不复用。本轮无签包、硬件、串口或复位，设备仍沿用037普通包/source及终态记录，
 未重新实测；这不是stall根因修复，资源与生产NO_GO不变。
 
+## 039 PC-status 消息流对照
+
+039 完成同 boot 普通 037 包 `20261008-202609` 上一次 normal→quiet→normal 对照，
+沿用源码 `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`，桌面 PID2140。
+三格均各有两个 recovered gap；Q 在110.1013822秒内抑制36次目标发布、转发0次，
+因此目标 PC 消息流不是这格 stall 的必要条件，其他 MQTT/TLS、日志与 PI 候选仍未排除。
+prime仅作准备，各格并非严格等时，不作统计效应或单 API 因果结论。
+
+16条命令均有成功ACK；关联WSS关闭、rearm与IPC空闲后，原publish、临时inspector和
+串口均已收尾，原绑定/tokenVersion4/authority保留。无刷写/擦除/复位/主动NVS操作；
+自然刷新可能持久化凭据，不宣称NVS全字节不变。038 TEST快照修正未部署到本轮设备。
+根因INCONCLUSIVE，资源与生产NO_GO；详细gap身份、完整哈希和独审见
+[039证据](ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039)。
+
 ## 仍未关闭的门禁
 
 不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
 安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
 没有硬性延迟期限；Capture 内存分配异常等业务失败也不属于本轮已验证的恢复保证。
 
-资源和生产发布继续 **NO_GO**。034—036 的 gap 与资源边界按原身份保留；037 的三个 gap 均 recovered，有限端点观察仍未区分 Ready/Blocked 或证明实际余量、全部物理资源归还。031 软件记录与
+资源和生产发布继续 **NO_GO**。039 已完成三格与现场清理，目标 PC 消息流不是本 Q 格 stall 的必要条件，其他候选未排除；038 快照顺序修正保持软件证据身份。034—036 的 gap 与资源边界按原身份保留；037 的三个 gap 均 recovered，有限端点观察仍未区分 Ready/Blocked 或证明实际余量、全部物理资源归还。031 软件记录与
 [030 已部署视频证据](task-retirement.md#030-制品与有限设备证据) 分开保留。

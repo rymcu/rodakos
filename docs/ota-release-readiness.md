@@ -14,18 +14,18 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
-their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
-pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
-their exact assertions. This round performs no signing, hardware, serial or reset
-operations. The recorded device remains on ordinary 037 package `20261008-202609`
-(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
-forward from 037, not remeasured. Root cause remains unresolved and resource/production
-remain **NO_GO**. See [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
-[037 hardware record](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
-retains its original identities.
+Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
+comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
+All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
+forwarded zero over 110.1013822 seconds; the target PC stream is not necessary for this Q stall.
+Other MQTT/TLS/logging/PI candidates remain unresolved. Original publish, serial capture and
+temporary inspector cleanup are complete; binding/tokenVersion4 remain. These bounded USB
+synthetic-input observations do not establish physical or acoustic acceptance. Root cause is
+**INCONCLUSIVE** and resource/production remain **NO_GO**. See
+[039 evidence](ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039) and the separately preserved
+[038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038).
 
-Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
+Evidence review updated on 2026-10-09. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
 recorded appearance-gate package is `build/packages/ota/20261001-234748`; its main image is 6,897,584 bytes
 (about 6.58 MiB) and remains within `ota_0`. The package booted through guarded COM3 refresh and
@@ -2815,3 +2815,99 @@ MQTT/Wake 空闲及桌面 UI/串口关闭终态沿用 037 的分时记录，未�
 桌面可执行文件/PID也未本轮重新核验。037 的三个 recovered gap、完整软件/包/硬件
 证据逐字保留；根因仍 **INCONCLUSIVE**，资源与生产 **NO_GO**。物理回收、实际
 heap/stack/ISR 余量、声学、并发/OOM、长稳、生产信任根和 power-cut 门禁不变。
+
+## 2026-10-09 PC-status causal comparison (039)
+
+本轮跨本地 2026-10-08/09，在同一 boot、同一桌面 PID 2140 上完成一次
+normal→quiet→normal 对照。**目标 PC 消息流不是这格 stall 的必要条件**；
+这个结论不排除该流的贡献、其他 MQTT/TLS、同步日志或 PI，也不确定统一根因。
+三格会话并非严格等时，不能用本次单组三格估计统计效应或宣称性能改善/恶化。
+
+固件继续使用普通 037 包 `20261008-202609`，源码
+`d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`，Main SHA-256
+`3f884068ccb37500d801be82c96649431fa150505c241a1a312e6da3fc44dd2c`。
+039 未修改固件、未重新构建/签包/刷写，没有擦除、复位或主动 NVS 操作；原绑定、
+tokenVersion4、authority 保留。自然 enrollment 可按既有流程持久化刷新凭据，
+未读回比较 NVS 全字节。038 的 TEST 快照修正未部署，不能套用其观察顺序或新栈帧。
+
+### 三格与凭据年龄
+
+| 正式窗口 | generation | wake 前保守凭据年龄 | recovered gap（μs） |
+| --- | --- | --- | --- |
+| normal 1 | 11 | 1117.444729 秒 | 660319 / 741333 |
+| quiet | 15 | 700.4774101 秒 | 1302552 / 660511 |
+| normal 2 | 19 | 673.5795886 秒 | 1325188 / 639333 |
+
+prime generation 7 的两个 recovered gap 649983/648692 μs 仅作准备，不算正式 normal。
+四个阶段共 16 条命令均按上一成功 ACK 后再发下一条执行，没有命令重试；各正式格
+为 audio_begin、单块 512 B 零 PCM、wake、stop。每格采用最新 enrollment 完整行 RX
+作为凭据签发时点的保守上界；实际 wake 年龄均超过 630 秒，没有用本机等待替代 RX。
+Q 的 651.2946752 秒和 N2 的 653.5380768 秒只是更早资格快照，不是实际 wake 年龄。
+
+Q 的同域资格端点距原目标 forward 排空 19.3821289 秒，已经抑制 6 次。整个 quiet
+窗口 110.1013822 秒内目标 suppressed=36、forwarded=0、contamination=0，目标
+publish throw/callback error 为 0；Q begin→rearm 的 PC-status received 为 0。
+其他 MQTT 发布仍继续。资格端点 publisher 的采样 inFlight=true；这里核的是
+gate 原目标 forward inFlight=0，不能称全系统 pending=0。相同 wrapper 在独立
+120 秒截止前约 9.9 秒显式恢复 normal，后续证明核到 5 次 forward/completion 及设备 PC 行。
+串口 QPC、broker performance 时间与 IPC 时间是不同观察域，不能拼成原子时刻。
+
+### gap 身份与候选机制边界
+
+N1 首 feed API 为 628257 μs；第二 gap 的 producer 为 between_reads，epoch 最大
+API seq4=653749 μs 不能借给该 gap 缺失的 feed 身份。Q 首 gap 1302552 μs、首 API
+seq1=630028 μs 与 closure between_reads/read_seq5121 是不同端点，不相加也不归到
+单次 API；第二 gap 的 stall seq32 与 API 最大值 seq32=640881 μs 身份一致，机制仍未知。
+N2 首 gap 1325188 μs 时，首 feed API 仅 14154 μs；read 最大值641057 μs/seq7593
+和后续 API 最大值647006 μs/seq3 都是独立观察。第二 gap 的 read_returned
+seq7603/previous526118 μs 不能借用先前 seq7593 或 API seq3 的 epoch 最大值解释。
+
+静态分析确认 open_mutex_ 与 refresh_mutex_ 跨同步 HTTPS，可能使短锁竞争触发的
+继承优先级保留到外层锁释放；本轮没有观测实际继承、waiter 或锁归属。
+PC-status float 日志在应用 mqtt_worker base4，不能归给 SDK mqtt_task base5；
+有效优先级也不等于连续 CPU。固定 100ms、TTL600、优先级、核绑定、缓冲与 AEC 合同保持。
+
+### 有限采集与现场收尾
+
+每格均有成功 stop ACK、关联 WSS Stop/Destroy ESP_OK、Wake rearm 与空闲 IPC；
+这是串口语音诊断，不是视频 sessionId/startCommandNo 合同，也不证明完整物理资源释放。
+N2 stop ACK QPC 为 261781794454600；在其后实际 RX 已达 82.1026418 秒时才发唯一
+final-restore。此前一次本地 PowerShell 空属性计数检查未通过且未追加命令，不是设备
+失败或命令重试。独审核得各 stop ACK 后、到下一阶段 TX 前或采集结束前最后实际 RX
+的端点跨度：N1 643.3635989 秒、Q 603.9823945 秒、N2 145.9083073 秒。它们有原始行
+支撑，不表示连续 idle 或每时刻都有数据；N2 rearm 后到最终 RX 为144.1341993秒，
+stop ACK 之后实际记录800个RX chunk/12726 B。
+
+controller 于 2026-10-08T16:11:14.547Z 正常退出，原 publish 已恢复；清理验证 holder
+移除并关闭自己的 inspector socket。16:11:51.774Z 操作系统监听证明临时 9229 已关闭，
+原 PID2140/启动时间及 MQTT 8883 保持。16:11:52.489Z IPC 保持原 bound/tokenVersion4、
+MQTT=true、voice=false、sessions=[]。COM3 capture 已正常关闭：16/16 命令、raw
+227633 B、elapsed 2755.9107324 秒、trailing0、portClosed=true，writeErrors=[]、
+error=null；全量3068完整行/13422 RX chunk/16唯一ACK及8个recovered gap已核，
+完整采集中未匹配 reset/fault/pause 标记，结构检查 issues={}。
+这些是有界采集和软件终态，不是物理回收验收。
+
+16:12:17.230Z UI 串口 disconnected、无 Camera preview、stopButtons0；
+16:12:45.825Z 已知 capture/monitor/controller 进程模式匹配为空，不是系统级 handle 扫描。
+桌面 EXE SHA-256 `8fad4b1641ee195f423fc32bb8f4dafbea3b697e8e9c85a600bbd42d22ce179a`，
+bundle SHA-256 `acdf8859141f53c4eac04a2651206f823cb8c324ab2f01efb11d4ac7782c106f` 与原记录一致。
+
+### 本地证据
+
+临时 gate 的 22 项纯 host 检查和 controller 的 4 项隔离 VM smoke 已通过；控制器
+独审绑定实际执行输入；最终控制审核103次续租、最大间隔15.2668499秒，
+目标请求515=转发479+抑制36，错误0。最终硬件与控制两份独审通过各自有界闭合，
+不授予物理资源或生产验收。没有查询、依赖、修复或重跑 GitHub Actions。
+完整本地证据位于 `D:/workspace/rodak/.codex-temp/voice-wait-039/`：
+
+| 证据 | 报告 / 文件 | SHA-256 |
+| --- | --- | --- |
+| 串口完整原始字节 | `windows/pc-status-triplet/serial.raw` | `1fb910444ee12fc4d8187406a2a67d5de2e2d513867edd00a937b6aa02f3e046` |
+| 控制器执行前独审 | `controller-independent-review.json` | `14f7b4f937f972a150d95cb2c17688ebecacafe3acc11d212e8e6d8289d54fc5` |
+| PI 长持锁静态分析 | `pi-hold-review.json` | `bc67f14d7e5817bda0efcfc5b61c2997931db62a085b3f2e20aef84bee5574f8` |
+| 最终硬件闭合独审 | `hardware-independent-final-review.json` | `79ed1081b7444751155fe0e18aff5a84f8701d09625fd828f2d0602d958fa32b` |
+| 最终控制暴露与恢复独审 | `control-exposure-final-review.json` | `fbd6110d6552246b01b19ec739a279cbb2e287f90cb381fd61a93727371d878e` |
+
+USB 合成输入不等于真实收音、扬声器或声学。根因 **INCONCLUSIVE**，资源与生产
+**NO_GO**；真实 heap/stack/ISR 余量、物理回收、并发/OOM、声学、多轮、长稳、生产根
+和真实 power-cut 门禁保持，031—038 历史证据不改写成本轮结果。
