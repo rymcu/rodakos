@@ -67,6 +67,11 @@ cleanup:
 
 int dev_camera_sub_dvp_deinit(void *device_handle)
 {
+    if (device_handle == NULL) {
+        ESP_LOGE(TAG, "Invalid DVP camera handle");
+        return -1;
+    }
+
     dev_camera_handle_t *handle = (dev_camera_handle_t *)device_handle;
     ESP_LOGI(TAG, "Deinitializing DVP camera...");
 
@@ -75,15 +80,27 @@ int dev_camera_sub_dvp_deinit(void *device_handle)
     esp_err_t ret = esp_video_deinit();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to deinitialize DVP camera: %s", esp_err_to_name(ret));
+        // esp_video_deinit() may leave the SCCB/video/controller graph alive
+        // when a lower layer (for example i2c_master_bus_rm_device) fails.
+        // Keep both the board peripheral reference and device handle alive so
+        // the board manager can retry instead of retaining a dangling handle.
+        return -1;
     }
 
     dev_camera_config_t *cfg = NULL;
     esp_board_device_get_config_by_handle(handle, (void **)&cfg);
     if (cfg) {
-        esp_board_periph_unref_handle(cfg->sub_cfg.dvp.i2c_name);
+        ret = esp_board_periph_unref_handle(cfg->sub_cfg.dvp.i2c_name);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to release DVP I2C peripheral '%s': %s",
+                     cfg->sub_cfg.dvp.i2c_name, esp_err_to_name(ret));
+            // The device handle remains owned by the board manager until all
+            // cleanup is complete; preserve it for a retry of the unref.
+            return -1;
+        }
     }
     free(device_handle);
-    return ret == ESP_OK ? 0 : -1;
+    return 0;
 }
 
 ESP_BOARD_SUBTYPE_ENTRY_IMPLEMENT(camera, dvp, dev_camera_sub_dvp_init, dev_camera_sub_dvp_deinit);
