@@ -32,6 +32,8 @@ def main():
         folder.mkdir(exist_ok=True)
         build = folder / 'build'
         options = ['-DVOICE_ASSISTANT_SOURCE=' + str(candidate), '-DVOICE_ASSISTANT_BASELINE_INCLUDE=' + str(include or '')]
+        if baseline:
+            options.append('-DRODAK_ASSISTANT_LEGACY_BASELINE=ON')
         configure = ['cmake', '-S', str(ROOT / 'tests/voice_volume_service'), '-B', str(build), '-G', 'Ninja',
                      '-DCMAKE_BUILD_TYPE=Debug', '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', '-DRODAKOS_IDF_PATH=' + args.idf_path, *options]
         for index, command in enumerate([configure, ['cmake', '--build', str(build), '-j', '2']]):

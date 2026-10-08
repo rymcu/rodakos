@@ -52,6 +52,8 @@ public:
     void MarkSpeaking(const char* message = nullptr);
     void MarkError(const std::string& message);
 
+    // Observation only; commands still validate their current state under the service lock.
+    VoiceAssistantPhase GetPhaseSnapshot();
     VoiceAssistantState GetState();
 
 private:
@@ -60,7 +62,8 @@ private:
     void FinishInteraction(VoiceAssistantPhase final_phase,
                            const std::string& message,
                            uint32_t expected_generation = 0,
-                           CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kVoiceUnavailable);
+                           CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kVoiceUnavailable,
+                           uint32_t expected_recording_transport_generation = 0);
     void FinishTransportFailure(const VoiceTransportFailure& failure, uint32_t expected_generation);
     void CompleteInteractionCleanupLocked(uint32_t generation);
     void CompleteStartAttempt(TaskHandle_t task);

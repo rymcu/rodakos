@@ -80,6 +80,7 @@ private:
     bool StartAfe(uint32_t generation);
     void StopAfe();
     void AfeFetchTask();
+    void InvalidateAfeContinuityLocked();
     void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation);
     void ProcessConversationSamples(const int16_t* samples, size_t count, uint32_t generation,
                                     bool vad_valid, bool vad_speech);
@@ -137,6 +138,17 @@ private:
     uint32_t afe_generation_ = 0;
     bool afe_feed_active_ = false;
     bool afe_feed_started_ = false;
+    size_t afe_fetch_bytes_ = 0;
+    size_t afe_feed_max_bytes_ = 0;
+    size_t afe_capacity_bytes_ = 0;
+    size_t afe_credit_bytes_ = 0;
+    size_t afe_uncertain_bytes_ = 0;
+    bool afe_resync_pending_ = false;
+    uint32_t afe_stream_epoch_ = 0;
+    unsigned afe_feed_calls_ = 0;
+    unsigned afe_feed_returns_ = 0;
+    unsigned afe_feed_errors_ = 0;
+    int64_t afe_started_us_ = 0;
 };
 
 }  // namespace rodakos

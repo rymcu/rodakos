@@ -390,7 +390,7 @@ RODAK_TEST("identity and disable generations reject stale barge in but current c
     RODAK_CHECK_EQ(f.assistant.interrupts, 1u);
 }
 
-RODAK_TEST("wake callback invalidated while reading assistant state cannot interrupt later TTS") {
+RODAK_TEST("wake callback invalidated while reading assistant phase cannot interrupt later TTS") {
     for (unsigned change = 0; change < 3; ++change) {
         Fixture f;
         f.Start();
@@ -402,11 +402,12 @@ RODAK_TEST("wake callback invalidated while reading assistant state cannot inter
         auto gate = release.get_future().share();
         auto wake = std::async(std::launch::async, [&]() {
             { std::lock_guard<std::mutex> lock(f.assistant.mutex);
-              f.assistant.get_state_hook = [&, caller = std::this_thread::get_id()]() {
+              f.assistant.get_phase_hook = [&, caller = std::this_thread::get_id()]() {
                   if (std::this_thread::get_id() != caller) return;
                   entered.set_value();
                   gate.wait();
-              }; }
+              };
+              f.assistant.get_state_hook = f.assistant.get_phase_hook; }
             callback("old wake");
         });
         entered.get_future().wait();
@@ -416,11 +417,42 @@ RODAK_TEST("wake callback invalidated while reading assistant state cannot inter
         else f.service->Stop();
         { std::lock_guard<std::mutex> lock(f.assistant.mutex);
           f.assistant.state.phase = VoiceAssistantPhase::kSpeaking;
-          f.assistant.get_state_hook = {}; }
+          f.assistant.get_state_hook = {};
+          f.assistant.get_phase_hook = {}; }
         release.set_value();
         wake.get();
         RODAK_CHECK(changed);
         RODAK_CHECK_EQ(f.assistant.interrupts, 0u);
+    }
+}
+
+RODAK_TEST("wake callback reads phase without copying the full assistant snapshot") {
+    for (const auto phase : {VoiceAssistantPhase::kIdle, VoiceAssistantPhase::kSpeaking}) {
+        Fixture f;
+        f.Start();
+        unsigned full_reads = 0, phase_reads = 0;
+        const auto caller = std::this_thread::get_id();
+        {
+            std::lock_guard<std::mutex> lock(f.assistant.mutex);
+            f.assistant.state.phase = phase;
+            f.assistant.state.message.assign(1024, 'm');
+            f.assistant.get_state_hook = [&]() {
+                if (std::this_thread::get_id() == caller) ++full_reads;
+            };
+            f.assistant.get_phase_hook = [&]() {
+                if (std::this_thread::get_id() == caller) ++phase_reads;
+            };
+        }
+        f.service->NotifyWakeWordDetected("current wake");
+        {
+            std::lock_guard<std::mutex> lock(f.assistant.mutex);
+            f.assistant.get_state_hook = {};
+            f.assistant.get_phase_hook = {};
+        }
+        RODAK_CHECK_EQ(full_reads, 0u);
+        RODAK_CHECK_EQ(phase_reads, 1u);
+        RODAK_CHECK_EQ(f.assistant.starts, phase == VoiceAssistantPhase::kIdle ? 1u : 0u);
+        RODAK_CHECK_EQ(f.assistant.interrupts, phase == VoiceAssistantPhase::kSpeaking ? 1u : 0u);
     }
 }
 

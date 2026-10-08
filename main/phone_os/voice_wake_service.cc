@@ -329,9 +329,9 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
 
     // AEC/VAD frontends may report a wake phrase while TTS is active. Treat it
     // as a barge-in on the existing session instead of opening a second one.
-    const VoiceAssistantState assistant_state = assistant_.GetState();
-    if (assistant_state.phase == VoiceAssistantPhase::kSpeaking) {
-        // GetState may have waited while Stop or an identity change invalidated
+    const VoiceAssistantPhase assistant_phase = assistant_.GetPhaseSnapshot();
+    if (assistant_phase == VoiceAssistantPhase::kSpeaking) {
+        // The phase snapshot may have waited while Stop or an identity change invalidated
         // this callback. Keep that generation current through the short setter.
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool can_interrupt = initialized_ && task_running_ && enabled_ &&

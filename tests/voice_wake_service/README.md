@@ -28,7 +28,7 @@ CTest 名称为 `rodakos_voice_wake_service`，超时 120 秒。可执行文件�
 
 运行 CTest 时设置 `ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1`。
 
-35 项用例覆盖：
+36 项用例覆盖：
 
 - 禁用且未配置时的 Init/GetState/Start 不加载唤醒 runtime、不启动监听；显式应用后才确认身份。
 - 完整身份记录的持久应用、相同 revision 幂等、冲突与旧 revision 拒绝、过期后保留水位。
@@ -36,7 +36,8 @@ CTest 名称为 `rodakos_voice_wake_service`，超时 120 秒。可执行文件�
 - 运行时配置失败、已知未写入和不确定写入、迁移失败锁定、监听恢复失败、存储补偿失败。
 - 配置途中到期、旧临时身份在失败补偿期间到期，以及过期恢复失败时停止监听并撤销确认。
 - 并发 Apply/GetState 的完整事务序列化，Stop/禁用/身份变更使旧 wake callback 失效；
-  barrier 覆盖读取 assistant 状态期间失效的 callback，不允许其打断后续 TTS。
+  barrier 覆盖读取 assistant phase 快照期间失效的 callback，不允许其打断后续 TTS；
+  当前 idle / speaking 回调均只读 phase，不复制完整诊断快照，supervisor 保留多字段一致快照。
 - 生产 Unix 适配器单次 `gettimeofday` 快照与既有 2020 年有效时间下限。
 - runtime 错误并发变化时，service 通过拥有字符串内容的快照读取完整错误。
 - supervisor Stop／Deinit／析构等待完整回收，退出不创建 cleanup task、不新增回收分配；

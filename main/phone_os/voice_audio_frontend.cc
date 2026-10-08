@@ -46,6 +46,12 @@ constexpr size_t kMaxQueuedFrames = 80;
 constexpr TickType_t kIdleDelay = pdMS_TO_TICKS(20);
 constexpr TickType_t kInputRetryDelay = pdMS_TO_TICKS(100);
 constexpr int kIdleCloseIterations = 15;
+// 固定 ESP-SR 2.2.2 的 1MIC/WebRTC 合同：feed 返回写入主 FIFO 的字节数。
+// WebRTC 按 10ms 分块；fetch 必须有完整帧，短读超时会消费并丢弃 partial PCM。
+constexpr size_t kAfeWebRtcBytes = 160 * sizeof(int16_t);
+constexpr int kAfeRingFrames = 50;
+constexpr size_t kAfeMaxUncertainFrames = 4;
+constexpr int64_t kAfeStallUs = 100000;
 
 class LifecycleLock {
 public:
@@ -722,12 +728,23 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
     afe_config->aec_init = false;
 #endif
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+    afe_config->afe_ringbuf_size = kAfeRingFrames;
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_ ? afe_iface_->create_from_config(afe_config) : nullptr;
     afe_config_free(afe_config);
     if (afe_data_ == nullptr) { afe_iface_ = nullptr; SetErrorLocked("AFE initialization failed"); xSemaphoreGive(mutex_); return false; }
-    if (afe_iface_->get_feed_chunksize(afe_data_) <= 0 ||
-        afe_iface_->get_feed_channel_num(afe_data_) != 2) {
+    const int feed_samples = afe_iface_->get_feed_chunksize(afe_data_);
+    const int fetch_samples = afe_iface_->get_fetch_chunksize(afe_data_);
+#if CONFIG_USE_DEVICE_AEC
+    constexpr int expected_feed_samples = 256;
+#else
+    constexpr int expected_feed_samples = 160;
+#endif
+    if (feed_samples != expected_feed_samples || fetch_samples != 512 ||
+        afe_iface_->reset_buffer == nullptr || afe_iface_->reset_vad == nullptr ||
+        afe_iface_->get_feed_channel_num(afe_data_) != 2 ||
+        afe_iface_->get_fetch_channel_num(afe_data_) != 1 ||
+        afe_iface_->get_samp_rate(afe_data_) != kSampleRate) {
         afe_iface_->destroy(afe_data_);
         afe_data_ = nullptr;
         afe_iface_ = nullptr;
@@ -738,6 +755,17 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
     afe_generation_ = generation;
     afe_fetch_stopping_ = false;
     afe_feed_started_ = false;
+    afe_fetch_bytes_ = static_cast<size_t>(fetch_samples) * sizeof(int16_t);
+    afe_feed_max_bytes_ = ((static_cast<size_t>(feed_samples) + 159) / 160) * kAfeWebRtcBytes;
+    afe_capacity_bytes_ = afe_fetch_bytes_ * kAfeRingFrames;
+    afe_credit_bytes_ = afe_uncertain_bytes_ = 0;
+    afe_resync_pending_ = false;
+    afe_stream_epoch_ = 0;
+    afe_feed_calls_ = afe_feed_returns_ = afe_feed_errors_ = 0;
+    afe_started_us_ = esp_timer_get_time();
+    ESP_LOGI(TAG, "AFE flow ready: generation=%u feed_samples=%d fetch_bytes=%u capacity=%u",
+             static_cast<unsigned>(generation), feed_samples,
+             static_cast<unsigned>(afe_fetch_bytes_), static_cast<unsigned>(afe_capacity_bytes_));
     if (xTaskCreatePinnedToCoreWithCaps(AfeFetchTaskEntry, "afe_fetch", 6144, this, 4,
                                 &afe_fetch_task_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         afe_iface_->destroy(afe_data_); afe_data_ = nullptr; afe_iface_ = nullptr;
@@ -870,11 +898,13 @@ void VoiceAudioFrontend::CaptureTask() {
     int idle_iterations = 0;
     std::vector<int16_t> afe_feed_buffer;
     uint32_t feed_generation = 0;
+    uint32_t feed_epoch = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool task_running = task_running_;
         const Mode mode = mode_;
         const uint32_t generation = conversation_generation_;
+        const uint32_t read_epoch = afe_stream_epoch_;
         const uint32_t wake_generation = wake_generation_;
         const size_t read_samples = ResolveReadSamples(mode) * kInputChannels;
         xSemaphoreGive(mutex_);
@@ -932,7 +962,9 @@ void VoiceAudioFrontend::CaptureTask() {
         if (mode == Mode::kConversation) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
             const bool can_feed = mode_ == mode && generation == conversation_generation_ &&
-                                  afe_data_ != nullptr && !afe_fetch_stopping_;
+                                  afe_data_ != nullptr && !afe_fetch_stopping_ && !afe_resync_pending_ &&
+                                  read_epoch == afe_stream_epoch_;
+            const uint32_t stream_epoch = afe_stream_epoch_;
             if (can_feed) {
                 afe_feed_active_ = true;
                 aec_diagnostic_capture_.AppendRaw(samples.data(), samples.size() / kInputChannels,
@@ -947,12 +979,17 @@ void VoiceAudioFrontend::CaptureTask() {
                         selected_samples[i] = samples[i * 4 + (selected_main_mic_ == 1 ? 0 : 2)];
                     }
                 }
+            } else if (mode_ == mode && generation == conversation_generation_ &&
+                       afe_data_ != nullptr && (afe_resync_pending_ || read_epoch != afe_stream_epoch_)) {
+                // 此 raw read 已消耗但未 AppendRaw；取消/旧代不计入当前 capture。
+                aec_diagnostic_capture_.MarkDiscontinuity(true, generation);
             }
             xSemaphoreGive(mutex_);
             if (can_feed) {
-                if (feed_generation != generation) {
+                if (feed_generation != generation || feed_epoch != stream_epoch) {
                     afe_feed_buffer.clear();
                     feed_generation = generation;
+                    feed_epoch = stream_epoch;
                 }
                 for (size_t i = 0; i < samples.size() / kInputChannels; ++i) {
                     afe_feed_buffer.push_back(selected_samples[i]);
@@ -961,9 +998,46 @@ void VoiceAudioFrontend::CaptureTask() {
                 const size_t feed_size = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * 2;
                 while (feed_size > 0 && afe_feed_buffer.size() >= feed_size) {
                     xSemaphoreTake(mutex_, portMAX_DELAY);
+                    if (afe_resync_pending_) {
+                        // 重同步会丢弃旧输入尾部，避免把 reset 前后数据重新拼成连续输入。
+                        afe_feed_buffer.clear();
+                        xSemaphoreGive(mutex_);
+                        break;
+                    }
                     afe_feed_started_ = true;
+                    const unsigned feed_call = ++afe_feed_calls_;
+                    const int64_t feed_started_us = esp_timer_get_time();
                     xSemaphoreGive(mutex_);
-                    afe_iface_->feed(afe_data_, afe_feed_buffer.data());
+                    const int written = afe_iface_->feed(afe_data_, afe_feed_buffer.data());
+                    xSemaphoreTake(mutex_, portMAX_DELAY);
+                    ++afe_feed_returns_;
+                    const bool current = mode_ == Mode::kConversation &&
+                                         generation == conversation_generation_;
+                    const bool valid = written > 0 &&
+                        static_cast<size_t>(written) <= afe_feed_max_bytes_ &&
+                        static_cast<size_t>(written) % kAfeWebRtcBytes == 0;
+                    const bool overflow = valid && (afe_credit_bytes_ > afe_capacity_bytes_ ||
+                        static_cast<size_t>(written) > afe_capacity_bytes_ - afe_credit_bytes_);
+                    if (valid && !overflow) {
+                        afe_credit_bytes_ += static_cast<size_t>(written);
+                    } else if (current) {
+                        ++afe_feed_errors_;
+                        InvalidateAfeContinuityLocked();
+                        // 0 是本次输出被丢弃；其他异常可能已写部分数据，须在无 feed 时重同步。
+                        if (written != 0 || afe_uncertain_bytes_ != 0) afe_resync_pending_ = true;
+                        if (afe_feed_errors_ == 1 || afe_feed_errors_ % 100 == 0) {
+                            ESP_LOGW(TAG, "AFE feed rejected: count=%u returned=%d credits=%u resync=%d",
+                                     afe_feed_errors_, written, static_cast<unsigned>(afe_credit_bytes_),
+                                     afe_resync_pending_);
+                        }
+                    }
+                    if (feed_call == 1) {
+                        ESP_LOGI(TAG, "AFE first feed: generation=%u begin_ms=%lld duration_ms=%lld written=%d",
+                                 static_cast<unsigned>(generation),
+                                 static_cast<long long>((feed_started_us - afe_started_us_) / 1000),
+                                 static_cast<long long>((esp_timer_get_time() - feed_started_us) / 1000), written);
+                    }
+                    xSemaphoreGive(mutex_);
                     afe_feed_buffer.erase(afe_feed_buffer.begin(), afe_feed_buffer.begin() + feed_size);
                 }
                 xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -1012,12 +1086,79 @@ void VoiceAudioFrontend::StopAfe() {
 void VoiceAudioFrontend::AfeFetchTask() {
     unsigned fetch_errors = 0;
     unsigned cancelled_results = 0;
+    unsigned stalls = 0;
+    unsigned resyncs = 0;
+    unsigned resync_errors = 0;
+    unsigned resync_discarded = 0;
+    bool output_started = false;
+    bool fetch_started = false;
+    bool stall_reported = false;
+    int64_t waiting_since_us = 0;
     uint32_t generation = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool stopping = afe_fetch_stopping_;
-        const bool fed = afe_feed_started_;
         generation = afe_generation_;
+        const bool active = mode_ == Mode::kConversation && generation == conversation_generation_;
+        if (!stopping && active && afe_resync_pending_ && !afe_feed_active_) {
+            // 只有此 worker 是 reader；锁阻止新的 feed lease，已有 lease 已归还。
+            // reset 只清主 FIFO，不重置 WebRTC 内部残余，后续仍以实际返回字节计账。
+            const int reset = afe_iface_->reset_buffer(afe_data_);
+            const int reset_vad = afe_iface_->reset_vad(afe_data_);
+            if (reset == 1 && reset_vad == 1) {
+                afe_credit_bytes_ = afe_uncertain_bytes_ = 0;
+                afe_resync_pending_ = false;
+                ++afe_stream_epoch_;
+                ++resyncs;
+                resync_errors = 0;
+                InvalidateAfeContinuityLocked();
+                ESP_LOGW(TAG, "AFE flow resynchronized: generation=%u count=%u",
+                         static_cast<unsigned>(generation), resyncs);
+            } else {
+                ++resync_errors;
+                ESP_LOGW(TAG, "AFE flow reset failed: generation=%u count=%u status=%d vad_status=%d",
+                         static_cast<unsigned>(generation), resync_errors, reset, reset_vad);
+                if (resync_errors >= 3) {
+                    SetErrorLocked("AFE buffer recovery failed");
+                    mode_ = Mode::kIdle;
+                    afe_fetch_stopping_ = true;
+                }
+            }
+            waiting_since_us = 0;
+            stall_reported = false;
+            xSemaphoreGive(mutex_);
+            vTaskDelay(reset == 1 && reset_vad == 1 ? 1 : pdMS_TO_TICKS(100));
+            continue;
+        }
+        const bool resync_draining = active && afe_resync_pending_ && afe_feed_active_;
+        const bool ready = afe_credit_bytes_ >= afe_fetch_bytes_;
+        // 取消或重同步等待旧 feed 时保留消费者；不能让 producer 等 reader、reader 等 producer。
+        const bool fed = afe_feed_started_ && (ready || !active || resync_draining);
+        if (!stopping && active && !fed) {
+            const int64_t now = esp_timer_get_time();
+            if (waiting_since_us == 0) waiting_since_us = now;
+            if (!stall_reported && now - waiting_since_us >= kAfeStallUs) {
+                stall_reported = true;
+                ++stalls;
+                InvalidateAfeContinuityLocked();
+                ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u",
+                         output_started ? "running" : "warmup", static_cast<unsigned>(generation),
+                         stalls, afe_feed_calls_, afe_feed_returns_, static_cast<unsigned>(afe_credit_bytes_));
+            }
+        }
+        if (!stopping && fed) {
+            // 预扣完整 chunk。异常 fetch 最多消费此 chunk，剩余 credit 仍是库存的保守下界。
+            if (ready) afe_credit_bytes_ -= afe_fetch_bytes_;
+            waiting_since_us = 0;
+            stall_reported = false;
+            if (!fetch_started) {
+                fetch_started = true;
+                ESP_LOGI(TAG, "AFE first fetch: generation=%u elapsed_ms=%lld feeds=%u returns=%u credits=%u",
+                         static_cast<unsigned>(generation),
+                         static_cast<long long>((esp_timer_get_time() - afe_started_us_) / 1000),
+                         afe_feed_calls_, afe_feed_returns_, static_cast<unsigned>(afe_credit_bytes_));
+            }
+        }
         xSemaphoreGive(mutex_);
         if (stopping) break;
         if (!fed) {
@@ -1038,12 +1179,26 @@ void VoiceAudioFrontend::AfeFetchTask() {
             vTaskDelay(1);
             continue;
         }
+        if (resync_draining || afe_resync_pending_) {
+            ++resync_discarded;
+            xSemaphoreGive(mutex_);
+            vTaskDelay(1);
+            continue;
+        }
         const bool invalid = result == nullptr || result->ret_value != ESP_OK ||
                              result->data == nullptr || result->data_size <= 0 ||
-                             result->data_size % sizeof(int16_t) != 0;
+                             static_cast<size_t>(result->data_size) != afe_fetch_bytes_;
         if (invalid) {
-            conversation_assembler_.InvalidateContinuity();
-            aec_diagnostic_capture_.MarkDiscontinuity(false, generation);
+            InvalidateAfeContinuityLocked();
+            afe_uncertain_bytes_ = std::min(afe_capacity_bytes_, afe_uncertain_bytes_ + afe_fetch_bytes_);
+            if (afe_uncertain_bytes_ >= kAfeMaxUncertainFrames * afe_fetch_bytes_)
+                afe_resync_pending_ = true;
+        } else if (!output_started) {
+            output_started = true;
+            ESP_LOGI(TAG, "AFE first output: generation=%u elapsed_ms=%lld feeds=%u returns=%u bytes=%d",
+                     static_cast<unsigned>(generation),
+                     static_cast<long long>((esp_timer_get_time() - afe_started_us_) / 1000),
+                     afe_feed_calls_, afe_feed_returns_, result->data_size);
         }
         xSemaphoreGive(mutex_);
         if (invalid) {
@@ -1062,6 +1217,9 @@ void VoiceAudioFrontend::AfeFetchTask() {
     }
     ESP_LOGI(TAG, "AFE fetch stopped: generation=%u current_failures=%u cancelled_results=%u",
              static_cast<unsigned>(generation), fetch_errors, cancelled_results);
+    ESP_LOGI(TAG, "AFE flow stopped: generation=%u feed_errors=%u stalls=%u resyncs=%u resync_discarded=%u credits=%u uncertain=%u",
+             static_cast<unsigned>(generation), afe_feed_errors_, stalls, resyncs, resync_discarded,
+             static_cast<unsigned>(afe_credit_bytes_), static_cast<unsigned>(afe_uncertain_bytes_));
     // The lifecycle owner joins and deletes this task before destroying AFE.
     vTaskSuspend(nullptr);
 }
@@ -1223,6 +1381,11 @@ void VoiceAudioFrontend::SetErrorLocked(const char* error) {
                       ? error
                       : "Voice audio frontend error";
     ESP_LOGW(TAG, "%s", last_error_.c_str());
+}
+
+void VoiceAudioFrontend::InvalidateAfeContinuityLocked() {
+    conversation_assembler_.InvalidateContinuity();
+    aec_diagnostic_capture_.MarkDiscontinuity(false, afe_generation_);
 }
 
 std::string VoiceAudioFrontend::LastErrorSnapshot() const {

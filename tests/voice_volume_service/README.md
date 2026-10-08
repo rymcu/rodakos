@@ -5,6 +5,31 @@ MCP dispatcher, reconnect coordinator and output/codec adapter. It drives `Start
 `StopInteraction` and the transport's installed inbound callback. It does not copy lifecycle
 guards or add a test-only production friend.
 
+## 034 phase snapshot and terminal capture failure
+
+The added cases exercise the real service's Idle (before Init and after Deinit), Connecting,
+Listening, Speaking and Error phases. A thread-local host `operator new` linker wrapper observes
+zero allocation requests from `GetPhaseSnapshot`, including a 1024-byte diagnostic message;
+the complete `GetState` remains a positive allocation control using the real transport/recorder
+name lengths. These are host allocation requests, not ESP32 internal-heap measurements.
+
+The actual I/O loop distinguishes an empty queue with a running recorder from terminal capture
+failure in Listening/Speaking, releases focus and transport, permits restart and preserves a
+concurrent normal Stop. AFE warmup and resynchronization must keep `IsRunning()` true. The terminal
+failure uses a fixed message and never reads a mutable recorder error pointer.
+
+Only `delayed_recording_failure.cc` uses `-fno-access-control`, to deliver an old captured failure
+to the real private cleanup endpoint after public Start/reconnect/restart operations. It never
+reads or writes private state, and the production TU retains normal access checks. This tests the
+final interaction/transport guard; it does not claim public I/O and reconnect run in parallel.
+
+`run_capture_controls.py --idf-path <idf> --output <new-directory>` requires precise assertion
+failures from five complete-TU mutations: allocating phase getter, missing terminal handling,
+missing transport guard, wake copying a full snapshot, and missing wake-generation recheck.
+Compiler failures, timeouts and unrelated crashes are not detection. The explicit historical
+self-delete control uses `RODAK_ASSISTANT_LEGACY_BASELINE=ON` to exclude tests for APIs absent
+from that unchanged old header; current tests and mutation controls keep it OFF.
+
 The task runtime links `tests/task_retirement`: the complete pinned ESP-IDF 6.0.2 WithCaps
 creation/deletion chain and production retirement registry, with host scheduler/allocator/core fakes.
 The old no-op self-delete headers have been removed. Other host fakes supply mutexes, a silent recorder,

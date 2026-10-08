@@ -51,7 +51,9 @@ CTest 名称为 `rodakos_voice_audio_frontend_identity` 与
 
 这些用例不验证目标芯片调度延迟、物理输入关闭、声学结果或所有 heap 全面回收。
 AFE fetch 仍使用原有外部删除顺序；wake_notify 保留 internal 栈与原有 callback 策略。
-033 的 fetch 取消分类、feed 排空与真实 PCM 连续性测试见 [AFE 生命周期回归](afe-lifecycle.md)。
+033 的 fetch 取消分类、feed 排空与真实 PCM 连续性，以及 034 的完整输出字节账本、
+停滞诊断和有限自动重同步见 [AFE 生命周期回归](afe-lifecycle.md)。主目标当前共 35 项；
+`RODAK_FRONTEND_DEVICE_AEC=OFF` 独立构建用命名格式用例验证关闭 AEC 的 160 样本输入合同。
 
 ## 033 MultiNet 命令表所有权
 

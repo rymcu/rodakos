@@ -1,4 +1,6 @@
 #include "host_runtime.h"
+#include "allocation_probe.h"
+#include "delayed_recording_failure.h"
 #include "test_framework.h"
 #include "task_retirement_host.h"
 #include "phone_os/task-retirement.h"
@@ -65,11 +67,18 @@ public:
     void Deinit() override { running = false; if (on_deinit) on_deinit(); }
     bool Start(const rodakos::VoiceRecorderConfig&) override { running = true; return true; }
     void Stop() override { running = false; }
-    bool IsRunning() const override { return running; }
-    bool PopFrame(rodakos::VoicePcmFrame&) override { return false; }
-    const char* name() const override { return "host-recorder"; }
+    bool IsRunning() const override {
+        const bool snapshot = running;
+        if (on_running_snapshot) on_running_snapshot();
+        return snapshot;
+    }
+    bool PopFrame(rodakos::VoicePcmFrame&) override { ++empty_polls; return false; }
+    const char* name() const override { return "esp-sr-multinet"; }
     const char* last_error() const override { return "host recorder error"; }
     std::function<void()> on_deinit;
+    std::function<void()> on_running_snapshot;
+    std::atomic<unsigned> empty_polls{0};
+    void FailCapture() { running = false; }
 private:
     std::atomic<bool> running{false};
 };
@@ -144,7 +153,7 @@ public:
         handler = std::move(value);
     }
     void SetMcpEndpointAvailable(bool value) override { mcp_available = value; }
-    const char* name() const override { return "host-transport"; }
+    const char* name() const override { return "rodak-realtime-voice"; }
     std::string last_error() const override { return "host transport error"; }
     rodakos::VoiceTransportFailure last_failure() const override { return failure; }
 
@@ -271,6 +280,140 @@ struct Fixture {
     rodakos::VoiceAssistantService service{focus, transport, recorder, output};
 };
 }
+
+#ifndef RODAK_ASSISTANT_LEGACY_BASELINE
+RODAK_TEST("phase snapshot follows real assistant phases without allocating diagnostic strings") {
+    Fixture f;
+    const std::string long_message(1024, 'm');
+    const auto check_phase = [&](rodakos::VoiceAssistantPhase expected) {
+        rodakos_test::BeginAllocationProbe();
+        const auto phase = f.service.GetPhaseSnapshot();
+        const auto narrow = rodakos_test::EndAllocationProbe();
+        RODAK_CHECK_EQ(phase, expected);
+        RODAK_CHECK_EQ(narrow.count, 0u);
+        rodakos_test::BeginAllocationProbe();
+        const auto full = f.service.GetState();
+        const auto copied = rodakos_test::EndAllocationProbe();
+        RODAK_CHECK_EQ(full.phase, phase);
+        RODAK_CHECK(copied.count > 0);
+        if (expected != rodakos::VoiceAssistantPhase::kIdle) {
+            RODAK_CHECK_EQ(full.message, long_message);
+            RODAK_CHECK(copied.bytes >= long_message.size() + 1);
+        }
+    };
+    RODAK_CHECK_FALSE(f.service.GetState().initialized);
+    check_phase(rodakos::VoiceAssistantPhase::kIdle);
+    RODAK_CHECK(f.service.Init());
+    check_phase(rodakos::VoiceAssistantPhase::kIdle);
+    f.service.MarkConnecting(long_message.c_str());
+    check_phase(rodakos::VoiceAssistantPhase::kConnecting);
+    f.service.MarkListening(long_message.c_str());
+    check_phase(rodakos::VoiceAssistantPhase::kListening);
+    f.service.MarkSpeaking(long_message.c_str());
+    check_phase(rodakos::VoiceAssistantPhase::kSpeaking);
+    f.service.MarkError(long_message);
+    check_phase(rodakos::VoiceAssistantPhase::kError);
+    f.service.Deinit();
+    check_phase(rodakos::VoiceAssistantPhase::kIdle);
+}
+
+RODAK_TEST("empty capture queue keeps the real assistant listening while recorder runs") {
+    Fixture f;
+    f.StartInitialized();
+    const auto before = f.recorder.empty_polls.load();
+    RODAK_CHECK(WaitUntil([&] { return f.recorder.empty_polls.load() >= before + 3; }));
+    const auto state = f.service.GetState();
+    RODAK_CHECK_EQ(state.phase, rodakos::VoiceAssistantPhase::kListening);
+    RODAK_CHECK(state.recorder_active && state.transport_active && state.focus_active);
+    RODAK_CHECK_FALSE(state.stopping);
+}
+
+RODAK_TEST("terminal capture failure exits real listening and speaking then permits restart") {
+    for (const bool speaking : {false, true}) {
+        Fixture f;
+        f.StartInitialized();
+        if (speaking) f.service.MarkSpeaking("Speaking");
+        f.recorder.FailCapture();
+        const bool failed = WaitUntil([&] {
+            const auto state = f.service.GetState();
+            return state.phase == rodakos::VoiceAssistantPhase::kError && !state.stopping;
+        });
+        const auto state = f.service.GetState();
+        RODAK_CHECK(failed);
+        RODAK_CHECK_EQ(state.message, "Voice capture stopped unexpectedly");
+        RODAK_CHECK_EQ(state.diagnostic, rodakos::CloudDiagnosticCode::kVoiceUnavailable);
+        RODAK_CHECK_FALSE(state.recorder_active || state.transport_active || state.focus_active);
+        RODAK_CHECK_FALSE(f.transport.IsAudioChannelOpen());
+        RODAK_CHECK(f.Start());
+        RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kListening);
+    }
+}
+
+RODAK_TEST("normal Stop wins over a delayed terminal recorder observation") {
+    Fixture f;
+    retirement_host::Gate observation;
+    std::atomic<bool> armed{false};
+    f.recorder.on_running_snapshot = [&] {
+        if (retirement_host::IsWorkerTask() && armed.exchange(false)) observation.Enter();
+    };
+    f.StartInitialized();
+    RODAK_CHECK(rodakos_test::PauseWorkers());
+    f.recorder.FailCapture();
+    armed = true;
+    rodakos_test::ResumeWorkers();
+    const bool observed = observation.Wait();
+    std::thread stop([&] { f.service.StopInteraction(); });
+    const bool stopping = WaitUntil([&] { return f.service.GetState().stopping; });
+    observation.Release();
+    stop.join();
+    f.recorder.on_running_snapshot = {};
+    const auto state = f.service.GetState();
+    RODAK_CHECK(observed && stopping);
+    RODAK_CHECK_EQ(state.phase, rodakos::VoiceAssistantPhase::kIdle);
+    RODAK_CHECK_EQ(state.message, "Ready");
+    RODAK_CHECK_FALSE(state.stopping || state.focus_active || state.recorder_active);
+}
+
+RODAK_TEST("delayed capture failure endpoint rejects an old transport after real reconnect") {
+    Fixture f;
+    uint32_t interaction = 0;
+    RODAK_CHECK(f.service.StartInteraction(
+        rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &interaction));
+    const auto old_transport = f.transport.connection_generation();
+    f.transport.FailConnection();
+    RODAK_CHECK(WaitUntil([&] {
+        return f.transport.connection_generation() != old_transport &&
+               f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    }));
+    uint32_t unchanged_interaction = 0;
+    RODAK_CHECK(f.service.StartInteraction(
+        rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &unchanged_interaction));
+    RODAK_CHECK_EQ(unchanged_interaction, interaction);
+    rodakos_test::SubmitDelayedRecordingFailure(f.service, interaction, old_transport);
+    const auto state = f.service.GetState();
+    RODAK_CHECK_EQ(state.phase, rodakos::VoiceAssistantPhase::kListening);
+    RODAK_CHECK(state.transport_active && state.recorder_active && state.focus_active);
+    RODAK_CHECK_FALSE(state.stopping);
+}
+
+RODAK_TEST("delayed capture failure endpoint rejects an old interaction after restart") {
+    Fixture f;
+    uint32_t old_interaction = 0, new_interaction = 0;
+    RODAK_CHECK(f.service.StartInteraction(
+        rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &old_interaction));
+    const auto old_transport = f.transport.connection_generation();
+    f.service.StopInteraction();
+    RODAK_CHECK(f.service.StartInteraction(
+        rodakos::VoiceAssistantTrigger::kWakeWord, "", {}, &new_interaction));
+    RODAK_CHECK_NE(old_interaction, new_interaction);
+    rodakos_test::SubmitDelayedRecordingFailure(f.service, old_interaction, old_transport);
+    const auto state = f.service.GetState();
+    RODAK_CHECK_EQ(state.phase, rodakos::VoiceAssistantPhase::kListening);
+    RODAK_CHECK(state.transport_active && state.recorder_active && state.focus_active);
+    RODAK_CHECK_FALSE(state.stopping);
+}
+
+#endif
 
 RODAK_TEST("Voice service retains initialize received synchronously during channel open") {
     Fixture f;

@@ -586,7 +586,7 @@ extern "C" void app_main(void) {
             }
             if (command == "wake") {
                 return voice_audio_frontend.QueueDiagnosticCommand([]() {
-                    if (voice_assistant_service.GetState().phase ==
+                    if (voice_assistant_service.GetPhaseSnapshot() ==
                             rodakos::VoiceAssistantPhase::kSpeaking ||
                         voice_audio_frontend.ArmDiagnosticAudio()) {
                         voice_wake_service.NotifyWakeWordDetected("USB simulated wake");

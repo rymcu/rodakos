@@ -15,6 +15,17 @@ struct VoiceAssistantState {
 };
 class VoiceAssistantService {
 public:
+    VoiceAssistantPhase GetPhaseSnapshot() {
+        VoiceAssistantPhase phase;
+        std::function<void()> hook;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            phase = state.phase;
+            hook = get_phase_hook;
+        }
+        if (hook) hook();
+        return phase;
+    }
     VoiceAssistantState GetState() {
         VoiceAssistantState snapshot;
         std::function<void()> hook;
@@ -43,6 +54,7 @@ public:
     std::mutex mutex;
     VoiceAssistantState state;
     std::function<void()> get_state_hook;
+    std::function<void()> get_phase_hook;
     std::function<void()> stop_hook;
     unsigned starts = 0;
     unsigned stops = 0;

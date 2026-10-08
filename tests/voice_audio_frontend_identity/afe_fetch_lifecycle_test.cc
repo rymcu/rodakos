@@ -70,7 +70,7 @@ control::FetchReply Pcm(size_t samples, int16_t value) {
 RODAK_TEST("AFE cancelled failure is accounted separately from active fetch errors") {
     Fixture fixture;
     const auto pending = control::QueueFetch({});
-    frontend_host::SupplyAudioReads(1);
+    frontend_host::SupplyAudioReads(3);
     RODAK_CHECK(fixture.frontend.Start({}));
     RODAK_CHECK(control::WaitFetchEntered(pending));
     RODAK_CHECK(fixture.frontend.ArmAecDiagnosticCapture(1000));
@@ -99,8 +99,8 @@ RODAK_TEST("AFE cancelled failure is accounted separately from active fetch erro
 
 RODAK_TEST("AFE cancelled valid PCM never enters the next recording generation") {
     Fixture fixture;
-    const auto pending = control::QueueFetch(Pcm(320, 17));
-    frontend_host::SupplyAudioReads(1);
+    const auto pending = control::QueueFetch(Pcm(512, 17));
+    frontend_host::SupplyAudioReads(3);
     RODAK_CHECK(fixture.frontend.Start({}));
     RODAK_CHECK(control::WaitFetchEntered(pending));
     RODAK_CHECK(fixture.frontend.ArmAecDiagnosticCapture(1000));
@@ -118,10 +118,13 @@ RODAK_TEST("AFE cancelled valid PCM never enters the next recording generation")
     RODAK_CHECK_EQ(fixture.frontend.GetAecDiagnosticCaptureStatus().afe_samples, size_t{0});
     RODAK_CHECK_EQ(control::DestroyDuringOperationCount(), size_t{0});
 
+    // The fake exhausted reader returns an I/O failure with a 100ms retry. Retire it
+    // before this clean-generation assertion so it cannot inject a real warmup gap.
+    fixture.frontend.Deinit();
     control::BeginScript();
-    const auto fresh = control::QueueFetch(Pcm(320, 42));
+    const auto fresh = control::QueueFetch(Pcm(512, 42));
     const auto sentinel = control::QueueFetch({});
-    frontend_host::SupplyAudioReads(1);
+    frontend_host::SupplyAudioReads(4);
     RODAK_CHECK(fixture.frontend.Start({}));
     RODAK_CHECK(control::WaitFetchEntered(fresh));
     control::ReleaseFetch(fresh);
@@ -134,15 +137,18 @@ RODAK_TEST("AFE cancelled valid PCM never enters the next recording generation")
 
 RODAK_TEST("AFE active fetch error preserves PCM while marking only the gap frame invalid") {
     Fixture fixture;
-    const auto before = control::QueueFetch(Pcm(160, 17));
+    const auto before = control::QueueFetch(Pcm(512, 17));
     const auto failure = control::QueueFetch({});
-    const auto after = control::QueueFetch(Pcm(160, 23));
-    const auto normal = control::QueueFetch(Pcm(320, 42));
+    const auto after = control::QueueFetch(Pcm(512, 23));
+    const auto normal = control::QueueFetch(Pcm(512, 42));
+    const auto normal_tail = control::QueueFetch(Pcm(512, 42));
     const auto sentinel = control::QueueFetch({});
-    frontend_host::SupplyAudioReads(1);
-    RODAK_CHECK(fixture.frontend.Start({}));
+    frontend_host::SupplyAudioReads(11);
+    rodakos::VoiceRecorderConfig config;
+    config.frame_duration_ms = 64;
+    RODAK_CHECK(fixture.frontend.Start(config));
     RODAK_CHECK(fixture.frontend.ArmAecDiagnosticCapture(1000));
-    for (const auto ticket : {before, failure, after, normal}) {
+    for (const auto ticket : {before, failure, after, normal, normal_tail}) {
         RODAK_CHECK(control::WaitFetchEntered(ticket));
         control::ReleaseFetch(ticket);
     }
@@ -150,17 +156,17 @@ RODAK_TEST("AFE active fetch error preserves PCM while marking only the gap fram
     RODAK_CHECK_EQ(control::RejectedWarningCount(), size_t{1});
     const auto diagnostic = fixture.frontend.GetAecDiagnosticCaptureStatus();
     RODAK_CHECK_EQ(diagnostic.afe_discontinuities, 1U);
-    RODAK_CHECK_EQ(diagnostic.afe_samples, size_t{640});
+    RODAK_CHECK_EQ(diagnostic.afe_samples, size_t{2048});
     rodakos::VoicePcmFrame frame;
     RODAK_CHECK(fixture.frontend.PopFrame(frame));
-    std::vector<int16_t> expected(160, 17);
-    expected.insert(expected.end(), 160, 23);
+    std::vector<int16_t> expected(512, 17);
+    expected.insert(expected.end(), 512, 23);
     RODAK_CHECK(frame.samples == expected);
     std::printf("AFE_GAP_OBSERVED samples=%zu vad_valid=%d current_errors=%zu\n",
                 frame.samples.size(), frame.vad_valid, control::RejectedWarningCount());
     RODAK_CHECK_FALSE(frame.vad_valid);
     RODAK_CHECK(fixture.frontend.PopFrame(frame));
-    RODAK_CHECK(frame.samples == std::vector<int16_t>(320, 42));
+    RODAK_CHECK(frame.samples == std::vector<int16_t>(1024, 42));
     RODAK_CHECK(frame.vad_valid);
     RODAK_CHECK_FALSE(fixture.frontend.PopFrame(frame));
     const auto generation = Generation(fixture.frontend);
@@ -178,11 +184,11 @@ RODAK_TEST("AFE cancellation keeps fetching until the blocked feed lease can dra
     Fixture fixture;
     const auto first = control::QueueFetch({});
     const auto draining = control::QueueFetch({});
-    control::BlockFeedUntilFetch(2, 2);
-    frontend_host::SupplyAudioReads(2);
+    control::BlockFeedUntilFetch(4, 2);
+    frontend_host::SupplyAudioReads(4);
     RODAK_CHECK(fixture.frontend.Start({}));
     RODAK_CHECK(control::WaitFetchEntered(first));
-    RODAK_CHECK(control::WaitFeedBlocked(2));
+    RODAK_CHECK(control::WaitFeedBlocked(4));
     const auto generation = Generation(fixture.frontend);
     Stopper stopper(fixture.frontend);
     const bool generation_changed = WaitUntil([&] {
@@ -211,12 +217,12 @@ RODAK_TEST("AFE diagnostic input EOF keeps zero feed and active errors remain ob
     RODAK_CHECK(fixture.frontend.LoadDiagnosticAudio(chunk));
     RODAK_CHECK(fixture.frontend.ArmDiagnosticAudio());
     const auto failure = control::QueueFetch({});
-    const auto recovered = control::QueueFetch(Pcm(320, 29));
+    const auto recovered = control::QueueFetch(Pcm(512, 29));
     const auto sentinel = control::QueueFetch({});
     RODAK_CHECK(fixture.frontend.Start({}));
-    frontend_host::SupplyAudioReads(2);
+    frontend_host::SupplyAudioReads(6);
     RODAK_CHECK(control::WaitFetchEntered(failure));
-    const bool fed = WaitUntil([] { return control::FedMicrophoneSamples().size() == 640; });
+    const bool fed = WaitUntil([] { return control::FedMicrophoneSamples().size() == 1792; });
     control::ReleaseFetch(failure);
     RODAK_CHECK(control::WaitFetchEntered(recovered));
     RODAK_CHECK_EQ(control::RejectedWarningCount(), size_t{1});
@@ -229,7 +235,7 @@ RODAK_TEST("AFE diagnostic input EOF keeps zero feed and active errors remain ob
     RODAK_CHECK_FALSE(frame.vad_valid);
     RODAK_CHECK(fed);
     auto expected = std::vector<int16_t>(256, 11);
-    expected.resize(640, 0);
+    expected.resize(1792, 0);
     RODAK_CHECK(control::FedMicrophoneSamples() == expected);
     const auto generation = Generation(fixture.frontend);
     Stopper stopper(fixture.frontend);

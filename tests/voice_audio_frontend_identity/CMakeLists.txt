@@ -21,11 +21,26 @@ foreach(CONTRACT IN LISTS MN_CONTRACT_FILES)
         message(FATAL_ERROR "ESP-SR 2.2.2 MultiNet ownership contract changed: ${RELATIVE_PATH}")
     endif()
 endforeach()
+# 输出字节账本依赖 1MIC 的固定 feed/fetch/ring/WebRTC 二进制合同；升级须重新反汇编。
+set(AFE_CONTRACT_FILES
+    "lib/esp32s3/libesp_audio_front_end.a|0f8b45d5fe9267479dbe9a35148b4f0820ae61375d134a886215f535d6fac2dd"
+    "lib/esp32s3/libesp_audio_processor.a|9499e6548944fc39b40b0246719e7a7446d2e839f72f50a9a35e718785334178"
+    "lib/esp32s3/libdl_lib.a|0299cea1f4fde129641069c9d180ca92b5657c9c780693dfe961f2b3d7111d8f")
+foreach(CONTRACT IN LISTS AFE_CONTRACT_FILES)
+    string(REPLACE "|" ";" PARTS "${CONTRACT}")
+    list(GET PARTS 0 RELATIVE_PATH)
+    list(GET PARTS 1 EXPECTED_HASH)
+    file(SHA256 "${ESP_SR_ROOT}/${RELATIVE_PATH}" ACTUAL_HASH)
+    if(NOT ACTUAL_HASH STREQUAL EXPECTED_HASH)
+        message(FATAL_ERROR "ESP-SR 2.2.2 AFE output contract changed: ${RELATIVE_PATH}")
+    endif()
+endforeach()
 set(RODAK_VOICE_FRONTEND_SOURCE "${RODAKOS_ROOT}/main/phone_os/voice_audio_frontend.cc"
     CACHE FILEPATH "Complete production frontend TU or frozen negative control")
 set(RODAK_VOICE_FRONTEND_INCLUDE_ROOT "" CACHE PATH "Frozen matching frontend header override")
 option(RODAK_FRONTEND_LEGACY_PROBE "Compile only the legacy-compatible retirement probe" OFF)
 option(RODAK_FRONTEND_NEGATIVE_CHILD "Skip recursive negative controls" OFF)
+option(RODAK_FRONTEND_DEVICE_AEC "Exercise the compiled device AEC input contract" ON)
 add_subdirectory("${RODAKOS_ROOT}/tests/task_retirement" "task_retirement")
 
 add_executable(rodakos_voice_audio_frontend_identity_tests
@@ -36,6 +51,7 @@ add_executable(rodakos_voice_audio_frontend_identity_tests
     host_runtime.cc
     afe_fetch_control.cc
     afe_fetch_lifecycle_test.cc
+    afe_output_flow_test.cc
     mn_runtime.cc
     mn_registry.c
     mn_ownership_test.cc
@@ -47,7 +63,7 @@ target_compile_features(rodakos_voice_audio_frontend_identity_tests PRIVATE cxx_
 target_compile_definitions(rodakos_voice_audio_frontend_identity_tests PRIVATE
     RODAK_ESP_SR_COMMANDS_SOURCE="${ESP_SR_ROOT}/src/esp_mn_speech_commands.c"
     CONFIG_SOC_CPU_CORES_NUM=2
-    CONFIG_USE_DEVICE_AEC=0)
+    CONFIG_USE_DEVICE_AEC=$<BOOL:${RODAK_FRONTEND_DEVICE_AEC}>)
 if(RODAK_FRONTEND_LEGACY_PROBE)
     target_compile_definitions(rodakos_voice_audio_frontend_identity_tests PRIVATE
         RODAK_FRONTEND_LEGACY_PROBE=1)

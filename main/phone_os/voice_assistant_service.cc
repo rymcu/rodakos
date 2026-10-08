@@ -593,6 +593,16 @@ void VoiceAssistantService::MarkError(const std::string& message) {
         VoiceAssistantPhase::kError, message.empty() ? "Error" : message);
 }
 
+VoiceAssistantPhase VoiceAssistantService::GetPhaseSnapshot() {
+    if (mutex_ == nullptr) {
+        return VoiceAssistantPhase::kIdle;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const VoiceAssistantPhase phase = phase_;
+    xSemaphoreGive(mutex_);
+    return phase;
+}
+
 VoiceAssistantState VoiceAssistantService::GetState() {
     VoiceAssistantState state;
     if (mutex_ == nullptr) {
@@ -652,7 +662,8 @@ void VoiceAssistantService::FinishTransportFailure(const VoiceTransportFailure& 
 void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
                                                const std::string& message,
                                                uint32_t expected_generation,
-                                               CloudDiagnosticCode diagnostic) {
+                                               CloudDiagnosticCode diagnostic,
+                                               uint32_t expected_recording_transport_generation) {
     if (mutex_ == nullptr) {
         return;
     }
@@ -671,6 +682,15 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (expected_generation != 0 && interaction_generation_ != expected_generation) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    // A delayed capture failure must not cancel a reconnect or a legitimate recorder stop.
+    if (expected_recording_transport_generation != 0 &&
+        (!initialized_ || deinitializing_ || stopping_ || !io_running_ ||
+         !transport_active_ || !recorder_active_ ||
+         transport_generation_ != expected_recording_transport_generation ||
+         (phase_ != VoiceAssistantPhase::kListening && phase_ != VoiceAssistantPhase::kSpeaking))) {
         xSemaphoreGive(mutex_);
         return;
     }
@@ -1590,11 +1610,17 @@ bool VoiceAssistantService::HasTerminalInboundEventLocked() const {
 }
 
 bool VoiceAssistantService::SendNextAudioFrame() {
+    uint32_t interaction_generation = 0;
     uint32_t transport_generation = 0;
     bool transport_active = false;
+    bool recording_expected = false;
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    interaction_generation = interaction_generation_;
     transport_generation = transport_generation_;
     transport_active = transport_active_;
+    recording_expected = initialized_ && !deinitializing_ && !stopping_ && io_running_ &&
+        transport_active_ && recorder_active_ &&
+        (phase_ == VoiceAssistantPhase::kListening || phase_ == VoiceAssistantPhase::kSpeaking);
     xSemaphoreGive(mutex_);
     if (!transport_active || transport_generation == 0) {
         return false;
@@ -1602,6 +1628,11 @@ bool VoiceAssistantService::SendNextAudioFrame() {
 
     VoicePcmFrame frame;
     if (!recorder_.PopFrame(frame)) {
+        if (recording_expected && !recorder_.IsRunning()) {
+            FinishInteraction(VoiceAssistantPhase::kError, "Voice capture stopped unexpectedly",
+                              interaction_generation, CloudDiagnosticCode::kVoiceUnavailable,
+                              transport_generation);
+        }
         return false;
     }
 

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -19,6 +20,13 @@ namespace {
 std::mutex state_mutex;
 size_t supplied_audio_reads = 0;
 size_t afe_feed_count = 0;
+std::condition_variable input_changed;
+size_t audio_read_calls = 0;
+size_t block_audio_read = 0;
+bool audio_read_blocked = false;
+size_t audio_read_release_through = 0;
+bool audio_reads_released = false;
+int16_t audio_sample_value = 250;
 
 
 }
@@ -32,6 +40,10 @@ void Reset() {
     afe_fetch::ResetToDefault();
     std::lock_guard<std::mutex> lock(state_mutex);
     supplied_audio_reads = afe_feed_count = 0;
+    audio_read_calls = block_audio_read = 0;
+    audio_read_blocked = audio_reads_released = false;
+    audio_read_release_through = 0;
+    audio_sample_value = 250;
 }
 
 void SupplyAudioReads(size_t count) {
@@ -41,6 +53,29 @@ void SupplyAudioReads(size_t count) {
 size_t AfeFeedCount() {
     std::lock_guard<std::mutex> lock(state_mutex);
     return afe_feed_count;
+}
+void BlockAudioReadAt(size_t call) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    block_audio_read = call;
+    audio_read_blocked = false;
+}
+bool WaitAudioReadBlocked() {
+    std::unique_lock<std::mutex> lock(state_mutex);
+    return input_changed.wait_for(lock, std::chrono::seconds(3), [] { return audio_read_blocked; });
+}
+void ReleaseAudioRead() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    audio_read_release_through = audio_read_calls;
+    input_changed.notify_all();
+}
+void ReleaseAllAudioReads() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    audio_reads_released = true;
+    input_changed.notify_all();
+}
+void SetAudioSampleValue(int16_t value) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    audio_sample_value = value;
 }
 }
 
@@ -57,10 +92,19 @@ bool AudioCodecInput::OpenForOwner(const char*, int, uint32_t, uint16_t, uint16_
                                    uint16_t, InputGainProfile) { return true; }
 void AudioCodecInput::CloseForOwner(const char*) {}
 bool AudioCodecInput::ReadForOwner(const char*, void* output, int bytes) {
-    std::lock_guard<std::mutex> lock(state_mutex);
+    std::unique_lock<std::mutex> lock(state_mutex);
     if (supplied_audio_reads == 0) return false;
     --supplied_audio_reads;
-    std::fill_n(static_cast<int16_t*>(output), bytes / sizeof(int16_t), int16_t{250});
+    const auto sample_value = audio_sample_value;
+    const auto read_call = ++audio_read_calls;
+    if (read_call == block_audio_read) {
+        audio_read_blocked = true;
+        input_changed.notify_all();
+        input_changed.wait(lock, [read_call] {
+            return audio_reads_released || audio_read_release_through >= read_call;
+        });
+    }
+    std::fill_n(static_cast<int16_t*>(output), bytes / sizeof(int16_t), sample_value);
     return true;
 }
 bool AudioCodecInput::IsOpen() const { return false; }
@@ -74,7 +118,7 @@ void afe_config_free(afe_config_t* config) { delete config; }
 const esp_afe_sr_iface_t* esp_afe_handle_from_config(afe_config_t*) {
     static esp_afe_sr_iface_t afe{
         [](afe_config_t*) { return new esp_afe_sr_data_t; },
-        [](esp_afe_sr_data_t*) { return 320; },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::FeedChunkSamples(); },
         [](esp_afe_sr_data_t*) { return 2; },
         [](esp_afe_sr_data_t* data) {
             rodakos_test::afe_fetch::OnDestroy();
@@ -86,10 +130,15 @@ const esp_afe_sr_iface_t* esp_afe_handle_from_config(afe_config_t*) {
                 std::lock_guard<std::mutex> lock(state_mutex);
                 ++afe_feed_count;
             }
-            rodakos_test::afe_fetch::OnFeed(buffer);
+            return rodakos_test::afe_fetch::OnFeed(buffer);
         },
         [](esp_afe_sr_data_t*, TickType_t timeout) -> afe_fetch_result_t* {
             return rodakos_test::afe_fetch::OnFetch(timeout);
-        }};
+        },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::FetchChunkSamples(); },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::ResetBuffer(); },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::ResetVad(); },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::FetchChannels(); },
+        [](esp_afe_sr_data_t*) { return rodakos_test::afe_fetch::SampleRate(); }};
     return &afe;
 }
