@@ -38,10 +38,13 @@ endforeach()
 set(RODAK_VOICE_FRONTEND_SOURCE "${RODAKOS_ROOT}/main/phone_os/voice_audio_frontend.cc"
     CACHE FILEPATH "Complete production frontend TU or frozen negative control")
 set(RODAK_VOICE_FRONTEND_INCLUDE_ROOT "" CACHE PATH "Frozen matching frontend header override")
+set(RODAK_FEED_PROGRESS_SOURCE "${RODAKOS_ROOT}/main/phone_os/voice_feed_progress_observer.cc"
+    CACHE FILEPATH "Complete production feed observer TU or precise negative control")
 option(RODAK_FRONTEND_LEGACY_PROBE "Compile only the legacy-compatible retirement probe" OFF)
 option(RODAK_FRONTEND_NEGATIVE_CHILD "Skip recursive negative controls" OFF)
 option(RODAK_FRONTEND_DEVICE_AEC "Exercise the compiled device AEC input contract" ON)
 option(RODAK_FRONTEND_OBSERVATION_TESTS "Compile current diagnostic-stage integration probes" ON)
+option(RODAK_FRONTEND_TEST_OBSERVER_INTEGRATION "Compile complete TEST frontend with actual observers" OFF)
 add_subdirectory("${RODAKOS_ROOT}/tests/task_retirement" "task_retirement")
 
 add_executable(rodakos_voice_audio_frontend_identity_tests
@@ -65,6 +68,62 @@ if(RODAK_FRONTEND_OBSERVATION_TESTS)
     target_sources(rodakos_voice_audio_frontend_identity_tests PRIVATE afe_observation_test.cc)
     # Internal gate/snapshot probes only; production TU and header tokens remain unchanged.
     set_source_files_properties(afe_observation_test.cc PROPERTIES COMPILE_OPTIONS "-fno-access-control")
+endif()
+
+if(RODAK_FRONTEND_TEST_OBSERVER_INTEGRATION)
+    # Keep the ESP-sized observer mux private to this object target; retirement's
+    # pthread mux and platform symbols must never be shared across the two ABIs.
+    add_library(rodakos_frontend_observer_modules OBJECT
+        observer_platform.cc
+        "${RODAKOS_ROOT}/main/phone_os/voice_tick_observer.cc"
+        "${RODAK_FEED_PROGRESS_SOURCE}")
+    target_compile_features(rodakos_frontend_observer_modules PRIVATE cxx_std_20)
+    target_compile_definitions(rodakos_frontend_observer_modules PRIVATE RODAKOS_RELEASE_TESTS=1)
+    target_include_directories(rodakos_frontend_observer_modules PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/observer_fakes"
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${RODAKOS_ROOT}/main")
+    target_compile_options(rodakos_frontend_observer_modules PRIVATE -Wall -Wextra -Werror)
+
+    add_executable(rodakos_voice_frontend_observer_tests
+        test_main.cc frontend_observer_test.cc allocation_observer.cc host_runtime.cc
+        observation_control.cc afe_fetch_control.cc mn_runtime.cc mn_registry.c
+        "${RODAK_VOICE_FRONTEND_SOURCE}"
+        "${RODAKOS_ROOT}/main/phone_os/voice_identity.cc"
+        "${RODAKOS_ROOT}/main/phone_os/voice_pcm_assembler.cc"
+        "${RODAKOS_ROOT}/main/phone_os/voice_aec_diagnostic_capture.cc"
+        $<TARGET_OBJECTS:rodakos_frontend_observer_modules>)
+    target_compile_features(rodakos_voice_frontend_observer_tests PRIVATE cxx_std_20)
+    target_compile_definitions(rodakos_voice_frontend_observer_tests PRIVATE
+        RODAKOS_RELEASE_TESTS=1
+        RODAK_ESP_SR_COMMANDS_SOURCE="${ESP_SR_ROOT}/src/esp_mn_speech_commands.c"
+        CONFIG_SOC_CPU_CORES_NUM=2 CONFIG_USE_DEVICE_AEC=1)
+    target_include_directories(rodakos_voice_frontend_observer_tests BEFORE PRIVATE
+        "${RODAKOS_ROOT}/tests/task_retirement/fakes"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fakes" "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${RODAKOS_ROOT}/tests/app_model" "${RODAKOS_ROOT}/main")
+    target_include_directories(rodakos_voice_frontend_observer_tests PRIVATE
+        "${ESP_SR_ROOT}/include/esp32s3" "${ESP_SR_ROOT}/src/include")
+    if(RODAK_VOICE_FRONTEND_INCLUDE_ROOT)
+        target_include_directories(rodakos_voice_frontend_observer_tests BEFORE PRIVATE
+            "${RODAK_VOICE_FRONTEND_INCLUDE_ROOT}")
+    endif()
+    set_source_files_properties(frontend_observer_test.cc PROPERTIES COMPILE_OPTIONS "-fno-access-control")
+    target_link_libraries(rodakos_voice_frontend_observer_tests PRIVATE rodakos_task_retirement_host)
+    target_link_options(rodakos_voice_frontend_observer_tests PRIVATE
+        -Wl,--wrap=retirement_host_enter_critical
+        -Wl,--wrap=_ZdlPv -Wl,--wrap=_ZdlPvm
+        -Wl,--wrap=esp_mn_commands_alloc -Wl,--wrap=esp_mn_commands_free
+        -Wl,--wrap=esp_mn_commands_clear)
+    target_compile_options(rodakos_voice_frontend_observer_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME voice_frontend_test_observer_integration COMMAND rodakos_voice_frontend_observer_tests)
+    set_tests_properties(voice_frontend_test_observer_integration PROPERTIES TIMEOUT 40)
+    if(NOT RODAK_FRONTEND_NEGATIVE_CHILD)
+        add_test(NAME voice_frontend_test_observer_negative_controls
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_frontend_observer_negative.py"
+            --idf-path "${RODAKOS_IDF_PATH}"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/frontend-observer-negative-controls")
+        set_tests_properties(voice_frontend_test_observer_negative_controls PROPERTIES TIMEOUT 180)
+    endif()
 endif()
 target_compile_features(rodakos_voice_audio_frontend_identity_tests PRIVATE cxx_std_20)
 target_compile_definitions(rodakos_voice_audio_frontend_identity_tests PRIVATE

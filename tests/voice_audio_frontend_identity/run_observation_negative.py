@@ -17,17 +17,37 @@ def main():
     header = (root / 'main/phone_os/voice_audio_frontend.h').read_text()
     diagnostic = (root / 'main/phone_os/voice_afe_observation.h').read_text()
     return_marker = '''                    const int64_t api_return_us = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+                    VoiceFeedProgressSnapshot feed_progress;
+                    CloseVoiceFeedProgress(feed_progress_ticket, api_return_us, feed_progress);
+#endif
                     afe_producer_diagnostics_.Publish(AfeProducerStage::kReturnedWaitPublish, generation,
                         stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));
                     xSemaphoreTake(mutex_, portMAX_DELAY);'''
     late_return = '''                    xSemaphoreTake(mutex_, portMAX_DELAY);
                     const int64_t api_return_us = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+                    VoiceFeedProgressSnapshot feed_progress;
+                    CloseVoiceFeedProgress(feed_progress_ticket, api_return_us, feed_progress);
+#endif
                     afe_producer_diagnostics_.Publish(AfeProducerStage::kReturnedWaitPublish, generation,
                         stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));'''
     release_before_log = '''                xSemaphoreGive(mutex_);
 #if defined(RODAKOS_RELEASE_TESTS)
                 tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
                     gap.first_stall, observed_us);
+                VoiceFeedProgressSnapshot feed_progress;
+                if (producer.stage == AfeProducerStage::kApiBoundary &&
+                    producer.generation == generation && producer.epoch == epoch) {
+                    SnapshotOpenVoiceFeedProgress(generation, epoch, producer.sequence, feed_progress);
+                } else {
+                    feed_progress.identity.generation = generation;
+                    feed_progress.identity.epoch = epoch;
+                    feed_progress.identity.sequence = producer.sequence;
+                    feed_progress.status = kVoiceFeedProgressStale;
+                    feed_progress.flags = kVoiceFeedProgressProducerUnaligned | kVoiceFeedProgressArmAfterUnknown;
+                }
+                LogVoiceFeedProgress("open", feed_progress);
 #endif
                 ESP_LOGW(TAG, "AFE input stalled:'''
     after_log = '                LogAfeProducerObservation(producer, generation, epoch, stalls, gap.first_stall, observed_us);'

@@ -134,13 +134,17 @@ if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
     list(APPEND SOURCES "apps/home/home_hardware_test_population.cc")
 endif()
 
+set(VOICE_OBSERVER_LDFRAGMENTS)
 if(RODAKOS_RELEASE_TESTS)
-    list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc" "phone_os/voice_tick_observer.cc")
+    list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc" "phone_os/voice_tick_observer.cc"
+        "phone_os/voice_feed_progress_observer.cc")
+    list(APPEND VOICE_OBSERVER_LDFRAGMENTS "voice_feed_progress.lf")
 endif()
 
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS "." "rodakos_adapters" "phone_os" "phone_ui" "apps"
+    LDFRAGMENTS ${VOICE_OBSERVER_LDFRAGMENTS}
     REQUIRES
         lvgl
         esp_lvgl_port

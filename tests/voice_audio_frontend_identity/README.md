@@ -68,6 +68,40 @@ generation 关联。异常 feed 已返回、生产者 lease 尚未释放时，�
 [观察器合同](../voice_tick_observer/README.md)。本目标默认仍编译普通 OFF 前端；其通过
 不能代替 TEST 接入的目标编译、最终 IRAM/DRAM 链检查或实机观察。
 
+### 037 完整 TEST 前端接入
+
+`RODAK_FRONTEND_TEST_OBSERVER_INTEGRATION=ON` 额外构建
+`rodakos_voice_frontend_observer_tests`。原有 OFF 可执行体与默认选项不变。新目标直接编译
+完整 `RODAKOS_RELEASE_TESTS` frontend、tick observer 和 feed progress observer；SDK
+feed、音频输入及任务调度仍由 host fixture 控制。七个用例在真实 Capture / Fetch 调用路径
+检查 SDK 入口前的 arm、返回后业务锁等待前的 close、Stop 跨代隔离、非法返回后的 epoch
+重同步，以及观察期限到期不阻断 feed。另用一次真实 close TRY 失败与 between-reads 门闩，
+保留未完成但已退役的 feed slot，并验证同值 read 序号不会借用该 slot。Close 失败后的
+采样停止、真实 Deinit 删除 Capture、同 opaque 值再次出现在 tick 时不再累计，均有整合
+断言；未完成记录仍保持 retired，不被改写成完整完成。
+
+observer 单独的 object target 使用 8 B、专名的 host mux 与平台函数；完整 frontend 和
+retirement 保留原 pthread mux，两个布局不跨 TU 传递。observer timer 转发同一
+`afe_observation::NowUs()`，受控 tick 使用生产 Capture 在 retirement fixture 中的真实
+opaque handle；不建立另一套 task 身份。target / other 是注入的采样端点，不能用来
+判定真实任务的 Ready / Blocked 状态、连续 CPU 时间或设备调度根因。
+
+可在原配置命令追加 `-DRODAK_FRONTEND_TEST_OBSERVER_INTEGRATION=ON` 与
+`-DRODAK_FRONTEND_NEGATIVE_CHILD=ON`，然后定向执行：
+
+```text
+cmake --build <build> --target rodakos_voice_frontend_observer_tests
+ctest --test-dir <build> -R '^voice_frontend_test_observer_integration$' --output-on-failure
+```
+
+`run_frontend_observer_negative.py` 冻结完整 TEST frontend TU，将 arm 移到 SDK 返回后，
+将 close 移到返回后的业务锁之后，或移除 producer 阶段/域检查，必须分别命中
+`armed_before_feed`、`closed_before_publish` 与 `read_scope_rejected` 的明确断言。
+第四项编译完整 observer 变体，只删除 Close 的采样撤销；真实 frontend 必须命中
+`failed_close_stops_sampling`，而独立的 flow-stop retirement 仍须阻止 Deinit 后继续采样。
+编译失败、超时、崩溃或其他断言失败均不计为检出。
+既有 OFF 的两个 observation 负控只更新精确注入片段，原判据保留。
+
 034 的 `feeds=124 / returns=123` 只证明一次 feed 已准入、返回尚未记账，
 不能区分调用前抢占、SDK 调用内部或返回后的业务锁等待，也不能指定 TLS/DSP 根因。
 035 在普通与 `RODAKOS_RELEASE_TESTS` 固件保留同一轻量观测实现；100ms 阈值、

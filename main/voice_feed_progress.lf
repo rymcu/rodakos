@@ -1,0 +1,4 @@
+[mapping:voice_feed_progress_current_task]
+archive: libfreertos.a
+entries:
+    tasks:xTaskGetCurrentTaskHandle (noflash_text)

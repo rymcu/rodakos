@@ -44,7 +44,7 @@ for name, text, expected in mutations:
     commands = [
         ['cmake', '-S', str(Path(__file__).parent), '-B', str(build), '-G', 'Ninja',
          '-DCMAKE_BUILD_TYPE=Debug', '-DRODAK_OBSERVER_SOURCE=' + str(variant)],
-        ['cmake', '--build', str(build)],
+        ['cmake', '--build', str(build), '--target', 'voice_tick_observer_tests'],
         [str(build / 'voice_tick_observer_tests')]
     ]
     for index, command in enumerate(commands):

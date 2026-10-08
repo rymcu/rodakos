@@ -10,3 +10,12 @@ target_include_directories(voice_tick_observer_tests PRIVATE fakes "${RODAKOS_RO
 target_compile_options(voice_tick_observer_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME voice_tick_observer COMMAND voice_tick_observer_tests)
 set_tests_properties(voice_tick_observer PROPERTIES TIMEOUT 20)
+
+set(RODAK_FEED_PROGRESS_SOURCE "${RODAKOS_ROOT}/main/phone_os/voice_feed_progress_observer.cc" CACHE FILEPATH "Actual feed observer TU or precise negative")
+add_executable(voice_feed_progress_tests feed_progress_test.cc)
+target_compile_features(voice_feed_progress_tests PRIVATE cxx_std_20)
+target_compile_definitions(voice_feed_progress_tests PRIVATE RODAKOS_RELEASE_TESTS=1 RODAK_FEED_PROGRESS_SOURCE="${RODAK_FEED_PROGRESS_SOURCE}")
+target_include_directories(voice_feed_progress_tests PRIVATE fakes "${RODAKOS_ROOT}/main")
+target_compile_options(voice_feed_progress_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME voice_feed_progress COMMAND voice_feed_progress_tests)
+set_tests_properties(voice_feed_progress PROPERTIES TIMEOUT 20)

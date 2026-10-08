@@ -2,6 +2,7 @@
 
 #include "rodakos_adapters/audio_codec_input.h"
 #if defined(RODAKOS_RELEASE_TESTS)
+#include "phone_os/voice_feed_progress_observer.h"
 #include "phone_os/voice_tick_observer.h"
 #endif
 
@@ -1114,8 +1115,18 @@ void VoiceAudioFrontend::CaptureTask() {
                     const int64_t api_begin_us = esp_timer_get_time();
                     afe_producer_diagnostics_.Publish(AfeProducerStage::kApiBoundary, generation, stream_epoch,
                                                       feed_call, api_begin_us);
+#if defined(RODAKOS_RELEASE_TESTS)
+                    const auto feed_progress_ticket = ArmVoiceFeedProgress(
+                        generation, stream_epoch, feed_call,
+                        reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()),
+                        api_begin_us, afe_started_us);
+#endif
                     const int written = afe_iface_->feed(afe_data_, afe_feed_buffer.data());
                     const int64_t api_return_us = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+                    VoiceFeedProgressSnapshot feed_progress;
+                    CloseVoiceFeedProgress(feed_progress_ticket, api_return_us, feed_progress);
+#endif
                     afe_producer_diagnostics_.Publish(AfeProducerStage::kReturnedWaitPublish, generation,
                         stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));
                     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -1144,6 +1155,9 @@ void VoiceAudioFrontend::CaptureTask() {
                     const bool report_error = current && (!valid || overflow) &&
                                               (feed_errors == 1 || feed_errors % 100 == 0);
                     xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                    LogVoiceFeedProgress("complete", feed_progress, published_us);
+#endif
                     if (report_error)
                         ESP_LOGW(TAG, "AFE feed rejected: count=%u returned=%d credits=%u resync=%d",
                                  feed_errors, written, credits, resync);
@@ -1347,6 +1361,18 @@ void VoiceAudioFrontend::AfeFetchTask() {
 #if defined(RODAKOS_RELEASE_TESTS)
                 tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
                     gap.first_stall, observed_us);
+                VoiceFeedProgressSnapshot feed_progress;
+                if (producer.stage == AfeProducerStage::kApiBoundary &&
+                    producer.generation == generation && producer.epoch == epoch) {
+                    SnapshotOpenVoiceFeedProgress(generation, epoch, producer.sequence, feed_progress);
+                } else {
+                    feed_progress.identity.generation = generation;
+                    feed_progress.identity.epoch = epoch;
+                    feed_progress.identity.sequence = producer.sequence;
+                    feed_progress.status = kVoiceFeedProgressStale;
+                    feed_progress.flags = kVoiceFeedProgressProducerUnaligned | kVoiceFeedProgressArmAfterUnknown;
+                }
+                LogVoiceFeedProgress("open", feed_progress);
 #endif
                 ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u epoch=%u gap_id=%u uncertain=%u feed_active=%d resync=%d wait_us=%u observe_gap_us=%u observe_lock_us=%u observe_gap_max_us=%u observe_lock_max_us=%u fetch_return_age_us=%u output_age_us=%u",
                          output_started ? "running" : "warmup", static_cast<unsigned>(generation),
@@ -1504,8 +1530,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
     ESP_LOGI(TAG, "AFE flow stopped: generation=%u feed_errors=%u stalls=%u resyncs=%u resync_discarded=%u credits=%u uncertain=%u",
              static_cast<unsigned>(generation), feed_errors, stalls, resyncs, resync_discarded, credits, uncertain);
 #if defined(RODAKOS_RELEASE_TESTS)
+    RetireVoiceFeedProgress(generation);
     ObserveVoiceTickBoundary("flow_stop", generation, tick_epoch, tick_token, 0,
                             esp_timer_get_time(), true);
+    LogVoiceFeedProgressSummary(generation);
 #endif
     // The lifecycle owner joins and deletes this task before destroying AFE.
     vTaskSuspend(nullptr);

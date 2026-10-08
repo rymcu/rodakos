@@ -222,6 +222,9 @@ int64_t esp_timer_get_time() {
     return result;
 }
 int xTaskGetSchedulerState() { return scheduler; }
+TaskHandle_t xTaskGetCurrentTaskHandle() { return reinterpret_cast<TaskHandle_t>(1); }
+// This suite isolates the original window observer; the actual feed observer has its own suite.
+void rodakos::ObserveVoiceFeedProgressTick(int64_t, uintptr_t, int64_t) {}
 bool spi_flash_cache_enabled() { if (on_cache) { auto callback = std::move(on_cache); on_cache = {}; callback(); } now_us += sample_advance; return cache_enabled; }
 int esp_register_freertos_tick_hook_for_cpu(esp_freertos_tick_cb_t hook, UBaseType_t core) {
     ++registrations; if (registration_fail == static_cast<int>(core)) return 0x101; hooks[core] = hook; return ESP_OK;

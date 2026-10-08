@@ -1,4 +1,5 @@
 #include "phone_os/voice_tick_observer.h"
+#include "phone_os/voice_feed_progress_observer.h"
 
 #include <freertos/FreeRTOS.h>
 #include <climits>
@@ -69,10 +70,14 @@ void IRAM_ATTR Increment(uint32_t& value) {
 void IRAM_ATTR ObserveVoiceTick(unsigned core_id) {
     auto& core = g_voice_tick_observer.cores[core_id];
     const int64_t entry_us = esp_timer_get_time();
+    const uintptr_t current_handle = core_id == 0
+        ? reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()) : 0;
     const uint32_t state = (xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED
                                ? kSchedulerSuspended : 0U) |
                            (!spi_flash_cache_enabled() ? kCacheDisabled : 0U);
     const int64_t sample_end_us = esp_timer_get_time();
+    if (core_id == 0)
+        ObserveVoiceFeedProgressTick(entry_us, current_handle, sample_end_us);
     const int64_t previous_us = core.tick.previous_call_us;
     const bool clock_valid = entry_us > 0 && previous_us >= 0 && sample_end_us >= entry_us &&
                              (previous_us == 0 || entry_us >= previous_us);
