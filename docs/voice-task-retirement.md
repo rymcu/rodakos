@@ -15,8 +15,10 @@
 不把它们改写成 032 的资源观测。
 
 033 源码 `78917fae1b9acb02010cef026facefc96a008c5c` 在保留退出机制的基础上修正模型
-清理、AFE 取消分类并缩减凭据刷新栈帧。当前普通 OFF 包为 `20261008-092316`，已恢复
+清理、AFE 取消分类并缩减凭据刷新栈帧。033结束时普通 OFF 包为 `20261008-092316`，当时已恢复
 启动；有限任务/自然刷新与普通 stop/rearm 已封存独审，见[033 证据](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033)。
+
+034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
 ## 修复的退出边界
 
@@ -138,11 +140,26 @@ RefreshAiot 使用顺序阶段与更短 NVS key 临时生命周期，保留 TLS�
 stack_min_free 是任务 lifetime 历史水位，不是当前 SP，frontend TAG 也不是采集线程名。
 硬件水位与自然刷新会话必须独立记录；不把静态帧差额加到 032 的 508 B。
 
+## 034 输出就绪与恢复边界
+
+034源码 `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` 按固定ESP-SR成功输出bytes累计credit，
+只有完整1024B帧才开始current fetch，保留100ms参数与可见的停滞诊断。单次异常后
+credit作为保守下界自动恢复；不确定库存达到四帧、已有不确定库存时feed返回0，或非零非法feed返回/credit溢出，才在旧lease排空后重置buffer+VAD，
+epoch隔离旧read/拼接尾部。同代未AppendRaw的被拒read单列raw gap，已保存raw只丢
+feed尾部则仅AFE gap。SDK仍保留不足160样本的WebRTC残余与AEC状态，不代表全新DSP。
+只有连续三次可观察reset失败才终止Running；Assistant清理前核对interaction/transport
+双代次与阶段。USB/wake只取同锁phase快照，原准入和wake代次检查保留。
+
+35项frontend及30/36项Assistant/Wake host验证、TEST/普通两包和有限硬件窗口已分别独审；
+TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。任务观察不证明全PCM声学、全物理
+资源归还、任意OOM或真实安全余量。见[034证据](ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034)。
+
 ## 仍未关闭的门禁
 
 不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
 安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
 没有硬性延迟期限；Capture 内存分配异常等业务失败也不属于本轮已验证的恢复保证。
 
-资源和生产发布继续 **NO_GO**。031 软件记录与
+资源和生产发布继续 **NO_GO**。034 generation15的running stall和实际余量仍待验，
+不得由SDK empty消失替代输入健康。031 软件记录与
 [030 已部署视频证据](task-retirement.md#030-制品与有限设备证据) 分开保留。

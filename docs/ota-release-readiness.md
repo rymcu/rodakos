@@ -14,16 +14,14 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-033 source `78917fae1b9acb02010cef026facefc96a008c5c` fixes audited MultiNet command
-ownership, classifies cancelled AFE returns while preserving drain, and reduces overlapping
-credential-refresh stack frames. TEST package `20261008-091207` and ordinary OFF package
-`20261008-092316` have separate verified source/ELF/signature records. Closed-window review
-records one idle and three Listening cycles, a separate natural-refresh session that ended
-by watchdog, and ordinary Recovery/main/OTA/Home restoration with an explicit stop/rearm smoke.
-The device remains on ordinary OFF, bound/tokenVersion 4 and MQTT online. Warnings and
-independent boot limits remain explicit; see [033 evidence](#2026-10-08-voice-health-and-credential-refresh-033).
-031/032 and earlier dated records retain their original identities. Resource and production
-release remain **NO_GO**.
+034 source `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` adds complete AFE output
+gating, visible stall diagnostics, bounded automatic recovery and a narrow phase snapshot.
+Closed review records one idle and three Listening cycles, with natural TTL600 refresh
+and cycle3404 in the same third session. Ordinary OFF `20261008-113338` is restored,
+with separate cold and explicit WSS stop/rearm windows; original binding/token4 remains.
+One TEST running stall in AFE generation15 remains unresolved. Actual headroom, full
+physical-resource return, broader concurrency, acoustics and soak remain **NO_GO**.
+030–033 retain their historical identities. See [034 evidence](#2026-10-08-afe-output-readiness-and-voice-recovery-034).
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -2175,3 +2173,165 @@ separately, beyond caller-provided capture labels. This is not reproducible-buil
 binary attestation. No Actions were queried, relied upon or repaired. Resource/production
 **NO_GO** remains: startup AFE diagnostics, actual headroom, complete physical-resource return,
 arbitrary OOM, acoustics and soak remain open.
+
+
+## 2026-10-08 AFE output readiness and voice recovery 034
+
+034源码 `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` 修复固定ESP-SR提前读取不足一帧
+PCM的风险，保留单次错误后的自动恢复。TEST一格idle、三格受控Listening及同第三次
+Listening会话的自然TTL600刷新已封存；普通OFF包 `20261008-113338` 已保NVS恢复，
+独立cold及明确WSS stop/rearm窗口闭合。TEST仍出现一次running stall，资源与生产
+保持**NO_GO**；030—033历史不改写为034结果。
+
+### 实现与软件证据
+
+固定1MIC/MR/16k/WebRTC路径中，device AEC开启时feed每通道256样本，关闭时160；
+fetch固定512单声道样本/1024B。开启AEC时正常前几个feed返回320/640/320输出字节。
+原033在feed前置started，且一次feed完成仍不足以保证完整输出就绪；SDK短读超时
+可能已消费partial，只向调用者返回-1/0字节，发生在VAD之前。
+
+034累计成功输出bytes并预扣完整1024B才进入current fetch，原100ms参数不变。单次
+异常fetch后credit保持库存保守下界，继续自动恢复并标记PCM/AEC gap。不确定库存
+达到四帧、已有不确定库存时feed返回0，或非零非法feed返回/credit溢出，才触发重同步。
+feed0本身仍作为可见的输出drop；并非任何一次feed异常都立即重置。重同步阻止新lease，
+旧feed继续排空，由唯一reader在feed归还后reset_buffer+reset_vad、清账本并推进epoch。
+跨reset旧raw read及本地尾部不再feed；同代未AppendRaw的被拒read单列raw gap，已保存
+raw只丢feed尾部则仅影响AFE连续性。WebRTC仍可保留不足160样本残余及AEC状态，不称
+全新DSP。一般warmup/等待/resync保持Running；三次可观察reset失败才终止，Assistant
+清理前复核interaction/transport双代次、录音阶段及非stopping状态。
+
+USB/wake阶段观察改用同锁GetPhaseSnapshot，保留原准入与wake代次检查；Supervisor
+仍读取一致的完整snapshot。HTTP/TLS/NVS留在原internal-stack wake_notify，无加栈、
+新增常驻任务或迁移到PSRAM栈。持续100ms无完整输出仍报告warmup/running stall，
+新日志区分首feed开始/完成、首fetch、首output及退出计数，不以隐藏WARN获得通过。
+
+| 软件范围 | 结果及边界 |
+| --- | --- |
+| Frontend完整TU | 35 Debug、35 ASan/UBSan/leak；4/4 CTest；8项AFE精确负控，原MN与frontend retirement各2项保留 |
+| device AEC关闭host配置 | 仅1项命名格式用例，验证feed160/fetch512/mono16k正常输出及6种错误格式拒绝；不代表完整AEC-off矩阵 |
+| Assistant / Wake | 各30/36项分别通过Debug与sanitizer；5项capture/snapshot完整TU负控。原retirement独立报告保留，不跨套件重复加总 |
+| 输入来源 | 实际编译live文件；58项列明host输入前后hash一致并留副本。171条跨三配置Ninja依赖记录为补充后验Git/SDK核对，不是171个唯一输入或全量前置hash |
+| 固定SDK | CMake核对AFE/processor/ring archive及既有MN关键源/头/库；升级需重新审计。有效handle的buffer reset会吞底层状态，不能由返回1证明任意SDK故障已恢复 |
+
+AFE软件封存SHA为 `b09c97a9d66be1dd653f0a9f709dab95b3a920b4f05dca3f3328a89a76e0102a`，
+实现独审SHA为 `9db174efbdfeaef728294cdc7de75d8768387c9cdb502315aeaff21dda35a04d`。
+8项AFE负控包含033完整旧TU、仅移post-feed flag仍丢partial，以及epoch/raw-gap守卫
+变体；host丢160/640样本只说明机制，不是033真机计数。033没有首feed/fetch的次数与
+时点，未证明其每次告警来自first fetch或TLS是唯一调度诱因。
+
+### 两种制品与静态边界
+
+| 身份 | TEST诊断 | 普通OFF |
+| --- | --- | --- |
+| 包 | `20261008-112651` | `20261008-113338` |
+| main | 7,154,608 B | 7,147,776 B |
+| main SHA-256 | `2e2d6ab87646ad34be3d0a037fb64f478c1c40e91a4bd9ce366fd50c63cde8a6` | `3bbfe03f5196a7dc5fc919f2baf3398998662549108d84e2a2926a3db90d4a72` |
+| ELF SHA-256 | `6bb504a86a3041f9623c4f92f45bd9642f0725bb6001e83cc6bc7ee8599eea3d` | `1e376d536bd223dea1c1cb680583a6121f04847f398e7a79844cfd10d0d25b40` |
+| 制品独审SHA-256 | `b1d745d5fc6c22e2c9503fc468fed84bda9b9e52d0a4c5794a0d4bed79f33774` | `f20b411b1f298aa8b93d58200c0e0bf1188973a9735852963d4e90dd9cfae945` |
+
+两包共享上述源码并使用原开发签名根，源码、编译/对象、image内ELF摘要和guarded
+部署分别核对，不声称可复现构建或仅凭version字符串证明运行时身份。普通bin/ELF/
+对象中lifecycle诊断入口完全缺席。这里OFF指release-fault关闭，不是device AEC关闭。
+
+两包最终ELF均确认USB lambda64B、HandleWakeWordDetected96B、GetPhaseSnapshot48B；
+033前两者为176/240B，USB重叠caller固定帧少256B，声学wake路径少144B。AFE实例
+528→576B（+48）。034普通对033普通同flavor的`.dram0.bss`和heap起点均+48B；034
+TEST对033普通则+112B，是跨flavor布局差值。以上不等于完整调用链最大值、净运行时
+free heap或HWM收益，不能把静态差额加到历史1100/2204/508B。
+
+### TEST同boot矩阵与自然刷新
+
+closed matrix为86,496B，raw SHA `3183963f7d6daedacf02dbc1dbac0c9480c81ed02feeafcc405dae258a697c44`。
+14条串口命令各自发送/完成，无写错误、inFlight、blocked或cycleBusy，root明确关闭。
+三次会话各新加载一块256样本/512B零PCM并取得begin/chunk/wake ACK；EOF继续补零，
+真实I2S及参考通道仍工作，不代表真人语音或物理声学验收。
+
+| cycle | session / AFE generation | 结果 | complete最后字节至下一TX前实际RX | 新遥测 |
+| --- | --- | --- | --- | --- |
+| 3401 idle | 无活动session / N/A | idle_cycle_pass | 70.961s | 2 |
+| 3402 Listening | `bcb83bc2-e332-4ee2-80d5-d9d732edc722` / 5 | three_task_pass | 78.313s | 2 |
+| 3403 Listening | `ea5c2958-86b1-4941-ab81-80c7d5456a9f` / 10 | three_task_pass | 328.534s | 2 |
+| 3404自然刷新Listening | `d07d1f58-af7f-4b44-a210-1420b80e091d` / 15 | three_task_pass | 88.115s | 3 |
+
+四格均有accepted/before/after/recovered/complete。idle before仅capture/supervisor在；
+三格Listening before三任务齐全且非stopping。after三任务均无，随后capture/supervisor
+与enabled/listening恢复；后者指wake监听，不是继续原assistant会话。实际RX使用QPC
+原始字节时间与下一TX排除边界，不能以采集进程存活或UI重读替代。
+
+运行时TTL为600s。初次enrollment落在启动日志与matrix采集之间的缺口；以
+`2026-10-08T03:32:46.089Z`成功MQTT快照为保守最迟上界，取其后至少100ms的第一
+actualRX（QPC `216359609001100`，offset809）为锚，同boot无后续成功refresh，实际
+累计**631.2673767s**才具备新wake资格。等待在assistant idle期，不是维持WSS600秒。
+
+第三次新wake在uptime696195ms开始refresh，698615ms成功enrollment，随后同session
+`d07d…` WSS/input.start/capturing，并及时执行3404；本轮没有watchdog结束后拼接新
+session的情形。原始enrollment精确时点仍未知，不把保守资格锚改写成实测enrollment。
+
+### AFE输出、保留告警与HWM
+
+三次TEST均ready为feed256/fetch1024B/capacity51200B，首feed返回320B。
+
+| AFE generation | first feed begin/duration ms | first fetch/output相对创建ms | current/cancelled | feed errors / stalls / resyncs | stopped credits / uncertain |
+| --- | --- | --- | --- | --- | --- |
+| 5 | 41 / 13 | 108 / 109 | 0 / 0 | 0 / 0 / 0 | 256 / 0 |
+| 10 | 43 / 13 | 109 / 111 | 0 / 0 | 0 / 0 / 0 | 512 / 0 |
+| 15 | 44 / 12 | 105 / 106 | 0 / 1 | 0 / 1 / 0 | 1536 / 0 |
+
+三次first fetch恰观测feeds=returns=3，预扣后credit256，first output1024B；此为本窗
+观察，不是固定“三次feed”验收门槛。停止后credit可包含取消时未交付的完整帧，不
+泛化为全部不足一帧或资源泄漏。所有resync_discarded为0，未在硬件注入resync失败。
+
+TEST matrix保留**1条W**：uptime698865ms、generation15的`phase=running count=1
+feeds=124 returns=123 credits=256`。它发生在已有首完整输出之后、自然刷新过程附近；
+没有逐次feed耗时轨迹，不能确定具体阻塞点或将其改叫warmup。current failure、SDK
+empty和wrapper rejected均0也不意味着无输入停滞。启动日志另有10条W（SD delay回退、
+测试开关、Settings缺失namespace与WiFi连接/auth阈值）；捕获窗口未见MN重复清理、
+panic/reset或watchdog，边界仅限所采窗口，不能覆盖所有OOM。
+
+| TEST会话顺序 | wake_notify累计HWM | assistant_io首帧 / stopping HWM |
+| --- | --- | --- |
+| 3402 | 2460B | 25772 / 25740B |
+| 3403 | 2460B | 25964 / 25740B |
+| 3404自然刷新 | 1356B | 25764 / 25732B |
+
+TEST同boot internal历史minimum为4507B。supervisor HWM在初始lifetime为2388B，
+cycle重建后的观测为2700→2396、2700→2396、2636→2396、2440→2392B，按各次
+lifetime解释。wake_notify可跨frontend Deinit存续，1356B是累计历史minimum，不是
+当前SP；assistant_io重建各自计数。不同boot、任务lifetime和静态帧差额不拼为净收益。
+
+### 普通OFF恢复、独立窗口与终态
+
+普通113338保NVS guarded刷写、写后校验与Recovery→main→OTA确认→Home已核。
+独立raw为22,219B，SHA `b659bd24056ff9377b03bdced710d182e278c74c80a9f87b2184545dc6dddc1f`，
+5条命令begin/chunk/wake/stop/clear均取得ACK，没有cycle。新普通session为
+`65e8793d-df0f-4d79-b3a7-0ee53fff4e04`，AFE generation3：first feed44/11ms、written320；
+first fetch89ms（3/3、预扣credit256），first output91ms/1024B。current/cancelled/
+feed errors/stalls/resyncs/resync_discarded/uncertain均0，停止credit1536B保留原值。
+
+普通cold从after-flash快照后的第一actualRX至cold-post前最后RX共**78.6965894s**，
+有3条新遥测。显式stop后的Interaction stopped至stopped-post前最后RX为
+**75.0805431s**，重新armed至同一末RX为**74.8730344s**，对应2条新遥测（uptime
+184946/214926ms）。共同末RX QPC为217455406325900；这些是明确快照截止前的覆盖，
+不是笼统把整个采集时长当stop后观察。
+
+普通matrix无W/E，启动W单列为9条W（SD delay、Settings缺失namespace、WiFi连接/auth阈值）。wake_notify为2460B，
+assistant_io首帧25964B、stopping25740B，supervisor初始2388→stop/rearm后1796B；
+该普通boot internal历史minimum4219B。普通未做自然TTL到期刷新，不能与TEST1356B/
+4507B跨boot计算容量收益；普通stop/rearm也不等于capture/supervisor Deinit。
+
+`2026-10-08T03:51:31.812Z`最终快照：原设备ID/绑定与tokenVersion4保持，MQTT在线、
+voice=false、session空，Wake enabled/listening；shadow1121，遥测uptime递增。
+audio_clear已ACK；UI串口disconnected、无活跃屏幕/相机媒体，capture明确关闭、无
+inFlight/blocked、无COM/JTAG helper。桌面运行身份按进程/既有构建证据解释，不以
+本轮仓库HEAD替代运行时二进制，也不因已有Electron PID认定可复现构建。
+
+原件根为`D:/workspace/rodak/.codex-temp/voice-health-034/`。TEST硬件独审SHA
+`8dff6fc8548fe9dd56b48b305a1bc0965f12f9e6c3923c1550d22e83be845669`；
+普通硬件独审SHA为`0a94af3a6f0816d6f77f8d44168176be0e576756210202822a4ea6c7a9a976e2`，
+双窗总审SHA为`7d55b9798f3d95ae1bdf470c9bb3f00300f3d1b7441effe67db32b452cde9141`，
+共49份使用证据已复制冻结且原件/副本hash一致。
+
+本轮未查询或依赖GitHub Actions。已完成有限矩阵、自然刷新同session cycle与普通
+恢复，仍需定位generation15的running stall和实际余量；全PCM声学、全部DMA/IRQ/
+codec/TCB/heap资源归还、任意OOM、更广取消/并发、实体触摸及八小时长稳未关闭。
+资源和生产继续**NO_GO**。

@@ -7,16 +7,14 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-033 source `78917fae1b9acb02010cef026facefc96a008c5c` fixes audited MultiNet command
-ownership, classifies cancelled AFE returns while preserving drain, and reduces overlapping
-credential-refresh stack frames. TEST package `20261008-091207` and ordinary OFF package
-`20261008-092316` have separate verified source/ELF/signature records. Closed-window review
-records one idle and three Listening cycles, a separate natural-refresh session that ended
-by watchdog, and ordinary Recovery/main/OTA/Home restoration with an explicit stop/rearm smoke.
-The device remains on ordinary OFF, bound/tokenVersion 4 and MQTT online. Warnings and
-independent boot limits remain explicit; see [033 evidence](docs/ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033).
-031/032 and earlier dated records retain their original identities. Resource and production
-release remain **NO_GO**.
+034 source `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` adds complete AFE output
+gating, visible stall diagnostics, bounded automatic recovery and a narrow phase snapshot.
+Closed review records one idle and three Listening cycles, with natural TTL600 refresh
+and cycle3404 in the same third session. Ordinary OFF `20261008-113338` is restored,
+with separate cold and explicit WSS stop/rearm windows; original binding/token4 remains.
+One TEST running stall in AFE generation15 remains unresolved. Actual headroom, full
+physical-resource return, broader concurrency, acoustics and soak remain **NO_GO**.
+030–033 retain their historical identities. See [034 evidence](docs/ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

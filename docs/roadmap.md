@@ -6,16 +6,14 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
-033 source `78917fae1b9acb02010cef026facefc96a008c5c` fixes audited MultiNet command
-ownership, classifies cancelled AFE returns while preserving drain, and reduces overlapping
-credential-refresh stack frames. TEST package `20261008-091207` and ordinary OFF package
-`20261008-092316` have separate verified source/ELF/signature records. Closed-window review
-records one idle and three Listening cycles, a separate natural-refresh session that ended
-by watchdog, and ordinary Recovery/main/OTA/Home restoration with an explicit stop/rearm smoke.
-The device remains on ordinary OFF, bound/tokenVersion 4 and MQTT online. Warnings and
-independent boot limits remain explicit; see [033 evidence](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033).
-031/032 and earlier dated records retain their original identities. Resource and production
-release remain **NO_GO**.
+034 source `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` adds complete AFE output
+gating, visible stall diagnostics, bounded automatic recovery and a narrow phase snapshot.
+Closed review records one idle and three Listening cycles, with natural TTL600 refresh
+and cycle3404 in the same third session. Ordinary OFF `20261008-113338` is restored,
+with separate cold and explicit WSS stop/rearm windows; original binding/token4 remains.
+One TEST running stall in AFE generation15 remains unresolved. Actual headroom, full
+physical-resource return, broader concurrency, acoustics and soak remain **NO_GO**.
+030–033 retain their historical identities. See [034 evidence](ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
 The following historical evidence retains its identity.
 
 030 software now moves five video workers to bounded, generation-owned external WithCaps
@@ -316,7 +314,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 033 closes the bounded task/refresh observations and ordinary OFF restore/smoke, preserving warnings. No MN duplicate-cleanup error was observed in the captured windows. SDK startup AFE warnings, actual heap/stack headroom, full physical-resource return, broader cancellation/concurrency, arbitrary OOM, DMA/IRQ/cache-off and eight-hour soak remain open. TEST notify minimum 1,100 B and ordinary 2,204 B belong to separate boots; 032 warnings/508 B and 030 video/359 B retain their dated identities. Resource/production **NO_GO** remains | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [033 evidence](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033), [voice contract](voice-task-retirement.md), [032 history](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) |
+| Resource recovery | 034 closes bounded idle/Listening cycles, same-session natural refresh and ordinary OFF recovery. TEST AFE generation15 retains one running stall; its exact producer/scheduler cause, actual heap/stack headroom, full physical return, broader cancellation/concurrency, arbitrary OOM, DMA/IRQ/cache-off and eight-hour soak remain open. TEST/ordinary notify HWM1356/2460B and internal minima4507/4219B belong to different boots; no net-capacity claim. 033/032/030 remain dated history. Resource/production **NO_GO** | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [034 evidence](ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

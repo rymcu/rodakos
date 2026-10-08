@@ -277,6 +277,18 @@ under the existing gate), with shorter NVS-key temporary lifetimes on the same i
 wake_notify task. Final ELF frame reductions are separate from runtime headroom. See
 [033 evidence](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033).
 
+034 gates current AFE fetch on one complete output frame using successful SDK output
+bytes. Credits remain a conservative lower bound after a transient read failure; a
+ledger of four uncertain frames, a zero feed with uncertain inventory, or a malformed
+nonzero feed/credit overflow triggers quiescent buffer/VAD resynchronization while
+outstanding feed leases can still drain. Input epochs fence old reads and local tails;
+raw and AFE diagnostic gaps stay distinct. DSP residual state is explicitly retained.
+Only terminal recorder failure ends Running, and Assistant cleanup rechecks both
+interaction and transport generations. The locked phase-only getter is observational;
+existing admission and wake-generation checks remain authoritative. See
+[034 evidence](ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
+
+
 ### Deferred serial and Camera navigation
 
 `PhoneNavigation` owns one `DeferredNavigation` ring: four pending canonical IDs in
