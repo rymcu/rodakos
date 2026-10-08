@@ -39,15 +39,18 @@ esp_err_t CameraDevice::Acquire() {
     if (ret != ESP_OK) {
         return ret;
     }
+    // A successful init owns a board reference even if the handle lookup fails.
+    // Release() must retain that ownership when cleanup needs another attempt.
+    acquired_ = true;
 
     dev_camera_handle_t* camera_handle = nullptr;
     ret = esp_board_manager_get_device_handle(kCameraDeviceName,
                                               reinterpret_cast<void**>(&camera_handle));
     if (ret != ESP_OK || camera_handle == nullptr || camera_handle->dev_path == nullptr) {
-        esp_board_manager_deinit_device_by_name(kCameraDeviceName);
-        release_retry_required_ = false;
-        acquired_ = false;
-        dev_path_ = nullptr;
+        const esp_err_t release_ret = Release();
+        if (release_ret != ESP_OK) {
+            return release_ret;
+        }
         return ret != ESP_OK ? ret : ESP_ERR_NOT_FOUND;
     }
 

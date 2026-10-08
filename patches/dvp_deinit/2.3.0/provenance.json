@@ -1,0 +1,25 @@
+{
+  "reviewed_esp_video_version": "2.3.0",
+  "reviewed_esp_cam_sensor_version": "2.3.0",
+  "target": "ESP32-S3 / GC0308 / borrowed Board Manager I2C",
+  "managed_hashes_lf": {
+    "espressif__esp_video/src/esp_video_init.c": "7c13f134807fc152d3cd6db5691bc6577f3fcbe286efb272e01a6531b919bfbf",
+    "espressif__esp_video/src/device/esp_video_device_common.c": "443dbba9ca77026c4fdf1e66a49279d61eaea1ce5d18dd763114c9a05e7821d1",
+    "espressif__esp_video/src/device/esp_video_dvp_device.c": "6f03260e08d347eb06cdf03635395afbd95310548ba1429a6080f817adde7a59",
+    "espressif__esp_video/src/esp_video.c": "01b6b6de3db37ede9fb530121871576986308e286ac77c4abd4ec627d8b08f30",
+    "espressif__esp_video/src/esp_video_vfs.c": "2dd4a499b3503a39f21e984f56b5eea38d7a587de127209c91cf025a35852882",
+    "espressif__esp_video/idf_component.yml": "a74bb51e1b72df43fd3784a685161c935bb64961680a1ee3a268da20a30262d5",
+    "espressif__esp_sccb_intf/src/sccb.c": "3e05384d63bb72a5261df06651b52a40a655957d16692ddc8cb70189e0add78e",
+    "espressif__esp_sccb_intf/sccb_i2c/src/sccb_i2c.c": "a021c9c46787f33caf3829dd47d0e2c4af728e6d25a15a204df58f25834a7f75",
+    "espressif__esp_cam_sensor/src/esp_cam_sensor.c": "ffc5099e70bd057cffd55c240192bb250bc33523417a58698eb9d0fb56e63bc2",
+    "espressif__esp_cam_sensor/sensors/gc0308/gc0308.c": "36f221ef43559c9fc222a1dc23b91a5eb64fb899d521a8fbb11a08b305c2052a",
+    "espressif__esp_cam_sensor/src/driver_dvp/esp_cam_ctlr_dvp_cam.c": "ce89109eefdef420a3a59197f4b4bc4d951ed69853752cb41d73e173b1b849a4",
+    "espressif__esp_cam_sensor/idf_component.yml": "fc810019f86c58d06524c9c6f6bf83d269c85f05c96ec658062fd3b7282423b3"
+  },
+  "generated_sha256_lf": "3dcd67e999db690506110ebe3b46804b1fad9e5234c5b5cd7ce11d65988c1ea0",
+  "reviewed_esp_idf_version": "6.0.2",
+  "idf_hashes_lf": {
+    "components/esp_driver_cam/dvp/src/esp_cam_ctlr_dvp_cam.c": "e980a3662614ece7095e7544b37008da503158dbdebb0204d8316eaed3971a56",
+    "tools/cmake/version.cmake": "1b9ff21383a4313665dd3636ad223c4fb90a37457156482a823c361f3de2dd34"
+  }
+}

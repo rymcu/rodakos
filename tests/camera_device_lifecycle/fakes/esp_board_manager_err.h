@@ -1,0 +1,15 @@
+#pragma once
+#include "esp_err.h"
+#define ESP_BOARD_ERR_MANAGER_DEVICE_NOT_FOUND (-20)
+#define ESP_BOARD_ERR_MANAGER_INVALID_ARG (-21)
+#define ESP_BOARD_ERR_DEVICE_NOT_FOUND (-40)
+#define ESP_BOARD_ERR_DEVICE_INVALID_ARG (-41)
+#define ESP_BOARD_ERR_DEVICE_NO_HANDLE (-42)
+#define ESP_BOARD_ERR_DEVICE_NO_INIT (-43)
+#define ESP_BOARD_ERR_DEVICE_DEP_IN_USE (-44)
+#define ESP_BOARD_ERR_DEVICE_NOT_SUPPORTED (-45)
+#define ESP_BOARD_ERR_DEVICE_INIT_FAILED (-46)
+#define ESP_BOARD_RETURN_ON_FALSE(condition, error_code, tag, format, ...) do { if (!(condition)) return (error_code); } while (0)
+#define ESP_BOARD_RETURN_ON_ERROR(operation, tag, ...) do { esp_err_t error_code_ = (operation); if (error_code_ != ESP_OK) return error_code_; } while (0)
+#define ESP_BOARD_RETURN_ON_DEVICE_NOT_FOUND(desc, name, tag, ...) ESP_BOARD_RETURN_ON_FALSE(desc, ESP_BOARD_ERR_DEVICE_NOT_FOUND, tag, "device not found")
+#define ESP_BOARD_RETURN_ON_PERIPH_NOT_FOUND(desc, name, tag, ...) ESP_BOARD_RETURN_ON_FALSE(desc, -30, tag, "periph not found")
