@@ -55,12 +55,16 @@ Home. RodakOS `29aaacd` retains the board handle and I2C reference across failed
 `4e08efa` propagates release errors so `CameraDevice::Acquire()` retries cleanup before a new
 initialization, and `51927b0` makes `CloseStream()` report deferred cleanup instead of false
 completion. The running package predates these fixes; a rebuilt package and fresh repeated
-Camera window are required. The source-contract suite now has 10 passing checks, including the
-camera-capture fake interface contract. A later full-chain review found that the outer
-`dev_camera_deinit()` still swallowed subtype errors, and that partial SDK teardown could
-leave a registered video device pointing at a freed sensor. Those checks alone therefore
-do not establish safe cleanup retries. The outer error path and SDK teardown ordering need
-compiled failure-path coverage before the next device window.
+Camera window are required. `cc32989` now includes outer error propagation, a pinned DVP
+teardown overlay and board-peripheral retry coverage. Debug/ASan host checks cover the
+Camera wrapper 4/4 and DVP teardown 13/13; the capture source-contract suite remains 10/10.
+A separate IDF 6.0.2 RCC overlay fixes the DVP deinit acquire/release mismatch and passes
+six Debug and six ASan/UBSan CTests for single, repeated and shared-owner lifecycles. These
+are software/host boundaries; a fresh package and hardware Camera window are still required.
+Earlier full-chain review found that the outer `dev_camera_deinit()` swallowed subtype errors
+and that partial SDK teardown could leave a registered video device pointing at a freed sensor;
+`cc32989` addresses those paths in source and host failure contracts. The result still does not
+establish safe physical retries until a rebuilt candidate is exercised on the device.
 
 The same ordinary-OFF package also passed one bounded follow-up-silence run: after about 28 seconds
 of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before

@@ -1,0 +1,15 @@
+{
+  "reviewed_esp_idf_version": "6.0.2",
+  "target": "ESP32-S3 / LCD_CAM shared RCC",
+  "idf_source_hashes_lf": {
+    "components/esp_driver_cam/dvp/src/esp_cam_ctlr_dvp_cam.c": "e980a3662614ece7095e7544b37008da503158dbdebb0204d8316eaed3971a56",
+    "components/esp_hw_support/include/esp_private/periph_ctrl.h": "22f73877695192a6924e814c573ccdb0e6352c77abd4099cab4e4aed1f0ed9ad",
+    "components/esp_hw_support/periph_ctrl.c": "e3ce744a6ec3598de7a274a257ab85a25a103b6b3041812c15b0655fd611acaf",
+    "components/esp_hal_cam/esp32s3/cam_periph.c": "3f9a3bf64532427683c2bf08db7304972c62a10cf8fef5f569719acea90b657c",
+    "components/esp_hal_cam/include/hal/cam_periph.h": "246171d5c12d0564e2cf281c73a4761965ab459800b54fc37291ed727e209454",
+    "components/soc/esp32s3/include/soc/periph_defs.h": "1eab61a091cc54f2bb03eedac5609e50b44568eac1f348522182ddb1dd887894"
+  },
+  "generated_sha256_lf": "72bbfcd126e6800581a88aab7b9de94620def7c2008c2fe540f0257a11d30c8a",
+  "reviewed_deinit_function_sha256_lf": "c71d289b7a943ac2e665432b1dca3fd5558012559ccead2e2000adee3931baf8",
+  "patched_deinit_function_sha256_lf": "6fad24d59a131aa014188460246885e2a6b1d80bb31a3564eae021e410ca6f95"
+}

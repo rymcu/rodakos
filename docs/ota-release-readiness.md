@@ -3073,9 +3073,11 @@ free board-manager handle，使失败状态可能留下悬空句柄，下一次�
 随后 `4e08efa` 让 `CameraDevice::Release()` 返回失败并保留 `release_retry_required_`，
 由下一次 `Acquire()` 先重试释放再重新初始化；`51927b0` 让 `CloseStream()` 仅在释放成功时
 记录 complete，失败时明确记录 deferred-for-retry；capture fake 已同步错误返回接口。当前 10 项 host source-contract 回归全部通过。
-后续完整调用链审查发现外层 `dev_camera_deinit()` 仍吞掉 subtype 错误，因此以上分层变更
-还不能使上层真实进入失败重试；SDK 原顺序还可能在 sensor 释放后因 VFS 注销分配失败而
-保留悬空指针。下一候选须补齐外层传播、逐阶段 SDK 清理和对应编译负控后再验收，不能把
-此前字符串检查或 Camera capture fake 通过写成完整释放链通过。
+`cc32989` 已补齐外层传播、DVP 分阶段 overlay 和失败引用回归；Camera wrapper Debug/ASan
+各 4/4，DVP teardown 各 13/13。另有独立 IDF 6.0.2 RCC overlay 将 DVP deinit 的共享
+引用从错误的 acquire 改为 release，Debug/ASan 各 6/6 通过。上述是源码、生成器和 host
+所有权边界，不能写成真实 I2C、DMA、共享时钟或 Camera 画面已经通过。
+下一候选仍须保留 NVS 重建签名包并复验 Camera 重复启动/关闭、共享 LCD_CAM owner、
+实际资源余量和完整设备日志。
 当前 COM3 运行的旧包未包含这些修复，必须重新构建、核验并在新的设备窗口复验 Camera 重复
 启动/关闭；本条观察保持资源/生产 **NO_GO**。
