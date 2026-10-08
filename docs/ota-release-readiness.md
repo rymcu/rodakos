@@ -3196,3 +3196,22 @@ wake、session identity、匹配 focus token、正向播放统计、transport cl
 `review.json`，最终逐轮打断负控见 `barge-count-review.json`，后者 SHA-256 为
 `6a5f2f4557858676c2d66adb5c90d244908c23932b381de14f5a4e1052e79525`。
 本轮只修改主机工具与测试，没有打开 COM3、重启长稳或修改 043 固件。
+
+## 2026-10-09 Camera 短窗口工具准备
+
+新增 `tools/run_serial_camera_smoke.py`，调用前置和模板见
+[单串口 Camera 冒烟](../tests/camera_serial_tool/README.md)。原采集退出、设备 immutable
+核验、保留 NVS 刷写与 DeviceCloud 身份基线完成后，才可在同一个串口会话内重复执行
+Camera → 软件首帧 → Home → 六个关闭阶段 → 至少 60 秒新鲜 MQTT/Main/Voice 健康观察。
+阶段失败保留 NO_GO 并停止下一轮；收尾只在同一会话有界等待/请求 Home，不重发已发的
+Home 请求、不复位、不抢占其他串口进程。
+
+纯离线 Camera 工具 **13/13**、其依赖的 Voice **21/21**、OTA **37/37** 回归通过。
+双轮正例及缺首帧、deferred release、缺 Voice、断线、低栈、过期关闭日志、延迟/缺失 Home
+和中断清理等负例使用内存串口 fake；没有执行新 CLI 或连接 COM3。离线结果位于
+`.codex-temp/camera-smoke-preparation-20261009-073129/review.json`。
+
+包、刷写记录与 boot log 仅作为外部提供的上下文；结果明确
+`installed_image_verified=false`、`binding_verified=false`。`software-smoke-observed` 不是
+物理成像或资源回收证明，`eight_hour_gate_passed` 始终为 false。该工具不改变 043 固件，
+当前长稳仍执行旧包与启动时的旧采集器。
