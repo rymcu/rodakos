@@ -57,6 +57,17 @@ AFE fetch 仍使用原有外部删除顺序；wake_notify 保留 internal 栈与
 
 ## 035 AFE 阶段与输出等待观测
 
+036 回归使用门闩固定两类合法交错，避免把调度时序当成业务失败。停止后的旧 generation
+必须恰好取消且不能恢复；下一 generation 可以有自己的启动 gap 并正常恢复，断言按
+generation 关联。异常 feed 已返回、生产者 lease 尚未释放时，重同步消费者仍可排空旧的
+不完整输出；用例分别核对零返回不排空、非法返回丢弃的旧样本、reset/VAD 不与 SDK
+操作重叠，以及 reset 前不下发半帧、后续恢复完整帧。035 与 036 OFF 的受控对照行为一致，
+这两项修正没有改变生产 AFE 的恢复合同。
+
+036 的 TEST 专用 tick/cache 摘要使用独立模块和测试，见
+[观察器合同](../voice_tick_observer/README.md)。本目标默认仍编译普通 OFF 前端；其通过
+不能代替 TEST 接入的目标编译、最终 IRAM/DRAM 链检查或实机观察。
+
 034 的 `feeds=124 / returns=123` 只证明一次 feed 已准入、返回尚未记账，
 不能区分调用前抢占、SDK 调用内部或返回后的业务锁等待，也不能指定 TLS/DSP 根因。
 035 在普通与 `RODAKOS_RELEASE_TESTS` 固件保留同一轻量观测实现；100ms 阈值、

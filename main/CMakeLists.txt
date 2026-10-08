@@ -135,7 +135,7 @@ if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
 endif()
 
 if(RODAKOS_RELEASE_TESTS)
-    list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc")
+    list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc" "phone_os/voice_tick_observer.cc")
 endif()
 
 idf_component_register(

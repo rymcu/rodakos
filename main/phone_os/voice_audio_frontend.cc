@@ -1,6 +1,9 @@
 #include "phone_os/voice_audio_frontend.h"
 
 #include "rodakos_adapters/audio_codec_input.h"
+#if defined(RODAKOS_RELEASE_TESTS)
+#include "phone_os/voice_tick_observer.h"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -772,6 +775,10 @@ bool VoiceAudioFrontend::InitModelLocked() {
 }
 
 bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
+#if defined(RODAKOS_RELEASE_TESTS)
+    InitializeVoiceTickObserver();
+    VoiceTickBeginSnapshot tick_begin{};
+#endif
     // Lifecycle transitions are serialized; workers only see a published instance.
     xSemaphoreTake(mutex_, portMAX_DELAY);
     afe_config_t* afe_config = afe_config_init("MR", nullptr, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
@@ -825,15 +832,27 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
     afe_stream_epoch_ = 0;
     afe_feed_calls_ = afe_feed_returns_ = afe_feed_errors_ = 0;
     afe_started_us_ = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+    BeginVoiceTickObservation(generation, 0, afe_started_us_, &tick_begin);
+#endif
     ESP_LOGI(TAG, "AFE flow ready: generation=%u feed_samples=%d fetch_bytes=%u capacity=%u",
              static_cast<unsigned>(generation), feed_samples,
              static_cast<unsigned>(afe_fetch_bytes_), static_cast<unsigned>(afe_capacity_bytes_));
     if (xTaskCreatePinnedToCoreWithCaps(AfeFetchTaskEntry, "afe_fetch", 6144, this, 4,
                                 &afe_fetch_task_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         afe_iface_->destroy(afe_data_); afe_data_ = nullptr; afe_iface_ = nullptr;
-        SetErrorLocked("AFE fetch task creation failed"); xSemaphoreGive(mutex_); return false;
+        SetErrorLocked("AFE fetch task creation failed"); xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+        LogVoiceTickBegin(generation, 0, tick_begin);
+        ObserveVoiceTickBoundary("fetch_create_failed", generation, 0, tick_begin.token, 0,
+                                 esp_timer_get_time(), true);
+#endif
+        return false;
     }
     xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+    LogVoiceTickBegin(generation, 0, tick_begin);
+#endif
     return true;
 }
 
@@ -1184,6 +1203,11 @@ void VoiceAudioFrontend::StopAfe() {
 }
 
 void VoiceAudioFrontend::AfeFetchTask() {
+#if defined(RODAKOS_RELEASE_TESTS)
+    uint32_t tick_token = 0;
+    bool tick_initialized = false;
+    uint32_t tick_epoch = 0;
+#endif
     unsigned fetch_errors = 0;
     unsigned cancelled_results = 0;
     unsigned stalls = 0;
@@ -1217,8 +1241,18 @@ void VoiceAudioFrontend::AfeFetchTask() {
         const bool stopping = afe_fetch_stopping_;
         generation = afe_generation_;
         const uint32_t epoch = afe_stream_epoch_;
+#if defined(RODAKOS_RELEASE_TESTS)
+        if (!tick_initialized) {
+            tick_token = CurrentVoiceTickObservation(generation, epoch);
+            tick_initialized = true;
+        }
+        tick_epoch = epoch;
+#endif
         const bool active = mode_ == Mode::kConversation && generation == conversation_generation_;
         if (!stopping && active && afe_resync_pending_ && !afe_feed_active_) {
+#if defined(RODAKOS_RELEASE_TESTS)
+            const uint32_t resync_gap_id = gap.began_us != 0 ? gap.first_stall : 0;
+#endif
             // Only this worker reads; admission is stopped and existing leases have returned.
             // Reset retains the SDK's WebRTC tail, so output continues using actual byte credits.
             const int reset = afe_iface_->reset_buffer(afe_data_);
@@ -1244,9 +1278,15 @@ void VoiceAudioFrontend::AfeFetchTask() {
             const unsigned feed_sequence = afe_feed_calls_;
             const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
             const int64_t reset_observed_us = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+            int64_t tick_resync_observed_us = reset_observed_us;
+#endif
             if (gap.began_us != 0 && (reset_ok || resync_errors >= 3)) {
                 const auto producer = afe_producer_diagnostics_.Snapshot();
                 const int64_t closed_us = esp_timer_get_time();
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_resync_observed_us = closed_us;
+#endif
                 xSemaphoreGive(mutex_);
                 LogAfeGapClosed(gap, reset_ok ? "resynced" : "cancelled", reset_observed_us,
                                 last_fetch_return_us, fetch_calls, feed_sequence, credits,
@@ -1255,6 +1295,14 @@ void VoiceAudioFrontend::AfeFetchTask() {
             } else {
                 xSemaphoreGive(mutex_);
             }
+#if defined(RODAKOS_RELEASE_TESTS)
+            tick_token = ObserveVoiceTickBoundary("resync", generation, epoch, tick_token,
+                resync_gap_id, tick_resync_observed_us, reset_ok || resync_errors >= 3);
+            if (reset_ok) {
+                tick_token = BeginVoiceTickObservation(generation, epoch + 1, reset_observed_us);
+                tick_epoch = epoch + 1;
+            }
+#endif
             if (reset_ok)
                 ESP_LOGW(TAG, "AFE flow resynchronized: generation=%u count=%u",
                          static_cast<unsigned>(generation), resyncs);
@@ -1296,6 +1344,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
                 const bool feed_active = afe_feed_active_;
                 const bool resync = afe_resync_pending_;
                 xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
+                    gap.first_stall, observed_us);
+#endif
                 ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u epoch=%u gap_id=%u uncertain=%u feed_active=%d resync=%d wait_us=%u observe_gap_us=%u observe_lock_us=%u observe_gap_max_us=%u observe_lock_max_us=%u fetch_return_age_us=%u output_age_us=%u",
                          output_started ? "running" : "warmup", static_cast<unsigned>(generation),
                          stalls, feeds, returns, credits, static_cast<unsigned>(epoch), gap.first_stall,
@@ -1330,6 +1382,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
             xSemaphoreGive(mutex_);
             LogAfeGapClosed(gap, "cancelled", event_us, last_fetch_return_us, fetch_calls,
                             feed_sequence, credits, producer, closed_us);
+#if defined(RODAKOS_RELEASE_TESTS)
+            tick_token = ObserveVoiceTickBoundary("cancelled", generation, epoch, tick_token,
+                gap.first_stall, closed_us);
+#endif
             gap = {};
         } else {
             xSemaphoreGive(mutex_);
@@ -1370,6 +1426,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
                 xSemaphoreGive(mutex_);
                 LogAfeGapClosed(gap, "cancelled", result_observed_us, last_fetch_return_us, fetch_calls,
                                 cancelled_feed_sequence, cancelled_credits, producer, closed_us);
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_token = ObserveVoiceTickBoundary("cancelled", generation, epoch, tick_token,
+                    gap.first_stall, closed_us);
+#endif
                 gap = {};
             } else {
                 xSemaphoreGive(mutex_);
@@ -1410,6 +1470,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
             xSemaphoreGive(mutex_);
             LogAfeGapClosed(gap, "recovered", result_observed_us, last_fetch_return_us, fetch_calls,
                             output_feed_sequence, output_credits, producer, closed_us);
+#if defined(RODAKOS_RELEASE_TESTS)
+            tick_token = ObserveVoiceTickBoundary("recovered", generation, epoch, tick_token,
+                gap.first_stall, closed_us);
+#endif
             gap = {};
         } else {
             xSemaphoreGive(mutex_);
@@ -1439,6 +1503,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
              static_cast<unsigned>(generation), fetch_errors, cancelled_results);
     ESP_LOGI(TAG, "AFE flow stopped: generation=%u feed_errors=%u stalls=%u resyncs=%u resync_discarded=%u credits=%u uncertain=%u",
              static_cast<unsigned>(generation), feed_errors, stalls, resyncs, resync_discarded, credits, uncertain);
+#if defined(RODAKOS_RELEASE_TESTS)
+    ObserveVoiceTickBoundary("flow_stop", generation, tick_epoch, tick_token, 0,
+                            esp_timer_get_time(), true);
+#endif
     // The lifecycle owner joins and deletes this task before destroying AFE.
     vTaskSuspend(nullptr);
 }

@@ -25,6 +25,10 @@ def main():
                     afe_producer_diagnostics_.Publish(AfeProducerStage::kReturnedWaitPublish, generation,
                         stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));'''
     release_before_log = '''                xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
+                    gap.first_stall, observed_us);
+#endif
                 ESP_LOGW(TAG, "AFE input stalled:'''
     after_log = '                LogAfeProducerObservation(producer, generation, epoch, stalls, gap.first_stall, observed_us);'
     assert source.count(return_marker) == source.count(release_before_log) == source.count(after_log) == 1
@@ -33,7 +37,7 @@ def main():
          'AFE SDK return is visible before the frontend credit publication lock',
          'AFE_RETURN_OBSERVED returned_visible=0', 'check failed: returned_visible'),
         ('stall_log_inside_business_lock', source.replace(release_before_log,
-             '                ESP_LOGW(TAG, "AFE input stalled:').replace(after_log,
+             release_before_log.replace('                xSemaphoreGive(mutex_);\n', '', 1)).replace(after_log,
              after_log + '\n                xSemaphoreGive(mutex_);'),
          'AFE stalled logger never owns the credit publication mutex',
          'AFE_LOG_UNLOCK_OBSERVED producer_progressed=0', 'check failed: producer_progressed')]
