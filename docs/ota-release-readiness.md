@@ -3010,3 +3010,19 @@ stop、cleanup、断开和 wake rearm 完成。Rodak IPC 复核为一次 `sessio
 
 该结果只证明播放期间麦克风路径能够恢复并完成有界清理，不证明回声消除、真人 barge-in、
 音乐或 Recorder 抢占、误接受/误拒绝、声学质量或长稳；资源与生产 **NO_GO** 保持。
+
+## 2026-10-09 合成 barge-in 与播放中断观察
+
+普通 OFF 上使用 `--cycles 1 --barge-in --interruptions 1` 在播放期间注入一轮打断音频。
+设备串口记录 `TTS interrupted`、AFE VAD confirmation 和 VAD end 各一次，播放统计非零、
+`write_failures=0`，无 reset/panic/watchdog/transport failure；随后 stop、cleanup、断开和
+wake rearm 完成。Rodak IPC 复核到同一 session 的一次 `playback.abort`，payload 的 reason
+为 `vad_detected`，最终 runtime sessions 为空。
+
+证据位于 `D:/workspace/rodakos/.codex-temp/voice-barge-in-20261009/`：`serial.log` SHA-256
+为 `ee50fa076bf1a8d02a2dcd6549a2842e5f6b89ea25ef7cdfd17340ea6857ca87`，`serial.summary.json`
+SHA-256 为 `7dc52aad09972826a6b534c16a7c094a3a72a98b65a6d17f1c3d42f2842d9bce`，
+`server-events-cdp.json` SHA-256 为 `3f15bcbec33af67e03c7f69f30d03781fe2edc018cc08430185f7f7b786151af`。
+
+该结果关闭的是合成播放中断路径的有界观察；真人收音、AEC 回声场景、误接受/误拒绝、
+音乐/Recorder 共存和长稳仍未验收，资源与生产 **NO_GO** 不变。

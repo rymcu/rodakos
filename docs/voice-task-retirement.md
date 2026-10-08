@@ -37,6 +37,11 @@
 AEC、真人 barge-in、音乐/Recorder 共存或声学验收。证据见
 [OTA readiness 的麦克风观察](ota-release-readiness.md#2026-10-09-播放期间恢复实体麦克风的有界观察)。
 
+同一普通 OFF 还完成一轮合成 barge-in：播放期间触发 `playback.abort(vad_detected)`，AFE
+VAD confirmation、VAD end、stop、cleanup 和 wake rearm 均完成；这仍不覆盖真人 AEC 或
+声学场景。证据见
+[OTA readiness 的 barge-in 观察](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察)。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本
