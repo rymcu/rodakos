@@ -1550,8 +1550,10 @@ void VoiceAudioFrontend::AfeFetchTask() {
              static_cast<unsigned>(generation), feed_errors, stalls, resyncs, resync_discarded, credits, uncertain);
 #if defined(RODAKOS_RELEASE_TESTS)
     RetireVoiceFeedProgress(generation);
-    ObserveVoiceTickBoundary("flow_stop", generation, tick_epoch, tick_token, 0,
-                            esp_timer_get_time(), true);
+    VoiceTickSnapshot stopped_snapshot;
+    FreezeVoiceTickObservation(generation, tick_epoch, tick_token, 0,
+                               esp_timer_get_time(), true, stopped_snapshot);
+    LogVoiceTickObservation("flow_stop", stopped_snapshot);
     LogVoiceFeedProgressSummary(generation);
 #endif
     // The lifecycle owner joins and deletes this task before destroying AFE.
