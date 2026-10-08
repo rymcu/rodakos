@@ -53,6 +53,68 @@ constexpr int kAfeRingFrames = 50;
 constexpr size_t kAfeMaxUncertainFrames = 4;
 constexpr int64_t kAfeStallUs = 100000;
 
+const char* AfeStageName(AfeProducerStage stage) {
+    switch (stage) {
+        case AfeProducerStage::kInputOpen: return "input_open";
+        case AfeProducerStage::kRawRead: return "raw_read";
+        case AfeProducerStage::kReadReturned: return "read_returned";
+        case AfeProducerStage::kReadFailed: return "read_failed";
+        case AfeProducerStage::kFeedAdmission: return "feed_admission";
+        case AfeProducerStage::kPrepareFeed: return "prepare_feed";
+        case AfeProducerStage::kFeedAdmitted: return "feed_admitted";
+        case AfeProducerStage::kApiBoundary: return "api_boundary";
+        case AfeProducerStage::kReturnedWaitPublish: return "returned_wait_publish";
+        case AfeProducerStage::kCreditPublished: return "credit_published";
+        case AfeProducerStage::kBetweenReads: return "between_reads";
+        default: return "unknown";
+    }
+}
+
+struct AfeGapWindow {
+    int64_t began_us = 0;
+    uint32_t generation = 0;
+    uint32_t epoch = 0;
+    unsigned first_stall = 0;
+    unsigned last_stall = 0;
+    uint32_t max_observation_gap_us = 0;
+    uint32_t max_observation_lock_us = 0;
+};
+
+void LogAfeProducerObservation(const AfeProducerObservation& producer, uint32_t generation,
+                              uint32_t epoch, unsigned stall, unsigned gap_id, int64_t observed_us,
+                              const char* event = "stall") {
+    const bool same_scope = producer.generation == generation && producer.epoch == epoch;
+    ESP_LOGI(TAG, "AFE %s producer: generation=%u epoch=%u count=%u gap_id=%u scope=%s producer_generation=%u producer_epoch=%u stage=%s seq=%u age_us=%u detail=%d previous_us=%u",
+             event, static_cast<unsigned>(generation), static_cast<unsigned>(epoch), stall, gap_id,
+             same_scope ? "current" : "stale", static_cast<unsigned>(producer.generation),
+             static_cast<unsigned>(producer.epoch), AfeStageName(producer.stage),
+             static_cast<unsigned>(producer.sequence),
+             static_cast<unsigned>(same_scope ? AfeElapsedUs(producer.began_us, observed_us) : 0),
+             static_cast<int>(producer.detail), static_cast<unsigned>(producer.previous_elapsed_us));
+    ESP_LOGI(TAG, "AFE %s maxima: generation=%u epoch=%u count=%u gap_id=%u scope=%s window=producer_epoch producer_generation=%u producer_epoch=%u read_us=%u read_seq=%u api_wall_us=%u api_seq=%u return_to_publish_us=%u publish_seq=%u",
+             event, static_cast<unsigned>(generation), static_cast<unsigned>(epoch), stall, gap_id,
+             same_scope ? "current" : "stale", static_cast<unsigned>(producer.generation),
+             static_cast<unsigned>(producer.epoch), static_cast<unsigned>(producer.max_read_us),
+             static_cast<unsigned>(producer.max_read_sequence), static_cast<unsigned>(producer.max_api_us),
+             static_cast<unsigned>(producer.max_api_sequence), static_cast<unsigned>(producer.max_return_to_publish_us),
+             static_cast<unsigned>(producer.max_publish_sequence));
+}
+
+void LogAfeGapClosed(const AfeGapWindow& gap, const char* reason, int64_t decision_us,
+                    int64_t last_fetch_return_us, unsigned fetches, unsigned feed_sequence,
+                    unsigned credits, const AfeProducerObservation& producer, int64_t observed_us) {
+    ESP_LOGI(TAG, "AFE input gap closed: generation=%u epoch=%u gap_id=%u first_stall=%u last_stall=%u warnings=%u reason=%s elapsed_us=%u decision_elapsed_us=%u fetch_return_age_us=%u observe_gap_max_us=%u observe_lock_max_us=%u fetches=%u feed_seq=%u credits=%u",
+             static_cast<unsigned>(gap.generation), static_cast<unsigned>(gap.epoch), gap.first_stall,
+             gap.first_stall, gap.last_stall, gap.last_stall - gap.first_stall + 1, reason,
+             static_cast<unsigned>(AfeElapsedUs(gap.began_us, observed_us)),
+             static_cast<unsigned>(AfeElapsedUs(gap.began_us, decision_us)),
+             static_cast<unsigned>(last_fetch_return_us == 0 ? 0 : AfeElapsedUs(last_fetch_return_us, observed_us)),
+             static_cast<unsigned>(gap.max_observation_gap_us), static_cast<unsigned>(gap.max_observation_lock_us),
+             fetches, feed_sequence, credits);
+    LogAfeProducerObservation(producer, gap.generation, gap.epoch, gap.last_stall, gap.first_stall,
+                              observed_us, "gap");
+}
+
 class LifecycleLock {
 public:
     explicit LifecycleLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
@@ -899,6 +961,7 @@ void VoiceAudioFrontend::CaptureTask() {
     std::vector<int16_t> afe_feed_buffer;
     uint32_t feed_generation = 0;
     uint32_t feed_epoch = 0;
+    uint32_t read_sequence = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool task_running = task_running_;
@@ -930,6 +993,9 @@ void VoiceAudioFrontend::CaptureTask() {
         }
 
         idle_iterations = 0;
+        if (mode == Mode::kConversation)
+            afe_producer_diagnostics_.Publish(AfeProducerStage::kInputOpen, generation, read_epoch,
+                                              read_sequence, esp_timer_get_time());
         if (!EnsureInputForMode(mode)) {
             vTaskDelay(kInputRetryDelay);
             continue;
@@ -939,9 +1005,20 @@ void VoiceAudioFrontend::CaptureTask() {
         const char* owner = mode == Mode::kConversation
                                 ? kConversationAudioInputOwner
                                 : kWakeAudioInputOwner;
-        if (!input_.ReadForOwner(owner,
-                                 samples.data(),
-                                 static_cast<int>(samples.size() * sizeof(int16_t)))) {
+        const int64_t read_begin_us = mode == Mode::kConversation ? esp_timer_get_time() : 0;
+        if (mode == Mode::kConversation)
+            afe_producer_diagnostics_.Publish(AfeProducerStage::kRawRead, generation, read_epoch,
+                                              ++read_sequence, read_begin_us);
+        const bool read_ok = input_.ReadForOwner(owner, samples.data(),
+                                                static_cast<int>(samples.size() * sizeof(int16_t)));
+        const int64_t raw_observed_us = esp_timer_get_time();
+        if (mode == Mode::kConversation)
+            afe_producer_diagnostics_.Publish(read_ok ? AfeProducerStage::kReadReturned
+                                                       : AfeProducerStage::kReadFailed,
+                generation, read_epoch, read_sequence, raw_observed_us,
+                read_ok ? static_cast<int32_t>(samples.size() / kInputChannels) : 0,
+                AfeElapsedUs(read_begin_us, raw_observed_us));
+        if (!read_ok) {
             xSemaphoreTake(mutex_, portMAX_DELAY);
             if (mode == Mode::kConversation)
                 aec_diagnostic_capture_.MarkDiscontinuity(true, generation);
@@ -956,10 +1033,11 @@ void VoiceAudioFrontend::CaptureTask() {
             continue;
         }
 
-        const int64_t raw_observed_us = esp_timer_get_time();
         std::vector<int16_t> selected_samples;
         SelectMainMicrophone(samples, selected_samples);
         if (mode == Mode::kConversation) {
+            afe_producer_diagnostics_.Publish(AfeProducerStage::kFeedAdmission, generation, read_epoch,
+                                              read_sequence, esp_timer_get_time());
             xSemaphoreTake(mutex_, portMAX_DELAY);
             const bool can_feed = mode_ == mode && generation == conversation_generation_ &&
                                   afe_data_ != nullptr && !afe_fetch_stopping_ && !afe_resync_pending_ &&
@@ -986,6 +1064,8 @@ void VoiceAudioFrontend::CaptureTask() {
             }
             xSemaphoreGive(mutex_);
             if (can_feed) {
+                afe_producer_diagnostics_.Publish(AfeProducerStage::kPrepareFeed, generation, stream_epoch,
+                    read_sequence, esp_timer_get_time(), static_cast<int32_t>(afe_feed_buffer.size() / 2));
                 if (feed_generation != generation || feed_epoch != stream_epoch) {
                     afe_feed_buffer.clear();
                     feed_generation = generation;
@@ -1007,8 +1087,18 @@ void VoiceAudioFrontend::CaptureTask() {
                     afe_feed_started_ = true;
                     const unsigned feed_call = ++afe_feed_calls_;
                     const int64_t feed_started_us = esp_timer_get_time();
+                    const int64_t afe_started_us = afe_started_us_;
+                    afe_producer_diagnostics_.Publish(AfeProducerStage::kFeedAdmitted, generation, stream_epoch,
+                        feed_call, feed_started_us, static_cast<int32_t>(afe_feed_buffer.size() / 2));
                     xSemaphoreGive(mutex_);
+                    // The marker-to-return interval includes scheduling and SDK waits, not DSP CPU time.
+                    const int64_t api_begin_us = esp_timer_get_time();
+                    afe_producer_diagnostics_.Publish(AfeProducerStage::kApiBoundary, generation, stream_epoch,
+                                                      feed_call, api_begin_us);
                     const int written = afe_iface_->feed(afe_data_, afe_feed_buffer.data());
+                    const int64_t api_return_us = esp_timer_get_time();
+                    afe_producer_diagnostics_.Publish(AfeProducerStage::kReturnedWaitPublish, generation,
+                        stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));
                     xSemaphoreTake(mutex_, portMAX_DELAY);
                     ++afe_feed_returns_;
                     const bool current = mode_ == Mode::kConversation &&
@@ -1025,25 +1115,35 @@ void VoiceAudioFrontend::CaptureTask() {
                         InvalidateAfeContinuityLocked();
                         // 0 是本次输出被丢弃；其他异常可能已写部分数据，须在无 feed 时重同步。
                         if (written != 0 || afe_uncertain_bytes_ != 0) afe_resync_pending_ = true;
-                        if (afe_feed_errors_ == 1 || afe_feed_errors_ % 100 == 0) {
-                            ESP_LOGW(TAG, "AFE feed rejected: count=%u returned=%d credits=%u resync=%d",
-                                     afe_feed_errors_, written, static_cast<unsigned>(afe_credit_bytes_),
-                                     afe_resync_pending_);
-                        }
                     }
-                    if (feed_call == 1) {
-                        ESP_LOGI(TAG, "AFE first feed: generation=%u begin_ms=%lld duration_ms=%lld written=%d",
-                                 static_cast<unsigned>(generation),
-                                 static_cast<long long>((feed_started_us - afe_started_us_) / 1000),
-                                 static_cast<long long>((esp_timer_get_time() - feed_started_us) / 1000), written);
-                    }
+                    const int64_t published_us = esp_timer_get_time();
+                    afe_producer_diagnostics_.Publish(AfeProducerStage::kCreditPublished, generation,
+                        stream_epoch, feed_call, published_us, written, AfeElapsedUs(api_return_us, published_us));
+                    const unsigned feed_errors = afe_feed_errors_;
+                    const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
+                    const bool resync = afe_resync_pending_;
+                    const bool report_error = current && (!valid || overflow) &&
+                                              (feed_errors == 1 || feed_errors % 100 == 0);
                     xSemaphoreGive(mutex_);
+                    if (report_error)
+                        ESP_LOGW(TAG, "AFE feed rejected: count=%u returned=%d credits=%u resync=%d",
+                                 feed_errors, written, credits, resync);
+                    if (feed_call == 1) {
+                        ESP_LOGI(TAG, "AFE first feed: generation=%u begin_ms=%lld before_api_us=%u api_wall_us=%u return_to_publish_us=%u written=%d",
+                                 static_cast<unsigned>(generation),
+                                 static_cast<long long>((feed_started_us - afe_started_us) / 1000),
+                                 static_cast<unsigned>(AfeElapsedUs(feed_started_us, api_begin_us)),
+                                 static_cast<unsigned>(AfeElapsedUs(api_begin_us, api_return_us)),
+                                 static_cast<unsigned>(AfeElapsedUs(api_return_us, published_us)), written);
+                    }
                     afe_feed_buffer.erase(afe_feed_buffer.begin(), afe_feed_buffer.begin() + feed_size);
                 }
                 xSemaphoreTake(mutex_, portMAX_DELAY);
                 afe_feed_active_ = false;
                 xSemaphoreGive(mutex_);
             }
+            afe_producer_diagnostics_.Publish(AfeProducerStage::kBetweenReads, generation, read_epoch,
+                read_sequence, esp_timer_get_time(), static_cast<int32_t>(afe_feed_buffer.size() / 2));
         } else if (mode == Mode::kWakeOnly) {
             ProcessWakeSamples(selected_samples, wake_generation);
         }
@@ -1090,34 +1190,49 @@ void VoiceAudioFrontend::AfeFetchTask() {
     unsigned resyncs = 0;
     unsigned resync_errors = 0;
     unsigned resync_discarded = 0;
+    unsigned fetch_calls = 0;
     bool output_started = false;
     bool fetch_started = false;
     bool stall_reported = false;
     int64_t waiting_since_us = 0;
+    int64_t last_observation_us = 0;
+    int64_t last_fetch_return_us = 0;
+    int64_t last_successful_fetch_us = 0;
+    uint32_t waiting_max_observation_gap_us = 0;
+    uint32_t waiting_max_observation_lock_us = 0;
+    AfeGapWindow gap;
     uint32_t generation = 0;
     while (true) {
+        const int64_t lock_begin_us = esp_timer_get_time();
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        const int64_t acquired_us = esp_timer_get_time();
+        const uint32_t observation_gap_us = last_observation_us == 0 ? 0 :
+            AfeElapsedUs(last_observation_us, acquired_us);
+        const uint32_t observation_lock_us = AfeElapsedUs(lock_begin_us, acquired_us);
+        last_observation_us = acquired_us;
+        if (gap.began_us != 0) {
+            gap.max_observation_gap_us = std::max(gap.max_observation_gap_us, observation_gap_us);
+            gap.max_observation_lock_us = std::max(gap.max_observation_lock_us, observation_lock_us);
+        }
         const bool stopping = afe_fetch_stopping_;
         generation = afe_generation_;
+        const uint32_t epoch = afe_stream_epoch_;
         const bool active = mode_ == Mode::kConversation && generation == conversation_generation_;
         if (!stopping && active && afe_resync_pending_ && !afe_feed_active_) {
-            // 只有此 worker 是 reader；锁阻止新的 feed lease，已有 lease 已归还。
-            // reset 只清主 FIFO，不重置 WebRTC 内部残余，后续仍以实际返回字节计账。
+            // Only this worker reads; admission is stopped and existing leases have returned.
+            // Reset retains the SDK's WebRTC tail, so output continues using actual byte credits.
             const int reset = afe_iface_->reset_buffer(afe_data_);
             const int reset_vad = afe_iface_->reset_vad(afe_data_);
-            if (reset == 1 && reset_vad == 1) {
+            const bool reset_ok = reset == 1 && reset_vad == 1;
+            if (reset_ok) {
                 afe_credit_bytes_ = afe_uncertain_bytes_ = 0;
                 afe_resync_pending_ = false;
                 ++afe_stream_epoch_;
                 ++resyncs;
                 resync_errors = 0;
                 InvalidateAfeContinuityLocked();
-                ESP_LOGW(TAG, "AFE flow resynchronized: generation=%u count=%u",
-                         static_cast<unsigned>(generation), resyncs);
             } else {
                 ++resync_errors;
-                ESP_LOGW(TAG, "AFE flow reset failed: generation=%u count=%u status=%d vad_status=%d",
-                         static_cast<unsigned>(generation), resync_errors, reset, reset_vad);
                 if (resync_errors >= 3) {
                     SetErrorLocked("AFE buffer recovery failed");
                     mode_ = Mode::kIdle;
@@ -1126,55 +1241,140 @@ void VoiceAudioFrontend::AfeFetchTask() {
             }
             waiting_since_us = 0;
             stall_reported = false;
-            xSemaphoreGive(mutex_);
-            vTaskDelay(reset == 1 && reset_vad == 1 ? 1 : pdMS_TO_TICKS(100));
+            const unsigned feed_sequence = afe_feed_calls_;
+            const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
+            const int64_t reset_observed_us = esp_timer_get_time();
+            if (gap.began_us != 0 && (reset_ok || resync_errors >= 3)) {
+                const auto producer = afe_producer_diagnostics_.Snapshot();
+                const int64_t closed_us = esp_timer_get_time();
+                xSemaphoreGive(mutex_);
+                LogAfeGapClosed(gap, reset_ok ? "resynced" : "cancelled", reset_observed_us,
+                                last_fetch_return_us, fetch_calls, feed_sequence, credits,
+                                producer, closed_us);
+                gap = {};
+            } else {
+                xSemaphoreGive(mutex_);
+            }
+            if (reset_ok)
+                ESP_LOGW(TAG, "AFE flow resynchronized: generation=%u count=%u",
+                         static_cast<unsigned>(generation), resyncs);
+            else
+                ESP_LOGW(TAG, "AFE flow reset failed: generation=%u count=%u status=%d vad_status=%d",
+                         static_cast<unsigned>(generation), resync_errors, reset, reset_vad);
+            vTaskDelay(reset_ok ? 1 : pdMS_TO_TICKS(100));
             continue;
         }
         const bool resync_draining = active && afe_resync_pending_ && afe_feed_active_;
         const bool ready = afe_credit_bytes_ >= afe_fetch_bytes_;
-        // 取消或重同步等待旧 feed 时保留消费者；不能让 producer 等 reader、reader 等 producer。
+        // Cancellation/resync must keep the consumer available to outstanding producers.
         const bool fed = afe_feed_started_ && (ready || !active || resync_draining);
         if (!stopping && active && !fed) {
             const int64_t now = esp_timer_get_time();
-            if (waiting_since_us == 0) waiting_since_us = now;
+            if (waiting_since_us == 0) {
+                waiting_since_us = now;
+                waiting_max_observation_gap_us = observation_gap_us;
+                waiting_max_observation_lock_us = observation_lock_us;
+            } else {
+                waiting_max_observation_gap_us = std::max(waiting_max_observation_gap_us, observation_gap_us);
+                waiting_max_observation_lock_us = std::max(waiting_max_observation_lock_us, observation_lock_us);
+            }
             if (!stall_reported && now - waiting_since_us >= kAfeStallUs) {
                 stall_reported = true;
                 ++stalls;
                 InvalidateAfeContinuityLocked();
-                ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u",
+                if (gap.began_us == 0)
+                    gap = {waiting_since_us, generation, epoch, stalls, stalls,
+                           waiting_max_observation_gap_us, waiting_max_observation_lock_us};
+                gap.last_stall = stalls;
+                const auto producer = afe_producer_diagnostics_.Snapshot();
+                // Sample after the independent tuple copy: its stage timestamp cannot be future.
+                const int64_t observed_us = esp_timer_get_time();
+                const unsigned feeds = afe_feed_calls_;
+                const unsigned returns = afe_feed_returns_;
+                const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
+                const unsigned uncertain = static_cast<unsigned>(afe_uncertain_bytes_);
+                const bool feed_active = afe_feed_active_;
+                const bool resync = afe_resync_pending_;
+                xSemaphoreGive(mutex_);
+                ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u epoch=%u gap_id=%u uncertain=%u feed_active=%d resync=%d wait_us=%u observe_gap_us=%u observe_lock_us=%u observe_gap_max_us=%u observe_lock_max_us=%u fetch_return_age_us=%u output_age_us=%u",
                          output_started ? "running" : "warmup", static_cast<unsigned>(generation),
-                         stalls, afe_feed_calls_, afe_feed_returns_, static_cast<unsigned>(afe_credit_bytes_));
+                         stalls, feeds, returns, credits, static_cast<unsigned>(epoch), gap.first_stall,
+                         uncertain, feed_active, resync,
+                         static_cast<unsigned>(AfeElapsedUs(waiting_since_us, observed_us)),
+                         static_cast<unsigned>(observation_gap_us), static_cast<unsigned>(observation_lock_us),
+                         static_cast<unsigned>(gap.max_observation_gap_us), static_cast<unsigned>(gap.max_observation_lock_us),
+                         static_cast<unsigned>(last_fetch_return_us == 0 ? 0 : AfeElapsedUs(last_fetch_return_us, observed_us)),
+                         static_cast<unsigned>(last_successful_fetch_us == 0 ? 0 : AfeElapsedUs(last_successful_fetch_us, observed_us)));
+                LogAfeProducerObservation(producer, generation, epoch, stalls, gap.first_stall, observed_us);
+                vTaskDelay(1);
+                continue;
             }
         }
+        bool first_fetch = false;
         if (!stopping && fed) {
-            // 预扣完整 chunk。异常 fetch 最多消费此 chunk，剩余 credit 仍是库存的保守下界。
+            // A failed fetch consumes at most the prepaid frame; remaining credit stays conservative.
             if (ready) afe_credit_bytes_ -= afe_fetch_bytes_;
             waiting_since_us = 0;
             stall_reported = false;
-            if (!fetch_started) {
-                fetch_started = true;
-                ESP_LOGI(TAG, "AFE first fetch: generation=%u elapsed_ms=%lld feeds=%u returns=%u credits=%u",
-                         static_cast<unsigned>(generation),
-                         static_cast<long long>((esp_timer_get_time() - afe_started_us_) / 1000),
-                         afe_feed_calls_, afe_feed_returns_, static_cast<unsigned>(afe_credit_bytes_));
-            }
+            first_fetch = !fetch_started;
+            fetch_started = true;
         }
-        xSemaphoreGive(mutex_);
+        const unsigned feed_sequence = afe_feed_calls_;
+        const unsigned feed_returns = afe_feed_returns_;
+        const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
+        const int64_t event_us = esp_timer_get_time();
+        const int64_t started_us = afe_started_us_;
+        if (gap.began_us != 0 && (!active || stopping)) {
+            const auto producer = afe_producer_diagnostics_.Snapshot();
+            const int64_t closed_us = esp_timer_get_time();
+            xSemaphoreGive(mutex_);
+            LogAfeGapClosed(gap, "cancelled", event_us, last_fetch_return_us, fetch_calls,
+                            feed_sequence, credits, producer, closed_us);
+            gap = {};
+        } else {
+            xSemaphoreGive(mutex_);
+        }
+        if (first_fetch)
+            ESP_LOGI(TAG, "AFE first fetch: generation=%u elapsed_ms=%lld feeds=%u returns=%u credits=%u",
+                     static_cast<unsigned>(generation), static_cast<long long>((event_us - started_us) / 1000),
+                     feed_sequence, feed_returns, credits);
         if (stopping) break;
         if (!fed) {
             vTaskDelay(1);
             continue;
         }
+        ++fetch_calls;
         auto* result = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
+        const int64_t fetch_return_us = esp_timer_get_time();
+        last_fetch_return_us = fetch_return_us;
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        const int64_t result_observed_us = esp_timer_get_time();
+        if (gap.began_us != 0) {
+            gap.max_observation_gap_us = std::max(gap.max_observation_gap_us,
+                                                 AfeElapsedUs(last_observation_us, result_observed_us));
+            gap.max_observation_lock_us = std::max(gap.max_observation_lock_us,
+                                                  AfeElapsedUs(fetch_return_us, result_observed_us));
+        }
+        last_observation_us = result_observed_us;
         const bool stopped = afe_fetch_stopping_;
         const bool current = !stopped && mode_ == Mode::kConversation &&
                              generation == conversation_generation_ &&
                              generation == afe_generation_;
         if (!current) {
             ++cancelled_results;
-            xSemaphoreGive(mutex_);
-            // Stop 先关闭新 feed；已有 feed 仍可能等消费者排空，只有 stopping 才能退出。
+            const unsigned cancelled_feed_sequence = afe_feed_calls_;
+            const unsigned cancelled_credits = static_cast<unsigned>(afe_credit_bytes_);
+            if (gap.began_us != 0) {
+                const auto producer = afe_producer_diagnostics_.Snapshot();
+                const int64_t closed_us = esp_timer_get_time();
+                xSemaphoreGive(mutex_);
+                LogAfeGapClosed(gap, "cancelled", result_observed_us, last_fetch_return_us, fetch_calls,
+                                cancelled_feed_sequence, cancelled_credits, producer, closed_us);
+                gap = {};
+            } else {
+                xSemaphoreGive(mutex_);
+            }
+            // Stop closes admission first; existing feed may still need this reader to drain.
             if (stopped) break;
             vTaskDelay(1);
             continue;
@@ -1188,38 +1388,57 @@ void VoiceAudioFrontend::AfeFetchTask() {
         const bool invalid = result == nullptr || result->ret_value != ESP_OK ||
                              result->data == nullptr || result->data_size <= 0 ||
                              static_cast<size_t>(result->data_size) != afe_fetch_bytes_;
+        const bool first_output = !invalid && !output_started;
         if (invalid) {
             InvalidateAfeContinuityLocked();
             afe_uncertain_bytes_ = std::min(afe_capacity_bytes_, afe_uncertain_bytes_ + afe_fetch_bytes_);
             if (afe_uncertain_bytes_ >= kAfeMaxUncertainFrames * afe_fetch_bytes_)
                 afe_resync_pending_ = true;
-        } else if (!output_started) {
+        } else {
             output_started = true;
-            ESP_LOGI(TAG, "AFE first output: generation=%u elapsed_ms=%lld feeds=%u returns=%u bytes=%d",
-                     static_cast<unsigned>(generation),
-                     static_cast<long long>((esp_timer_get_time() - afe_started_us_) / 1000),
-                     afe_feed_calls_, afe_feed_returns_, result->data_size);
+            last_successful_fetch_us = fetch_return_us;
         }
-        xSemaphoreGive(mutex_);
+        const bool recovered = !invalid && gap.began_us != 0 &&
+                               gap.generation == generation && gap.epoch == afe_stream_epoch_;
+        const unsigned output_feed_sequence = afe_feed_calls_;
+        const unsigned output_feed_returns = afe_feed_returns_;
+        const unsigned output_credits = static_cast<unsigned>(afe_credit_bytes_);
+        const int64_t output_elapsed_ms = (esp_timer_get_time() - afe_started_us_) / 1000;
+        if (recovered) {
+            const auto producer = afe_producer_diagnostics_.Snapshot();
+            const int64_t closed_us = esp_timer_get_time();
+            xSemaphoreGive(mutex_);
+            LogAfeGapClosed(gap, "recovered", result_observed_us, last_fetch_return_us, fetch_calls,
+                            output_feed_sequence, output_credits, producer, closed_us);
+            gap = {};
+        } else {
+            xSemaphoreGive(mutex_);
+        }
+        if (first_output)
+            ESP_LOGI(TAG, "AFE first output: generation=%u elapsed_ms=%lld feeds=%u returns=%u bytes=%d",
+                     static_cast<unsigned>(generation), static_cast<long long>(output_elapsed_ms),
+                     output_feed_sequence, output_feed_returns, result->data_size);
         if (invalid) {
-            if (++fetch_errors == 1 || fetch_errors % 100 == 0) {
+            if (++fetch_errors == 1 || fetch_errors % 100 == 0)
                 ESP_LOGW(TAG, "AFE fetch rejected: count=%u status=%d bytes=%d", fetch_errors,
                          result ? result->ret_value : ESP_FAIL, result ? result->data_size : 0);
-            }
         } else {
             const bool vad_valid = result->vad_state == VAD_SILENCE || result->vad_state == VAD_SPEECH;
-            // Every fetch frame, including silence, is retained. vad_cache repeats the
-            // pre-trigger history needed only by consumers that discard non-speech.
+            // Preserve silence; vad_cache duplicates pre-trigger history for other consumers.
             ProcessConversationSamples(result->data, result->data_size / sizeof(int16_t),
                                        generation, vad_valid, result->vad_state == VAD_SPEECH);
         }
         vTaskDelay(1);
     }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const unsigned feed_errors = afe_feed_errors_;
+    const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
+    const unsigned uncertain = static_cast<unsigned>(afe_uncertain_bytes_);
+    xSemaphoreGive(mutex_);
     ESP_LOGI(TAG, "AFE fetch stopped: generation=%u current_failures=%u cancelled_results=%u",
              static_cast<unsigned>(generation), fetch_errors, cancelled_results);
     ESP_LOGI(TAG, "AFE flow stopped: generation=%u feed_errors=%u stalls=%u resyncs=%u resync_discarded=%u credits=%u uncertain=%u",
-             static_cast<unsigned>(generation), afe_feed_errors_, stalls, resyncs, resync_discarded,
-             static_cast<unsigned>(afe_credit_bytes_), static_cast<unsigned>(afe_uncertain_bytes_));
+             static_cast<unsigned>(generation), feed_errors, stalls, resyncs, resync_discarded, credits, uncertain);
     // The lifecycle owner joins and deletes this task before destroying AFE.
     vTaskSuspend(nullptr);
 }

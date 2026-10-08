@@ -1,5 +1,6 @@
 #include "host_runtime.h"
 #include "afe_fetch_control.h"
+#include "observation_control.h"
 
 #include "esp_afe_config.h"
 #include "esp_afe_sr_iface.h"
@@ -38,6 +39,7 @@ void Reset() {
     ResetAllocationObserver();
     ResetMultiNet();
     afe_fetch::ResetToDefault();
+    afe_observation::Reset();
     std::lock_guard<std::mutex> lock(state_mutex);
     supplied_audio_reads = afe_feed_count = 0;
     audio_read_calls = block_audio_read = 0;

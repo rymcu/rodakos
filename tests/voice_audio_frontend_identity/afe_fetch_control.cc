@@ -1,4 +1,5 @@
 #include "afe_fetch_control.h"
+#include "observation_control.h"
 
 #include <algorithm>
 #include <chrono>
@@ -309,7 +310,7 @@ void CaptureLog(char level, const char* tag, const char* format, ...) {
     va_start(args, format);
     std::vsnprintf(message, sizeof(message), format, args);
     va_end(args);
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
     if (level == 'W' && std::string(message).rfind("AFE fetch rejected:", 0) == 0)
         ++rejected_warnings;
     if (level == 'W' && std::string(message).rfind("AFE input stalled:", 0) == 0)
@@ -323,5 +324,7 @@ void CaptureLog(char level, const char* tag, const char* format, ...) {
         summary = {true, generation, failures, cancelled};
     }
     changed.notify_all();
+    lock.unlock();
+    rodakos_test::afe_observation::OnLog(message);
 }
 }  // namespace rodakos_test::afe_fetch

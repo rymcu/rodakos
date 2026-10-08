@@ -5,6 +5,7 @@
 #include "phone_os/voice_aec_diagnostic_capture.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/task-retirement.h"
+#include "phone_os/voice_afe_observation.h"
 
 #include <cstdint>
 #include <deque>
@@ -149,6 +150,7 @@ private:
     unsigned afe_feed_returns_ = 0;
     unsigned afe_feed_errors_ = 0;
     int64_t afe_started_us_ = 0;
+    AfeProducerDiagnostics afe_producer_diagnostics_;
 };
 
 }  // namespace rodakos

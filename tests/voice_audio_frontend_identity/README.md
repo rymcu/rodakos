@@ -42,7 +42,7 @@ wsl -d Debian -- bash -lc '
 
 CTest 名称为 `rodakos_voice_audio_frontend_identity` 与
 `voice_frontend_retirement_negative_controls`、`voice_frontend_multinet_negative_controls`、
-`voice_frontend_afe_negative_controls`。可执行文件为
+`voice_frontend_afe_negative_controls`、`voice_frontend_observation_negative_controls`。可执行文件为
 `rodakos_voice_audio_frontend_identity_tests`，接受一个完整测试名称作为过滤参数。
 负控报告存于构建目录的 `negative-controls/results.json`。ASan/UBSan 使用独立构建目录，
 编译与链接增加 `-fsanitize=address,undefined`，设置
@@ -52,8 +52,72 @@ CTest 名称为 `rodakos_voice_audio_frontend_identity` 与
 这些用例不验证目标芯片调度延迟、物理输入关闭、声学结果或所有 heap 全面回收。
 AFE fetch 仍使用原有外部删除顺序；wake_notify 保留 internal 栈与原有 callback 策略。
 033 的 fetch 取消分类、feed 排空与真实 PCM 连续性，以及 034 的完整输出字节账本、
-停滞诊断和有限自动重同步见 [AFE 生命周期回归](afe-lifecycle.md)。主目标当前共 35 项；
+停滞诊断和有限自动重同步见 [AFE 生命周期回归](afe-lifecycle.md)。主目标当前共 49 项；
 `RODAK_FRONTEND_DEVICE_AEC=OFF` 独立构建用命名格式用例验证关闭 AEC 的 160 样本输入合同。
+
+## 035 AFE 阶段与输出等待观测
+
+034 的 `feeds=124 / returns=123` 只证明一次 feed 已准入、返回尚未记账，
+不能区分调用前抢占、SDK 调用内部或返回后的业务锁等待，也不能指定 TLS/DSP 根因。
+035 在普通与 `RODAKOS_RELEASE_TESTS` 固件保留同一轻量观测实现；100ms 阈值、
+完整输出 credit、取消排空、保守库存、epoch/raw gap、reset 与 terminal 行为不变。
+
+`voice_afe_observation.h` 的 56B 固定元组由 Capture 单一写者通过独立 `portMUX` 发布。
+时间先在临界区外读取，临界区只有有界字段更新/56B 快照复制，没有 timer、业务锁、
+SDK、日志或动态分配。SDK 返回后先发布 `returned_wait_publish`，再获取 frontend mutex；
+因此等待该业务锁时，返回边界仍可独立观察。生命周期不写/reset 该元组，晚到的旧 raw read
+保留旧 generation/epoch；消费者将不匹配元组标为 `scope=stale`，不把它当作当前阶段。
+
+| 阶段 | 仅能说明的边界 |
+| --- | --- |
+| `input_open` / `raw_read` | 输入打开或 `ReadForOwner` 调用边界；仍含输入锁、调度与 codec，不是纯 I2S 时间 |
+| `read_returned` / `read_failed` | raw 返回及读取墙钟耗时；成功返回后还会做选麦处理 |
+| `feed_admission` / `prepare_feed` | 准入锁等待或本地 MR 拼接准备 |
+| `feed_admitted` / `api_boundary` | 已准入或已发布 SDK 调用边界；标记到真正调用之间仍可能被抢占 |
+| `returned_wait_publish` | SDK 已返回，尚未完成本次返回记账；`previous_us` 是 API 边界墙钟耗时 |
+| `credit_published` | 返回校验/记账已完成；0、非法返回或 overflow 时不代表 credit 增加；`previous_us` 是 return-to-publish 全段墙钟 |
+| `between_reads` | 本轮处理结束，尚未发布下一输入边界 |
+
+`seq` 在 raw/准备阶段是 read 序号，在 feed/API/记账阶段是 feed 序号；`detail`
+按阶段为样本/尾部数量或 SDK 返回字节。序号只用于关联，不用于业务授权或时间差计算。
+read、API、return-to-publish 的最大墙钟耗时和对应序号属于该 **producer generation/epoch**，
+后来的短操作不会覆盖最大值。它们可能早于当前输出 gap，不证明该 gap 的唯一原因。
+所有原始时点为锁保护的 `int64_t`；压缩到 `uint32_t` 的 `*_us` 在 `UINT32_MAX`
+饱和，表示“至少 4,294,967,295µs”，不是精确值或微秒计数回绕。
+
+每次原有 W 保留独立 `count`，并携带以首个 W 序号命名的稳定 `gap_id`。失败 fetch 后
+再次达到 100ms 仍会增加 W/count；同一个 gap 延续到同 generation/epoch 的首个有效完整
+输出，或以 `cancelled` / `resynced` 关闭。闭合记录列出 first/last stall 与 warnings，
+不会让新一代输出关闭旧 gap。等待起点是首次不足 credit 的消费者观察，elapsed 是观察
+区间，不是测得的单次 raw/SDK 阻塞时长。
+
+消费者记录相邻观察和业务锁调用的墙钟间隔，保留首 W 之前、首 W 之后及 fetch 返回后
+再次取锁的最大值。间隔包含 SDK、日志、delay 与调度，不能直接称为调度延迟或 mutex
+竞争时长。stall 与 gap closed 均在业务锁内复制 producer 元组，再在 diag mux 外采时，
+随后释放业务锁输出冻结值；stageAge 不复用更早的 fetch-return 时刻。原有 AFE feed/reset/
+first-fetch/first-output 相关日志也移到业务锁外。日志阻塞期间实际阶段可能继续推进，
+打印内容仍是带原 generation/epoch/count 的观测快照。
+
+`afe_observation_test.cc` 的 14 项新用例运行完整生产 TU。仅该测试 TU 使用
+`-fno-access-control` 读取私有 mutex、计数和诊断快照；生产 TU 正常编译，没有
+`#define private public` 或生产测试回调。这是内部边界合同测试，不是纯公共 API 黑盒测试。
+host-only semaphore/critical-entry/log 门闩和可推进的单调时钟控制交错，覆盖 raw、
+API 前、API 内、SDK 返回后记账锁、消费者延迟、跨代 stale、resync、同 gap 多次 W、
+快照采时顺序，以及堵日志时 producer 实际进入第二次 SDK 调用。元组并发测试要求
+读者实际观察两类不同阶段，另外核对 scope/sequence 回绕与饱和。
+
+`run_observation_negative.py` 编译完整变体 TU：把返回标记移到业务锁之后，必须由
+`returned_visible` 断言拒绝；把 stall 日志移回业务锁内，必须由 `producer_progressed`
+断言拒绝。两者先确认实际门闩边界，日志负控先解除门闩再报告断言失败；编译失败、
+超时或任意异常退出都不算检出。旧 2 项 retirement、2 项 MultiNet、8 项 AFE 负控
+仍保留，旧头变体只关闭不兼容的新观测测试文件。
+
+固定 034 OFF 编译参数的隔离目标检查记录：实例 576→640B（+64B，包括 8B mux），
+Capture 固定帧 176→240B，Fetch 112→368B；gap/producer 日志 helper 分别 128/112B。
+这些是对象与固定帧成本，不是完整调用栈或实测 HWM，也不能从既有水位推算新余量。
+正常路径每个 conversation read 有 6 次 Publish、每次 feed 另有 4 次；诊断确有采时和
+短临界区成本，不能称“仅告警时有开销”。正式包仍须独立核对最终 ELF 与设备窗口。
+host fake 不执行闭源 DSP、FreeRTOS 真调度、物理 I2S 或声学处理，不给出 034 真机根因。
 
 ## 033 MultiNet 命令表所有权
 

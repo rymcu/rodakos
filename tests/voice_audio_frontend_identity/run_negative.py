@@ -57,6 +57,7 @@ def main():
         commands = [
             ['cmake', '-S', str(suite), '-B', str(build), '-G', 'Ninja',
              '-DCMAKE_BUILD_TYPE=Debug', '-DRODAK_FRONTEND_NEGATIVE_CHILD=ON',
+             '-DRODAK_FRONTEND_OBSERVATION_TESTS=OFF',
              f'-DRODAKOS_IDF_PATH={args.idf_path}',
              f'-DRODAK_VOICE_FRONTEND_SOURCE={fixture_source}',
              f'-DRODAK_VOICE_FRONTEND_INCLUDE_ROOT={include_root}',
