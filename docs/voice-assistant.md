@@ -292,3 +292,12 @@ On hardware, verify:
 
 Normal refresh must write only `otadata` and `ota_0` after `-VerifyOnly` passes. Never erase or
 overwrite NVS, Recovery, the partition table, or the OTA journal during routine assistant testing.
+
+The synthetic USB helper `tools/run_serial_voice_test.py` owns its serial port; do not run it
+alongside another capture or monitor. `--cycles` validates each upload/wake window separately:
+session identity, matching focus token, non-empty playback, successful transport cleanup,
+interaction stop and wake rearm must belong to that cycle. Barge-in interruption, AFE confirmation
+and VAD-end counts must also match `--interruptions` in each cycle. Extra evidence in an earlier
+cycle cannot compensate for a later failure. `--turns` retains its separate same-session trace
+contract. The host validator runs with `python -m unittest discover -s tests/voice_serial_tool -v`;
+passing it establishes software evidence handling, not physical/acoustic acceptance.

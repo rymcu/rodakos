@@ -2969,8 +2969,9 @@ MQTT 在线、语音连接关闭，普通 OFF boot confirmation 成功。
 断开事件以及 `window.api.agentRuntime.listSessions()` 为空。服务端的实时 VAD 会在一个
 逻辑 turn 内切分音频，因此同一 session 下保存了六个 `reason=vad-end` 片段和一个很短的
 最终 `reason=listen-stop` 片段；这不是七轮对话，也不是六次显式 `input.stop`。该边界
-证明了同 session 的设备生命周期与播放恢复，但服务端分段/停止归属仍需专门收口，不能
-扩大为真实收音、声学 barge-in、音乐/Recorder 抢占、长稳或生产发布通过。
+证明了同 session 的设备生命周期与播放恢复；当时缺少服务端尾段终态，后来由下方
+[尾段复核](#2026-10-09-六轮合成语音尾段归属复核)补齐。仍不能扩大为真实收音、声学
+barge-in、音乐/Recorder 抢占、长稳或生产发布通过。
 
 本轮只使用本地串口、Electron IPC 和 SQLite 只读取证，没有查询、依赖、修复或重跑
 GitHub Actions；资源与生产 **NO_GO** 保持。
@@ -3152,3 +3153,46 @@ Voice `supervisor_stack_min_free` 也已纳入全局 `stack_min_free` 的最小�
 误写成曾经通过；该快照也不是完整八小时日志。比较清单、原/新摘要及栈负控分别保存在
 `manifest.json`、`before.json`、`after-stack.json`、`stack-controls.json`。原采集进程未重启，
 仍执行启动时加载的旧解析器；这些修复适用于后续采集及独立离线复核，不改变 043 固件内容。
+
+## 2026-10-09 六轮合成语音尾段归属复核
+
+只读检索原 `server-device*.ndjson`，补取历史 session
+`5d18440a-a694-4341-bb70-4bfed30127b3` 的完整 trace；没有重新连接设备或重复六轮测试。
+对应历史基线仍为 Rodak `44fbc43c`、RodakOS `b941705` 与普通 OFF 包
+`20261009-014905`，不把新服务端修复当作这次旧窗口的证据。
+
+六个 `vad-end` 均完成回复，流式下行分组的包数依次为 **200、340、340、337、442、305**，
+与原串口六组 `Playback audio stats` 的 packets/decoded_frames 逐组一致，写入失败均为 0。
+流式模式的最终 `audioPackets` 数组为空，因此不能仅用该字段推断是否有音频输出。
+
+最终尾段在 `18:44:21.085Z` 记录 `reason=listen-stop`、9 packets / 41 payload bytes、
+`hadLiveVadSpeech=false`、`captureStartReason=binary-auto-capture`。随后进入 VAD，并在
+`18:44:21.127Z` 完成为 `discarded=true`、`discardReason=ambient-noise`、
+`agentStreamedSentenceCount=0`；尾段开始后至会话断开没有音频包发送或播放完成日志。
+因此这是六次合成回复加一个被丢弃的停止尾段，文件数 7 不表示七轮回复。
+
+原串口与摘要 SHA-256 均复核未变；原 `final-summary.json` 的文件数判定仍保留，不覆盖历史。
+本次 1,268 条设备窗口快照位于 Rodak `.codex-temp/six-turn-tail-audit/device-window.json`，
+SHA-256 为 `c5c1af3ef759d3791acaaa250934bbc194cf59e6e356f646c52457f067d41422`；
+逐段对账 `reconciliation.json` SHA-256 为
+`792c5e62afb50743b0a0347d2e099390d37f3a4a87e3785ac2c56d9ca1250205`。
+本条只收口该次合成六轮窗口的服务端尾段归属，真人六轮、声学、资源与长稳门禁继续开放。
+
+## 2026-10-09 语音 cycles 逐轮门禁修复
+
+`run_serial_voice_test.py --cycles` 旧门禁只统计整段日志；前一轮有两条播放统计、后一轮完全
+没有播放时也可能通过。现以每轮 PCM 上传的 `audio_begin` 回执分窗，每窗必须有自身的
+wake、session identity、匹配 focus token、正向播放统计、transport cleanup、stop 和 rearm。
+允许异步任务的合法启动/播放日志交错、清理期间末尾播放统计，以及自然超时先于显式 stop
+回执。barge-in 的 interruption、AFE confirmation 和 VAD end 也逐窗核对，不能跨轮借用。
+
+`tests/voice_serial_tool` **21/21** 通过。保存的旧实现 AST 对两类反例仍错误通过：后一轮无
+播放，以及第一轮两次打断而第二轮零次；新工具均拒绝。三份普通 OFF 封存日志离线复核仍
+通过：late-follow-up、live-mic、barge-in 各自为 2/2、1/1、2/1 组播放开始/统计，被打断的首段
+不强求正常结束统计；barge-in 的三个事件计数各为 1。未找到独立多 cycle 的实机封存日志，
+多轮反例与正例仍属于 host 合成控制，不宣称新增硬件通过。
+
+证据位于 `.codex-temp/voice-cycle-validator-20261009-071018/`，原日志哈希与首轮复核见
+`review.json`，最终逐轮打断负控见 `barge-count-review.json`，后者 SHA-256 为
+`6a5f2f4557858676c2d66adb5c90d244908c23932b381de14f5a4e1052e79525`。
+本轮只修改主机工具与测试，没有打开 COM3、重启长稳或修改 043 固件。

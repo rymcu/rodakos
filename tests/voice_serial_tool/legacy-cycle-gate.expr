@@ -1,0 +1,16 @@
+# Exact cycle_gate expression from abecfb2:tools/run_serial_voice_test.py.
+# Original complete source SHA-256: 56c6a360198d6549f465cd6c17a6f0b9ea1b8868bead033dfa3bc9301e49173c
+turns is None and (
+        not error and not summary["failure"]
+        and not summary["failure_flags"]["reset"]
+        and summary["interaction_started"] >= (cycles or 0)
+        and summary["interaction_stopped"] >= (cycles or 0)
+        and (not args.live_mic_playback or summary["vad_interruptions"] == 0)
+        and (not args.barge_in or (
+            summary["vad_interruptions"] == (cycles or 0) * args.interruptions
+            and summary["afe_vad_confirmations"] == (cycles or 0) * args.interruptions
+            and summary["vad_ends"] == (cycles or 0) * args.interruptions))
+        and len(stats) >= (cycles or 0)
+        and all(s.get("packets", 0) > 0 and s.get("decoded_frames", 0) > 0
+                and s.get("pcm_bytes", 0) > 0 and s.get("write_failures", 1) == 0 for s in stats)
+    )

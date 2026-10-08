@@ -240,6 +240,116 @@ def validate_same_session_turns(text, turns):
     }
 
 
+def validate_cycle_sessions(text, cycles, *, expected_interruptions=None):
+    """Keep each software wake's playback and cleanup inside its own serial window."""
+    lines = text.splitlines()
+    results = _voice_test_results(text)
+    beginnings = [result["line"] for result in results
+                  if result.get("command") == "audio_begin" and result.get("ok") is True]
+    errors = []
+    sessions = []
+    if len(beginnings) != cycles:
+        errors.append(f"expected {cycles} successful audio_begin results, got {len(beginnings)}")
+    if any(result.get("ok") is not True for result in results):
+        errors.append("voice test command failed or returned a malformed result")
+    if not beginnings:
+        return {"passed": False, "errors": errors, "sessions": sessions}
+    if any("Interaction started:" in line or "Interaction stopped:" in line
+           for line in lines[:beginnings[0]]):
+        errors.append("unowned interaction before the first software wake")
+
+    # Each CLI cycle uploads once before sending wake. Use that reply as its boundary:
+    # the asynchronous voice task may log ready/start before the later wake ACK prints.
+    for cycle, beginning in enumerate(beginnings):
+        end = beginnings[cycle + 1] if cycle + 1 < len(beginnings) else len(lines)
+        window = lines[beginning:end]
+        def matches(pattern):
+            return [(index + beginning, match) for index, line in enumerate(window)
+                    if (match := re.search(pattern, line)) is not None]
+
+        ready = matches(r"Realtime voice session ready: session=([^\s]+)")
+        inputs = matches(r"Sent speech input start: session=([^\s]+)")
+        started = matches(r"Interaction started:.*focus_token=(\d+)")
+        stopped = matches(r"Interaction stopped:.*focus_token=(\d+)")
+        plays = matches(r"Playback started: playback_epoch=(\d+)")
+        stats = matches(r"Playback audio stats:(.*)")
+        cleanup = matches(r"Voice websocket cleanup started")
+        destroyed = matches(r"Voice websocket destroy completed: result=(\S+)")
+        rearmed = matches(r"Always-on wake monitoring armed")
+        cycle_errors = []
+        for name, events in (("ready", ready), ("interaction start", started),
+                             ("interaction stop", stopped), ("cleanup start", cleanup),
+                             ("websocket destroy", destroyed)):
+            if len(events) != 1:
+                cycle_errors.append(f"expected one {name} event, got {len(events)}")
+        if not inputs or not plays or not stats:
+            cycle_errors.append("missing speech input, playback start or non-empty playback stats")
+        if len(ready) == 1 and any(match[1] != ready[0][1][1] for _, match in inputs):
+            cycle_errors.append("input.start session id differs from this cycle's ready session")
+        if len(started) == 1 and len(stopped) == 1 and started[0][1][1] != stopped[0][1][1]:
+            cycle_errors.append("interaction stop focus token differs from its start")
+        if len(destroyed) == 1 and destroyed[0][1][1] != "ESP_OK":
+            cycle_errors.append("websocket destruction did not succeed")
+        if all(len(events) == 1 for events in (ready, started, stopped, cleanup, destroyed)):
+            # FinishInteraction waits for transport close and I/O retirement before logging
+            # focus release. Startup and playback logs come from different tasks.
+            if not cleanup[0][0] < destroyed[0][0] < stopped[0][0]:
+                cycle_errors.append("session cleanup/stop markers are out of order")
+            if not any(index > stopped[0][0] for index, _ in rearmed):
+                cycle_errors.append("wake monitoring was not rearmed after this cycle stopped")
+            if any(not ready[0][0] < index < stopped[0][0] for index, _ in plays + stats):
+                cycle_errors.append("playback evidence falls outside this interaction")
+        if any(int(plays[index][1][1]) >= int(plays[index + 1][1][1])
+               for index in range(len(plays) - 1)):
+            cycle_errors.append("playback epochs are not strictly increasing within this cycle")
+        for index, match in stats:
+            fields = {key: int(value) for key, value in re.findall(
+                r"(packets|decoded_frames|pcm_bytes|write_failures)=(\d+)", match[1])}
+            if (not all(fields.get(key, 0) > 0 for key in ("packets", "decoded_frames", "pcm_bytes"))
+                    or fields.get("write_failures", 1) != 0):
+                cycle_errors.append("playback stats report failure, empty audio or missing fields")
+            if not any(play_index < index for play_index, _ in plays):
+                cycle_errors.append("playback stats precede this cycle's playback start")
+        stops = [result for result in results if beginning <= result["line"] < end
+                 and result.get("command") == "stop" and result.get("ok") is True]
+        wakes = [result for result in results if beginning <= result["line"] < end
+                 and result.get("command") == "wake" and result.get("ok") is True]
+        if len(wakes) != 1:
+            cycle_errors.append("missing unique successful wake command in this upload window")
+        interruption_counts = {
+            name: "\n".join(window).count(marker) for name, marker in (
+                ("vad_interruptions", "TTS interrupted:"),
+                ("afe_vad_confirmations", "AFE VAD confirmed:"),
+                ("vad_ends", "VAD end sent:"),
+            )
+        }
+        if expected_interruptions is not None:
+            for name, count in interruption_counts.items():
+                if count != expected_interruptions:
+                    cycle_errors.append(f"expected {expected_interruptions} {name}, got {count}")
+        # A follow-up timeout can finish the interaction before the explicit stop ACK.
+        if len(stops) != 1 or (ready and stops[0]["line"] <= ready[0][0]):
+            cycle_errors.append("missing unique successful stop command after session ready")
+        sessions.append({"cycle": cycle + 1, "session_id": ready[0][1][1] if len(ready) == 1 else None,
+                         "playback_start_events": len(plays), "playback_stats_events": len(stats),
+                         "stop_line": stopped[0][0] if len(stopped) == 1 else None,
+                         "rearm_lines": [index for index, _ in rearmed],
+                         **interruption_counts,
+                         "passed": not cycle_errors, "errors": cycle_errors})
+        errors.extend(f"cycle {cycle + 1}: {error}" for error in cycle_errors)
+
+    session_ids = [session["session_id"] for session in sessions if session["session_id"] is not None]
+    if len(session_ids) != len(set(session_ids)):
+        errors.append("software wake cycles reused a realtime session id")
+    clears = [result for result in results
+              if result.get("command") == "audio_clear" and result.get("ok") is True]
+    last = sessions[-1]
+    if (len(clears) != 1 or last["stop_line"] is None
+            or not any(last["stop_line"] < index < clears[0]["line"] for index in last["rearm_lines"])):
+        errors.append("audio_clear did not complete once after the final stop and wake rearm")
+    return {"passed": not errors, "errors": errors, "sessions": sessions}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="COM3")
@@ -379,6 +489,11 @@ def main():
     summary["vad_ends"] = text.count("VAD end sent:")
     turn_trace = validate_same_session_turns(text, turns) if turns is not None else None
     summary["same_session_trace"] = turn_trace
+    cycle_trace = validate_cycle_sessions(
+        text, cycles or 0,
+        expected_interruptions=args.interruptions if args.barge_in else None,
+    ) if turns is None else None
+    summary["cycle_session_trace"] = cycle_trace
     stats = []
     for line in text.splitlines():
         if "Playback audio stats:" in line:
@@ -401,6 +516,8 @@ def main():
     cycle_gate = turns is None and (
         not error and not summary["failure"]
         and not summary["failure_flags"]["reset"]
+        and completed == cycles
+        and bool(cycle_trace and cycle_trace["passed"])
         and summary["interaction_started"] >= (cycles or 0)
         and summary["interaction_stopped"] >= (cycles or 0)
         and (not args.live_mic_playback or summary["vad_interruptions"] == 0)
