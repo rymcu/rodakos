@@ -2911,3 +2911,36 @@ bundle SHA-256 `acdf8859141f53c4eac04a2651206f823cb8c324ab2f01efb11d4ac7782c106f
 USB 合成输入不等于真实收音、扬声器或声学。根因 **INCONCLUSIVE**，资源与生产
 **NO_GO**；真实 heap/stack/ISR 余量、物理回收、并发/OOM、声学、多轮、长稳、生产根
 和真实 power-cut 门禁保持，031—038 历史证据不改写成本轮结果。
+
+## 2026-10-09 准备阶段优先级观察与 TEST/OFF 恢复 (040)
+
+040 源码提交为 `d2de3d3392d2f7f21e355911746dbf49bb2f27fb`。TEST Main 为
+`7,171,568 B`、SHA-256 `29db69e465568c681a5dc59d006c8e1680b5f2c4aa84431535972deec5617651`，
+ELF SHA-256 `8491abf49707cbcfed0fc532ea437226242bae918681df3c4853b02ec17f978c`；普通 OFF
+Main 为 `7,154,016 B`、SHA-256 `d24a2e550de32387fd2672f1a6eff5ad928fe8bdec3f2535ce72000573d7ba3b`，
+ELF SHA-256 `61bc0d0abbb77969b30cf9b99432161c2032bfaf46eec60fa99b0cf06aa8f307`。
+TEST/OFF 均为同一提交的本地构建，未查询、依赖、修复或重跑 GitHub Actions。
+
+TEST 专属观察器只采当前任务的四个端点：`prepare_begin`、`open_acquired`、
+`cloud_returned`、`open_released`；单槽完成后由
+`RODAK_RELEASE_TEST_V1 voice_prepare_take` 一次性消费。目标静态独审状态为
+`PASS_TARGET_COST_STATIC_ONLY`：新增 prepare observer DRAM 200 B，旧 tick/feed 为
+320/144 B；函数入口帧是单函数值，不是累计或峰值栈。真实 transport host 9 条返回路径、
+真实 Cloud 单次调用、锁持有 `false/true/true/false` 和 OFF 缺席均通过；过期凭据成功刷新、
+真实 PI、资源和生产验收不在覆盖范围内。
+
+TEST 包 `20261009-014715` 和普通包 `20261009-014905` 均通过官方签名验包、037 immutable
+Recovery 锚定、分区偏移、16 MiB merged、FF padding、ZIP 与目标 collection 绑定。TEST
+随后以增量方式刷写 COM3，仅写 `otadata` 和 `ota_0`；恢复时同样刷回普通 OFF 包，未擦除
+NVS、Recovery 或 OTA journal。设备 `44:1b:f6:c3:b4:30` 的一次真实 USB wake 记录了完整
+四点：scope=1、同一任务 handle、优先级 `4/4/4/4`、`flags=0`，串口 raw `16,608 B`、
+无丢行、无尾部残行。TEST 期间 WSS 因 `required_internal_stack=6144` 而启动失败，不能
+将端点快照解释为优先级继承或声学/资源通过。恢复后设备仍 `bound`、`tokenVersion=4`、
+MQTT 在线、语音连接关闭，普通 OFF boot confirmation 成功。
+
+040 本地证据位于 `D:/workspace/rodak/.codex-temp/voice-wait-040/`，其中目标叙述
+`final-target040-review.json` SHA-256 为
+`e27442e10cc32913c769dc83980d85f32ecdbb18d1781d78f0a2ac92a362ac0b`，TEST 快照的
+`lifecycle.json` 使用采集器 SHA-256
+`e2bbe7a7dfc409964de67c8152a1d70d5b0f136aa862feb991d1f8e707b70586`。根因仍
+**INCONCLUSIVE**，资源与生产继续 **NO_GO**。

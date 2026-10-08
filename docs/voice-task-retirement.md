@@ -20,7 +20,7 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
-当前 039：已完成同 boot 普通 037 固件的 normal→quiet→normal 三格取证：三格均各有两个 recovered gap，Q 在 110.1013822 秒内抑制 36 次目标 PC 发布、转发 0 次。目标 PC 消息流不是这格 stall 的必要条件，其他 MQTT/TLS、日志与 PI 候选未排除。原 publish、串口和临时 inspector 已收尾，原绑定/tokenVersion4 保留；根因 **INCONCLUSIVE**，资源与生产 **NO_GO**。
+当前 040：已完成 TEST 固件四点准备优先级观察和一次真实 USB wake 取证；普通 OFF 已恢复。真实记录为 `prepare_begin → open_acquired → cloud_returned → open_released`，四点有效优先级均为 4、`flags=0`，同一任务 handle，串口完整收集。该观察只覆盖端点，不证明整个等待区间的优先级继承、锁归属、CPU 使用或 stall 根因；根因 **INCONCLUSIVE**，资源与生产 **NO_GO**。
 
 ## 修复的退出边界
 
@@ -246,6 +246,26 @@ prime仅作准备，各格并非严格等时，不作统计效应或单 API 因�
 自然刷新可能持久化凭据，不宣称NVS全字节不变。038 TEST快照修正未部署到本轮设备。
 根因INCONCLUSIVE，资源与生产NO_GO；详细gap身份、完整哈希和独审见
 [039证据](ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039)。
+
+## 040 准备阶段自身优先级观察
+
+040 在提交 `d2de3d3392d2f7f21e355911746dbf49bb2f27fb` 的 TEST 固件中加入一次性、单槽
+观察器，只在当前任务的四个端点读取自身有效优先级：`prepare_begin`、
+`open_acquired`、`cloud_returned`、`open_released`。Start/取锁失败使用两点或三点终态；
+普通 OFF 不编译观察器和读取命令。观察器不增加任务、轮询、实时日志或音频参数，完成后
+通过 `RODAK_RELEASE_TEST_V1 voice_prepare_take` 读取并消费记录。
+
+Debug、ASan/UBSan/leak 的 observer、diagnostic 和真实 transport host 目标均通过；真实
+transport 覆盖 9 个返回路径、真实 Cloud 单次调用、锁持有 `false/true/true/false` 与 OFF
+缺席检查。目标静态审查确认 TEST 增量 DRAM 为 200 B（旧 tick/feed 为 320/144 B），并保留
+个别函数未链接或内联、单函数入口帧不等于峰值栈的边界。目标审查为
+`PASS_TARGET_COST_STATIC_ONLY`，资源和生产仍 NO_GO。
+
+TEST 包 `20261009-014715` 通过官方验包与 immutable Recovery 锚定检查后，以增量方式只写
+`otadata` 和 `ota_0`。设备 MAC `44:1b:f6:c3:b4:30` 的一次真实 USB wake 取得完整四点：
+scope=1、同一任务 handle、优先级 `4/4/4/4`、`flags=0`、串口原始 16608 B、无丢行；
+WSS 因目标资源不足未建立，不能将这次证据解释为实际 PI 发生或未发生。随后已恢复普通
+OFF 包 `20261009-014905`，绑定/tokenVersion4、WiFi、MQTT 和 boot confirmation 保持正常。
 
 ## 仍未关闭的门禁
 
