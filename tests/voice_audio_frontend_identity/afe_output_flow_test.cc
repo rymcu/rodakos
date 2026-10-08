@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "host_runtime.h"
 #include "afe_fetch_control.h"
+#include "observation_control.h"
 #include "phone_os/voice_audio_frontend.h"
 
 #include <chrono>
@@ -12,6 +13,7 @@ namespace {
 using namespace std::chrono_literals;
 namespace control = rodakos_test::afe_fetch;
 namespace host = rodakos_test::voice_frontend;
+namespace observe = rodakos_test::afe_observation;
 struct Fixture {
     rodakos::AudioCodecInput input;
     rodakos::VoiceAudioFrontend frontend{input};
@@ -19,7 +21,12 @@ struct Fixture {
         host::Reset();
         control::BeginStreaming(block_first);
     }
-    ~Fixture() { control::ForceReleaseAll(); host::ReleaseAllAudioReads(); frontend.Deinit(); }
+    ~Fixture() {
+        observe::ReleaseAll();
+        control::ForceReleaseAll();
+        host::ReleaseAllAudioReads();
+        frontend.Deinit();
+    }
 };
 template<class T> bool WaitUntil(T predicate) {
     const auto deadline = std::chrono::steady_clock::now() + 3s;
@@ -148,21 +155,54 @@ RODAK_TEST("AFE feed zero is observable and malformed feed returns recover throu
     for (const int injected : {0, -1, 1, 318, 960}) {
         Fixture fixture;
         control::SetFeedResult(injected);
+        // The SDK has returned here, but Capture still owns its producer lease.
+        observe::ArmLog("AFE feed rejected:");
         host::SupplyAudioReads(1);
         RODAK_CHECK(fixture.frontend.Start({}));
+        RODAK_CHECK(observe::WaitLogBlocked());
         RODAK_CHECK(control::WaitFeedReturns(1));
-        RODAK_CHECK(WaitUntil([] { return control::FlowSnapshot().feed_errors == 1; }));
+        const size_t expected_partial = injected == -1 || injected == 960 ? 160U
+                                        : injected == 318 ? 159U : 0U;
+        if (expected_partial != 0) {
+            RODAK_CHECK(WaitUntil([&] {
+                return control::FlowSnapshot().partial_lost == expected_partial;
+            }));
+        } else if (injected != 0) {
+            RODAK_CHECK(WaitUntil([] { return control::FlowSnapshot().fetches != 0; }));
+        }
+        const auto draining = control::FlowSnapshot();
+        RODAK_CHECK_EQ(draining.returns, size_t{1});
+        RODAK_CHECK_EQ(draining.feed_errors, size_t{1});
+        RODAK_CHECK_EQ(draining.partial_lost, expected_partial);
+        RODAK_CHECK_EQ(draining.resets, size_t{0});
+        RODAK_CHECK_EQ(draining.vad_resets, size_t{0});
+        RODAK_CHECK_EQ(draining.reset_during_operation, size_t{0});
+        RODAK_CHECK_EQ(draining.valid_samples, size_t{0});
+        if (injected == 0) RODAK_CHECK_EQ(draining.fetches, size_t{0});
+        rodakos::VoicePcmFrame frame;
+        RODAK_CHECK_FALSE(fixture.frontend.PopFrame(frame));
+        std::printf("AFE_MALFORMED_DRAIN return=%d partial_lost=%zu fetches=%zu resets=%zu\n",
+                    injected, draining.partial_lost, draining.fetches, draining.resets);
+        observe::ReleaseLog();
         if (injected != 0) {
             RODAK_CHECK(control::WaitFlowResets(1));
             RODAK_CHECK(WaitUntil([] { return control::FlowSnapshot().vad_resets == 1; }));
         }
         RODAK_CHECK(fixture.frontend.IsRunning());
+        RODAK_CHECK_FALSE(fixture.frontend.PopFrame(frame));
         host::SupplyAudioReads(4);
         RODAK_CHECK(control::WaitFlowSamples(512));
+        RODAK_CHECK(WaitUntil([&] { return fixture.frontend.PopFrame(frame); }));
+        RODAK_CHECK(frame.samples == std::vector<int16_t>(320, 250));
+        RODAK_CHECK_FALSE(frame.vad_valid);
         const auto state = control::FlowSnapshot();
-        RODAK_CHECK_EQ(state.partial_lost, size_t{0});
+        RODAK_CHECK_EQ(state.partial_lost, expected_partial);
         RODAK_CHECK_EQ(state.reset_during_operation, size_t{0});
         RODAK_CHECK_EQ(state.resets, injected == 0 ? size_t{0} : size_t{1});
+        RODAK_CHECK_EQ(state.vad_resets, state.resets);
+        std::printf("AFE_MALFORMED_RECOVERY return=%d partial_lost=%zu resets=%zu vad_resets=%zu complete_samples=%zu frame_samples=%zu vad_valid=%d\n",
+                    injected, state.partial_lost, state.resets, state.vad_resets,
+                    state.valid_samples, frame.samples.size(), frame.vad_valid);
     }
 }
 

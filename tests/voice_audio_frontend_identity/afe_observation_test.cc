@@ -255,11 +255,48 @@ RODAK_TEST("AFE stop closes an old gap without recovering it in the next generat
     RODAK_CHECK(observe::WaitLogContaining("reason=cancelled"));
     RODAK_CHECK(FindLog("reason=recovered").empty());
     flow::BeginStreaming();
+    // read #1 belongs to the stopped lifecycle; force a legitimate gap in its successor.
+    host::BlockAudioReadAt(2);
     host::SupplyAudioReads(3);
     RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(host::WaitAudioReadBlocked());
+    const auto new_generation = fixture.Snapshot().generation;
+    RODAK_CHECK(new_generation != old_generation);
+    RODAK_CHECK(WaitUntil([&] {
+        for (const auto& line : observe::Logs())
+            if (line.find("AFE input stalled:") == 0 &&
+                Number(line, "generation") == new_generation) return true;
+        return false;
+    }));
+    host::ReleaseAudioRead();
     RODAK_CHECK(flow::WaitFlowSamples(512));
-    RODAK_CHECK(fixture.Snapshot().generation != old_generation);
-    RODAK_CHECK(FindLog("reason=recovered").empty());
+    RODAK_CHECK(WaitUntil([&] {
+        for (const auto& line : observe::Logs())
+            if (line.find("AFE input gap closed:") == 0 &&
+                Number(line, "generation") == new_generation &&
+                line.find("reason=recovered") != std::string::npos) return true;
+        return false;
+    }));
+    fixture.frontend.Stop();
+    unsigned old_cancelled = 0;
+    unsigned old_recovered = 0;
+    unsigned new_recovered = 0;
+    for (const auto& line : observe::Logs()) {
+        if (line.find("AFE input gap closed:") != 0) continue;
+        std::printf("AFE_STOP_CLOSED %s\n", line.c_str());
+        const auto generation = Number(line, "generation");
+        const bool recovered = line.find("reason=recovered") != std::string::npos;
+        if (generation == old_generation) {
+            if (recovered) ++old_recovered;
+            if (line.find("reason=cancelled") != std::string::npos) ++old_cancelled;
+        }
+        if (generation == new_generation && recovered) ++new_recovered;
+    }
+    RODAK_CHECK_EQ(old_cancelled, 1U);
+    RODAK_CHECK_EQ(old_recovered, 0U);
+    RODAK_CHECK(new_recovered >= 1U);
+    std::printf("AFE_STOP_SCOPE_OBSERVED old_generation=%u new_generation=%u old_cancelled=%u old_recovered=%u new_recovered=%u\n",
+                old_generation, new_generation, old_cancelled, old_recovered, new_recovered);
 }
 
 RODAK_TEST("AFE reset closes a stalled gap with the old producer epoch maxima") {
