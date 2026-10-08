@@ -2974,3 +2974,23 @@ MQTT 在线、语音连接关闭，普通 OFF boot confirmation 成功。
 
 本轮只使用本地串口、Electron IPC 和 SQLite 只读取证，没有查询、依赖、修复或重跑
 GitHub Actions；资源与生产 **NO_GO** 保持。
+
+## 2026-10-09 Follow-up silence 与超时观察
+
+沿用同一普通 OFF 固件和 16 kHz PCM，在 COM3 使用 `--cycles 1 --late-follow-up` 完成一轮
+延迟 follow-up：首轮回复进入 follow-up listening 后静默约 28 秒，再 replay 一轮输入；
+第二轮回复完成后未再注入音频，设备报告 follow-up window timed out，随后 stop、清理并重新
+布防。设备 session ID 为 `d0076cae-d957-4ca1-a5be-b4d9ce2f811c`，串口摘要确认一个
+session、无 reset/panic/watchdog/transport failure，两个回复的播放统计均为非零且
+`write_failures=0`。
+
+Rodak IPC 事件窗口确认一次 `session.open`、一次 `wake.detected`、三次 `input.start`、
+一次最终 `input.stop`、断开事件和空 runtime session。服务端保存了两个 `vad-end` 片段和
+一个最终 `listen-stop` 尾段；这是同一 session 的 VAD 分段边界，不代表额外对话轮次。原始
+串口、摘要和 IPC 快照位于 `D:/workspace/rodakos/.codex-temp/voice-late-follow-up-20261009/`：
+`serial.log` SHA-256 为 `228d2921856e3f64a5b1718c2b62dac1bf8f345210d0e3b9f0b40d1ec935e6f8`，
+`serial.summary.json` SHA-256 为 `8099decd31f9f3b3ff6661d152baa1943d5ba7ff3dcb76962433a8a14f457c3e`，
+`server-events-cdp.json` SHA-256 为 `10e7697da1b44f23be92504bde64de9234754e386ce81f04c00287b36bd09151`。
+
+该结果只关闭 follow-up silence/timeout 的有界合成门禁；音乐恢复、Recorder 抢占、重复唤醒
+抑制、TTS 尾音、AEC/barge-in、真实收音与长稳仍开放，资源与生产 **NO_GO** 不变。

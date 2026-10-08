@@ -34,6 +34,13 @@ session list. Server VAD split the same session into six `vad-end` files plus on
 `listen-stop` file, so this is a bounded same-session lifecycle result rather than complete
 server-segmentation, acoustic or production acceptance. See [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察).
 
+The same ordinary-OFF package then passed one bounded follow-up-silence run: after about 28 seconds
+of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before
+stop/cleanup and wake re-arm. The device and IPC evidence stayed within one session and showed no
+reset, panic, watchdog or transport failure. This closes only the synthetic follow-up silence gate;
+music/Recorder coexistence, repeated-wake suppression, TTS tail, AEC/barge-in, physical acoustics,
+resource headroom and long-duration stability remain open. See [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察).
+
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
 PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,
@@ -334,7 +341,7 @@ firmware build does not change an existing hardware gate.
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
 | Resource recovery | 040 added a TEST-only 200 B prepare observer and captured four priority endpoints once; WSS failed the 6144-byte internal stack allocation, so PI, resource headroom, acoustic behavior and soak remain open. 039 same-boot normal/quiet/normal remains bounded evidence. Root cause INCONCLUSIVE; resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [040 evidence](ota-release-readiness.md#2026-10-09-准备阶段优先级观察与-testoff-恢复-040), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
-| Voice | 040 provides one synthetic USB-wake endpoint snapshot only; six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [040 evidence](ota-release-readiness.md#2026-10-09-准备阶段优先级观察与-testoff-恢复-040), [AEC integration](voice-aec-integration.md) |
+| Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns and one delayed follow-up/silence-timeout run; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
 | Voice identity | Identified-firmware NVS power-cut/reboot acceptance, actual clock synchronization, model recovery under resource pressure, wake recognition across speakers/distances/noise and two-device identity isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio | Codec startup/shutdown and other API failure recovery, hardware volume failure/retry and audible output checks; MQTT/MCP receipts prove only volatile software configuration, and remaining mutations need separate contracts | [Volume MCP](voice-volume-mcp.md), [MQTT volume effects](mqtt-volume-effects.md), [dependency correction](dependency-maintenance.md) |

@@ -27,6 +27,11 @@
 一个短的最终 `listen-stop` 片段，服务端停止归属尚未收口。完整窗口、边界和本地证据见
 [OTA readiness 的六轮记录](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察)。
 
+同一普通 OFF 随后完成一轮延迟 follow-up 与 30 秒静默超时观察：28 秒静默后 replay 成功
+进入第二轮回复，随后超时、stop、cleanup 和 wake rearm 均完成；该门禁仍是合成输入，
+不覆盖音乐恢复、Recorder 抢占、AEC/barge-in 或长稳。证据见
+[OTA readiness 的 follow-up 记录](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察)。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本
