@@ -1293,25 +1293,29 @@ void VoiceAudioFrontend::AfeFetchTask() {
             const unsigned credits = static_cast<unsigned>(afe_credit_bytes_);
             const int64_t reset_observed_us = esp_timer_get_time();
 #if defined(RODAKOS_RELEASE_TESTS)
-            int64_t tick_resync_observed_us = reset_observed_us;
+            VoiceTickSnapshot tick_resync_snapshot;
 #endif
             if (gap.began_us != 0 && (reset_ok || resync_errors >= 3)) {
                 const auto producer = afe_producer_diagnostics_.Snapshot();
                 const int64_t closed_us = esp_timer_get_time();
-#if defined(RODAKOS_RELEASE_TESTS)
-                tick_resync_observed_us = closed_us;
-#endif
                 xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                    resync_gap_id, closed_us, reset_ok || resync_errors >= 3, tick_resync_snapshot);
+#endif
                 LogAfeGapClosed(gap, reset_ok ? "resynced" : "cancelled", reset_observed_us,
                                 last_fetch_return_us, fetch_calls, feed_sequence, credits,
                                 producer, closed_us);
                 gap = {};
             } else {
                 xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                    resync_gap_id, reset_observed_us, reset_ok || resync_errors >= 3, tick_resync_snapshot);
+#endif
             }
 #if defined(RODAKOS_RELEASE_TESTS)
-            tick_token = ObserveVoiceTickBoundary("resync", generation, epoch, tick_token,
-                resync_gap_id, tick_resync_observed_us, reset_ok || resync_errors >= 3);
+            LogVoiceTickObservation("resync", tick_resync_snapshot);
             if (reset_ok) {
                 tick_token = BeginVoiceTickObservation(generation, epoch + 1, reset_observed_us);
                 tick_epoch = epoch + 1;
@@ -1359,8 +1363,9 @@ void VoiceAudioFrontend::AfeFetchTask() {
                 const bool resync = afe_resync_pending_;
                 xSemaphoreGive(mutex_);
 #if defined(RODAKOS_RELEASE_TESTS)
-                tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
-                    gap.first_stall, observed_us);
+                VoiceTickSnapshot tick_snapshot;
+                tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                    gap.first_stall, observed_us, false, tick_snapshot);
                 VoiceFeedProgressSnapshot feed_progress;
                 if (producer.stage == AfeProducerStage::kApiBoundary &&
                     producer.generation == generation && producer.epoch == epoch) {
@@ -1372,6 +1377,8 @@ void VoiceAudioFrontend::AfeFetchTask() {
                     feed_progress.status = kVoiceFeedProgressStale;
                     feed_progress.flags = kVoiceFeedProgressProducerUnaligned | kVoiceFeedProgressArmAfterUnknown;
                 }
+                // Logging can block while Capture advances the live feed identity.
+                LogVoiceTickObservation("stall", tick_snapshot);
                 LogVoiceFeedProgress("open", feed_progress);
 #endif
                 ESP_LOGW(TAG, "AFE input stalled: phase=%s generation=%u count=%u feeds=%u returns=%u credits=%u epoch=%u gap_id=%u uncertain=%u feed_active=%d resync=%d wait_us=%u observe_gap_us=%u observe_lock_us=%u observe_gap_max_us=%u observe_lock_max_us=%u fetch_return_age_us=%u output_age_us=%u",
@@ -1406,11 +1413,15 @@ void VoiceAudioFrontend::AfeFetchTask() {
             const auto producer = afe_producer_diagnostics_.Snapshot();
             const int64_t closed_us = esp_timer_get_time();
             xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+            VoiceTickSnapshot tick_snapshot;
+            tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                gap.first_stall, closed_us, false, tick_snapshot);
+#endif
             LogAfeGapClosed(gap, "cancelled", event_us, last_fetch_return_us, fetch_calls,
                             feed_sequence, credits, producer, closed_us);
 #if defined(RODAKOS_RELEASE_TESTS)
-            tick_token = ObserveVoiceTickBoundary("cancelled", generation, epoch, tick_token,
-                gap.first_stall, closed_us);
+            LogVoiceTickObservation("cancelled", tick_snapshot);
 #endif
             gap = {};
         } else {
@@ -1450,11 +1461,15 @@ void VoiceAudioFrontend::AfeFetchTask() {
                 const auto producer = afe_producer_diagnostics_.Snapshot();
                 const int64_t closed_us = esp_timer_get_time();
                 xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+                VoiceTickSnapshot tick_snapshot;
+                tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                    gap.first_stall, closed_us, false, tick_snapshot);
+#endif
                 LogAfeGapClosed(gap, "cancelled", result_observed_us, last_fetch_return_us, fetch_calls,
                                 cancelled_feed_sequence, cancelled_credits, producer, closed_us);
 #if defined(RODAKOS_RELEASE_TESTS)
-                tick_token = ObserveVoiceTickBoundary("cancelled", generation, epoch, tick_token,
-                    gap.first_stall, closed_us);
+                LogVoiceTickObservation("cancelled", tick_snapshot);
 #endif
                 gap = {};
             } else {
@@ -1494,11 +1509,15 @@ void VoiceAudioFrontend::AfeFetchTask() {
             const auto producer = afe_producer_diagnostics_.Snapshot();
             const int64_t closed_us = esp_timer_get_time();
             xSemaphoreGive(mutex_);
+#if defined(RODAKOS_RELEASE_TESTS)
+            VoiceTickSnapshot tick_snapshot;
+            tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                gap.first_stall, closed_us, false, tick_snapshot);
+#endif
             LogAfeGapClosed(gap, "recovered", result_observed_us, last_fetch_return_us, fetch_calls,
                             output_feed_sequence, output_credits, producer, closed_us);
 #if defined(RODAKOS_RELEASE_TESTS)
-            tick_token = ObserveVoiceTickBoundary("recovered", generation, epoch, tick_token,
-                gap.first_stall, closed_us);
+            LogVoiceTickObservation("recovered", tick_snapshot);
 #endif
             gap = {};
         } else {

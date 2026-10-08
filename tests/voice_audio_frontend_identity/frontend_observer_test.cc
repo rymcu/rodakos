@@ -7,6 +7,7 @@
 
 #include "phone_os/voice_audio_frontend.h"
 #include "phone_os/voice_feed_progress_observer.h"
+#include "phone_os/voice_tick_observer.h"
 
 #include <atomic>
 #include <chrono>
@@ -56,6 +57,11 @@ uint64_t Field(const std::string& line, const std::string& key) {
     const auto at = line.find(" " + key + "=");
     RODAK_CHECK(at != std::string::npos);
     return std::stoull(line.substr(at + key.size() + 2));
+}
+std::string FindReport(const std::string& contains) {
+    for (const auto& line : observe::Logs())
+        if (line.find(contains) != std::string::npos) return line;
+    return {};
 }
 
 struct Fixture {
@@ -351,4 +357,166 @@ RODAK_TEST("TEST frontend retires failed close sampling before capture deletion 
     RODAK_CHECK((after_delete.flags & rodakos::kVoiceFeedProgressSamplingRetired) != 0);
     RODAK_CHECK_FALSE(after_delete.strict_counts_known);
     RODAK_CHECK_EQ(after_delete.api_return_us, 0);
+}
+
+RODAK_TEST("TEST frontend freezes open feed before the first stall tick log blocks") {
+    Fixture fixture;
+    host::SupplyAudioReads(1);
+    RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(flow::WaitFeedBlocked(1));
+    const auto producer = fixture.Producer();
+    const auto armed = fixture.Open(producer);
+    platform::Tick(0, fixture.frontend.task_);
+    observe::ArmLog("VoiceTickObserver: window: event=stall");
+    observe::AdvanceUs(200000);
+    RODAK_CHECK(observe::WaitLogBlocked());
+    const auto blocked_at = observe::NowUs();
+    observe::AdvanceUs(200000);
+    platform::Tick(0, fixture.frontend.afe_fetch_task_);
+    flow::ReleaseFirstFeed();
+    const bool producer_progressed = flow::WaitFeedReturns(1) &&
+        WaitUntil([&] { return !CompleteReport(producer).empty(); });
+    observe::ReleaseLog();
+    const bool open_logged = WaitUntil([&] { return !UnalignedOpenReport(producer, 0).empty(); });
+    const auto report = UnalignedOpenReport(producer, 0);
+    fixture.frontend.Stop();
+    const bool open_frozen_before_first_log = open_logged &&
+        Field(report, "status") == rodakos::kVoiceFeedProgressOpen &&
+        Field(report, "ticket") == armed.identity.ticket &&
+        Field(report, "target_samples") == 1 && Field(report, "other_samples") == 0 &&
+        Field(report, "freeze_after_us") <= static_cast<uint64_t>(blocked_at);
+    std::printf("TEST_SNAPSHOT_OPEN producer_progressed=%d open_frozen_before_first_log=%d\n",
+                producer_progressed, open_frozen_before_first_log);
+    RODAK_CHECK(producer_progressed);
+    RODAK_CHECK(open_frozen_before_first_log);
+}
+
+namespace {
+void CheckRecoveredFreeze(bool cross_deadline) {
+    Fixture fixture;
+    host::BlockAudioReadAt(4);
+    host::SupplyAudioReads(4);
+    RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(flow::WaitFeedBlocked(1));
+    RODAK_CHECK(observe::WaitLogContaining("AFE stall maxima:"));
+    const auto producer = fixture.Producer();
+    const auto old_token = rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch);
+    RODAK_CHECK_NE(old_token, 0U);
+    observe::ArmLog("AFE input gap closed:");
+    flow::ReleaseFirstFeed();
+    RODAK_CHECK(observe::WaitLogBlocked());
+    const auto blocked_at = observe::NowUs();
+    const auto new_token = rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch);
+    const auto closed = FindReport("AFE input gap closed:");
+    observe::AdvanceUs(cross_deadline ? 21000000 : 500000);
+    platform::Tick(0, fixture.frontend.task_);
+    platform::Tick(1, fixture.frontend.afe_fetch_task_);
+    observe::ReleaseLog();
+    const bool logged = observe::WaitLogContaining("VoiceTickObserver: window: event=recovered");
+    const auto report = FindReport("VoiceTickObserver: window: event=recovered");
+    host::ReleaseAudioRead();
+    fixture.frontend.Stop();
+    const bool recovered_frozen_before_first_log = logged &&
+        closed.find("reason=recovered") != std::string::npos &&
+        Field(report, "token") == old_token && new_token != 0 && new_token != old_token &&
+        Field(report, "status") == rodakos::kVoiceTickOk &&
+        Field(report, "freeze_end_us") <= static_cast<uint64_t>(blocked_at);
+    const auto stopped = FindReport("VoiceTickObserver: window: event=flow_stop");
+    const bool token_kept_until_stop = !stopped.empty() && Field(stopped, "token") == new_token &&
+        (!cross_deadline || Field(stopped, "status") == rodakos::kVoiceTickExpired);
+    std::printf("TEST_SNAPSHOT_RECOVERED cross_deadline=%d recovered_frozen_before_first_log=%d token_kept_until_stop=%d\n",
+                cross_deadline, recovered_frozen_before_first_log, token_kept_until_stop);
+    RODAK_CHECK(recovered_frozen_before_first_log);
+    RODAK_CHECK(token_kept_until_stop);
+}
+
+void CheckCancelledFreeze(bool after_fetch) {
+    Fixture fixture(false);
+    size_t pending = 0;
+    if (after_fetch) {
+        flow::BeginScript();
+        pending = flow::QueueFetch({});
+    }
+    host::SupplyAudioReads(1);
+    RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(flow::WaitFeedReturns(1));
+    RODAK_CHECK(observe::WaitLogContaining("AFE stall maxima:"));
+    const auto producer = fixture.Producer();
+    const auto old_token = rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch);
+    RODAK_CHECK_NE(old_token, 0U);
+    if (after_fetch) {
+        host::SupplyAudioReads(2);
+        RODAK_CHECK(flow::WaitFetchEntered(pending));
+    }
+    observe::ArmLog("AFE input gap closed:");
+    std::thread stopper([&] { fixture.frontend.Stop(); });
+    const bool cancelled = WaitUntil([&] { return !fixture.frontend.IsRunning(); });
+    if (after_fetch) flow::ReleaseFetch(pending);
+    const bool blocked = observe::WaitLogBlocked();
+    const auto blocked_at = observe::NowUs();
+    const auto new_token = rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch);
+    observe::AdvanceUs(200000);
+    platform::Tick(0, fixture.frontend.task_);
+    observe::ReleaseAll();
+    flow::ForceReleaseAll();
+    stopper.join();
+    const auto report = FindReport("VoiceTickObserver: window: event=cancelled");
+    const bool cancelled_frozen_before_first_log = cancelled && blocked && !report.empty() &&
+        FindReport("AFE input gap closed:").find("reason=cancelled") != std::string::npos &&
+        Field(report, "token") == old_token && new_token != 0 && new_token != old_token &&
+        Field(report, "freeze_end_us") <= static_cast<uint64_t>(blocked_at);
+    std::printf("TEST_SNAPSHOT_CANCELLED after_fetch=%d cancelled_frozen_before_first_log=%d\n",
+                after_fetch, cancelled_frozen_before_first_log);
+    RODAK_CHECK(cancelled_frozen_before_first_log);
+}
+}
+
+RODAK_TEST("TEST frontend freezes recovered tick before the closure log blocks") {
+    CheckRecoveredFreeze(false);
+}
+
+RODAK_TEST("TEST frontend retains recovered snapshot when its log crosses the deadline") {
+    CheckRecoveredFreeze(true);
+}
+
+RODAK_TEST("TEST frontend freezes prefetch cancellation before the closure log blocks") {
+    CheckCancelledFreeze(false);
+}
+
+RODAK_TEST("TEST frontend freezes returned cancellation before the closure log blocks") {
+    CheckCancelledFreeze(true);
+}
+
+RODAK_TEST("TEST frontend freezes old epoch before the resync closure log blocks") {
+    Fixture fixture;
+    flow::SetFeedResult(-1);
+    host::SupplyAudioReads(1);
+    RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(flow::WaitFeedBlocked(1));
+    RODAK_CHECK(observe::WaitLogContaining("AFE stall maxima:"));
+    const auto producer = fixture.Producer();
+    const auto old_token = rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch);
+    RODAK_CHECK_NE(old_token, 0U);
+    observe::ArmLog("AFE input gap closed:");
+    flow::ReleaseFirstFeed();
+    RODAK_CHECK(observe::WaitLogBlocked());
+    const auto blocked_at = observe::NowUs();
+    const bool old_epoch_finished = rodakos::CurrentVoiceTickObservation(
+        producer.generation, producer.epoch) == 0;
+    observe::AdvanceUs(200000);
+    platform::Tick(0, fixture.frontend.task_);
+    observe::ReleaseLog();
+    const bool logged = observe::WaitLogContaining("VoiceTickObserver: window: event=resync");
+    const auto report = FindReport("VoiceTickObserver: window: event=resync");
+    const bool new_epoch_open = WaitUntil([&] {
+        return rodakos::CurrentVoiceTickObservation(producer.generation, producer.epoch + 1) != 0;
+    });
+    fixture.frontend.Stop();
+    const bool resync_frozen_before_first_log = logged && old_epoch_finished &&
+        Field(report, "token") == old_token && Field(report, "epoch") == producer.epoch &&
+        Field(report, "freeze_end_us") <= static_cast<uint64_t>(blocked_at);
+    std::printf("TEST_SNAPSHOT_RESYNC resync_frozen_before_first_log=%d new_epoch_open=%d\n",
+                resync_frozen_before_first_log, new_epoch_open);
+    RODAK_CHECK(resync_frozen_before_first_log);
+    RODAK_CHECK(new_epoch_open);
 }

@@ -102,6 +102,29 @@ ctest --test-dir <build> -R '^voice_frontend_test_observer_integration$' --outpu
 编译失败、超时、崩溃或其他断言失败均不计为检出。
 既有 OFF 的两个 observation 负控只更新精确注入片段，原判据保留。
 
+### 038 首条日志前冻结既有快照
+
+完整 TEST 前端另有六项日志门闩回归，合计十三项。stall 在首条 tick 日志前复制
+open feed；recovered、fetch 前/返回后 cancelled 与 resync 在首条 closure 日志前
+冻结 tick。测试在日志阻塞期间继续 feed/credit 发布、推进模拟时钟和注入 tick，
+核对旧 snapshot 的身份/时间以及已切换的新 token；恢复日志跨过原20秒期限后，
+此前冻结的 OK 不能被追溯改成 expired，后续窗口仍按原期限到期。
+
+所有冻结都在业务 mutex 释放之后。Capture 的 SDK 前 arm、返回后 credit 锁等待前
+close 不变；20秒、8条 feed 加1条 summary、失败/stale语义和普通 OFF 路径保留。
+这只去掉明确的日志先行间隔，不把两个独立快照变成原子事件，也不证明真实 stall
+根因。flow-stop保留原观察点。新增局部 snapshot 的目标栈成本须以精确产物单独核对。
+
+`run_snapshot_order_negative.py` 接受已冻结的037完整 frontend 源文件，先核验其
+规范化 SHA，再用同提交配套头编译一次旧顺序，并分别运行上述六个新用例。每项必须
+命中指定 marker 和断言，退出码为1且只报告该单例失败；超时/构建失败不算检出：
+
+```text
+python3 tests/voice_audio_frontend_identity/run_snapshot_order_negative.py \
+  --idf-path /mnt/c/esp/v6.0.2/esp-idf \
+  --baseline-source <frozen-037-voice_audio_frontend.cc> --output <new-evidence-directory>
+```
+
 034 的 `feeds=124 / returns=123` 只证明一次 feed 已准入、返回尚未记账，
 不能区分调用前抢占、SDK 调用内部或返回后的业务锁等待，也不能指定 TLS/DSP 根因。
 035 在普通与 `RODAKOS_RELEASE_TESTS` 固件保留同一轻量观测实现；100ms 阈值、
