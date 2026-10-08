@@ -257,8 +257,17 @@ its vector destructors before retirement, Assistant closes its transport before 
 and Wake coalesces Stop/Disable/Deinit completion by operation epoch. AFE fetch retains its
 existing external delete and wake notification retains its ordinary internal stack.
 See [030 video contract](task-retirement.md) and [031 voice contract](voice-task-retirement.md).
-The deployed device remains on 030; 031 has local software/build evidence but no package or
-hardware acceptance of the three voice Deinit paths.
+The 032 diagnostic is compiled only with `RODAKOS_RELEASE_TESTS=ON`. It admits a canonical
+request ID into one accepting/pending/executing slot; the permanent internal-stack main task
+calls Wake Deinit, observes task-name absence without reinitializing Wake, then attempts one
+Wake Start. Listening with all three workers and idle cycles have different result categories.
+Callbacks run outside the slot mutex; busy checks and serial-write blocking do not arbitrate
+UI/MQTT operations globally. The ordinary OFF ELF excludes the TU, hooks, command and fault
+markers. Test-flavor device observations and ordinary restoration have separate identities in
+[032 evidence](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032).
+Independent review records one idle and three Listening cycles on the test image, followed by
+ordinary OFF guarded boot and one voice-session stop/rearm window. The latter does not execute
+the absent lifecycle diagnostic; physical full-resource recovery and production gates remain open.
 
 ### Deferred serial and Camera navigation
 

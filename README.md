@@ -7,12 +7,15 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-The latest recorded COM3 deployment is package `20261008-055334` from `34c9e645`, preserving
-NVS and the original binding. Its bounded 030 evidence is recorded in
-[release readiness](docs/ota-release-readiness.md#2026-10-08-video-task-retirement-and-navigation-030).
-The current 031 source also migrates three voice workers to external retirement, with local
-host tests and an ESP-IDF build; it has not been packaged, deployed or accepted on hardware.
-See [voice task retirement](docs/voice-task-retirement.md).
+032 source `514ebb8c` retains the 031 voice retirement implementation and adds a test-only
+USB lifecycle cycle. Test package `20261008-080207` was used for the bounded matrix;
+ordinary OFF package `20261008-081054` has passed its separate package audit and guarded
+Recovery/main/OTA/Home restoration. Independent review records one idle and three Listening
+cycles on the test image, then a separate ordinary voice-session stop/rearm observation.
+The device remains on the ordinary OFF package with its original binding and tokenVersion 4.
+See [032 evidence](docs/ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) and
+[voice task retirement](docs/voice-task-retirement.md). The 030 video record retains its own
+firmware identity and limits.
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -37,11 +40,11 @@ See [voice task retirement](docs/voice-task-retirement.md).
 - Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
 - Five video workers now retire through an external owner after their complete body and local
   destructors return, avoiding IDF's exit-time cleanup-task creation. Serial app launch and Camera
-  Home use a bounded precreated queue. The deployed 030 package has seven correlated Stops,
+  Home use a bounded precreated queue. The historical 030 package recorded seven correlated Stops,
   four bounded local-Camera/remote-Display order checks and one remote-pointer Home check.
   The same-boot internal minimum is 359 B; image quality, resource recovery and production
-  release remain open. The three voice exits are migrated in 031 source with their device
-  Deinit gate still open. See [task retirement](docs/task-retirement.md) and
+  release remain open. The three voice exits use the 031 implementation; 032 distinguishes
+  test-flavor Deinit observations from ordinary OFF firmware restoration. See [task retirement](docs/task-retirement.md) and
   [voice task retirement](docs/voice-task-retirement.md).
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.

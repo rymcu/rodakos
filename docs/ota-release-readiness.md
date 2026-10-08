@@ -14,18 +14,17 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-The latest recorded device package is `20261008-055334`, built from
-`34c9e6453344b8eb7896ab5476ef222504c12a94`, with the existing development root and preserved
-NVS/binding/token version 4. Guarded boot, closed normal/matrix windows, seven correlated Stops
-and the remote-pointer Home observation are recorded separately in
-[030](#2026-10-08-video-task-retirement-and-navigation-030). Resource/production **NO_GO**,
-Camera quality and the three voice exits on hardware remain open. The later
-[031 software slice](#2026-10-08-voice-task-retirement-031) migrates those exits in source,
-with local tests/build only and no new package or deployment. Historical
-[029](#2026-10-08-aes-dma-allocation-cleanup-029),
-[028](#2026-10-08-cooperative-dvp-worker-validation-028) and
-[027](#2026-10-08-candidate-capacity-and-camera-failure-027) retain their own identities and limits. Exact Stop evidence remains in
-[026](#2026-10-07-exact-stream-stop-026); earlier dated windows retain their own firmware identity.
+032 source `514ebb8c47b0409e4bc1ac6dff95e57af6cc615e` retains the 031 voice retirement
+implementation. Test package `20261008-080207` was used for the bounded lifecycle matrix;
+ordinary OFF package `20261008-081054` has passed its separate package audit and guarded
+Recovery/main/OTA/Home restoration. Independent closed-window review records one idle and
+three Listening cycles on the test image, then a separate ordinary session stop/rearm window.
+The device remains on the ordinary OFF package, bound with tokenVersion 4 and MQTT online.
+See [032](#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) for separate source, software and package identities.
+The [031 software slice](#2026-10-08-voice-task-retirement-031) and
+[030 video record](#2026-10-08-video-task-retirement-and-navigation-030) retain their original
+results, as do 027–029 and earlier dated windows. Resource/production **NO_GO**, physical
+full-resource return, Camera quality, arbitrary OOM, concurrency and soak remain open.
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -1899,3 +1898,135 @@ Evidence is under `D:/workspace/rodak/.codex-temp/voice-retirement-031/`, includ
 Actual voice-task Deinit, complete task/stack/hardware resource return, heap headroom,
 audio/TLS concurrency, acoustic quality, arbitrary OOM, physical power cuts, production root
 and eight-hour soak remain open. Resource and production release remain **NO_GO**.
+
+## 2026-10-08 Voice lifecycle diagnostic and restoration 032
+
+Source [`514ebb8c47b0409e4bc1ac6dff95e57af6cc615e`](https://github.com/rymcu/rodakos/commit/514ebb8c47b0409e4bc1ac6dff95e57af6cc615e)
+adds a test-only USB lifecycle diagnostic while retaining all three 031 voice services and the
+shared retirement implementation byte-for-byte. The command is compiled only with
+`RODAKOS_RELEASE_TESTS=ON`; a fixed single slot admits one canonical ID and the permanent
+internal-stack main task performs Wake Deinit, task-name observations and one Wake Start.
+The [contract](voice-task-retirement.md#032-诊断与普通固件的边界) and
+[host target](../tests/voice_lifecycle_diagnostic/README.md) define accepted versus complete,
+three-task Listening versus idle results, restoration checks and sampled busy boundaries.
+
+Fourteen real diagnostic-TU cases pass in Debug and ASan/UBSan/leak. Separate wire checks
+exercise the real JSON printer and require an empty macro-off object symbol table. The OFF
+guard object alone disables sanitizer compiler-registration stubs; the diagnostic TU remains
+instrumented. This is not a full target-hardware scheduling or acoustic test.
+
+Both packages passed local ESP-IDF 6.0.2 builds and independent source/object/map/ELF,
+signature, ZIP, partition and trust checks. Version is `0.1.2-dev.1`; both use the original
+development signing root, with `developmentPackage=true`.
+
+| Identity | Diagnostic test | Ordinary OFF |
+| --- | --- | --- |
+| Package | `20261008-080207` | `20261008-081054` |
+| taskNo | `voice-lifecycle-032-test` | `voice-lifecycle-032-production` |
+| Build flag / flavor | `RODAKOS_RELEASE_TESTS=ON` / `release-fault-test` | `RODAKOS_RELEASE_TESTS=OFF` / `production` |
+| Main filename / image type | `rodakos_release_test.bin` / `hardware-test` | `rodakos.bin` / `app` |
+| Main size | 7,155,280 B | 7,148,928 B |
+| Main SHA-256 | `fea8d8d2bc9519eaad702041b9dbde79529c7656cfc52edffcda06a43ec3ed5b` | `a7efbc12243ca0897b152b0d6b084061813af064b663f711688b0b1129fd7638` |
+| ELF SHA-256 | `1fb107c329e74f8a17ede2603bef75446f32c000f4cc37ff0b393818bcca39d6` | `a187c6d8379b382a2a81077ae0a5bc2376a8a433a1f2d0ba587028f5ad225fe9` |
+
+The ordinary compile database/project description excludes the diagnostic TU, its link map
+contains no diagnostic object, and main/serial compile commands have no release-test define.
+Main/serial objects and final bin/ELF contain no diagnostic hooks, `voice_cycle`,
+`RODAK_VOICE_CYCLE` or fault marker. The test and ordinary outputs are frozen separately;
+decoding test hardware evidence must use the test ELF, even after rebuilding ordinary firmware.
+
+For both packages, bootloader, partition table, initial otadata, Recovery and public key match
+the installed 030 baseline byte-for-byte, as do merged bytes outside the Main partition.
+Authority v3, AES/Camera generated patches and the original development root are retained.
+The shared retirement pool remains a 448 B PSRAM request and 21 B internal global symbols;
+the three voice instances add 16/16/32 B against 030. The test controller adds 44 B plus an
+8 B static guard, excluding other pointer/mutex/allocation metadata. None of these static
+measurements establishes net free-heap gain or permits comparing minima across boots.
+
+Local independent records are under Rodak `.codex-temp/voice-lifecycle-032/`:
+
+| Record | SHA-256 |
+| --- | --- |
+| `verification.json` | `6ce665a0335f283eb94c03d7e8b6f0513657debfa78b37cb01c87b571555b7b9` |
+| `package-review/test-20261008-080207/review.json` | `c75abb3b1434939e7b7f69a7a03dca4770bd6dc2c2d0181eeb5852aef1a935ad` |
+| `package-review/production-20261008-081054/review.json` | `4695d94adf0cb0e0e9fedb894ea6ef977b47b17459e5296c2e6407ab8a0e3197` |
+| `hardware-review/hardware-review.json` | `02f18c3ed68dedd66f915a0ea831bad774f710dcb51358dff01384280a1532ab` |
+| `hardware-review/matrix-review.json` | `f0e5d0d5bf1c3c9348ec398d63f9dec71c89d8baaadd407ff5f5d39529ef8f8b` |
+| `hardware-review/production-review.json` | `93024ad5a833ed6368d587c55cf6a78ecf2f57c5b1f0c8f7d35251a908256998` |
+
+### Closed test matrix
+
+The test package was installed through guarded COM3 refresh. The `matrix-a` collector has
+81,419 raw bytes with contiguous RX offsets, complete-line/last-byte timing, 14 transmitted
+commands and 30 matched replies. All four requests have ordered accepted/before/after/recovered/
+complete records. Listening sessions each reload 256 synthetic samples as one 512 B zero-PCM
+block, establish a distinct WSS session with ready/input.start and host capturing, then call
+the cycle directly without first stopping the session.
+
+| ID / target | Before → after → recovered tasks | Internal free before → after → recovered | Complete to last actual RX before next TX | Fresh post-cycle telemetry |
+| --- | --- | --- | --- | --- |
+| 3201 idle | 011 → 000 → 011 | 20,379 → 30,403 → 18,175 B | 73.625 s | 2 |
+| 3202 Listening | 111 → 000 → 011 | 6,339 → 30,679 → 20,111 B | 92.265 s | 3 |
+| 3203 Listening | 111 → 000 → 011 | 6,255 → 30,779 → 20,191 B | 199.890 s | 7 |
+| 3204 Listening | 111 → 000 → 011 | 5,803 → 30,863 → 20,227 B | 85.828 s | 3 |
+
+Task-bit order is assistant/capture/supervisor. Each three-task before is enabled, Listening
+and not stopping; all after snapshots have all three task names absent, and all recovered snapshots
+retain enabled/listening with assistant absent and capture/supervisor present. 3201 reports
+`idle_cycle_pass`; 3202–3204 report `three_task_pass`. Binding/token4 and MQTT remain present
+in the supplied snapshots, and post-cycle session lists are empty.
+
+Durations use actual RX monotonic timestamps, not collector lifetime. The old first-two values
+74.828/92.594 s included next-command ACK bytes sharing the coarse Windows monotonic tick.
+Finer UTC timestamps and raw offsets exclude those post-TX bytes, yielding the corrected table;
+the original script/results remain preserved. Collector lifetime is 726.844 s and actual total
+RX span is 725.563 s. One 10 ms cross-task firmware-log prefix reversal is retained; phase and
+telemetry uptime checks remain separate from log ordering.
+
+Preserve **2 MQTT fragment warnings, 4 MultiNet `commands not initialized` errors, 3 AFE
+ringbuffer-empty warnings and 2 AFE fetch-rejected warnings**. All four MultiNet errors occur
+during the before/after cleanup interval. Source review locates the error at empty command-
+registry clearing; it does not establish who first cleared the registry inside the prebuilt
+model destructor or prove a double-free. AFE rejection marks PCM discontinuity and is not
+acoustic/AEC success. The test boot's diagnostic internal minimum is **4,087 B**; notification
+stack minima are **2,204 / 2,204 / 508 B**. These small margins remain open resource concerns.
+No fatal/reset/watchdog or RX-read error appears in the closed capture; filtered host event
+lists do not prove the absence of every host warning. Capture ends explicitly with the port
+closed, no outstanding request, no retries and no implicit cleanup commands.
+
+### Ordinary OFF restoration and separate session window
+
+The ordinary package was subsequently restored with guarded flashing. The recorded writes
+are 8,192 B otadata at `0xf000` and 7,148,928 B Main at `0x2a0000`, both verified. The
+Recovery → Main (`a187c6d83…`) → local OTA confirmation → Home handoff completes. Recovery's
+own software reset/version/ELF belongs to the flash handoff, not a reset during the later window.
+The boot log retains nine SD/NVS/WiFi warnings separately from session diagnostics.
+
+The closed `production-smoke` window has 32,139 raw bytes and five commands/replies, with
+151.125 s of actual cold RX before the first audio command. Synthetic-silence session
+`3a527ac9-e247-43ee-98b7-4a34778d34cf` has ready/input.start and host capturing. After the
+Stop reply, actual `Interaction stopped` and wake rearm are recorded. Actual RX coverage to
+before the next audio_clear is **73.203 s from stopped** and **72.656 s from rearm**, with
+three fresh telemetry samples after stopping. One AFE empty and one fetch-rejected warning
+remain; no fatal/reset/watchdog or RX-read error appears in this closed window.
+
+The ordinary boot's internal minimum is **4,391 B**. Its later wake-health sample records
+internal free/largest **21,127/6,400 B** and supervisor-stack minimum **1,796 B**; these are
+samples, not a final complete allocation census. They are not compared as improvements over
+the test boot's 4,087 B or historical 030's 359 B. Collector lifetime is 392.250 s and actual
+total RX span is 391.625 s; the port is explicitly closed with no outstanding request.
+
+The final `2026-10-08T00:27:49.598Z` device snapshot remains bound/tokenVersion 4, MQTT online
+and voice disconnected. The `00:27:50.150Z` UI snapshot has serial disconnected, zero camera
+images and zero Stop buttons; the preview is not playing. An unrelated image element is not
+counted as an active video stream. Both capture lifecycles and final process evidence are
+retained in the hardware review.
+
+Test-flavor task disappearance and restored wake listening remain evidence for that precise
+test image. Ordinary OFF boot/smoke does not execute the
+absent diagnostic, and source identity is not a second direct hardware trial. Retain synthetic
+silence versus physical microphone/recognition distinctions. Complete physical resource
+recovery, heap headroom, arbitrary OOM, DMA/IRQ/cache-off, media/audio/TLS concurrency,
+acoustic quality, physical power cuts, production root and eight-hour soak remain open.
+Resource and production release remain **NO_GO**; 030's 359 B and 031's unflashed build retain
+their original identities and are not 032 measurements.

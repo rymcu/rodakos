@@ -1,15 +1,18 @@
-# 031 语音任务回收合同与软件验证
+# 语音任务回收合同与 032 分层验证
 
 更新：2026-10-08。031 把 Assistant I/O、前端采集和唤醒 supervisor 的三个 WithCaps
-任务接入 [030 共享回收器](task-retirement.md)。本切片已完成宿主软件回归及本地 ESP-IDF
-6.0.2 构建；尚未构包、部署或取得这三个任务实际 Deinit 的设备证据。
+任务接入 [030 共享回收器](task-retirement.md)。032 保持这三条服务及回收器源码不变，新增
+测试专用 USB lifecycle cycle；软件、测试包和普通 OFF 包分别验证。独审确认测试镜像下
+一次 idle、三次 Listening 的有限任务退出与恢复观察。随后恢复普通 OFF 包，完成受保护
+刷写、Recovery/main/OTA/Home 启动及一次会话 stop/rearm；完整物理资源和生产门禁仍开放。
 
 031 源码提交：[`7ad01b7452102fd1a6a2f64d4102ae42031509b2`](https://github.com/rymcu/rodakos/commit/7ad01b7452102fd1a6a2f64d4102ae42031509b2)。
 
-设备 `44:1b:f6:c3:b4:30` 的最后已记录部署仍是源码 `34c9e645`、包
-`20261008-055334` / `task-retirement-030` / `0.1.2-dev.1`。031 不改写该包的五条视频路径、
-7 条关联停止、359 B 同 boot internal 最低值或资源/生产 **NO_GO** 结论。
-源码与部署身份分别以 [release readiness](ota-release-readiness.md) 的对应记录为准。
+032 源码提交：[`514ebb8c47b0409e4bc1ac6dff95e57af6cc615e`](https://github.com/rymcu/rodakos/commit/514ebb8c47b0409e4bc1ac6dff95e57af6cc615e)。
+测试包 `20261008-080207` 与普通 OFF 包 `20261008-081054` 共享该源码，具有不同 Main/ELF
+和构建开关。制品、部署与硬件结果见 [032 readiness](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032)。
+030 的五条视频路径、7 条关联停止、359 B 同 boot internal 最低值和 NO_GO 保持原记录；
+不把它们改写成 032 的资源观测。
 
 ## 修复的退出边界
 
@@ -81,15 +84,39 @@ Frontend 在 AFE feed 记录局部 vector 的实际地址，通过链接器包�
 及 SIGABRT，且不得出现 vector 释放或无关线程析构终止标记。跳过 vector 析构的变体则必须
 精确触发“任务删除前缓冲区已释放”断言。超时、编译失败及任意非零退出均不算检出。
 
-本地 ESP-IDF 6.0.2 构建的主应用为 **7,148,928 B**，SHA-256
+031 当时本地 ESP-IDF 6.0.2 构建的主应用为 **7,148,928 B**，SHA-256
 `cd3942e01f201569534a0deab7ed0b86680ce1094894986fa0903dd832fd5c07`。
 编译前后核对的生产输入未变化；这仅是本地构建产物，不是签名包、已安装固件或新设备证据。
 
-## 仍未关闭的门禁
+## 032 诊断与普通固件的边界
 
-031 尚未构包部署，也未在设备上观察 assistant、capture、wake 三条完整 Deinit 退出。
-普通串口唤醒/停止会话不能自动等同于常驻 Capture 与 Wake supervisor 的 Deinit 验收。
-旧包的 COM3、MQTT、音量回执、视频停止及 Home 证据保持各自身份。
+`RODAK_RELEASE_TEST_V1 voice_cycle <id>` 仅在 `RODAKOS_RELEASE_TESTS=ON` 时存在。单槽
+保留 accepting/pending/executing，请求 ID 每 boot 严格递增且只有 accepted 消耗；现有 main
+internal 栈任务执行一次 Wake.Deinit 与一次恢复 Wake.Start，不新增 worker、不改 enabled
+偏好。after 仅读取三个任务名和不会 Init 的 Assistant 快照，不调用 Wake.GetState。
+
+三任务结果要求 before 为 enabled、Listening、非 stopping 且 assistant_io、voice_frontend、
+voice_wake 均存在；after 三者缺席；恢复后 assistant 缺席、capture/supervisor 存在、监听
+恢复且 enabled 前后一致。idle/disabled-idle 单独分类，不能代替三任务验收。忙态门禁是
+两次快照及串口变更阻断，不是 UI/MQTT 全局互斥，也不覆盖 Music library scan。
+
+[诊断宿主目标](../tests/voice_lifecycle_diagnostic/README.md) 的 14 个用例在 Debug 与
+ASan/UBSan/leak 通过，另实际检查 JSON 输出和 OFF TU 空符号。普通包最终 ELF、bin、
+main/serial 对象不含诊断/fault marker 或 hook，新 TU 不在编译数据库和 map；两种包的
+bootloader、分区表、otadata、Recovery、公钥及 merged 的非 Main 区域与 030 一致。
+
+矩阵请求 3201（idle）与 3202–3204（Listening）分别得到完整结果链，complete 后到下一次
+TX 前的实际 RX 跨度为 73.625 / 92.265 / 199.890 / 85.828 s。测试包保留四条 MultiNet
+清理错误、两条 MQTT fragment、三条 AFE empty 和两条 fetch rejected 警告；通知任务
+栈最低采样为 508 B，不能宣称零错误或资源余量充分。
+
+普通 OFF 包恢复后，独立记录 151.125 s cold RX 跨度及一次合成静音会话，实际 stopped 后
+覆盖 73.203 s、wake rearm 后覆盖 72.656 s；保留 AFE empty/fetch 各一条警告及启动诊断。
+测试 flavor 的实际 Deinit 结果只归该测试镜像；普通 OFF 包启动与会话检查不等于执行不存在
+的诊断入口。普通串口 wake/stop 也不等同于常驻 Capture/Wake Deinit。
+最终身份和证据摘要以 [032 readiness](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) 为准。
+
+## 仍未关闭的门禁
 
 不据此宣称物理输入或所有资源完全归还、净内存节省、任意 OOM 恢复、DMA/IRQ/cache-off
 安全、音频/SD/TLS 并发、识别与 AEC/音质或长稳通过。回收可能等待业务退出与跨核收敛，
