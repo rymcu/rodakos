@@ -126,7 +126,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | New Recovery deployment                     | COM13 read-only verification matches partition table but mismatches new Bootloader and Recovery                                          | Wired migration required                      |
 | Actual power interruption                   | Power fixture and observed cut points                                                                                                    | Not established                               |
 | Complete LVGL exhaustion                    | CLIB allocations and internal LVGL allocations can still assert                                                                          | Release blocker                               |
-| Eight-hour release soak                     | Must identify the newly flashed build and capture 28,800 seconds                                                                         | Not started                                   |
+| Eight-hour release soak                     | Ordinary OFF `20261009-014905` capture was still running at the 2026-10-09 06:45:37 local snapshot: 8,490.5 / 28,800 seconds; see the [interim evidence](#2026-10-09-正式八小时采集中间快照) | Failures observed: NO_GO; capture incomplete; final evidence pending |
 | Production signing root and server manifest | Operator-owned key and Rodak v2 signature fields                                                                                         | Not established                               |
 
 ## 2026-10-06 local audio-volume validation
@@ -3061,7 +3061,7 @@ RecordingService **17/17** 和 voice-volume/focus **30/30**。Music 新增用例
 
 ## 2026-10-09 Camera DVP 失败清理观察与修复
 
-正式 8 小时采集仍在进行时，第 4 次应用探针完成 Camera → Home 切换。串口显示
+正式 8 小时采集的中间日志中，第 4 次应用探针完成 Camera → Home 切换。串口显示
 `VIDIOC_STREAMOFF` 成功返回，但随后出现 `i2c_master_bus_rm_device: Wrong I2C status`、
 `s_sccb_i2c_destroy`、DVP video deinit 和 `DEV_CAMERA_SUB_DVP` 清理失败；同一窗口还保留
 `E:RX:153600-84480`。应用最终回到 Home 并回报 `RODAK_APP_LAUNCH_COMPLETE {"ok":true}`，
@@ -3077,7 +3077,78 @@ free board-manager handle，使失败状态可能留下悬空句柄，下一次�
 各 4/4，DVP teardown 各 13/13。另有独立 IDF 6.0.2 RCC overlay 将 DVP deinit 的共享
 引用从错误的 acquire 改为 release，Debug/ASan 各 6/6 通过。上述是源码、生成器和 host
 所有权边界，不能写成真实 I2C、DMA、共享时钟或 Camera 画面已经通过。
-下一候选仍须保留 NVS 重建签名包并复验 Camera 重复启动/关闭、共享 LCD_CAM owner、
-实际资源余量和完整设备日志。
-当前 COM3 运行的旧包未包含这些修复，必须重新构建、核验并在新的设备窗口复验 Camera 重复
-启动/关闭；本条观察保持资源/生产 **NO_GO**。
+包含这些修复的 043 候选已完成本地构建和签名包校验，身份见下方[候选包记录](#2026-10-09-网络与-camera-修复候选-043)。
+当前 COM3 采集的旧包未包含这些修复。原采集结束后仍须保留 NVS，在新的设备窗口核验并刷写
+候选，复验 Camera 重复启动/关闭、共享 LCD_CAM owner、实际资源余量和完整设备日志；本条
+观察保持资源/生产 **NO_GO**。
+
+## 2026-10-09 正式八小时采集中间快照
+
+2026-10-09 06:45:37（Asia/Shanghai）核实时，普通 OFF 包 `20261009-014905` 的 COM3
+采集进程 PID `14024` 仍在运行。`status.json` 的 elapsed 为 **8,490.5 / 28,800 秒**，
+`status=no-go`、`complete=false`；这是中间快照，不能写成已经完成八小时测试或最终日志结论。
+
+该快照包含 283 个 MQTT、279 个 Main、141 个 Voice 和 20 个应用资源样本，27 条 warning
+和 17 条 error。最低 `internal_min=275 B`，`internal_largest=5632 B`、
+`dma_largest=5632 B`。应用 request/ACK/completion 计数为 **28/28/28**；计数完整只证明
+观察到了事件，不证明每次启动成功、Camera 资源释放、Music 播放或 Recorder 保存成功。
+已观测的错误和不足资源余量保持 **NO_GO**；后续恢复、更多健康样本或完成规定时长都不能
+覆盖本窗口已经发生的失败。
+
+原始数据位于本仓库 `.codex-temp/release-soak-20261009-full/` 的 `status.json`、
+`analysis-live.json` 和 `serial.log`。采集期间这些文件仍会变化，不把活动日志哈希作为最终
+封存证据。必须等待原进程退出并确认 COM3 释放，再保存最终状态、完整串口日志 SHA-256
+及结束原因。此前不打开第二个 COM3 会话、不重启采集、不刷写候选包。新候选的实机窗口须
+单独记录包身份，保留原 NVS、设备 ID、`bound` 与 `tokenVersion=4`。
+
+## 2026-10-09 网络与 Camera 修复候选 043
+
+043 使用 RodakOS 源码 `abecfb26b24e84b90bc555cf69eed0105d70e375`，配套 Rodak 源码为
+`474b2e8587626a1fe1c2461096984b3d276e5c53`。ESP-IDF 6.0.2 本地完整构建完成，开发签名包
+位于 `build/packages/ota/20261009-063127`，task 为 `network-camera-rcc-043`，version 为
+`0.1.2-dev.1`。包包含 GOT_IP 可信路由刷新、Camera 分阶段失败清理及 DVP RCC 引用修复。
+
+| 制品 | 大小 / SHA-256 |
+| --- | --- |
+| `rodakos.bin` | 7,157,168 B / `ddc7927ca87eb431eec882656fb76fc9032c95faa680f2feae1ea0c36fafe88d` |
+| immutable Recovery | `ffa412ebe30c714c691bba73c8ab6e4efcaaab14fce5229f595707a8a08f75fd` |
+| 合并首刷镜像 | `99f1aff4d0f3121301955bae0d62e9ea25f19a5d6304f8437c17ad2478a97444` |
+
+manifest 明确 `developmentPackage=true`、`buildFlavor=production`、
+`releaseFaultInjection=false`、`homeHardwareTestPopulation=false`。这里的 production 是普通
+运行 flavor，不表示生产签名根或发布验收通过。
+
+2026-10-09 约 06:46（Asia/Shanghai），本地命令
+`python tools/ota_security.py verify-package --directory build/packages/ota/20261009-063127`
+退出码为 0。它只核验磁盘上的签名包及声明的制品，不能证明当前设备的 partition table 或
+immutable Recovery 与候选匹配。与旧包 `20261009-014905` 的本地文件比较确认 bootloader、
+partition table、Recovery 和 OTA 公钥四项 SHA-256 一致，结果保存于
+`.codex-temp/network-camera-rcc-043-review/immutable-disk-comparison.json`；这仍是磁盘文件比较。
+本轮**未运行设备 `flash_and_test.ps1 -VerifyOnly`，也未刷写**；
+该设备核验会复位目标，必须等当前 COM3 采集退出并释放端口后另开窗口执行。后续刷写不使用
+`-Erase`，保留 NVS、原设备 ID、`bound` 与 `tokenVersion=4`，并记录完整 Recovery → Main →
+Home 启动证据。资源与生产发布仍为 **NO_GO**。
+
+## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
+
+Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录
+`camera_requests` 和 `camera_preview_submissions`，关联本次请求、Camera 创建和
+`Camera preview image updated`。允许合法的首帧早于 completion、启动日志早于 queue ACK；
+退出、旧时间戳或重复首帧不能补足另一实例，已退出或采集结束仍无首帧时记录
+`missing_camera_preview_submission`。该日志只证明 `lv_image_set_src` 后的软件预览提交，
+不证明屏幕物理输出、成像质量或资源回收；当前协议没有逐请求 wire ID，关联范围限定于
+单客户端有序串口观察。
+
+Voice `supervisor_stack_min_free` 也已纳入全局 `stack_min_free` 的最小值，原字段仍保留在
+`resource_minima.voice`，防止健康 MQTT 栈掩盖 Voice 低栈。完整 OTA Python 回归 **37/37**
+通过（签名 5、采集器 32）；无 Camera 首帧以及 Voice 栈 128/511 B 的负控在旧解析器误通过，
+新解析器均为 NO_GO；512/2048 B 的正常边界保持通过。
+
+06:51:13 封存的中间输入位于 `.codex-temp/camera-soak-parser-20261009-065113/`。
+`serial.log` 快照 637,971 字节，SHA-256
+`28477a2b5d55cfbe3369040c1bc264b62df08a2be055b33a2672996bd93f90a4`。
+离线重放保留 295 个健康样本和 29/29/29 应用事件，5 次 Camera 请求只有 3 次软件预览提交；
+新增缺首帧失败，全局最小栈为 1796 B。新旧解析器均为 `no-go / complete=false`，没有把本轮
+误写成曾经通过；该快照也不是完整八小时日志。比较清单、原/新摘要及栈负控分别保存在
+`manifest.json`、`before.json`、`after-stack.json`、`stack-controls.json`。原采集进程未重启，
+仍执行启动时加载的旧解析器；这些修复适用于后续采集及独立离线复核，不改变 043 固件内容。

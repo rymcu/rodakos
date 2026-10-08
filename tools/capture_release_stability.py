@@ -27,6 +27,9 @@ class Evidence:
         self.exercise_acks = 0
         self.exercise_completions = 0
         self.exercise_events = []
+        self.camera_launch_event = None
+        self.camera_instance_event = None
+        self.camera_log_uptime = None
 
     @staticmethod
     def _fields(line):
@@ -52,14 +55,71 @@ class Evidence:
         minima = self.resource_minima.setdefault(source, {})
         for name, value in fields.items():
             minima[name] = min(minima.get(name, value), value)
+            if name == "supervisor_stack_min_free":
+                name = "stack_min_free"
             if name in {"internal_free", "internal_min", "internal_largest", "stack_min_free",
                         "psram_free", "psram_min", "psram_largest", "dma_free", "dma_largest"}:
                 self.minima[name] = min(self.minima.get(name, value), value)
 
     def record_app_request(self, app, elapsed):
         self.exercise_requests += 1
-        self.exercise_events.append({"app": app, "requested_at": round(elapsed, 3),
-                                     "ack": False, "complete": False})
+        event = {"app": app, "requested_at": round(elapsed, 3),
+                 "ack": False, "complete": False}
+        if app == "camera":
+            event.update(camera_created_uptime=None, camera_preview_uptime=None,
+                         camera_preview_sequence=None, camera_observation_closed=False)
+        self.exercise_events.append(event)
+
+    def _close_camera_observation(self):
+        event = self.camera_instance_event
+        if event is not None:
+            event["camera_observation_closed"] = True
+            if event["camera_preview_uptime"] is None:
+                self.failures.add("missing_camera_preview_submission")
+        self.camera_instance_event = None
+        self.camera_launch_event = None
+
+    def _record_camera_evidence(self, line):
+        match = re.search(r"\bI\s*\((\d+)\)\s+(PhoneAppHost|CameraApp): (.*)", line)
+        if match is None:
+            return
+        uptime, tag, message = int(match[1]), match[2], match[3].strip()
+        if self.camera_log_uptime is not None and uptime < self.camera_log_uptime:
+            return
+        self.camera_log_uptime = uptime
+        if tag == "PhoneAppHost":
+            if message.startswith("Launching app: "):
+                self.camera_launch_event = None
+                if message == "Launching app: camera":
+                    # The serial and LVGL tasks can print admission/startup in either order.
+                    # The request must already exist; ACK and completion are checked separately.
+                    pending = next((event for event in self.exercise_events
+                                    if not event["complete"]), None)
+                    if pending is not None and pending["app"] == "camera":
+                        self.camera_launch_event = pending
+            elif message == "Closing app: camera" or (
+                    message.startswith("App launched: ") and message != "App launched: camera"):
+                self._close_camera_observation()
+            return
+        if message == "Destroy: capture guard begin":
+            self._close_camera_observation()
+        elif message == "Camera app created; preview startup deferred":
+            event = self.camera_launch_event
+            self.camera_launch_event = None
+            if event is None or event["camera_created_uptime"] is not None:
+                return
+            self._close_camera_observation()
+            event["camera_created_uptime"] = uptime
+            self.camera_instance_event = event
+        else:
+            frame = re.fullmatch(r"Camera preview image updated: sequence=(\d+)", message)
+            event = self.camera_instance_event
+            if frame is None or int(frame[1]) == 0 or event is None:
+                return
+            if event["camera_preview_uptime"] is None:
+                # This log follows lv_image_set_src, not a physical display/camera check.
+                event["camera_preview_uptime"] = uptime
+                event["camera_preview_sequence"] = int(frame[1])
 
     def _record_app_ack(self):
         self.exercise_acks += 1
@@ -85,6 +145,7 @@ class Evidence:
 
     def accept(self, line, elapsed):
         self._record_log_level(line)
+        self._record_camera_evidence(line)
         if re.search(r"Guru Meditation|assert failed|abort\(\)|watchdog.*trigger|rst:|ESP-ROM:|stack overflow|CORRUPT HEAP|panic|brownout|failed to (?:alloc|create)|no mem", line, re.I):
             self.failures.add("reset_or_runtime_failure")
         if 'RODAK_APP_LAUNCH_RESULT {"queued":true}' in line:
@@ -159,6 +220,9 @@ class Evidence:
                 failures.add("unacknowledged_app_launch")
             if any(not event["complete"] for event in self.exercise_events):
                 failures.add("uncompleted_app_launch")
+        camera_events = [event for event in self.exercise_events if event["app"] == "camera"]
+        if complete and any(event["camera_preview_uptime"] is None for event in camera_events):
+            failures.add("missing_camera_preview_submission")
         passed = complete and elapsed >= requested and requested >= 28800 and self.samples >= 960 and not failures
         return dict(status="pass-observed" if passed else "no-go" if failures else "incomplete",
                     elapsed_seconds=round(elapsed, 2), requested_seconds=requested,
@@ -170,6 +234,9 @@ class Evidence:
                     exercise_requests=self.exercise_requests, exercise_acks=self.exercise_acks,
                     exercise_completions=self.exercise_completions,
                     exercise_events=self.exercise_events,
+                    camera_requests=len(camera_events),
+                    camera_preview_submissions=sum(event["camera_preview_uptime"] is not None
+                                                   for event in camera_events),
                     failures=sorted(failures), complete=complete)
 
 

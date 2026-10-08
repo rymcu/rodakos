@@ -170,6 +170,44 @@ class SoakTests(unittest.TestCase):
         self.assertNotIn("reset_or_runtime_failure", report["failures"])
         self.assertIn("error_log_present", report["failures"])
 
+    def test_voice_supervisor_stack_uses_the_shared_headroom_threshold(self):
+        for stack, expected in ((128, "no-go"), (511, "no-go"), (512, "pass-observed"),
+                                (2048, "pass-observed")):
+            with self.subTest(supervisor_stack_min_free=stack):
+                evidence = Evidence()
+                for index in range(960):
+                    evidence.accept(line(index * 30000), index * 30)
+                evidence.accept(
+                    f"I (28780000) VoiceWakeService: Voice health: enabled=1 listening=1 "
+                    f"internal_free=40000 internal_largest=16384 supervisor_stack_min_free={stack}",
+                    28780,
+                )
+                report = evidence.report(28800, 28800, True)
+                self.assertEqual(report["status"], expected)
+                self.assertEqual(report["minima"]["stack_min_free"], stack)
+                self.assertEqual(report["resource_minima"]["mqtt"]["stack_min_free"], 2048)
+                self.assertEqual(report["resource_minima"]["voice"]["supervisor_stack_min_free"], stack)
+                self.assertNotIn("stack_min_free", report["resource_minima"]["voice"])
+                self.assertEqual("insufficient_memory_or_stack_headroom" in report["failures"],
+                                 stack < 512)
+
+    def test_stack_minimum_combines_sources_without_later_samples_hiding_pressure(self):
+        for observations in (
+            ("Main health: stack_min_free=256", "Voice health: supervisor_stack_min_free=1024"),
+            ("Voice health: supervisor_stack_min_free=128", "Main health: stack_min_free=1024"),
+        ):
+            with self.subTest(observations=observations):
+                evidence = Evidence()
+                evidence.accept(line(1000), 1)
+                for index, observation in enumerate(observations):
+                    evidence.accept(f"I ({2000 + index * 1000}) Runtime: {observation}", index + 2)
+                evidence.accept("I (4000) VoiceWakeService: Voice health: supervisor_stack_min_free=2048", 4)
+                evidence.accept(line(5000), 5)
+                report = evidence.report(5, 28800)
+                expected = 256 if observations[0].startswith("Main") else 128
+                self.assertEqual(report["minima"]["stack_min_free"], expected)
+                self.assertIn("insufficient_memory_or_stack_headroom", report["failures"])
+
     def test_app_completion_before_ack_is_rejected(self):
         evidence = Evidence()
         evidence.record_app_request("home", 1)
@@ -186,12 +224,204 @@ class SoakTests(unittest.TestCase):
         for index, app in enumerate(("home", "photos", "camera", "home", "music")):
             evidence.record_app_request(app, index * 300)
             evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', index * 300 + 1)
+            if app == "camera":
+                evidence.accept('I (601000) PhoneAppHost: Launching app: camera', 601)
+                evidence.accept('I (601010) CameraApp: Camera app created; preview startup deferred', 601)
             evidence.accept('RODAK_APP_LAUNCH_COMPLETE {"ok":true}', index * 300 + 2)
+            if app == "camera":
+                evidence.accept('I (601200) CameraApp: Camera preview image updated: sequence=1', 602)
         report = evidence.report(28800, 28800, True)
         self.assertEqual(report["status"], "pass-observed")
         self.assertEqual(report["exercise_requests"], 5)
         self.assertEqual(report["exercise_acks"], 5)
         self.assertEqual(report["exercise_completions"], 5)
+        self.assertEqual(report["camera_requests"], 1)
+        self.assertEqual(report["camera_preview_submissions"], 1)
+
+
+class CameraSoakTests(unittest.TestCase):
+    def setUp(self):
+        self.evidence = Evidence()
+        for index in range(960):
+            self.evidence.accept(line(index * 30000), index * 30)
+
+    def request_camera(self, uptime=1000):
+        self.evidence.record_app_request("camera", uptime / 1000)
+        self.evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', uptime / 1000)
+
+    def create_camera(self, uptime=1000):
+        self.evidence.accept(f'I ({uptime}) PhoneAppHost: Launching app: camera', uptime / 1000)
+        self.evidence.accept(
+            f'I ({uptime + 10}) CameraApp: Camera app created; preview startup deferred',
+            uptime / 1000,
+        )
+
+    def complete_launch(self):
+        self.evidence.accept('RODAK_APP_LAUNCH_COMPLETE {"ok":true}', 1.1)
+
+    def submit_preview(self, uptime=1200, sequence=1):
+        self.evidence.accept(
+            f'I ({uptime}) CameraApp: Camera preview image updated: sequence={sequence}',
+            uptime / 1000,
+        )
+
+    def report(self, complete=True):
+        return self.evidence.report(28800, 28800, complete)
+
+    def test_navigation_completion_alone_does_not_prove_camera_preview(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        report = self.report()
+        self.assertEqual(report["exercise_completions"], 1)
+        self.assertEqual(report["camera_preview_submissions"], 0)
+        self.assertEqual(report["status"], "no-go")
+        self.assertIn("missing_camera_preview_submission", report["failures"])
+
+    def test_camera_may_still_be_waiting_in_an_unfinished_capture(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        self.assertEqual(self.report(False)["status"], "incomplete")
+
+    def test_first_preview_submission_can_precede_navigation_completion(self):
+        self.request_camera()
+        self.create_camera()
+        self.submit_preview()
+        self.assertIn("uncompleted_app_launch", self.report()["failures"])
+        self.complete_launch()
+        self.assertEqual(self.report()["status"], "pass-observed")
+
+    def test_startup_logs_before_queue_ack_still_belong_to_the_request(self):
+        self.evidence.record_app_request("camera", 1)
+        self.create_camera()
+        self.submit_preview()
+        self.evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', 1.3)
+        self.complete_launch()
+        self.assertEqual(self.report()["status"], "pass-observed")
+
+    def test_preview_without_ack_or_completion_cannot_pass(self):
+        self.evidence.record_app_request("camera", 1)
+        self.create_camera()
+        self.submit_preview()
+        report = self.report()
+        self.assertEqual(report["camera_preview_submissions"], 1)
+        self.assertIn("unacknowledged_app_launch", report["failures"])
+        self.assertIn("uncompleted_app_launch", report["failures"])
+
+    def test_service_first_frame_is_not_an_app_preview_submission(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        self.evidence.accept(
+            'I (1200) CameraService: Camera first frame ready: 320x240 stride=640 elapsed_ms=96', 1.2,
+        )
+        self.assertEqual(self.report()["camera_preview_submissions"], 0)
+        self.assertEqual(self.report()["status"], "no-go")
+
+    def test_unowned_camera_instance_cannot_satisfy_a_later_request(self):
+        self.create_camera()
+        self.submit_preview()
+        self.request_camera(2000)
+        self.complete_launch()
+        self.submit_preview(2200)
+        self.assertEqual(self.report()["camera_preview_submissions"], 0)
+        self.assertIn("missing_camera_preview_submission", self.report()["failures"])
+
+    def test_first_frame_requires_a_created_instance_for_the_launch(self):
+        self.request_camera()
+        self.complete_launch()
+        self.submit_preview()
+        self.assertEqual(self.report()["camera_preview_submissions"], 0)
+
+    def test_duplicate_first_frame_does_not_satisfy_a_second_request(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        self.submit_preview()
+        self.submit_preview()
+        self.evidence.accept('I (1300) PhoneAppHost: Closing app: camera', 1.3)
+        self.request_camera(2000)
+        self.create_camera(2000)
+        self.complete_launch()
+        self.submit_preview()
+        report = self.report()
+        self.assertEqual(report["camera_requests"], 2)
+        self.assertEqual(report["camera_preview_submissions"], 1)
+        self.assertEqual(report["status"], "no-go")
+        self.submit_preview(2200, 3)
+        self.assertEqual(self.report()["status"], "pass-observed")
+        self.assertEqual(self.report()["camera_preview_submissions"], 2)
+
+    def test_late_frame_cannot_reopen_a_closed_camera_observation(self):
+        for boundary in (
+            'PhoneAppHost: Closing app: camera',
+            'CameraApp: Destroy: capture guard begin',
+            'PhoneAppHost: App launched: home',
+        ):
+            with self.subTest(boundary=boundary):
+                self.setUp()
+                self.request_camera()
+                self.create_camera()
+                self.complete_launch()
+                self.evidence.accept(f'I (1300) {boundary}', 1.3)
+                self.submit_preview(1400)
+                report = self.report(False)
+                self.assertEqual(report["status"], "no-go")
+                self.assertEqual(report["camera_preview_submissions"], 0)
+                self.assertTrue(report["exercise_events"][0]["camera_observation_closed"])
+
+    def test_next_request_does_not_end_preview_until_actual_navigation(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        self.evidence.record_app_request("home", 1.3)
+        self.evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', 1.3)
+        self.submit_preview(1400)
+        self.evidence.accept('I (1500) PhoneAppHost: Closing app: camera', 1.5)
+        self.complete_launch()
+        self.assertEqual(self.report()["status"], "pass-observed")
+
+    def test_replayed_lifecycle_and_frame_do_not_replace_a_new_instance(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        self.submit_preview()
+        self.evidence.accept('I (1300) CameraApp: Destroy: capture guard begin', 1.3)
+        self.request_camera(2000)
+        self.create_camera(2000)
+        self.complete_launch()
+        self.create_camera()
+        self.submit_preview()
+        self.assertEqual(self.report()["camera_preview_submissions"], 1)
+        self.assertEqual(self.report()["exercise_events"][1]["camera_created_uptime"], 2010)
+        self.submit_preview(2200)
+        self.assertEqual(self.report()["status"], "pass-observed")
+
+    def test_malformed_or_zero_sequence_preview_is_not_evidence(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        for text in (
+            'CameraApp: Camera preview image updated: sequence=1',
+            'I (1200) CameraApp: Camera preview image updated: sequence=0',
+            'I (1200) CameraApp: Camera preview image updated: sequence=',
+            'I (1200) CameraApp: Camera preview image updated: sequence=-1',
+        ):
+            self.evidence.accept(text, 1.2)
+        self.assertEqual(self.report()["camera_preview_submissions"], 0)
+
+    def test_final_unterminated_preview_submission_is_preserved(self):
+        self.request_camera()
+        self.create_camera()
+        self.complete_launch()
+        stream = SerialEvidenceStream(self.evidence)
+        stream.accept(b'I (1200) CameraApp: Camera preview image updated: sequence=1', 1.2)
+        self.assertEqual(self.report()["camera_preview_submissions"], 0)
+        stream.finish(1.3)
+        stream.finish(1.4)
+        self.assertEqual(self.report()["camera_preview_submissions"], 1)
+        self.assertEqual(self.report()["status"], "pass-observed")
 
 
 if __name__ == "__main__":

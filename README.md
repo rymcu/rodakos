@@ -100,7 +100,9 @@ synthetic-input observations do not establish physical or acoustic acceptance. R
   requests; eviction and device restart have no deduplication guarantee. See the
   [command result boundary](docs/rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
 - Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
-  queued and successful completion evidence for app exercises. These host checks do not close the
+  queued and successful navigation completion for app exercises, plus an instance-associated
+  software preview submission for Camera. Voice supervisor stack headroom contributes to the
+  shared minimum. These host checks do not close the
   eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
 - Voice identity uses a bounded versioned record, an accepted revision watermark and explicit
   runtime/storage recovery states. Temporary expiry uses Unix time plus a monotonic lifetime limit;
