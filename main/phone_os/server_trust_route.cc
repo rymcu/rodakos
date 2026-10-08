@@ -11,12 +11,7 @@ std::string NormalizeServerRouteAddress(const std::string& address) {
     unsigned char bytes[16] = {};
     int family = AF_INET;
     if (inet_pton(AF_INET, address.c_str(), bytes) == 1) {
-        // Link-local IPv4 addresses require an interface scope just like
-        // scoped IPv6 routes. Discovery only persists a plain address, so
-        // accepting 169.254/16 would leave a route that cannot survive a
-        // network change reliably.
-        if (bytes[0] == 0 || bytes[0] == 127 || bytes[0] >= 224 ||
-            (bytes[0] == 169 && bytes[1] == 254)) return {};
+        if (bytes[0] == 0 || bytes[0] == 127 || bytes[0] >= 224) return {};
     } else {
         family = AF_INET6;
         if (inet_pton(AF_INET6, address.c_str(), bytes) != 1 || bytes[0] == 0xff ||

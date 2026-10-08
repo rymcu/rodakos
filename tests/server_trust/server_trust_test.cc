@@ -591,6 +591,19 @@ RODAK_TEST("Discovery rejects link-local IPv4 without an interface scope") {
     RODAK_CHECK_EQ(routes.front().connect_address, "192.168.137.9");
 }
 
+RODAK_TEST("Persisted link-local authority remains readable while discovery rejects it") {
+    const auto trust = trust_test::TestTrust();
+    rodakos::ServerAuthority authority;
+    authority.active = {trust_test::BootstrapUrl(), trust, true, "169.254.1.2"};
+
+    std::string encoded;
+    RODAK_CHECK(rodakos::EncodeServerAuthority(authority, encoded));
+    rodakos::ServerAuthority decoded;
+    std::string error;
+    RODAK_CHECK(rodakos::DecodeServerAuthority(encoded, decoded, error));
+    RODAK_CHECK_EQ(decoded.active.connect_address, "169.254.1.2");
+}
+
 RODAK_TEST("Compact authority keeps one trust and rejects conflicting or ambiguous identities") {
     rodakos::ServerAuthority authority;
     authority.active = {trust_test::BootstrapUrl(), trust_test::TestTrust(), true, "192.168.137.9"};

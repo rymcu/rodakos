@@ -5,6 +5,7 @@
 #include <lwip/sockets.h>
 
 #include <algorithm>
+#include <cstring>
 #include <mutex>
 
 namespace rodakos {
@@ -48,6 +49,10 @@ std::vector<ServerRouteCandidate> DiscoverServerTrustRoutes(const ServerTrust& t
             char numeric[46] = {};
             if (address->addr.type == ESP_IPADDR_TYPE_V4) {
                 if (inet_ntop(AF_INET, &address->addr.u_addr.ip4.addr, numeric, sizeof(numeric)) == nullptr) continue;
+                // A discovered route has no interface scope. Do not admit new
+                // link-local IPv4 routes that cannot follow a network change;
+                // persisted authorities still use the compatible route parser.
+                if (std::strncmp(numeric, "169.254.", 8) == 0) continue;
             } else if (address->addr.type == ESP_IPADDR_TYPE_V6) {
                 if (address->addr.u_addr.ip6.zone != 0 ||
                     inet_ntop(AF_INET6, address->addr.u_addr.ip6.addr, numeric, sizeof(numeric)) == nullptr) continue;
