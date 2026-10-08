@@ -6,17 +6,16 @@ billing, quota or required-check setup. Existing runs remain evidence for their 
 candidates; missing or unavailable Actions do not block delivery. Actual software failures and
 the remaining physical and production-release gates still require their own evidence.
 
-037 source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` adds TEST-only per-feed
-identity and accepted task-getter endpoints. Separate OFF-AFE, observer-module
-and complete TEST-frontend host suites, 30 precise negative controls, both final
-packages and bounded closed hardware evidence have independent reviews. The
-fresh TEST window records no gap; two post-TTL TEST gaps and one ordinary OFF
-gap recover. The 639598us seq3 bracket contains one target and 63 aggregate
-non-target endpoints; this does not establish Ready/Blocked state or CPU time.
-The earlier 681147us seq4 call is not the second gap. Ordinary package
-`20261008-202609` is restored with the original binding/token4 and idle MQTT/Wake
-state. Root cause remains unresolved; resource and production remain **NO_GO**.
-See [037 evidence](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037); earlier evidence retains its original identities.
+038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
+their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
+pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
+their exact assertions. This round performs no signing, hardware, serial or reset
+operations. The recorded device remains on ordinary 037 package `20261008-202609`
+(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
+forward from 037, not remeasured. Root cause remains unresolved and resource/production
+remain **NO_GO**. See [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
+[037 hardware record](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
+retains its original identities.
 
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
@@ -316,7 +315,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 037 closes the bounded per-feed observation and ordinary restoration evidence: separate 49 OFF / 23 module / 7 full TEST-frontend scopes, 30 precise controls, both packages and closed hardware review pass their stated scopes. Fresh TEST records no gap; two post-TTL TEST gaps and one ordinary gap recover. Accepted target/non-target endpoints narrow uninterrupted-selection claims but do not distinguish Ready from Blocked or prove CPU time, SDK cause or headroom; earlier seq4 ends before gap2 and cannot supply seq13 latency. Ordinary `20261008-202609` and original bound/token4 idle state are restored. Remaining work is exact task/SDK wait evidence where needed, actual heap/stack/ISR margin, complete physical return, arbitrary OOM, broader concurrency and soak; resource/production **NO_GO** | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [037 evidence](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037), [036 history](ota-release-readiness.md#2026-10-08-bounded-tick-and-cache-observation-036), [voice contract](voice-task-retirement.md) |
+| Resource recovery | 038 moves existing TEST snapshots before logs; 13 TEST / 49 OFF cases pass in Debug and sanitizers, with six exact previous-order controls. No device operations were performed; ordinary 037 package `20261008-202609` and its terminal-state record remain the last device evidence. The 037 recovered gaps and root cause remain unresolved. Remaining gates are actual heap/stack/ISR margin, physical resource return, acoustic/concurrent/OOM and soak acceptance; resource/production **NO_GO** | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038), [037 hardware evidence](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | Six same-session turns, silence timeout, music resume, Recorder preemption, repeated wake suppression, TTS tail, AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

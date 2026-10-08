@@ -14,17 +14,16 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-037 source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` adds TEST-only per-feed
-identity and accepted task-getter endpoints. Separate OFF-AFE, observer-module
-and complete TEST-frontend host suites, 30 precise negative controls, both final
-packages and bounded closed hardware evidence have independent reviews. The
-fresh TEST window records no gap; two post-TTL TEST gaps and one ordinary OFF
-gap recover. The 639598us seq3 bracket contains one target and 63 aggregate
-non-target endpoints; this does not establish Ready/Blocked state or CPU time.
-The earlier 681147us seq4 call is not the second gap. Ordinary package
-`20261008-202609` is restored with the original binding/token4 and idle MQTT/Wake
-state. Root cause remains unresolved; resource and production remain **NO_GO**.
-See [037 evidence](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037); earlier evidence retains its original identities.
+038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
+their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
+pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
+their exact assertions. This round performs no signing, hardware, serial or reset
+operations. The recorded device remains on ordinary 037 package `20261008-202609`
+(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
+forward from 037, not remeasured. Root cause remains unresolved and resource/production
+remain **NO_GO**. See [038 software evidence](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
+[037 hardware record](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
+retains its original identities.
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -2761,3 +2760,58 @@ feed 身份下选择最小探针，不以调高优先级、换核、放宽 100ms
 完整物理资源归还、实际 heap/stack/ISR 余量、声学、更多取消/并发、任意 OOM、长稳、生产
 信任根与 power-cut 门禁仍开放，资源与生产 **NO_GO**。031—036 历史保留原身份，不用
 不同 boot 的最低值相减推算收益。
+
+## 2026-10-08 Snapshot-before-log software correction (038)
+
+源码：[`6c807b87d164c38794b48a97b1632c8c1788ee4c`](https://github.com/rymcu/rodakos/commit/6c807b87d164c38794b48a97b1632c8c1788ee4c)。仅调整
+`RODAKOS_RELEASE_TESTS` 中既有观察的顺序：stall 先冻结 tick 与 open feed，再输出
+tick/feed/W；recovered、fetch 前/返回后 cancelled 与 resync 先冻结 tick，再输出
+closure 日志。冻结仍在业务 mutex 释放之后；Capture 的 SDK 前 arm、返回后 credit
+锁等待前 close 不动。原 token/身份失效语义、固定 20s、8 条 feed 加 1 条 summary、
+100ms、TTL600、任务优先级/核绑定、缓冲与 AEC 合同保留。停止处在原位置直接调用
+Freeze/Log，避免再经 helper 嵌套一份快照；flow-stop 采时阶段、Retire 与 summary
+顺序不变，最终栈成本以下述目标审查为准。
+
+完整 TEST 前端 13 项、普通 OFF 前端 49 项分别通过 Debug 与 ASan/UBSan/leak。
+六个新增日志门闩用例覆盖 open、recovered、日志跨 deadline、两类取消和 resync；
+037 完整旧 TU 只编译一次，再分别运行六个用例，均以指定 marker/assertion 和退出码 1
+拒绝。最终源码 v2 只改变被负控固定旧 TU 替换的当前前端文件，其余 69 个输入及
+测试/runner/旧 TU 不变，独审确认复用原六项负控，不重复执行。日志阻塞期间 producer
+仍能发布 credit，已冻结结果不会借用后续 feed 或 token。
+host 替身不验证芯片调度、DSP、声学或物理资源；OFF 的 TEST-block 消去文本一致也不
+替代最终目标对象核验。
+
+| 本轮目标产物 | 身份与审查 |
+| --- | --- |
+| TEST 主构建 | Main 7,168,992 B，SHA-256 `579324a70f015452b275d3d0b216ba0ae4967e311e1d2ef79751bff22981f357`；ELF `f5a92e3219a3d71a7dd6733088f0dfb4b055f1d04c33167575fe6f19c66a7d6a`；清单 `c6e20f1f01bd2ecac83bc6f260f4956d9c37669cd378c8b28067fb82a6c6b8f4` |
+| 普通 OFF 主构建 | Main 7,154,016 B，SHA-256 `65d77c37ee76e9e29d2a24f61f7713b05c7df247daf99f83a5479c9e8b62726c`；ELF `80c82d0da185ec28a747c4df3bfe582c0be3823800f949d1787bb3d6fdf4953d`；清单 `3e7ceab0b74212c48dd0ad6ca1152c0e437f43becd75cff9b65a498813680bba` |
+| 新 Fetch/Capture 帧与局部调用链 | 最终对象/ELF独审 `final-target-v2-review.json`，SHA-256 `76d2737f1829a1885c5e78f454cb8f8019c131847ac2193dea12e5b9cd9e8b8a`；仅本地构建静态边界通过，非签包/硬件验收 |
+
+最终 ELF 核验 TEST Fetch 固定帧为 784 B（037 为 528 B），Capture 仍为 432 B；
+最大已核局部调用链为 1088 B，比 037 的旧局部链 1072 B 多 16 B。它不是完整
+栈上界或实测 HWM，不能据此推算余量。两个 observer 的状态仍为 464 B；所审
+ISR/getter 对象与指令字节保持既有边界。普通 OFF 的 AFE allocated sections 与
+relocations 等于 037，observer/链接片段缺席，getter 位于 flash，内部 DRAM 增量
+为 0；Capture/Fetch 为 240/368 B。上述构建不是签名包或设备部署证据。
+
+038 的定点静态排查约束 scheduler、mutex/日志与 SDK 等待分支的候选解释，未把 opaque
+other 端点映射到具体任务，也未识别 037 三个 gap 的统一根因。观察顺序修正只去除
+明确的日志先行间隔，不能把 event/freeze 两个时间包络合并为原子事件。
+本地证据目录为 `D:/workspace/rodak/.codex-temp/voice-wait-038/`：
+
+| 证据 | 报告 | SHA-256 |
+| --- | --- | --- |
+| 最终源码 Debug | `snapshot-debug-v2/result.json` | `d105b266c6584cb1225093da92820ceabd9b6c89835f252f064da067cc2b714f` |
+| 最终源码 ASan/UBSan/leak | `snapshot-asan-v2/result.json` | `a47d1e01841ce614d408b74e4d0277daf0b98c7a4286576f302adf97cdd7978b` |
+| 最终源码与 host 独审 | `sdk-snapshot-independent-review-v2.json` | `b08370972e83c6f10d3fc4528792ddc9fd9c8752d31bbf8c34aed9e5ae451488` |
+| SDK 等待链静态分析 | `sdk-blocking-analysis-v2.md` | `620cdaf6829a964a3cdf9b1d5164d4204112868d4b9ed78bb25aac1fa40be5f4` |
+| SDK 期号归属勘误 | `sdk-blocking-corrigendum-v2.json` | `10523ee9687ce9d094aebb7961ac56c35deb1255796cd8e636ae7654758d526c` |
+| 调度与优先级边界 | `scheduler-review.json` | `fcca8e2b5fdce9dbac2b34d7db438d8e7499f220397b0bd985eae1581bb5ed6f` |
+| 同步日志与观察窗口限制 | `interference-review.json` | `e1dea033e44562ac7c9be1cbc3d9c143d29cd6e371e0b841c368027b917b5dc7` |
+
+**本轮没有签包、硬件、串口、刷写或复位操作。** 设备固件记录仍为 037 普通包
+`20261008-202609`、源码 `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`；原绑定/token4、
+MQTT/Wake 空闲及桌面 UI/串口关闭终态沿用 037 的分时记录，未在 038 重新测量。
+桌面可执行文件/PID也未本轮重新核验。037 的三个 recovered gap、完整软件/包/硬件
+证据逐字保留；根因仍 **INCONCLUSIVE**，资源与生产 **NO_GO**。物理回收、实际
+heap/stack/ISR 余量、声学、并发/OOM、长稳、生产信任根和 power-cut 门禁不变。

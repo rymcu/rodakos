@@ -7,17 +7,16 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-037 source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` adds TEST-only per-feed
-identity and accepted task-getter endpoints. Separate OFF-AFE, observer-module
-and complete TEST-frontend host suites, 30 precise negative controls, both final
-packages and bounded closed hardware evidence have independent reviews. The
-fresh TEST window records no gap; two post-TTL TEST gaps and one ordinary OFF
-gap recover. The 639598us seq3 bracket contains one target and 63 aggregate
-non-target endpoints; this does not establish Ready/Blocked state or CPU time.
-The earlier 681147us seq4 call is not the second gap. Ordinary package
-`20261008-202609` is restored with the original binding/token4 and idle MQTT/Wake
-state. Root cause remains unresolved; resource and production remain **NO_GO**.
-See [037 evidence](docs/ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037); earlier evidence retains its original identities.
+038 source `6c807b87d164c38794b48a97b1632c8c1788ee4c` moves existing TEST snapshots ahead of
+their first related log. The 13 full TEST-frontend and 49 ordinary OFF host cases
+pass separately in Debug and ASan/UBSan/leak; six previous-order controls fail at
+their exact assertions. This round performs no signing, hardware, serial or reset
+operations. The recorded device remains on ordinary 037 package `20261008-202609`
+(source `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396`); its terminal state is carried
+forward from 037, not remeasured. Root cause remains unresolved and resource/production
+remain **NO_GO**. See [038 software evidence](docs/ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038); the
+[037 hardware record](docs/ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)
+retains its original identities.
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

@@ -20,7 +20,7 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
-当前 037：037 源码 `d852d9fdb6b16a0a34a49eb7555ddd5a9b944396` 的逐 feed 身份观察已完成分层软件验证、30 个精确负控、两份制品和有限闭合硬件独审。TEST fresh 未记录 gap；自然 TTL600 后两个 gap、普通 OFF 一个 gap 均 recovered。seq3 的 639598us 包络接受 target1/other63 端点，但不能区分 Ready/Blocked 或换算 CPU 时间；先前 seq4 的 681147us 不属于第二个 gap。普通 `20261008-202609` 已恢复原绑定/token4 与 MQTT/Wake 空闲终态。根因未定，资源与生产 **NO_GO** 保持。见[037 证据](ota-release-readiness.md#2026-10-08-per-feed-identity-and-progress-observation-037)。
+当前 038：源码 `6c807b87d164c38794b48a97b1632c8c1788ee4c` 将 TEST 既有快照移到首条相关日志之前；13 项 TEST、49 项 OFF 分别通过 Debug 与 ASan/UBSan/leak，6 个旧顺序负控精确检出。本轮无签包、硬件、串口或复位操作，设备固件与终态沿用 037 普通 `20261008-202609` 记录，未重新实测。根因未定，资源与生产 **NO_GO** 保持。见[038 软件证据](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038)。
 
 ## 修复的退出边界
 
@@ -219,6 +219,19 @@ getter 的 IRAM 布局和新增观察路径；已知局部 Fetch 链 1072B、Cap
 普通 OFF 一个 gap 均 recovered，普通 `20261008-202609` 已恢复。seq3 的 target1 / other63
 是有限 getter 端点，other 聚合所有非 target；第二 gap 缺 seq13 complete，不借先前 seq4
 的 681147us。实际 heap/stack 余量、物理资源、声学与生产仍 **NO_GO**。
+
+## 038 TEST 快照先于日志
+
+源码 `6c807b87d164c38794b48a97b1632c8c1788ee4c` 仅调整 TEST 既有调用顺序：stall 的 tick/open feed
+以及 recovered、两类 cancelled、resync 的 tick，在首条相关日志前冻结，仍在业务
+mutex 释放之后。Capture 的 arm/Close/credit、旧 token 身份、固定20s和8+1配额、
+普通 OFF 合同不变；停止处在原位置直接 Freeze/Log，避免嵌套 helper 的快照帧，
+flow-stop采时阶段、Retire/summary顺序保持。独立时间包络和stale仍有意义，不宣称原子快照。
+
+13项完整 TEST 与49项 OFF 分别通过 Debug、ASan/UBSan/leak，6个旧顺序负控精确拒绝。
+目标构建与新栈帧按[038证据](ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038)核验，旧1072 B局部链
+不复用。本轮无签包、硬件、串口或复位，设备仍沿用037普通包/source及终态记录，
+未重新实测；这不是stall根因修复，资源与生产NO_GO不变。
 
 ## 仍未关闭的门禁
 
