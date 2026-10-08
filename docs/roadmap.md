@@ -41,6 +41,11 @@ reset, panic, watchdog or transport failure. This closes only the synthetic foll
 music/Recorder coexistence, repeated-wake suppression, TTS tail, AEC/barge-in, physical acoustics,
 resource headroom and long-duration stability remain open. See [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察).
 
+A separate one-cycle ordinary-OFF observation restored physical microphones during playback and
+completed without VAD interruption, runtime/transport failure, or cleanup loss. This is bounded
+microphone/full-duplex path evidence only; it does not close acoustic AEC/barge-in, music/Recorder
+coexistence, or long-duration gates. See [microphone evidence](ota-release-readiness.md#2026-10-09-播放期间恢复实体麦克风的有界观察).
+
 030 software now moves five video workers to bounded, generation-owned external WithCaps
 retirement and replaces serial/Camera Home async admission with a precreated four-request
 PSRAM queue and LVGL timer. Local production-source tests, pinned real-IDF exit controls,

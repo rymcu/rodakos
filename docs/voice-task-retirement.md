@@ -32,6 +32,11 @@
 不覆盖音乐恢复、Recorder 抢占、AEC/barge-in 或长稳。证据见
 [OTA readiness 的 follow-up 记录](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察)。
 
+另完成一轮播放期间恢复实体麦克风的合成观察：未出现 VAD interruption 或传输/运行时故障，
+播放后 stop、cleanup 和 wake rearm 完成。该结果只是有界 full-duplex 路径证据，不替代
+AEC、真人 barge-in、音乐/Recorder 共存或声学验收。证据见
+[OTA readiness 的麦克风观察](ota-release-readiness.md#2026-10-09-播放期间恢复实体麦克风的有界观察)。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本

@@ -2994,3 +2994,19 @@ Rodak IPC 事件窗口确认一次 `session.open`、一次 `wake.detected`、三
 
 该结果只关闭 follow-up silence/timeout 的有界合成门禁；音乐恢复、Recorder 抢占、重复唤醒
 抑制、TTS 尾音、AEC/barge-in、真实收音与长稳仍开放，资源与生产 **NO_GO** 不变。
+
+## 2026-10-09 播放期间恢复实体麦克风的有界观察
+
+普通 OFF 上使用 `--cycles 1 --live-mic-playback` 完成一轮 USB 合成输入。设备在回复播放
+期间恢复实体麦克风，仍保持同一 realtime voice session；串口未出现 VAD interruption、
+reset、panic、watchdog 或 transport failure，播放统计为非零且 `write_failures=0`，随后
+stop、cleanup、断开和 wake rearm 完成。Rodak IPC 复核为一次 `session.open`、一次
+`wake.detected`、两次 `input.start`、最终 `input.stop`、空 runtime session。
+
+原始串口与 IPC 快照位于 `D:/workspace/rodakos/.codex-temp/voice-live-mic-20261009/`：
+`serial.log` SHA-256 为 `7dc91553e45c3fb9d6caec7b0dc2839451b437332bb417b25535d436bda51389`，
+`serial.summary.json` SHA-256 为 `33475ce414bb37adefdd3dee8fc7d1d3c4f7340719a8789d87eceb1e928241fe`，
+`server-events-cdp.json` SHA-256 为 `7b92404957023fc04c929161bc389cbeb408866434ef2d4537bf76ebd5a4c0eb`。
+
+该结果只证明播放期间麦克风路径能够恢复并完成有界清理，不证明回声消除、真人 barge-in、
+音乐或 Recorder 抢占、误接受/误拒绝、声学质量或长稳；资源与生产 **NO_GO** 保持。
