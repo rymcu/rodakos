@@ -119,7 +119,7 @@ backup, a further 40-second capture confirms MQTT connected with no runtime fail
 | Codec volume driver failures                | Real esp_codec_dev and software-volume source: exact driver errors, cache retention, software priority and no-codec PCM path | Fourteen host regressions pass; hardware unverified |
 | Command / stream / input lifecycle | Original-connection publication, bounded result cache, stream cleanup, real LVGL input grants, original-peer ACK retry and cancellation without synthetic click | 021 held-down cancellation causes no extra PNG load, but the next reenabled Retry still times out at 3.197/3.193 s and is rejected. Earlier 019/020 software and device evidence retains its own identity. End-to-end delivery, static first frame and wider physical gates remain open |
 | Voice identity / recovery | Single-record persistence, retained revision watermark, Unix/monotonic expiry, runtime recovery and proactive shadow reports | 277 app-model, 8 parser, 25 wake service, 6 frontend and 4 service integration cases pass; 4 desktop cross-repository cases pass; hardware unverified |
-| Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 17 UI cases pass in Debug/ASan; physical SD/audio unverified |
+| Music scanning / playback | Production directory reader, asynchronous AudioService with managed Helix and real LVGL Music UI | 8 directory + 17 audio + 18 UI cases pass in Debug/ASan; physical SD/audio unverified |
 | Media PNG / display allocation | PNG ownership/inflate headroom, Camera frame release, scoped screen JPEG PSRAM allocation and final ELF gate | 021 Display 30 / Home 43 / allocator 10 pass Debug/ASan; checker 26 and real ELF positive/bypass-negative checks pass. First-frame open DMA net loss is zero and screen-first Camera starts, but STREAMOFF stalls for 127.583 s before reset. Two post-reset A3 loads pass; final 8,192-byte internal largest does not close OOM/concurrency or soak |
 | Other resource failures                     | Physical image/display coexistence, camera preview task, voice I/O task, MQTT bootstrap allocation hooks                               | Embedded validation pending                   |
 | COM13 preflight                             | Existing firmware: 40-second capture, MQTT connected, no reset/panic; internal largest block 20,480 bytes                                | Baseline observation only                     |
@@ -3046,3 +3046,16 @@ MQTT 的水位纳入摘要。对上述原始日志离线重解析得到：Voice 
 
 新增回归测试覆盖 Voice/Main 水位、应用事件乱序、非致命 warning 与 `E:RX` 分类；本地
 Python 测试和离线解析均通过。该门禁不依赖或等待 GitHub Actions。
+
+## 2026-10-09 Music/Recorder 与音频焦点 host 前置
+
+在不打开 COM3、不刷写固件的条件下，本地 Debug CMake/CTest 完成 Music UI **18/18**、
+RecordingService **17/17** 和 voice-volume/focus **30/30**。Music 新增用例验证异步
+`RequestLibraryScan()` 会发布替换后的曲目列表；其余用例覆盖真实生产服务的扫描、暂停/恢复、
+焦点抢占、录音收尾与失败恢复。产物和日志保存在未提交的
+`.codex-temp/hardware-next-gate/`，不把 host fake 结果写成设备验收。
+
+设备端仍没有 Music 播放或 Recorder Start/Stop 的串口直控命令；下一次 COM3 门禁必须通过
+已建立的 screen-control 远控流，按 enable/ACK、逐序列 pointer down/up、Music 播放→语音
+暂停/恢复、Recorder Start/Stop 和至少 60 秒健康观察取证。实体 SD、ADC/DAC、麦克风、扬声器、
+触摸、声学共存及八小时 soak 继续保持 **NO_GO**。

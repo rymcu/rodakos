@@ -15,7 +15,7 @@ ASan/UBSan 使用独立目录，并为 C/C++ 添加
 `-fsanitize=address,undefined -fno-omit-frame-pointer`；执行时使用
 `ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1`。CTest 超时为 60 秒。
 
-17 项用例覆盖缺服务、缺卡到空库、根目录/子目录读取失败、旧曲目清除、纯不支持格式的空库、
+18 项用例覆盖缺服务、缺卡到空库、根目录/子目录读取失败、旧曲目清除、纯不支持格式的空库、
 真实 Refresh / Retry 按钮恢复、旧列表版本拒绝、其他应用占用音频、monitor 创建失败后的重试、
 慢卡扫描时 LVGL 与 Stop 可继续、Deinit 等待扫描、异步文件/codec 错误及后续重试、音量拒绝后
 滑杆回读、Stop 保留自动续播停止状态、Resume 与独占焦点排序，以及扫描中操作错误在终态清除。

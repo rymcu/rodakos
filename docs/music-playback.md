@@ -57,6 +57,7 @@ durable device-effect contract. No remote music or backlight MCP endpoint is int
 Exact source/build identity and dated results are recorded in
 [release evidence](ota-release-readiness.md). Real SD removal/slow-card and low-memory runs,
 physical music/Recorder/voice preemption and resume, and audible playback remain open in the
-[roadmap](roadmap.md). Photos, File Manager, Camera and Recorder error-state acceptance also
-remains open. Recorder's final header/flush/close errors and Camera's failed completion delivery
-still need dedicated implementation and tests.
+  [roadmap](roadmap.md). Photos, File Manager, Camera and Recorder still need physical SD,
+  touch, audio and resource acceptance. Recorder's final header/flush/close errors and Camera's
+  failed completion delivery are covered by the host software suites; those tests do not replace
+  device-side recovery or acoustic validation.

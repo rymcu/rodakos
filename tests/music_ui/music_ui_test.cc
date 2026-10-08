@@ -196,6 +196,19 @@ RODAK_TEST("worker creation failure can retry and recover") {
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kReady);
     RODAK_CHECK_EQ(f.player.track_count(),1U);
 }
+RODAK_TEST("requested library scan publishes changed tracks") {
+    Fixture f;f.files.Tracks({"/before.wav"});f.Create();
+    const auto before = f.player.GetState().library_revision;
+    f.files.Tracks({"/after.wav"});
+    RODAK_CHECK(f.player.RequestLibraryScan());
+    Await([&] {
+        const auto state = f.player.GetState();
+        return state.library_revision > before && state.library_status != MusicLibraryStatus::kScanning;
+    });
+    const auto tracks = f.player.GetTracks();
+    RODAK_CHECK_EQ(tracks.size(), 1U);
+    RODAK_CHECK_EQ(tracks.front().path, "/after.wav");
+}
 RODAK_TEST("retry does not hold LVGL during a slow directory read") {
     Fixture f;f.Create();f.files.Hold();f.app.RefreshLibrary();Await([&]{return f.files.Entered();});
     f.Refresh();RODAK_CHECK_EQ(f.Status(),"Scanning music...");
