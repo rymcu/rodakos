@@ -138,6 +138,12 @@ private:
                      int64_t deadline_ms = 0, bool allow_pairing = true,
                      bool* credentials_rejected = nullptr,
                      CloudDiagnosticCode* failure = nullptr);
+    struct AiotRefreshContext;
+    bool ExchangeAiotCredentials(AiotRefreshContext& context);
+    bool PairAiotCredentials(AiotRefreshContext& context, const std::string& device_key,
+                              const std::string& client_id, const std::string& firmware_version);
+    bool ParseAiotCredentials(AiotRefreshContext& context);
+    bool PersistAiotCredentials(AiotRefreshContext& context);
     bool RefreshWithDiscovery(DeviceCloudConfig& config);
     void SetError(const std::string& message,
                   CloudDiagnosticCode diagnostic = CloudDiagnosticCode::kRefreshFailed);

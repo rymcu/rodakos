@@ -119,7 +119,6 @@ private:
     srmodel_list_t* models_ = nullptr;
     esp_mn_iface_t* multinet_ = nullptr;
     model_iface_data_t* multinet_data_ = nullptr;
-    bool commands_allocated_ = false;
     bool wake_model_ready_ = false;
     size_t wake_chunk_samples_ = 0;
     uint32_t wake_generation_ = 0;

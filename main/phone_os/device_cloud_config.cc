@@ -531,18 +531,19 @@ bool HasCompleteAiotConfig(const DeviceCloudConfig& config) {
 
 bool PersistAiotIdentity(const DeviceCloudConfig& config) {
     Settings settings(kCloudNamespace, true);
-    const bool written = settings.SetString(kAiotSecretKey, config.aiot_device_secret) &&
-                         settings.SetString(kAiotTokenKey, config.aiot_access_token) &&
-                         settings.SetBool(kAiotRegisteredKey, config.aiot_registered) &&
-                         settings.SetBool(kAiotActivatedKey, config.aiot_activated) &&
-                         settings.SetBool(kAiotPendingKey, config.aiot_pending) &&
-                         settings.SetBool(kUnbindPendingKey, config.unbind_pending) &&
-                         settings.SetBool(kUnbindAckKey, config.unbind_server_acknowledged) &&
-                         settings.SetString(kPairingRequestIdKey, config.pairing_request_id) &&
-                         settings.SetString(kPairingRequestTokenKey, config.pairing_request_token) &&
-                         settings.SetString(kPairingCodeKey, config.pairing_code) &&
-                         settings.SetString(kPairingExpiresAtKey, config.pairing_expires_at) &&
-                         settings.SetString(kPairingStatusKey, config.pairing_status);
+    // Separate full expressions let temporary NVS keys release their stack slots.
+    bool written = settings.SetString(kAiotSecretKey, config.aiot_device_secret);
+    written = written && settings.SetString(kAiotTokenKey, config.aiot_access_token);
+    written = written && settings.SetBool(kAiotRegisteredKey, config.aiot_registered);
+    written = written && settings.SetBool(kAiotActivatedKey, config.aiot_activated);
+    written = written && settings.SetBool(kAiotPendingKey, config.aiot_pending);
+    written = written && settings.SetBool(kUnbindPendingKey, config.unbind_pending);
+    written = written && settings.SetBool(kUnbindAckKey, config.unbind_server_acknowledged);
+    written = written && settings.SetString(kPairingRequestIdKey, config.pairing_request_id);
+    written = written && settings.SetString(kPairingRequestTokenKey, config.pairing_request_token);
+    written = written && settings.SetString(kPairingCodeKey, config.pairing_code);
+    written = written && settings.SetString(kPairingExpiresAtKey, config.pairing_expires_at);
+    written = written && settings.SetString(kPairingStatusKey, config.pairing_status);
     if (!written || !settings.Commit()) {
         (void)settings.Commit();
         return false;
@@ -552,21 +553,21 @@ bool PersistAiotIdentity(const DeviceCloudConfig& config) {
 
 bool PersistRealtimeVoiceConfig(const DeviceCloudConfig& config) {
     Settings settings(kRealtimeVoiceNamespace, true);
-    const bool written =
-        settings.SetString(kRealtimeVoiceEndpointKey, config.realtime_voice_url) &&
-        settings.SetInt(kRealtimeVoiceProtocolVersionKey,
-                        config.realtime_voice_protocol_version) &&
-        settings.SetInt(kRealtimeVoiceDownlinkSampleRateKey,
-                        config.realtime_voice_downlink_sample_rate_hz) &&
-        settings.SetInt(kRealtimeVoiceDownlinkFrameDurationKey,
-                        config.realtime_voice_downlink_frame_duration_ms) &&
-        settings.SetInt(kRealtimeVoiceMaxAudioFrameKey,
-                        static_cast<int32_t>(config.realtime_voice_max_audio_frame_bytes)) &&
-        settings.SetInt(kRealtimeVoiceMaxControlKey,
-                        static_cast<int32_t>(config.realtime_voice_max_control_bytes)) &&
-        settings.SetString(kRealtimeVoiceVadStrategiesKey,
-                           SerializeStringArray(config.realtime_voice_vad_strategies)) &&
-        settings.SetString(kRealtimeVoicePreferredVadStrategyKey,
+    // Separate full expressions let temporary NVS keys release their stack slots.
+    bool written = settings.SetString(kRealtimeVoiceEndpointKey, config.realtime_voice_url);
+    written = written && settings.SetInt(kRealtimeVoiceProtocolVersionKey,
+                        config.realtime_voice_protocol_version);
+    written = written && settings.SetInt(kRealtimeVoiceDownlinkSampleRateKey,
+                        config.realtime_voice_downlink_sample_rate_hz);
+    written = written && settings.SetInt(kRealtimeVoiceDownlinkFrameDurationKey,
+                        config.realtime_voice_downlink_frame_duration_ms);
+    written = written && settings.SetInt(kRealtimeVoiceMaxAudioFrameKey,
+                        static_cast<int32_t>(config.realtime_voice_max_audio_frame_bytes));
+    written = written && settings.SetInt(kRealtimeVoiceMaxControlKey,
+                        static_cast<int32_t>(config.realtime_voice_max_control_bytes));
+    written = written && settings.SetString(kRealtimeVoiceVadStrategiesKey,
+                           SerializeStringArray(config.realtime_voice_vad_strategies));
+    written = written && settings.SetString(kRealtimeVoicePreferredVadStrategyKey,
                            config.realtime_voice_preferred_vad_strategy);
     if (!written || !settings.Commit()) {
         // NVSHandleSimple may have applied an earlier field before reporting
@@ -580,27 +581,27 @@ bool PersistRealtimeVoiceConfig(const DeviceCloudConfig& config) {
 
 bool PersistMqttConfig(const DeviceCloudConfig& config) {
     Settings settings(kMqttNamespace, true);
-    const bool written =
-        settings.SetString(kCachedAuthorityKey,
+    // Separate full expressions let temporary NVS keys release their stack slots.
+    bool written = settings.SetString(kCachedAuthorityKey,
                           ServerAuthorityKey({config.provisioning_url, config.server_trust,
-                                              false, config.server_connect_address})) &&
-        settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version) &&
-        settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address) &&
-        settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port) &&
-        settings.SetString(kMqttUsernameKey, config.mqtt_username) &&
-        settings.SetString(kMqttPasswordKey, config.mqtt_password) &&
-        settings.SetInt(kMqttKeepaliveKey, config.mqtt_keepalive) &&
-        settings.SetString(kMqttDeviceKey, config.mqtt_device_key) &&
-        settings.SetBool(kMqttHomeEnabledKey, config.mqtt_home_enabled) &&
-        settings.SetString(kMqttHttpBaseUrlKey, config.mqtt_http_base_url) &&
-        settings.SetString(kMqttTelemetryTopicKey, config.mqtt_topic_telemetry) &&
-        settings.SetString(kMqttShadowReportTopicKey, config.mqtt_topic_shadow_report) &&
-        settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired) &&
-        settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify) &&
-        settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress) &&
-        settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands) &&
-        settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status) &&
-        settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
+                                              false, config.server_connect_address}));
+    written = written && settings.SetInt(kMqttProtocolVersionKey, config.mqtt_protocol_version);
+    written = written && settings.SetString(kMqttBrokerAddressKey, config.mqtt_broker_address);
+    written = written && settings.SetInt(kMqttBrokerPortKey, config.mqtt_broker_port);
+    written = written && settings.SetString(kMqttUsernameKey, config.mqtt_username);
+    written = written && settings.SetString(kMqttPasswordKey, config.mqtt_password);
+    written = written && settings.SetInt(kMqttKeepaliveKey, config.mqtt_keepalive);
+    written = written && settings.SetString(kMqttDeviceKey, config.mqtt_device_key);
+    written = written && settings.SetBool(kMqttHomeEnabledKey, config.mqtt_home_enabled);
+    written = written && settings.SetString(kMqttHttpBaseUrlKey, config.mqtt_http_base_url);
+    written = written && settings.SetString(kMqttTelemetryTopicKey, config.mqtt_topic_telemetry);
+    written = written && settings.SetString(kMqttShadowReportTopicKey, config.mqtt_topic_shadow_report);
+    written = written && settings.SetString(kMqttShadowDesiredTopicKey, config.mqtt_topic_shadow_desired);
+    written = written && settings.SetString(kMqttOtaNotifyTopicKey, config.mqtt_topic_ota_notify);
+    written = written && settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress);
+    written = written && settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands);
+    written = written && settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
+    written = written && settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
     if (!written || !settings.Commit()) {
         (void)settings.Commit();
         return false;
@@ -842,6 +843,56 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     return config.has_aiot_config;
 }
 
+struct DeviceCloudConfigService::AiotRefreshContext {
+    DeviceCloudConfigService& service;
+    DeviceCloudConfig& config;
+    const std::function<bool()>& can_continue;
+    int64_t deadline_ms;
+    bool allow_pairing;
+    bool* credentials_rejected;
+    CloudDiagnosticCode* failure;
+    int64_t refresh_started_ms;
+    uint32_t config_generation;
+    std::string bootstrap_url;
+    std::string origin;
+    std::string error;
+    std::string device_key;
+    cJSON* bootstrap_root = nullptr;
+    cJSON* bootstrap_data = nullptr;
+    cJSON* token_root = nullptr;
+    cJSON* token_data = nullptr;
+    int token_lifetime_seconds = 0;
+
+    ~AiotRefreshContext() {
+        ClearToken();
+        ClearBootstrap();
+    }
+    void ClearToken() {
+        cJSON_Delete(token_root);
+        token_root = nullptr;
+        token_data = nullptr;
+    }
+    void ClearBootstrap() {
+        cJSON_Delete(bootstrap_root);
+        bootstrap_root = nullptr;
+        bootstrap_data = nullptr;
+    }
+    bool Allowed() const {
+        if (can_continue && !can_continue()) return false;
+        std::lock_guard<std::recursive_mutex> lock(service.config_mutex_);
+        return config_generation == service.config_generation_;
+    }
+    void Fail(const std::string& message,
+              CloudDiagnosticCode code = CloudDiagnosticCode::kRefreshFailed) const {
+        std::lock_guard<std::recursive_mutex> lock(service.config_mutex_);
+        if (config_generation != service.config_generation_ || (can_continue && !can_continue())) {
+            code = CloudDiagnosticCode::kCancelled;
+        }
+        if (failure != nullptr) *failure = code;
+        if (config_generation == service.config_generation_) service.SetError(message, code);
+    }
+};
+
 bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                           const std::function<bool()>& can_continue,
                                           int64_t deadline_ms, bool allow_pairing,
@@ -860,45 +911,64 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             return false;
         }
     }
-    const auto request_allowed = [&]() {
-        if (can_continue && !can_continue()) return false;
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        return config_generation == config_generation_;
-    };
-    const auto fail = [&](const std::string& message,
-                          CloudDiagnosticCode code = CloudDiagnosticCode::kRefreshFailed) {
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        if (config_generation != config_generation_ || (can_continue && !can_continue())) {
-            code = CloudDiagnosticCode::kCancelled;
-        }
-        if (failure != nullptr) *failure = code;
-        if (config_generation == config_generation_) SetError(message, code);
-    };
+    AiotRefreshContext context{*this, config, can_continue, deadline_ms, allow_pairing,
+                               credentials_rejected, failure, refresh_started_ms,
+                               config_generation, {}, {}, {}, {}};
     if (config.server_trust_error) {
-        fail("Server trust record is unreadable; refusing cloud access",
-             CloudDiagnosticCode::kTrustUnavailable);
+        context.Fail("Server trust record is unreadable; refusing cloud access",
+                     CloudDiagnosticCode::kTrustUnavailable);
         return false;
     }
-    const std::string bootstrap_url = ResolveAiotBootstrapUrl(config.provisioning_url);
-    const std::string origin = UrlOrigin(bootstrap_url);
-    if (origin.empty()) {
-        fail("AIoT bootstrap URL has no valid origin");
+    context.bootstrap_url = ResolveAiotBootstrapUrl(config.provisioning_url);
+    context.origin = UrlOrigin(context.bootstrap_url);
+    if (context.origin.empty()) {
+        context.Fail("AIoT bootstrap URL has no valid origin");
         return false;
     }
+    // Each stage must unwind before the next deep HTTP or NVS call. Keeping
+    // descriptor and pairing locals here would retain their stack slots even
+    // before construction. The noinline boundaries preserve that separation;
+    // this task must keep its flash-safe internal stack.
+    if (!ExchangeAiotCredentials(context) || !ParseAiotCredentials(context) ||
+        !PersistAiotCredentials(context)) return false;
+    context.ClearBootstrap();
+    ESP_LOGI(TAG, "Rodak AIoT enrollment complete: device=%s broker=%s:%d",
+             config.mqtt_device_key.c_str(), config.mqtt_broker_address.c_str(),
+             config.mqtt_broker_port);
+    {
+        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
+        if (config.cloud_generation == config_generation_) {
+            last_error_.clear();
+            ObserveDiagnosticConfig(config);
+        }
+    }
+    return true;
+}
 
-    std::string error;
+[[gnu::noinline]] bool DeviceCloudConfigService::ExchangeAiotCredentials(
+    AiotRefreshContext& context) {
+    auto& config = context.config;
+    const auto& origin = context.origin;
+    auto& error = context.error;
+    auto*& bootstrap_root = context.bootstrap_root;
+    auto*& bootstrap_data = context.bootstrap_data;
+    auto*& token_root = context.token_root;
+    auto*& token_data = context.token_data;
+    const int64_t deadline_ms = context.deadline_ms;
+    const bool allow_pairing = context.allow_pairing;
+    const auto request_allowed = [&context]() { return context.Allowed(); };
+    const auto& bootstrap_url = context.bootstrap_url;
+    auto* credentials_rejected = context.credentials_rejected;
     HttpResponse bootstrap_response;
     if (!PerformHttpRequest(config, bootstrap_url, HTTP_METHOD_GET, {}, {},
                             kMaxAiotResponseBytes, bootstrap_response, error,
                             request_allowed, deadline_ms)) {
-        fail(error, bootstrap_response.failure);
+        context.Fail(error, bootstrap_response.failure);
         return false;
     }
 
-    cJSON* bootstrap_root = nullptr;
-    cJSON* bootstrap_data = nullptr;
     if (!ParseResponse(bootstrap_response, bootstrap_root, bootstrap_data, error)) {
-        fail(error);
+        context.Fail(error);
         return false;
     }
 
@@ -913,65 +983,36 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     }
     if (cJSON_IsString(bootstrap_module) && bootstrap_module->valuestring != nullptr &&
         std::strcmp(bootstrap_module->valuestring, "aiot") != 0) {
-        fail("AIoT bootstrap module is unsupported");
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT bootstrap module is unsupported");
+        context.ClearBootstrap();
         return false;
     }
     if (cJSON_IsString(bootstrap_protocol) && bootstrap_protocol->valuestring != nullptr &&
         std::strcmp(bootstrap_protocol->valuestring, kRodakAiotProtocol) != 0) {
-        fail("AIoT bootstrap protocol is unsupported");
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT bootstrap protocol is unsupported");
+        context.ClearBootstrap();
         return false;
     }
     if (cJSON_IsString(bootstrap_product) && bootstrap_product->valuestring != nullptr &&
         std::strcmp(bootstrap_product->valuestring, kRodakBigSmartProductKey) != 0) {
-        fail("AIoT bootstrap product is not rymcu-bigsmart");
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT bootstrap product is not rymcu-bigsmart");
+        context.ClearBootstrap();
         return false;
     }
 
     int protocol_version = 0;
-    int mqtt_port = 0;
-    std::string mqtt_host;
-    int mqtt_protocol = 0;
-    std::string mqtt_http_base_url;
-    std::string mqtt_username;
-    std::string mqtt_password;
-    std::string mqtt_device_key;
-    std::string telemetry_topic;
-    std::string shadow_report_topic;
-    std::string shadow_desired_topic;
-    std::string ota_notify_topic;
-    std::string ota_progress_topic;
-    std::string commands_topic;
-    std::string pc_status_topic;
-    std::string home_prefix_topic;
-    int mqtt_keepalive = 0;
-    bool mqtt_home_enabled = false;
-    std::string activation_code;
-    std::string activation_message;
-
     AddIntAlias(bootstrap_data, "protocolVersion", protocol_version);
     AddIntAlias(bootstrap_data, "protocol_version", protocol_version);
-    AddIntAlias(bootstrap_data, "mqttPort", mqtt_port);
-    AddIntAlias(bootstrap_data, "mqtt_port", mqtt_port);
-    AddStringAlias(bootstrap_data, "mqttHost", mqtt_host);
-    AddStringAlias(bootstrap_data, "mqtt_host", mqtt_host);
     if (protocol_version <= 0) {
         protocol_version = kRodakAiotProtocolVersion;
     }
     if (protocol_version != kRodakAiotProtocolVersion) {
-        fail("AIoT bootstrap protocol version is unsupported");
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT bootstrap protocol version is unsupported");
+        context.ClearBootstrap();
         return false;
     }
-    if (mqtt_port <= 0 || mqtt_port > 65535) {
-        mqtt_port = kDefaultMqttBrokerPort;
-    }
-
-    cJSON* token_root = nullptr;
-    cJSON* token_data = nullptr;
-    const std::string device_key = MacAddress();
+    context.device_key = MacAddress();
+    const auto& device_key = context.device_key;
     const std::string client_id = GetClientId();
     const esp_app_desc_t* app_desc = esp_app_get_description();
     const std::string firmware_version = app_desc != nullptr ? app_desc->version : "unknown";
@@ -995,8 +1036,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         if (!PerformHttpRequest(config, origin + kAiotTokenPath, HTTP_METHOD_POST, token_json, {},
                                 kMaxAiotResponseBytes, token_response, error,
                                 request_allowed, deadline_ms)) {
-            fail(error, token_response.failure);
-            cJSON_Delete(bootstrap_root);
+            context.Fail(error, token_response.failure);
+            context.ClearBootstrap();
             return false;
         }
         const int business_code = ResponseBusinessCode(token_response);
@@ -1005,8 +1046,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             business_code == 403 || business_code == 404) {
             if (credentials_rejected != nullptr) *credentials_rejected = true;
             if (!allow_pairing || !config.server_trust.empty()) {
-                fail("Rodak rejected device credentials; reconnect from Settings", CloudDiagnosticCode::kCredentialsRejected);
-                cJSON_Delete(bootstrap_root);
+                context.Fail("Rodak rejected device credentials; reconnect from Settings", CloudDiagnosticCode::kCredentialsRejected);
+                context.ClearBootstrap();
                 return false;
             }
             // The server no longer accepts this identity (for example after a
@@ -1014,16 +1055,31 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             ResetAiotCredentials(config);
             ResetMqttConfig(config);
         } else if (!ParseResponse(token_response, token_root, token_data, error)) {
-            fail("AIoT token refresh failed: " + error);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("AIoT token refresh failed: " + error);
+            context.ClearBootstrap();
             return false;
         }
     }
 
-    if (token_data == nullptr) {
+    if (token_data == nullptr && !PairAiotCredentials(
+            context, device_key, client_id, firmware_version)) return false;
+    return true;
+}
+
+[[gnu::noinline]] bool DeviceCloudConfigService::PairAiotCredentials(
+    AiotRefreshContext& context, const std::string& device_key,
+    const std::string& client_id, const std::string& firmware_version) {
+    auto& config = context.config;
+    const auto& origin = context.origin;
+    auto& error = context.error;
+    auto*& token_root = context.token_root;
+    auto*& token_data = context.token_data;
+    const int64_t deadline_ms = context.deadline_ms;
+    const bool allow_pairing = context.allow_pairing;
+    const auto request_allowed = [&context]() { return context.Allowed(); };
     if (!allow_pairing) {
-        fail("Connect this device to Rodak in Settings first", CloudDiagnosticCode::kUnconfigured);
-        cJSON_Delete(bootstrap_root);
+        context.Fail("Connect this device to Rodak in Settings first", CloudDiagnosticCode::kUnconfigured);
+        context.ClearBootstrap();
         return false;
     }
     // Pairing is an explicit user-mediated gate. The device may prepare a
@@ -1036,8 +1092,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         if (!PersistAiotIdentity(config)) {
-            fail("Failed to persist AIoT device secret");
-            cJSON_Delete(bootstrap_root);
+            context.Fail("Failed to persist AIoT device secret");
+            context.ClearBootstrap();
             return false;
         }
     }
@@ -1071,22 +1127,22 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         HttpResponse response;
         if (!PerformHttpRequest(config, pairing_url, HTTP_METHOD_POST, request_json, {},
                                 kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
-            fail(error, response.failure);
-            cJSON_Delete(bootstrap_root);
+            context.Fail(error, response.failure);
+            context.ClearBootstrap();
             return false;
         }
         if (response.status_code < 200 || response.status_code >= 300) {
-            fail("AIoT pairing request failed: HTTP status " +
+            context.Fail("AIoT pairing request failed: HTTP status " +
                      std::to_string(response.status_code));
-            cJSON_Delete(bootstrap_root);
+            context.ClearBootstrap();
             return false;
         }
         DevicePairingResponse pairing_response;
         if (!ParseDevicePairingResponse(response.body,
                                         DevicePairingResponseType::kCreateRequest,
                                         pairing_response, error)) {
-            fail("AIoT pairing request failed: " + error);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("AIoT pairing request failed: " + error);
+            context.ClearBootstrap();
             return false;
         }
         config.pairing_request_id = pairing_response.request_id;
@@ -1100,8 +1156,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         HttpResponse response;
         if (!PerformHttpRequest(config, status_url, HTTP_METHOD_GET, {}, config.pairing_request_token,
                                 kMaxAiotResponseBytes, response, error, request_allowed, deadline_ms)) {
-            fail(error, response.failure);
-            cJSON_Delete(bootstrap_root);
+            context.Fail(error, response.failure);
+            context.ClearBootstrap();
             return false;
         }
         const int business_code = ResponseBusinessCode(response);
@@ -1114,23 +1170,23 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 std::lock_guard<std::recursive_mutex> lock(config_mutex_);
                 cleared = PersistAiotIdentity(config);
             }
-            fail(cleared ? "配对申请已失效，请重新发起绑定"
+            context.Fail(cleared ? "配对申请已失效，请重新发起绑定"
                              : "配对申请已失效，但本地状态清理失败");
-            cJSON_Delete(bootstrap_root);
+            context.ClearBootstrap();
             return false;
         }
         if (response.status_code < 200 || response.status_code >= 300) {
-            fail("AIoT pairing status failed: HTTP status " +
+            context.Fail("AIoT pairing status failed: HTTP status " +
                      std::to_string(response.status_code));
-            cJSON_Delete(bootstrap_root);
+            context.ClearBootstrap();
             return false;
         }
         DevicePairingResponse pairing_response;
         if (!ParseDevicePairingResponse(response.body,
                                         DevicePairingResponseType::kStatus,
                                         pairing_response, error)) {
-            fail("AIoT pairing status failed: " + error);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("AIoT pairing status failed: " + error);
+            context.ClearBootstrap();
             return false;
         }
         pairing_status = pairing_response.raw_status;
@@ -1140,8 +1196,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         cJSON* root = nullptr;
         cJSON* data = nullptr;
         if (!ParseResponse(response, root, data, error)) {
-            fail("AIoT pairing status failed: " + error);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("AIoT pairing status failed: " + error);
+            context.ClearBootstrap();
             return false;
         }
         token_root = root;
@@ -1150,9 +1206,9 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (config.pairing_request_id.empty() || config.pairing_request_token.empty() ||
         config.pairing_code.empty()) {
         ResetPairingRequest(config);
-        fail("AIoT pairing response is incomplete");
-        cJSON_Delete(token_root);
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT pairing response is incomplete");
+        context.ClearToken();
+        context.ClearBootstrap();
         return false;
     }
     bool pairing_persisted = false;
@@ -1167,9 +1223,9 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         }
     }
     if (!pairing_persisted) {
-        fail("Failed to persist pairing request");
-        cJSON_Delete(token_root);
-        cJSON_Delete(bootstrap_root);
+        context.Fail("Failed to persist pairing request");
+        context.ClearToken();
+        context.ClearBootstrap();
         return false;
     }
     const DevicePairingStatus classified_status =
@@ -1182,24 +1238,56 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                 std::lock_guard<std::recursive_mutex> lock(config_mutex_);
                 cleared = PersistAiotIdentity(config);
             }
-            fail(!cleared ? "配对终态清理失败，请重试"
+            context.Fail(!cleared ? "配对终态清理失败，请重试"
                               : (classified_status == DevicePairingStatus::kRejected
                                      ? "配对申请已拒绝，请重新发起绑定"
                                      : "配对申请已过期，请重新发起绑定"));
-            cJSON_Delete(token_root);
-            cJSON_Delete(bootstrap_root);
+            context.ClearToken();
+            context.ClearBootstrap();
             return false;
         }
-        fail(config.pairing_code.empty()
+        context.Fail(config.pairing_code.empty()
                      ? "等待设备绑定确认"
                      : "等待设备绑定确认，配对码：" + config.pairing_code,
              CloudDiagnosticCode::kUnconfigured);
-        cJSON_Delete(token_root);
-        cJSON_Delete(bootstrap_root);
+        context.ClearToken();
+        context.ClearBootstrap();
         return false;
     }
-    }
+    return true;
+}
 
+[[gnu::noinline]] bool DeviceCloudConfigService::ParseAiotCredentials(
+    AiotRefreshContext& context) {
+    auto& config = context.config;
+    const auto& origin = context.origin;
+    auto*& bootstrap_data = context.bootstrap_data;
+    auto*& token_data = context.token_data;
+    int mqtt_port = 0;
+    std::string mqtt_host;
+    int mqtt_protocol = 0;
+    std::string mqtt_http_base_url;
+    std::string mqtt_username;
+    std::string mqtt_password;
+    std::string mqtt_device_key;
+    std::string telemetry_topic;
+    std::string shadow_report_topic;
+    std::string shadow_desired_topic;
+    std::string ota_notify_topic;
+    std::string ota_progress_topic;
+    std::string commands_topic;
+    std::string pc_status_topic;
+    std::string home_prefix_topic;
+    int mqtt_keepalive = 0;
+    bool mqtt_home_enabled = false;
+    std::string activation_code;
+    std::string activation_message;
+
+    AddIntAlias(bootstrap_data, "mqttPort", mqtt_port);
+    AddIntAlias(bootstrap_data, "mqtt_port", mqtt_port);
+    AddStringAlias(bootstrap_data, "mqttHost", mqtt_host);
+    AddStringAlias(bootstrap_data, "mqtt_host", mqtt_host);
+    if (mqtt_port <= 0 || mqtt_port > 65535) mqtt_port = kDefaultMqttBrokerPort;
     if (config.aiot_device_secret.empty()) {
         config.aiot_device_secret = GenerateDeviceSecret();
     }
@@ -1210,9 +1298,9 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     config.aiot_registered = false;
     config.aiot_activated = false;
     if (token_data == nullptr) {
-        fail("AIoT pairing confirmation did not include credentials");
-        cJSON_Delete(token_root);
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT pairing confirmation did not include credentials");
+        context.ClearToken();
+        context.ClearBootstrap();
         return false;
     }
     AddStringAlias(token_data, "deviceToken", config.aiot_access_token);
@@ -1245,9 +1333,9 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         const auto* transport = cJSON_GetObjectItemCaseSensitive(mqtt_object, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring == nullptr ||
             std::strcmp(transport->valuestring, "mqtts") != 0) {
-            fail("Pinned server did not provide an MQTT TLS descriptor");
-            cJSON_Delete(token_root);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("Pinned server did not provide an MQTT TLS descriptor");
+            context.ClearToken();
+            context.ClearBootstrap();
             return false;
         }
     }
@@ -1338,17 +1426,17 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         RealtimeVoiceDescriptor voice_descriptor;
         std::string voice_error;
         if (!ParseRealtimeVoiceDescriptor(realtime_voice, voice_descriptor, voice_error)) {
-            fail("Realtime voice descriptor is invalid", CloudDiagnosticCode::kVoiceUnavailable);
-            cJSON_Delete(token_root);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("Realtime voice descriptor is invalid", CloudDiagnosticCode::kVoiceUnavailable);
+            context.ClearToken();
+            context.ClearBootstrap();
             return false;
         }
         if (!config.server_trust.empty() &&
             !IsServerTrustVoiceDestination(config.server_trust, config.provisioning_url,
                                             voice_descriptor.endpoint)) {
-            fail("Realtime voice endpoint does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
-            cJSON_Delete(token_root);
-            cJSON_Delete(bootstrap_root);
+            context.Fail("Realtime voice endpoint does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
+            context.ClearToken();
+            context.ClearBootstrap();
             return false;
         }
         config.realtime_voice_url = voice_descriptor.endpoint;
@@ -1365,18 +1453,18 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             voice_descriptor.preferred_vad_strategy;
         config.has_realtime_voice_config = true;
     }
-    int token_lifetime_seconds = 0;
+    auto& token_lifetime_seconds = context.token_lifetime_seconds;
     const cJSON* token_lifetime = cJSON_GetObjectItemCaseSensitive(token_data, "expiresIn");
     if (cJSON_IsNumber(token_lifetime) && token_lifetime->valuedouble > 0 &&
         token_lifetime->valuedouble <= INT32_MAX &&
         token_lifetime->valuedouble == token_lifetime->valueint) {
         token_lifetime_seconds = token_lifetime->valueint;
     }
-    cJSON_Delete(token_root);
+    context.ClearToken();
 
     if (config.aiot_access_token.empty()) {
-        fail("AIoT token response did not contain an access token");
-        cJSON_Delete(bootstrap_root);
+        context.Fail("AIoT token response did not contain an access token");
+        context.ClearBootstrap();
         return false;
     }
     if (mqtt_host.empty()) {
@@ -1386,7 +1474,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         mqtt_host = UrlHost(origin);
     }
     if (mqtt_device_key.empty()) {
-        mqtt_device_key = device_key;
+        mqtt_device_key = context.device_key;
     }
     if (mqtt_username.empty()) {
         mqtt_username = mqtt_device_key;
@@ -1400,8 +1488,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     if (!config.server_trust.empty() &&
         (mqtt_host != config.server_trust.tls_name || mqtt_port <= 0 || mqtt_port > 65535 ||
          ServerTrustUrlOrigin(mqtt_http_base_url) != origin)) {
-        fail("MQTT descriptor does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
-        cJSON_Delete(bootstrap_root);
+        context.Fail("MQTT descriptor does not match the pinned server", CloudDiagnosticCode::kTrustUnavailable);
+        context.ClearBootstrap();
         return false;
     }
     config.mqtt_protocol_version = mqtt_protocol > 0 ? mqtt_protocol : 2;
@@ -1430,12 +1518,21 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     FinalizeMqttConfig(config);
     config.has_aiot_config = HasCompleteAiotConfig(config);
 
+    return true;
+}
+
+[[gnu::noinline]] bool DeviceCloudConfigService::PersistAiotCredentials(
+    AiotRefreshContext& context) {
+    auto& config = context.config;
+    const auto config_generation = context.config_generation;
+    const auto refresh_started_ms = context.refresh_started_ms;
+    const auto token_lifetime_seconds = context.token_lifetime_seconds;
     {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         if (config_generation != config_generation_) {
-            fail("AIoT provisioning endpoint changed while refresh was in progress",
+            context.Fail("AIoT provisioning endpoint changed while refresh was in progress",
                  CloudDiagnosticCode::kCancelled);
-            cJSON_Delete(bootstrap_root);
+            context.ClearBootstrap();
             return false;
         }
     }
@@ -1454,7 +1551,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
             auto previous_config = std::unique_ptr<DeviceCloudConfig>(
                 new (std::nothrow) DeviceCloudConfig());
             if (previous_config == nullptr) {
-                fail("Not enough memory to snapshot AIoT credentials");
+                context.Fail("Not enough memory to snapshot AIoT credentials");
             } else {
                 Load(*previous_config);
 
@@ -1529,26 +1626,15 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     }
     if (!credentials_persisted) {
         if (!generation_matches) {
-            fail("AIoT provisioning endpoint changed while refresh was in progress",
+            context.Fail("AIoT provisioning endpoint changed while refresh was in progress",
                  CloudDiagnosticCode::kCancelled);
         } else if (!rollback_ok) {
-            fail("AIoT credentials state is uncertain after persistence failure");
+            context.Fail("AIoT credentials state is uncertain after persistence failure");
         } else {
-            fail("Failed to persist AIoT credentials");
+            context.Fail("Failed to persist AIoT credentials");
         }
-        cJSON_Delete(bootstrap_root);
+        context.ClearBootstrap();
         return false;
-    }
-    cJSON_Delete(bootstrap_root);
-    ESP_LOGI(TAG, "Rodak AIoT enrollment complete: device=%s broker=%s:%d",
-             config.mqtt_device_key.c_str(), config.mqtt_broker_address.c_str(),
-             config.mqtt_broker_port);
-    {
-        std::lock_guard<std::recursive_mutex> lock(config_mutex_);
-        if (config.cloud_generation == config_generation_) {
-            last_error_.clear();
-            ObserveDiagnosticConfig(config);
-        }
     }
     return true;
 }

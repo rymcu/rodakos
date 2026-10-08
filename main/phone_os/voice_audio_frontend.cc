@@ -3,6 +3,7 @@
 #include "rodakos_adapters/audio_codec_input.h"
 
 #include <algorithm>
+#include <cstring>
 #include <utility>
 
 #include <esp_heap_caps.h>
@@ -664,6 +665,11 @@ bool VoiceAudioFrontend::InitModelLocked() {
         SetErrorLocked("Chinese MultiNet model unavailable");
         return fail();
     }
+    // ESP-SR 2.2.2 的 mn5q8_cn create/destroy 拥有全局命令表；新模型需重新核验合同。
+    if (std::strcmp(model_name, "mn5q8_cn") != 0) {
+        SetErrorLocked("Unsupported MultiNet command ownership contract");
+        return fail();
+    }
 
     multinet_ = esp_mn_handle_from_name(model_name);
     if (multinet_ == nullptr) {
@@ -678,11 +684,7 @@ bool VoiceAudioFrontend::InitModelLocked() {
     }
 
     multinet_->set_det_threshold(multinet_data_, kDetectionThreshold);
-    if (esp_mn_commands_alloc(multinet_, multinet_data_) != ESP_OK) {
-        SetErrorLocked("MultiNet command registry allocation failed");
-        return fail();
-    }
-    commands_allocated_ = true;
+    // create 已创建命令表；此处只登记命令，失败时也统一由 destroy 释放。
     if (esp_mn_commands_add(1, wake_identity_.wake_command.c_str()) != ESP_OK) {
         SetErrorLocked("Wake command registration failed");
         return fail();
@@ -748,10 +750,6 @@ bool VoiceAudioFrontend::StartAfe(uint32_t generation) {
 void VoiceAudioFrontend::ReleaseWakeModelLocked() {
     if (multinet_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_data_);
-    }
-    if (commands_allocated_) {
-        esp_mn_commands_free();
-        commands_allocated_ = false;
     }
     multinet_data_ = nullptr;
     multinet_ = nullptr;
@@ -1013,11 +1011,13 @@ void VoiceAudioFrontend::StopAfe() {
 
 void VoiceAudioFrontend::AfeFetchTask() {
     unsigned fetch_errors = 0;
+    unsigned cancelled_results = 0;
+    uint32_t generation = 0;
     while (true) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         const bool stopping = afe_fetch_stopping_;
         const bool fed = afe_feed_started_;
-        const uint32_t generation = afe_generation_;
+        generation = afe_generation_;
         xSemaphoreGive(mutex_);
         if (stopping) break;
         if (!fed) {
@@ -1025,14 +1025,28 @@ void VoiceAudioFrontend::AfeFetchTask() {
             continue;
         }
         auto* result = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
-        if (result == nullptr || result->ret_value != ESP_OK || result->data == nullptr ||
-            result->data_size <= 0 || result->data_size % sizeof(int16_t) != 0) {
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            if (generation == conversation_generation_) {
-                conversation_assembler_.InvalidateContinuity();
-                aec_diagnostic_capture_.MarkDiscontinuity(false, generation);
-            }
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool stopped = afe_fetch_stopping_;
+        const bool current = !stopped && mode_ == Mode::kConversation &&
+                             generation == conversation_generation_ &&
+                             generation == afe_generation_;
+        if (!current) {
+            ++cancelled_results;
             xSemaphoreGive(mutex_);
+            // Stop 先关闭新 feed；已有 feed 仍可能等消费者排空，只有 stopping 才能退出。
+            if (stopped) break;
+            vTaskDelay(1);
+            continue;
+        }
+        const bool invalid = result == nullptr || result->ret_value != ESP_OK ||
+                             result->data == nullptr || result->data_size <= 0 ||
+                             result->data_size % sizeof(int16_t) != 0;
+        if (invalid) {
+            conversation_assembler_.InvalidateContinuity();
+            aec_diagnostic_capture_.MarkDiscontinuity(false, generation);
+        }
+        xSemaphoreGive(mutex_);
+        if (invalid) {
             if (++fetch_errors == 1 || fetch_errors % 100 == 0) {
                 ESP_LOGW(TAG, "AFE fetch rejected: count=%u status=%d bytes=%d", fetch_errors,
                          result ? result->ret_value : ESP_FAIL, result ? result->data_size : 0);
@@ -1046,6 +1060,8 @@ void VoiceAudioFrontend::AfeFetchTask() {
         }
         vTaskDelay(1);
     }
+    ESP_LOGI(TAG, "AFE fetch stopped: generation=%u current_failures=%u cancelled_results=%u",
+             static_cast<unsigned>(generation), fetch_errors, cancelled_results);
     // The lifecycle owner joins and deletes this task before destroying AFE.
     vTaskSuspend(nullptr);
 }
