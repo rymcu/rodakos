@@ -1,4 +1,4 @@
-# 语音任务回收合同与 032 分层验证
+# 语音任务回收合同与分层验证
 
 更新：2026-10-08。031 把 Assistant I/O、前端采集和唤醒 supervisor 的三个 WithCaps
 任务接入 [030 共享回收器](task-retirement.md)。032 保持这三条服务及回收器源码不变，新增
@@ -13,6 +13,10 @@
 和构建开关。制品、部署与硬件结果见 [032 readiness](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032)。
 030 的五条视频路径、7 条关联停止、359 B 同 boot internal 最低值和 NO_GO 保持原记录；
 不把它们改写成 032 的资源观测。
+
+033 源码 `78917fae1b9acb02010cef026facefc96a008c5c` 在保留退出机制的基础上修正模型
+清理、AFE 取消分类并缩减凭据刷新栈帧。当前普通 OFF 包为 `20261008-092316`，已恢复
+启动；有限任务/自然刷新与普通 stop/rearm 已封存独审，见[033 证据](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033)。
 
 ## 修复的退出边界
 
@@ -115,6 +119,24 @@ TX 前的实际 RX 跨度为 73.625 / 92.265 / 199.890 / 85.828 s。测试包保
 测试 flavor 的实际 Deinit 结果只归该测试镜像；普通 OFF 包启动与会话检查不等于执行不存在
 的诊断入口。普通串口 wake/stop 也不等同于常驻 Capture/Wake Deinit。
 最终身份和证据摘要以 [032 readiness](ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) 为准。
+
+## 033 模型所有权、取消分类与栈边界
+
+固定 ESP-SR 2.2.2 的 `mn5q8_cn` create/destroy 拥有全局命令表，Frontend 不再额外
+alloc/free，创建前拒绝未审模型。真实 SDK 注册表 host 用例和模型库反汇编共同限定此合同；
+不覆盖 SDK 任意 OOM 或其他模型，详见[测试说明](../tests/voice_audio_frontend_identity/README.md)。
+
+AFE fetch 返回后在锁内复核 mode/generation/stopping。当前会话的失败保留原 WARN 并标记
+PCM/AEC 不连续；已取消结果不计为 current failure，但在原 feed 仍需排空时继续 fetch，
+只有 stopping 置位才能退出。有效 PCM 保留下游二次代次检查。退出摘要分列当前失败与取消，
+不删除 SDK empty 警告、不提高 100ms 参数，也不改外部删除/destroy 次序。
+[五项真实 TU 用例与三类精确负控](../tests/voice_audio_frontend_identity/afe-lifecycle.md)
+覆盖取消失败/有效帧、新代交付、活跃 gap、背压排空和诊断输入 EOF 后的持续补零。
+
+RefreshAiot 使用顺序阶段与更短 NVS key 临时生命周期，保留 TLS、generation 与事务/回滚。
+两包最终 ELF 已确认应用层子链帧减少，但 6,144 B internal wake_notify 栈不变；其
+stack_min_free 是任务 lifetime 历史水位，不是当前 SP，frontend TAG 也不是采集线程名。
+硬件水位与自然刷新会话必须独立记录；不把静态帧差额加到 032 的 508 B。
 
 ## 仍未关闭的门禁
 

@@ -14,17 +14,16 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-032 source `514ebb8c47b0409e4bc1ac6dff95e57af6cc615e` retains the 031 voice retirement
-implementation. Test package `20261008-080207` was used for the bounded lifecycle matrix;
-ordinary OFF package `20261008-081054` has passed its separate package audit and guarded
-Recovery/main/OTA/Home restoration. Independent closed-window review records one idle and
-three Listening cycles on the test image, then a separate ordinary session stop/rearm window.
-The device remains on the ordinary OFF package, bound with tokenVersion 4 and MQTT online.
-See [032](#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) for separate source, software and package identities.
-The [031 software slice](#2026-10-08-voice-task-retirement-031) and
-[030 video record](#2026-10-08-video-task-retirement-and-navigation-030) retain their original
-results, as do 027–029 and earlier dated windows. Resource/production **NO_GO**, physical
-full-resource return, Camera quality, arbitrary OOM, concurrency and soak remain open.
+033 source `78917fae1b9acb02010cef026facefc96a008c5c` fixes audited MultiNet command
+ownership, classifies cancelled AFE returns while preserving drain, and reduces overlapping
+credential-refresh stack frames. TEST package `20261008-091207` and ordinary OFF package
+`20261008-092316` have separate verified source/ELF/signature records. Closed-window review
+records one idle and three Listening cycles, a separate natural-refresh session that ended
+by watchdog, and ordinary Recovery/main/OTA/Home restoration with an explicit stop/rearm smoke.
+The device remains on ordinary OFF, bound/tokenVersion 4 and MQTT online. Warnings and
+independent boot limits remain explicit; see [033 evidence](#2026-10-08-voice-health-and-credential-refresh-033).
+031/032 and earlier dated records retain their original identities. Resource and production
+release remain **NO_GO**.
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -2030,3 +2029,149 @@ recovery, heap headroom, arbitrary OOM, DMA/IRQ/cache-off, media/audio/TLS concu
 acoustic quality, physical power cuts, production root and eight-hour soak remain open.
 Resource and production release remain **NO_GO**; 030's 359 B and 031's unflashed build retain
 their original identities and are not 032 measurements.
+
+## 2026-10-08 Voice health and credential refresh 033
+
+Source `78917fae1b9acb02010cef026facefc96a008c5c` retains the 031 task retirement mechanism.
+The audited ESP-SR 2.2.2 `mn5q8_cn` model owns command-table creation/destruction; the caller
+no longer duplicates alloc/free and rejects unreviewed model identities. AFE fetch returns
+are classified under the lifecycle mutex: current failures retain warning/continuity handling,
+cancelled results are counted separately, and cancellation must keep draining until the
+active feed lease ends. The existing 100ms argument and external deletion order remain.
+
+Credential refresh now uses sequential noinline stages and shorter NVS-key temporary lifetimes,
+retaining TLS, generation, pairing, transactional rollback and cooperative timeout checks.
+The 6,144-byte internal wake_notify stack is unchanged; no extra task or PSRAM-stack HTTP/NVS
+migration was introduced. The merged full frontend passes 24 Debug and 24 ASan/UBSan/leak cases;
+Debug CTest is 4/4 with two retirement negatives, two MultiNet old-TU probes and three AFE
+old/mutated-TU probes. Server-trust passes 47 cases in both modes; MQTT full-TU passes six in
+both modes, including header isolation and exact credential fence negatives (3/3 CTest each).
+
+### Software and separately reviewed packages
+
+| Identity | TEST | Ordinary OFF |
+| --- | --- | --- |
+| Package | `20261008-091207` | `20261008-092316` |
+| taskNo / flavor | `voice-health-033-test` / `release-fault-test` | `voice-health-033-production` / `production` |
+| Main bytes | 7,151,680 | 7,144,816 |
+| Main SHA-256 | `e8d3b3733106f23e049f0c33a9be5a1ac57412dfad7aea7e435d055147850806` | `b3522e088ada9badb46d4d83ebc36e8dc12edd0c605b768ba8694f0cfa3e6296` |
+| ELF SHA-256 | `12e5623be080f3355c8dc91420c671810051435d27733da8fb69a1e4c15ef7bf` | `39336d2c08955a90bf17ef0fa0a86c2873de9b4fb4b9108bf8faf4a931c25243` |
+| Package review SHA-256 | `bf922d9b8467eaad382242608280f80a0b5112c24dfd58ddd900e7aaae68adb9` | `6de703f7bb779b1d3d6215668875b6c7e2b7943900130c46e61745e6de20d32c` |
+
+Both retain the development signing root, authority v3 and immutable non-Main regions. OFF
+symbols/objects exclude the lifecycle diagnostic and release-fault entry. TEST r1 was rejected for a report-field mismatch. TEST r2 was rejected after Windows ar
+stdout conversion changed the extracted bytes; the actual model member had not drifted.
+Read-only archive verification then passed in r3. Both failed review reports remain; these
+tooling failures are not corrupted-package findings or accepted checks.
+
+Both final ELF reviews confirm entry frames of 304 B for RefreshAiot, 304/336/608/464 B for
+Exchange/Pair/Parse/Persist, and 112/160/272 B for the three NVS helpers. Application subchains
+are bound HTTP 1,472→912 B, pairing HTTP 1,472→1,248 B, MQTT NVS 1,904→1,040 B and old-snapshot
+Load 1,664→1,264 B. These exclude outer callers, SDK frames, register spills and interrupts;
+they do not establish complete worst-case stack or a hardware watermark gain over 032's 508 B.
+
+Evidence root: Rodak `.codex-temp/voice-health-033/`.
+
+| Report | SHA-256 |
+| --- | --- |
+| Software seal | `1d12b2678d4a81fa82b69a58edc49250d7ae37de7414b9af1a5904a4fa232d4c` |
+| Merged frontend | `4c5244a4dbf2a7c97cf4579c5be39f13cba076ad5e003462981d0704c1063bb0` |
+| MultiNet review | `fb574e9ab89e9fb42df7fb4294681eb2aaa5d3108b4e17ef103a770098e2e14d` |
+| Cloud host validation | `ca76d4cf9577ba707e620a470a49363e83896d4c94186c38e99da13e3bc2d70c` |
+| Static stack review | `43789bf9325c958b0e32edc6dd7f92f2763bfd716b41b15ab1bffae099a45b04` |
+| Independent cloud review | `0f3c870a8caafc398eda49188f46d34a4fc585491c1b0ecb2d22939e34e42aa6` |
+
+### Closed TEST matrix and separate natural-refresh session
+
+Independent review matched 104,343 raw bytes, 1,319 lines, 6,958 RX chunks and 15 commands.
+The idle and Listening categories, all five phases, task-name snapshots, byte continuity and
+QPC final-byte times were checked. Task bits are assistant/capture/supervisor; all Listening
+before snapshots are non-stopping, and all recovered snapshots restore enabled/listening.
+
+| Cycle | before → after → recovered | Internal free / B | Actual RX before next TX | New post-snapshot telemetry |
+| --- | --- | --- | --- | --- |
+| 3301 idle | 011 → 000 → 011 | 20,611 → 30,435 → 20,519 | 112.862 s | 4 |
+| 3302 Listening | 111 → 000 → 011 | 5,851 → 30,671 → 20,807 | 75.596 s | 3 |
+| 3303 Listening | 111 → 000 → 011 | 6,151 → 30,935 → 21,139 | 76.014 s | 2 |
+| 3304 Listening | 111 → 000 → 011 | 5,651 → 30,695 → 20,863 | 76.957 s | 2 |
+
+Coverage is complete's last byte through the final actual RX before the next explicit TX.
+The initial enrollment is missing between approximately 4.5s of guarded-flash boot logs and
+23.5s when continuous capture starts. The 01:21:18.349Z snapshot supplies only a conservative
+latest upper bound. The accepted v2 anchor is the first measured RX at least 100ms after it;
+the third wake has 634.6890717s of actual pre-wake QPC coverage with no later enrollment.
+TTL600/margin30 remains unchanged without manual invalidation, rebind or tokenVersion
+rotation. Device uptime then records refresh at 685845ms, enrollment at 687795ms, WSS ready
+at 688595ms and the USB callback watermark at 688615ms. This is bounded natural-refresh
+evidence, not an exact first-token issue/expiry timestamp.
+
+The third session `9e429518-9b62-4f7e-9720-f94caefe44ff` received no cycle; its watchdog at
+809215ms ended the session naturally. The fourth explicit wake created
+`090b2348-0df6-48b8-973b-03bfd506a00d` for cycle3304. It reused the third wake's acknowledged
+256 samples / single 512-byte zero PCM, without another audio_begin/chunk; exhausted input
+continues as zero padding. Four wakes are not four cycles or four fresh fixture loads.
+
+| Wake / AFE generation | current_failures | cancelled_results | Persistent wake_notify watermark |
+| --- | --- | --- | --- |
+| 1 / 5, cycle3302 | 1 | 1 | 2,204 B |
+| 2 / 10, cycle3303 | 1 | 1 | 2,204 B |
+| 3 / 15, natural refresh and watchdog stop | 2 | 0 | 1,100 B |
+| 4 / 19, cycle3304 | 1 | 0 | 1,100 B |
+
+Keep all 12 matrix warnings: seven SDK AFE empty, four current-rejected and one watchdog.
+The summaries count five current failures; wrapper warnings are throttled and are not the
+failure count. No MultiNet duplicate-cleanup error or fatal/reset was seen in this closed
+matrix. Ten first-boot SD/test-entry/NVS/WiFi warnings are retained separately. Same-boot
+internal minimum is 4,411 B. The fourth 1,100-byte sample is the same task's cumulative mark,
+not another refresh measurement; do not compare independent boot minima as memory gains.
+
+Two tooling deviations remain explicit: an earlier PowerShell JSON DateTime reparse lost
+the UTC offset and selected a pre-snapshot anchor; it was rejected before expiry-dependent
+action. listening4-before used a from about 2.331s in the future, so its zero telemetry count
+is excluded. Its direct device/session read remains valid, and two post-complete records
+independently establish cycle3304 telemetry coverage.
+
+Closed TEST review SHA-256: `8a5414d70491134b00055a1fe71b5403102eb88ad9b63445424e9a33e6783f1a`.
+SDK startup empty remains unresolved. This limited task/refresh observation adds no acoustic,
+full physical-resource, arbitrary OOM or long-soak acceptance; resource/production **NO_GO**.
+
+### Ordinary OFF restoration and final state
+
+Ordinary package `20261008-092316` passed guarded restoration: immutable images were verified,
+only otadata/main were written, NVS and the development signing root were preserved, and
+Recovery/main/OTA/Home handoff completed. The closed smoke contains 18,953 raw bytes,
+1,335 RX chunks, 264 lines and five explicit commands. Cold actual QPC RX is 69.121s with
+three new telemetry records.
+
+Session `8ac92a74-7ea5-4103-8e61-bb7ddd3cd0d0` matches server capturing. The explicit stop
+ACK is followed by the same session's input stop, Interaction stopped and wake rearm.
+Before the next clear, actual RX after stopped is 73.539s and after rearmed 73.322s, with
+two new telemetry records. AFE generation3 reports current_failures=1/cancelled_results=1.
+The raw retains three warnings (two SDK AFE empty, one current rejected); first boot retains
+nine more. No MN duplicate-cleanup error or fatal/reset was seen in the captured window.
+This boot's internal minimum is 4,683 B and wake_notify samples are 2,204 B; TEST/OFF boot
+minima cannot be combined into a resource-gain claim.
+
+No voice_cycle was sent on OFF. Ordinary stop/rearm does not prove capture/supervisor Deinit,
+and this short OFF window does not test natural-expiry refresh. The TEST natural-refresh
+observation does not transfer into an ordinary-refresh pass. Boot-to-capture gaps remain;
+absence of observed errors is bounded to the captured windows.
+
+The final 01:42:36.413Z device snapshot preserves the original ID, bound/tokenVersion4,
+MQTT=true and voice=false. UI serial is disconnected, screen playback is stopped, with no
+stop button or camera frame. Both captures were explicitly closed without in-flight or
+blocked state; the final process snapshot has no serial/JTAG helper. Electron PID2140 is
+the existing 026 process, labelled `d28370c82ee8818cb47924ccc5d091a3164e5761`; this is not a
+fresh executable attestation, and documentation HEAD does not replace runtime identity.
+
+| Closed-window review | SHA-256 |
+| --- | --- |
+| TEST | `8a5414d70491134b00055a1fe71b5403102eb88ad9b63445424e9a33e6783f1a` |
+| Ordinary OFF | `daf2889bffe87828ecb6b1d349c5cd73a73433ee129b2cdfaaeb070c32ca81a4` |
+| Combined hardware | `e310190daf371bdc04911425ab66c577e91816b82884ff45883ede36ef8bee67` |
+
+Software, package/signature/ELF checks, flash logs and closed capture evidence are correlated
+separately, beyond caller-provided capture labels. This is not reproducible-build or runtime
+binary attestation. No Actions were queried, relied upon or repaired. Resource/production
+**NO_GO** remains: startup AFE diagnostics, actual headroom, complete physical-resource return,
+arbitrary OOM, acoustics and soak remain open.

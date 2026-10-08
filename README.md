@@ -7,15 +7,17 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-032 source `514ebb8c` retains the 031 voice retirement implementation and adds a test-only
-USB lifecycle cycle. Test package `20261008-080207` was used for the bounded matrix;
-ordinary OFF package `20261008-081054` has passed its separate package audit and guarded
-Recovery/main/OTA/Home restoration. Independent review records one idle and three Listening
-cycles on the test image, then a separate ordinary voice-session stop/rearm observation.
-The device remains on the ordinary OFF package with its original binding and tokenVersion 4.
-See [032 evidence](docs/ota-release-readiness.md#2026-10-08-voice-lifecycle-diagnostic-and-restoration-032) and
-[voice task retirement](docs/voice-task-retirement.md). The 030 video record retains its own
-firmware identity and limits.
+033 source `78917fae1b9acb02010cef026facefc96a008c5c` fixes audited MultiNet command
+ownership, classifies cancelled AFE returns while preserving drain, and reduces overlapping
+credential-refresh stack frames. TEST package `20261008-091207` and ordinary OFF package
+`20261008-092316` have separate verified source/ELF/signature records. Closed-window review
+records one idle and three Listening cycles, a separate natural-refresh session that ended
+by watchdog, and ordinary Recovery/main/OTA/Home restoration with an explicit stop/rearm smoke.
+The device remains on ordinary OFF, bound/tokenVersion 4 and MQTT online. Warnings and
+independent boot limits remain explicit; see [033 evidence](docs/ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033).
+031/032 and earlier dated records retain their original identities. Resource and production
+release remain **NO_GO**.
+
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
 - Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
@@ -43,8 +45,9 @@ firmware identity and limits.
   Home use a bounded precreated queue. The historical 030 package recorded seven correlated Stops,
   four bounded local-Camera/remote-Display order checks and one remote-pointer Home check.
   The same-boot internal minimum is 359 B; image quality, resource recovery and production
-  release remain open. The three voice exits use the 031 implementation; 032 distinguishes
-  test-flavor Deinit observations from ordinary OFF firmware restoration. See [task retirement](docs/task-retirement.md) and
+  release remain open. The three voice exits retain the 031 implementation. Later records distinguish
+  test-flavor Deinit, separate natural-refresh sessions and ordinary OFF restoration; 033 adds
+  model ownership, AFE cancellation/drain and refresh-stack corrections. See [task retirement](docs/task-retirement.md) and
   [voice task retirement](docs/voice-task-retirement.md).
 - The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
 - Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.

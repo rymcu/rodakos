@@ -269,6 +269,14 @@ Independent review records one idle and three Listening cycles on the test image
 ordinary OFF guarded boot and one voice-session stop/rearm window. The latter does not execute
 the absent lifecycle diagnostic; physical full-resource recovery and production gates remain open.
 
+033 keeps that retirement and diagnostic contract. The audited mn5q8_cn model alone owns
+its command registry. AFE classifies post-fetch cancellation under the lifecycle mutex and
+continues draining outstanding feed before exit; current errors still invalidate continuity.
+Credential refresh runs sequential noinline exchange/parse/persist stages (and pairing only
+under the existing gate), with shorter NVS-key temporary lifetimes on the same internal
+wake_notify task. Final ELF frame reductions are separate from runtime headroom. See
+[033 evidence](ota-release-readiness.md#2026-10-08-voice-health-and-credential-refresh-033).
+
 ### Deferred serial and Camera navigation
 
 `PhoneNavigation` owns one `DeferredNavigation` ring: four pending canonical IDs in
