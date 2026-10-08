@@ -3059,3 +3059,17 @@ RecordingService **17/17** 和 voice-volume/focus **30/30**。Music 新增用例
 已建立的 screen-control 远控流，按 enable/ACK、逐序列 pointer down/up、Music 播放→语音
 暂停/恢复、Recorder Start/Stop 和至少 60 秒健康观察取证。实体 SD、ADC/DAC、麦克风、扬声器、
 触摸、声学共存及八小时 soak 继续保持 **NO_GO**。
+
+## 2026-10-09 Camera DVP 失败清理观察与修复
+
+正式 8 小时采集仍在进行时，第 4 次应用探针完成 Camera → Home 切换。串口显示
+`VIDIOC_STREAMOFF` 成功返回，但随后出现 `i2c_master_bus_rm_device: Wrong I2C status`、
+`s_sccb_i2c_destroy`、DVP video deinit 和 `DEV_CAMERA_SUB_DVP` 清理失败；同一窗口还保留
+`E:RX:153600-84480`。应用最终回到 Home 并回报 `RODAK_APP_LAUNCH_COMPLETE {"ok":true}`，
+但这不能视为 Camera 物理资源已正确释放。
+
+审查发现 `dev_camera_sub_dvp_deinit()` 在 `esp_video_deinit()` 失败后仍会释放 I2C 引用并
+free board-manager handle，使失败状态可能留下悬空句柄，下一次初始化/重试存在 UAF 风险。
+`29aaacd` 已修复为：底层视频或 I2C 引用释放失败时保留句柄和引用，只有两步都成功才释放；
+新增 4 项 host source-contract 回归全部通过。当前 COM3 运行的旧包未包含此修复，必须重新构建、
+核验并在新的设备窗口复验 Camera 重复启动/关闭；本条观察保持资源/生产 **NO_GO**。
