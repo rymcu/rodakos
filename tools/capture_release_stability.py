@@ -16,25 +16,105 @@ class Evidence:
         self.last_uptime = None
         self.max_health_gap = 0
         self.minima = {}
+        self.resource_samples = {}
+        self.resource_minima = {}
         self.first = []
         self.last = deque(maxlen=10)
         self.failures = set()
+        self.log_counts = {"warning": 0, "error": 0}
+        self.log_samples = {"warning": [], "error": []}
         self.exercise_requests = 0
         self.exercise_acks = 0
         self.exercise_completions = 0
+        self.exercise_events = []
+
+    @staticmethod
+    def _fields(line):
+        return {k: int(v) for k, v in re.findall(r"(\w+)=(-?\d+)", line)}
+
+    def _record_log_level(self, line):
+        match = re.search(r"(?:^|\s)([WE])\s*\(\d+\)\s+", line)
+        if match is None:
+            match = re.match(r"\s*([WE]):", line)
+        if not match:
+            return
+        level = "warning" if match.group(1) == "W" else "error"
+        self.log_counts[level] += 1
+        if len(self.log_samples[level]) < 20:
+            self.log_samples[level].append(line.strip())
+        if level == "error":
+            self.failures.add("error_log_present")
+
+    def _record_resource(self, source, fields):
+        if not fields:
+            return
+        self.resource_samples[source] = self.resource_samples.get(source, 0) + 1
+        minima = self.resource_minima.setdefault(source, {})
+        for name, value in fields.items():
+            minima[name] = min(minima.get(name, value), value)
+            if name in {"internal_free", "internal_min", "internal_largest", "stack_min_free",
+                        "psram_free", "psram_min", "psram_largest", "dma_free", "dma_largest"}:
+                self.minima[name] = min(self.minima.get(name, value), value)
+
+    def record_app_request(self, app, elapsed):
+        self.exercise_requests += 1
+        self.exercise_events.append({"app": app, "requested_at": round(elapsed, 3),
+                                     "ack": False, "complete": False})
+
+    def _record_app_ack(self):
+        self.exercise_acks += 1
+        pending = next((event for event in self.exercise_events if not event["ack"]), None)
+        if pending is None:
+            if self.exercise_events:
+                self.failures.add("unexpected_app_launch_ack")
+            return
+        pending["ack"] = True
+
+    def _record_app_completion(self, ok):
+        if not ok:
+            self.failures.add("app_launch_failed")
+            return
+        self.exercise_completions += 1
+        pending = next((event for event in self.exercise_events
+                        if event["ack"] and not event["complete"]), None)
+        if pending is None:
+            if self.exercise_events:
+                self.failures.add("app_launch_completion_before_ack")
+            return
+        pending["complete"] = True
 
     def accept(self, line, elapsed):
-        if re.search(r"Guru Meditation|assert failed|abort\(\)|watchdog.*trigger|rst:|ESP-ROM:|stack overflow|CORRUPT HEAP", line, re.I):
+        self._record_log_level(line)
+        if re.search(r"Guru Meditation|assert failed|abort\(\)|watchdog.*trigger|rst:|ESP-ROM:|stack overflow|CORRUPT HEAP|panic|brownout|failed to (?:alloc|create)|no mem", line, re.I):
             self.failures.add("reset_or_runtime_failure")
         if 'RODAK_APP_LAUNCH_RESULT {"queued":true}' in line:
-            self.exercise_acks += 1
+            self._record_app_ack()
+        if 'RODAK_APP_LAUNCH_RESULT {"queued":false}' in line:
+            self.failures.add("app_launch_rejected")
         if 'RODAK_APP_LAUNCH_COMPLETE {"ok":true}' in line:
-            self.exercise_completions += 1
+            self._record_app_completion(True)
         if 'RODAK_APP_LAUNCH_COMPLETE {"ok":false}' in line:
-            self.failures.add("app_launch_failed")
+            self._record_app_completion(False)
+
+        fields = self._fields(line)
+        if "Voice health:" in line:
+            self._record_resource("voice", fields)
+        elif "Main health:" in line:
+            self._record_resource("main", fields)
+        elif "Provisioning health:" in line:
+            self._record_resource("provisioning", fields)
+        elif "Transport memory " in line:
+            self._record_resource("transport", fields)
+        elif re.search(r"\b(?:SRAM|internal)\s+free=\d+\s+largest=\d+", line, re.I):
+            app_fields = dict(fields)
+            if "free" in app_fields:
+                app_fields["internal_free"] = app_fields["free"]
+            if "largest" in app_fields:
+                app_fields["internal_largest"] = app_fields["largest"]
+            self._record_resource("app", app_fields)
+
         if "MQTT health:" not in line:
             return
-        fields = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", line)}
         required = {"connected", "internal_free", "internal_largest", "stack_min_free", "psram_free", "psram_largest", "telemetry_queued"}
         if not required.issubset(fields):
             self.failures.add("missing_release_health_fields")
@@ -55,6 +135,7 @@ class Evidence:
             self.failures.add("mqtt_disconnected_or_publish_failed")
         for name in required - {"connected", "telemetry_queued"}:
             self.minima[name] = min(self.minima.get(name, fields[name]), fields[name])
+        self._record_resource("mqtt", fields)
         if len(self.first) < 10:
             self.first.append(fields["internal_free"])
         self.last.append(fields["internal_free"])
@@ -73,13 +154,22 @@ class Evidence:
             failures.add("unacknowledged_app_launch")
         if complete and self.exercise_requests != self.exercise_completions:
             failures.add("uncompleted_app_launch")
+        if complete and self.exercise_events:
+            if any(not event["ack"] for event in self.exercise_events):
+                failures.add("unacknowledged_app_launch")
+            if any(not event["complete"] for event in self.exercise_events):
+                failures.add("uncompleted_app_launch")
         passed = complete and elapsed >= requested and requested >= 28800 and self.samples >= 960 and not failures
         return dict(status="pass-observed" if passed else "no-go" if failures else "incomplete",
                     elapsed_seconds=round(elapsed, 2), requested_seconds=requested,
                     health_samples=self.samples, max_health_gap_seconds=round(gaps, 2),
-                    minima=self.minima, internal_heap_median_drop=drop,
+                    minima=self.minima, resource_samples=self.resource_samples,
+                    resource_minima=self.resource_minima,
+                    log_counts=self.log_counts, log_samples=self.log_samples,
+                    internal_heap_median_drop=drop,
                     exercise_requests=self.exercise_requests, exercise_acks=self.exercise_acks,
                     exercise_completions=self.exercise_completions,
+                    exercise_events=self.exercise_events,
                     failures=sorted(failures), complete=complete)
 
 
@@ -145,7 +235,7 @@ def main():
                 if args.exercise_apps and elapsed >= next_action:
                     app = apps[evidence.exercise_requests % len(apps)]
                     port.write(f"RODAK_APP_LAUNCH_V1 {app}\n".encode())
-                    evidence.exercise_requests += 1
+                    evidence.record_app_request(app, elapsed)
                     next_action += 300
                 if elapsed >= next_status:
                     save(); next_status += 30

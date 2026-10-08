@@ -1,10 +1,12 @@
 # RodakOS Roadmap
 
-Decision of 2026-10-07: delivery proceeds through local tests, builds and recorded device
-validation without depending on GitHub Actions. Do not repair or rerun Actions, or pursue its
-billing, quota or required-check setup. Existing runs remain evidence for their original
-candidates; missing or unavailable Actions do not block delivery. Actual software failures and
-the remaining physical and production-release gates still require their own evidence.
+Decision updated 2026-10-09: delivery proceeds through local tests, builds and recorded device
+validation without depending on hosted GitHub Actions. Do not wait for or rerun hosted checks, or
+pursue their billing, quota or required-check setup. Low-risk workflow configuration may be
+repaired and linted locally, but its hosted result is not a release gate. Existing runs remain
+evidence for their original candidates; missing or unavailable Actions do not block delivery.
+Actual software failures and the remaining physical and production-release gates still require
+their own evidence.
 
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
@@ -33,6 +35,14 @@ session then stopped, cleaned up and re-armed wake monitoring. Local Electron ev
 session list. Server VAD split the same session into six `vad-end` files plus one short final
 `listen-stop` file, so this is a bounded same-session lifecycle result rather than complete
 server-segmentation, acoustic or production acceptance. See [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察).
+
+The subsequent 1,800.20-second ordinary-OFF release-soak observation produced 60 MQTT samples
+and five application launches with 5/5 ACK and completion. The repaired collector now includes
+Voice/Main/application resource minima and warning/error samples; offline replay found Voice
+`internal_min=275 B`, an application `internal_largest=3584 B` and one `E:RX` line. The run was
+below the 28,800-second release threshold, so resource and production remain **NO_GO**. Music
+only reached app creation and a five-track scan; playback and coexistence are unverified. See
+[soak evidence](ota-release-readiness.md#2026-10-09-资源采集器修复与-30-分钟有限观察).
 
 The same ordinary-OFF package then passed one bounded follow-up-silence run: after about 28 seconds
 of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before

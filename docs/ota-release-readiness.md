@@ -5,10 +5,11 @@ accepted as completed where their evidence is recorded in the repository. This d
 the remaining signed-firmware release, interruption, and resource-failure work. Passing software
 tests does not close physical power-loss or full heap-exhaustion gates.
 
-Decision of 2026-10-07: release evidence is collected through local tests, firmware builds,
-package verification and the physical gates below. GitHub Actions success or repair is not a
-delivery prerequisite; do not rerun Actions or pursue billing, quota or required-check setup.
-Preserve existing CI outcomes with their original candidates as history, including failures.
+Decision updated 2026-10-09: release evidence is collected through local tests, firmware builds,
+package verification and the physical gates below without depending on hosted GitHub Actions.
+Do not wait for or rerun hosted checks or pursue billing, quota or required-check setup. Low-risk
+workflow configuration may be repaired and checked locally, but a hosted result is not a release
+gate. Preserve existing CI outcomes with their original candidates as history, including failures.
 Missing or unavailable Actions do not make the release NO_GO; the unresolved software,
 production-root, power-loss, resource and soak gates retain their existing acceptance criteria.
 
@@ -3026,3 +3027,22 @@ SHA-256 为 `7dc52aad09972826a6b534c16a7c094a3a72a98b65a6d17f1c3d42f2842d9bce`�
 
 该结果关闭的是合成播放中断路径的有界观察；真人收音、AEC 回声场景、误接受/误拒绝、
 音乐/Recorder 共存和长稳仍未验收，资源与生产 **NO_GO** 不变。
+
+## 2026-10-09 资源采集器修复与 30 分钟有限观察
+
+普通 OFF 包 `20261009-014905` 在 COM3 上完成了 1,800.20 秒串口观察。原始日志包含 60 个
+严格递增的 MQTT health 样本、5 次 Home/Photos/Camera/Home/Music 应用启动，5/5 ACK 和
+5/5 completion；`--duration 1800` 本身低于正式 28,800 秒门槛，因此状态只能是
+`incomplete`，不能写成八小时通过。原始 `serial.log` SHA-256 为
+`fe1fbb7a9d1017b0664ef71278a499d653016509a9eb5d903617684157f5f714`。
+
+本轮同时修复 `tools/capture_release_stability.py`：它现在保留 MQTT、Main、Voice、应用局部
+资源样本及 warning/error 原始行，按请求→ACK→completion 检查应用事件顺序，并将不属于
+MQTT 的水位纳入摘要。对上述原始日志离线重解析得到：Voice `internal_min=275` B，应用局部
+`internal_largest=3584` B，MQTT 最低 `internal_free=20275` B、`psram_free=1715724` B，
+3 条 warning 和 1 条 `E:RX:153600-88320`。没有捕获 reset、panic 或 watchdog；这些资源低水位、
+错误行和未达到时长的事实共同保持资源/生产 **NO_GO**。`Music app created` 及 SD 扫描 5 首只
+证明应用启动，不证明播放、暂停/恢复或声学共存。
+
+新增回归测试覆盖 Voice/Main 水位、应用事件乱序、非致命 warning 与 `E:RX` 分类；本地
+Python 测试和离线解析均通过。该门禁不依赖或等待 GitHub Actions。

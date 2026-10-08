@@ -1,9 +1,9 @@
 # RodakOS 固件构建 CI
 
-2026-10-07 用户决定：后续交付不依赖 GitHub Actions，不再修复或重跑 Actions，也不处理其
-账单、额度或 required checks。固件继续通过[本地构建与打包入口](firmware-download.md)
-验证源码、依赖、最终 ELF、签名包和产物摘要，再按对应门禁取实机证据。Actions 缺失或
-不可用不构成交付阻塞；下述已有工作流、日期记录及其失败/修复结果保留为历史。
+2026-10-09 更新：后续交付不依赖 hosted GitHub Actions，也不等待或重跑 Actions，或处理其
+账单、额度与 required checks。固件继续通过[本地构建与打包入口](firmware-download.md)
+验证源码、依赖、最终 ELF、签名包和产物摘要，再按对应门禁取实机证据。工作流可做低风险
+静态修复并在本地检查；Actions 缺失或不可用不构成交付阻塞；下述已有工作流、日期记录及其失败/修复结果保留为历史。
 
 本文带 SHA 的结果保留为历史基线。已取得的 main/PR 精确 Actions 和下载工件核验由
 [#26](https://github.com/rymcu/rodakos/issues/26) 汇总；当前设备运行的原开发根具名包见

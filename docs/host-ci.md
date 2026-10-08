@@ -1,9 +1,9 @@
 # RodakOS 主机测试 CI
 
-2026-10-07 用户决定：后续交付不依赖 GitHub Actions，不再修复或重跑 Actions，也不处理其
-账单、额度或 required checks。已有工作流配置与运行结果保留；本文带日期的失败、修复和
-成功记录只属于各自历史候选。当前软件验收继续使用下述本地 runner、语法检查及源码/日志
-核验，Actions 缺失或不可用不构成交付阻塞，实际测试失败和硬件门禁继续独立处理。
+2026-10-09 更新：后续交付不依赖 hosted GitHub Actions，也不等待或重跑 Actions，或处理其
+账单、额度与 required checks。工作流可以做低风险静态修复并在本地做语法检查；本文带日期
+的失败、修复和成功记录只属于各自历史候选。当前软件验收继续使用下述本地 runner、语法
+检查及源码/日志核验，Actions 缺失或不可用不构成交付阻塞，实际测试失败和硬件门禁继续独立处理。
 
 [RodakOS host checks](../.github/workflows/host-checks.yml) 在所有 Pull Request、
 `main` push 和手动触发时运行。这是 [#26](https://github.com/rymcu/rodakos/issues/26)

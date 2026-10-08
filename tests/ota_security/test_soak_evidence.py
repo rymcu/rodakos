@@ -138,6 +138,61 @@ class SoakTests(unittest.TestCase):
         self.assertEqual(report["status"], "pass-observed")
         self.assertEqual(report["exercise_completions"], 1)
 
+    def test_voice_and_main_health_are_kept_in_resource_minima(self):
+        evidence = Evidence()
+        evidence.accept(
+            "I (100) VoiceWakeService: Voice health: enabled=1 status=1 listening=1 "
+            "internal_free=1000 internal_min=275 internal_largest=9000 "
+            "psram_free=200000 psram_min=150000 psram_largest=120000 "
+            "supervisor_stack_min_free=1796",
+            1,
+        )
+        evidence.accept(
+            "I (200) RodakOS: Main health: stack_min_free=2640 internal_free=8000 "
+            "internal_largest=3584 dma_free=5000 dma_largest=3584",
+            2,
+        )
+        report = evidence.report(2, 28800)
+        self.assertEqual(report["resource_samples"]["voice"], 1)
+        self.assertEqual(report["resource_samples"]["main"], 1)
+        self.assertEqual(report["minima"]["internal_min"], 275)
+        self.assertEqual(report["minima"]["internal_largest"], 3584)
+        self.assertEqual(report["minima"]["dma_largest"], 3584)
+        self.assertIn("insufficient_memory_or_stack_headroom", report["failures"])
+
+    def test_warning_is_recorded_without_becoming_a_runtime_failure(self):
+        evidence = Evidence()
+        evidence.accept("W (100) Settings: Open NVS namespace home failed: ESP_ERR_NVS_NOT_FOUND", 1)
+        evidence.accept("E:RX:153600-88320", 1.5)
+        report = evidence.report(1, 28800)
+        self.assertEqual(report["log_counts"]["warning"], 1)
+        self.assertEqual(report["log_counts"]["error"], 1)
+        self.assertNotIn("reset_or_runtime_failure", report["failures"])
+        self.assertIn("error_log_present", report["failures"])
+
+    def test_app_completion_before_ack_is_rejected(self):
+        evidence = Evidence()
+        evidence.record_app_request("home", 1)
+        evidence.accept('RODAK_APP_LAUNCH_COMPLETE {"ok":true}', 2)
+        evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', 3)
+        report = evidence.report(3, 28800, True)
+        self.assertEqual(report["status"], "no-go")
+        self.assertIn("app_launch_completion_before_ack", report["failures"])
+
+    def test_app_request_ack_completion_stays_one_to_one(self):
+        evidence = Evidence()
+        for index in range(960):
+            evidence.accept(line(index * 30000), index * 30)
+        for index, app in enumerate(("home", "photos", "camera", "home", "music")):
+            evidence.record_app_request(app, index * 300)
+            evidence.accept('RODAK_APP_LAUNCH_RESULT {"queued":true}', index * 300 + 1)
+            evidence.accept('RODAK_APP_LAUNCH_COMPLETE {"ok":true}', index * 300 + 2)
+        report = evidence.report(28800, 28800, True)
+        self.assertEqual(report["status"], "pass-observed")
+        self.assertEqual(report["exercise_requests"], 5)
+        self.assertEqual(report["exercise_acks"], 5)
+        self.assertEqual(report["exercise_completions"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
