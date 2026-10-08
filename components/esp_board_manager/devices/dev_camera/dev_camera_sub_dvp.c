@@ -82,22 +82,28 @@ int dev_camera_sub_dvp_deinit(void *device_handle)
         ESP_LOGE(TAG, "Failed to deinitialize DVP camera: %s", esp_err_to_name(ret));
         // esp_video_deinit() may leave the SCCB/video/controller graph alive
         // when a lower layer (for example i2c_master_bus_rm_device) fails.
-        // Keep both the board peripheral reference and device handle alive so
-        // the board manager can retry instead of retaining a dangling handle.
+        // Keep both the board peripheral reference and device handle alive for
+        // an explicit retry instead of retaining a dangling handle.
         return -1;
     }
 
     dev_camera_config_t *cfg = NULL;
-    esp_board_device_get_config_by_handle(handle, (void **)&cfg);
-    if (cfg) {
-        ret = esp_board_periph_unref_handle(cfg->sub_cfg.dvp.i2c_name);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to release DVP I2C peripheral '%s': %s",
-                     cfg->sub_cfg.dvp.i2c_name, esp_err_to_name(ret));
-            // The device handle remains owned by the board manager until all
-            // cleanup is complete; preserve it for a retry of the unref.
-            return -1;
-        }
+    ret = esp_board_device_get_config_by_handle(handle, (void **)&cfg);
+    if (ret != ESP_OK || cfg == NULL) {
+        ESP_LOGE(TAG, "Failed to resolve DVP camera configuration for cleanup: %s",
+                 esp_err_to_name(ret));
+        // Keep the handle owned by the board manager so a later deinit can
+        // retry without losing the I2C reference.
+        return -1;
+    }
+
+    ret = esp_board_periph_unref_handle(cfg->sub_cfg.dvp.i2c_name);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to release DVP I2C peripheral '%s': %s",
+                 cfg->sub_cfg.dvp.i2c_name, esp_err_to_name(ret));
+        // The device handle remains owned by the board manager until all
+        // cleanup is complete; preserve it for a retry of the unref.
+        return -1;
     }
     free(device_handle);
     return 0;

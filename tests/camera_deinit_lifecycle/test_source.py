@@ -14,10 +14,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "components/esp_board_manager/devices/dev_camera/dev_camera_sub_dvp.c"
+CAMERA_DEVICE_HEADER = ROOT / "main/rodakos_adapters/camera_device.h"
+CAMERA_DEVICE_SOURCE = ROOT / "main/rodakos_adapters/camera_device.cc"
 
 
 def function_body(source: str, name: str) -> str:
-    match = re.search(rf"\bint\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", source)
+    match = re.search(
+        rf"\b(?:[A-Za-z_][\w:<>]*\s+)+{re.escape(name)}\s*\([^)]*\)\s*\{{", source
+    )
     if match is None:
         raise AssertionError(f"missing {name}")
     start = match.end()
@@ -65,6 +69,44 @@ class DvpDeinitContractTest(unittest.TestCase):
     def test_handle_is_freed_only_after_i2c_release(self) -> None:
         self.assertLess(self.body.index("esp_board_periph_unref_handle"), self.body.index("free(device_handle)"))
         self.assertIn("return 0", self.body)
+
+    def test_config_lookup_failure_preserves_handle(self) -> None:
+        self.assertIn("ret = esp_board_device_get_config_by_handle", self.body)
+        self.assertIn("ret != ESP_OK || cfg == NULL", self.body)
+        lookup_failure = self.body.index("ret != ESP_OK || cfg == NULL")
+        self.assertLess(self.body.index("return -1", lookup_failure), self.body.index("free(device_handle)"))
+
+
+class CameraDeviceRetryContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.header = CAMERA_DEVICE_HEADER.read_text(encoding="utf-8")
+        source = CAMERA_DEVICE_SOURCE.read_text(encoding="utf-8")
+        self.acquire = function_body(source, "CameraDevice::Acquire")
+        self.release = function_body(source, "CameraDevice::Release")
+
+    def test_release_reports_error_and_keeps_state_for_retry(self) -> None:
+        self.assertIn("esp_err_t Release();", self.header)
+        self.assertIn("bool release_retry_required_ = false;", self.header)
+        failure = re.search(r"if\s*\(\s*ret\s*!=\s*ESP_OK\s*\)\s*\{(?P<body>.*?)\}", self.release, re.S)
+        self.assertIsNotNone(failure)
+        failure_body = failure.group("body")
+        self.assertIn("release_retry_required_ = true", failure_body)
+        self.assertIn("return ret", failure_body)
+        self.assertNotIn("acquired_ = false", failure_body)
+        self.assertNotIn("dev_path_ = nullptr", failure_body)
+
+    def test_acquire_retries_release_before_initializing(self) -> None:
+        self.assertIn("if (acquired_ && !release_retry_required_)", self.acquire)
+        retry = self.acquire.index("if (release_retry_required_)")
+        release_call = self.acquire.index("Release()", retry)
+        init_call = self.acquire.index("esp_board_manager_init_device_by_name")
+        self.assertLess(release_call, init_call)
+        self.assertIn("if (release_ret != ESP_OK)", self.acquire[retry:init_call])
+
+    def test_release_clears_state_only_after_success(self) -> None:
+        reset = self.release.index("acquired_ = false")
+        self.assertLess(self.release.index("esp_board_manager_deinit_device_by_name"), reset)
+        self.assertLess(reset, self.release.index("return ESP_OK"))
 
 
 if __name__ == "__main__":

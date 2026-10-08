@@ -24,8 +24,15 @@ bool CameraDevice::IsConfigured() const {
 
 esp_err_t CameraDevice::Acquire() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    if (acquired_) {
+    if (acquired_ && !release_retry_required_) {
         return ESP_OK;
+    }
+
+    if (release_retry_required_) {
+        const esp_err_t release_ret = Release();
+        if (release_ret != ESP_OK) {
+            return release_ret;
+        }
     }
 
     esp_err_t ret = esp_board_manager_init_device_by_name(kCameraDeviceName);
@@ -38,29 +45,36 @@ esp_err_t CameraDevice::Acquire() {
                                               reinterpret_cast<void**>(&camera_handle));
     if (ret != ESP_OK || camera_handle == nullptr || camera_handle->dev_path == nullptr) {
         esp_board_manager_deinit_device_by_name(kCameraDeviceName);
+        release_retry_required_ = false;
+        acquired_ = false;
         dev_path_ = nullptr;
         return ret != ESP_OK ? ret : ESP_ERR_NOT_FOUND;
     }
 
     dev_path_ = camera_handle->dev_path;
     acquired_ = true;
+    release_retry_required_ = false;
     return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 }
 
-void CameraDevice::Release() {
+esp_err_t CameraDevice::Release() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     if (acquired_) {
         const esp_err_t ret = esp_board_manager_deinit_device_by_name(kCameraDeviceName);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Camera device release failed: %s", esp_err_to_name(ret));
+            release_retry_required_ = true;
+            return ret;
         }
     }
 #endif
     acquired_ = false;
+    release_retry_required_ = false;
     dev_path_ = nullptr;
+    return ESP_OK;
 }
 
 }  // namespace rodakos
