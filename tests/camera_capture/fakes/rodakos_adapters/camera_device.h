@@ -6,7 +6,7 @@ class CameraDevice {
 public:
     bool IsConfigured() const { return camera_host::IsCameraConfigured(); }
     esp_err_t Acquire() { return ESP_OK; }
-    void Release() {}
+    esp_err_t Release() { return ESP_OK; }
     const char* dev_path() const { return "/dev/rodakos-test-camera"; }
 };
 }

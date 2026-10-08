@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "components/esp_board_manager/devices/dev_camera/dev_camera_sub_dvp.c"
 CAMERA_DEVICE_HEADER = ROOT / "main/rodakos_adapters/camera_device.h"
 CAMERA_DEVICE_SOURCE = ROOT / "main/rodakos_adapters/camera_device.cc"
+CAMERA_CAPTURE_FAKE_HEADER = ROOT / "tests/camera_capture/fakes/rodakos_adapters/camera_device.h"
 CAMERA_SERVICE_SOURCE = ROOT / "main/phone_os/camera_service.cc"
 
 
@@ -108,6 +109,13 @@ class CameraDeviceRetryContractTest(unittest.TestCase):
         reset = self.release.index("acquired_ = false")
         self.assertLess(self.release.index("esp_board_manager_deinit_device_by_name"), reset)
         self.assertLess(reset, self.release.index("return ESP_OK"))
+
+
+class CameraCaptureFakeContractTest(unittest.TestCase):
+    def test_camera_capture_fake_matches_error_returning_release_contract(self) -> None:
+        header = CAMERA_CAPTURE_FAKE_HEADER.read_text(encoding="utf-8")
+        self.assertRegex(header, r"\besp_err_t\s+Release\s*\(\)\s*\{\s*return\s+ESP_OK;\s*\}")
+        self.assertNotRegex(header, r"\bvoid\s+Release\s*\(")
 
 
 class CameraServiceReleaseLogContractTest(unittest.TestCase):
