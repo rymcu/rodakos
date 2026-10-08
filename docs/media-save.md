@@ -22,7 +22,7 @@ Recorder 页面把录音错误和列表错误分开显示，保存失败可以�
 
 相机抓拍在 `WithIoLock` 短写锁内调用 `WriteNewFile`，只在文件写入、flush、close 成功后发布结果路径；失败会清理本次拥有的文件并保留之前已经成功的照片。它不使用长时 `WithWriteLease`。相机服务析构只排空已经进入 `CapturePhoto` 的调用，不能替代真实设备或存储卸载协调。
 
-Camera DVP 的失败清理随后由 `29aaacd`、`4e08efa` 与 `51927b0` 收敛：底层视频或 I2C 清理失败时保留句柄，`CameraDevice::Acquire()` 在重新初始化前先重试释放，`CloseStream()` 只在释放成功时记录 complete；9 项 source-contract 回归通过。该修复尚未随当前 COM3 包完成设备复验，不能替代真实 Camera 资源与长稳门禁。
+Camera DVP 的失败清理随后由 `29aaacd`、`4e08efa` 与 `51927b0` 收敛：底层视频或 I2C 清理失败时保留句柄，`CameraDevice::Acquire()` 在重新初始化前先重试释放，`CloseStream()` 只在释放成功时记录 complete；相机生命周期与 capture fake 契约回归 10 项通过。该修复尚未随当前 COM3 包完成设备复验，不能替代真实 Camera 资源与长稳门禁。
 
 Web 上传在打开、接收、写入、flush、close 和失败清理期间持有目标路径租约。租约冲突返回 HTTP 409，普通写入或收尾失败返回 HTTP 500；上传成功只表示本次正常文件写入完成；替换写入失败可能已截断原文件，当前不是原子替换协议。
 

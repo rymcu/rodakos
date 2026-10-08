@@ -56,7 +56,8 @@ Home. RodakOS `29aaacd` retains the board handle and I2C reference across failed
 `4e08efa` propagates release errors so `CameraDevice::Acquire()` retries cleanup before a new
 initialization, and `51927b0` makes `CloseStream()` report deferred cleanup instead of false
 completion. The running package predates these fixes; a rebuilt package and fresh repeated
-Camera window are required. The source-contract suite now has 9 passing checks.
+Camera window are required. The source-contract suite now has 10 passing checks, including the
+camera-capture fake interface contract.
 
 The same ordinary-OFF package also passed one bounded follow-up-silence run: after about 28 seconds
 of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before
