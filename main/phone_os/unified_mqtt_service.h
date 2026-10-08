@@ -132,9 +132,10 @@ private:
     static void TelemetryTimerCallback(TimerHandle_t timer);
 
     void StartConnectionAsync();
+    void HandleNetworkAddress(uint32_t address, uint32_t netmask, uint32_t gateway);
     void Connect();
     std::unique_ptr<DeviceCloudConfig> LoadMqttSnapshot();
-    bool StartClient(DeviceCloudConfig& config);
+    bool StartClient(DeviceCloudConfig& config, uint64_t route_generation);
     bool DestroyClient(std::unique_ptr<ClientInstance> client);
     bool RetireClientForRefresh();
     std::unique_ptr<ClientInstance> DetachClientLocked();
@@ -253,6 +254,13 @@ private:
     std::atomic<bool> force_refresh_{false};
     MqttTransportRecoveryPolicy transport_recovery_;
     bool transport_refresh_scheduled_ = false;
+    bool network_route_refresh_scheduled_ = false;
+    bool station_ip_valid_ = false;
+    uint32_t station_ip_ = 0;
+    uint32_t station_netmask_ = 0;
+    uint32_t station_gateway_ = 0;
+    uint64_t network_route_generation_ = 0;
+    uint64_t refresh_route_generation_ = 0;
     uint32_t auth_refresh_generation_ = 0;
     std::unique_ptr<DeviceCloudConfig> pending_credential_config_;
     int64_t client_replacement_retry_at_ms_ = 0;

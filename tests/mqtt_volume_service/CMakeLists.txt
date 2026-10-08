@@ -88,6 +88,12 @@ target_link_libraries(rodakos_mqtt_credential_replacement_tests PRIVATE mqtt_vol
 add_test(NAME rodakos_mqtt_credential_replacement COMMAND rodakos_mqtt_credential_replacement_tests)
 set_tests_properties(rodakos_mqtt_credential_replacement PROPERTIES TIMEOUT 90)
 
+add_executable(rodakos_mqtt_network_route_tests
+    mqtt_network_route_test.cc diagnostic_test_main.cc)
+target_link_libraries(rodakos_mqtt_network_route_tests PRIVATE mqtt_volume_host)
+add_test(NAME rodakos_mqtt_network_route COMMAND rodakos_mqtt_network_route_tests)
+set_tests_properties(rodakos_mqtt_network_route PROPERTIES TIMEOUT 60)
+
 add_executable(rodakos_mqtt_queue_diagnostics_tests
     mqtt_queue_diagnostics_test.cc allocation_probe.cc diagnostic_test_main.cc)
 target_link_libraries(rodakos_mqtt_queue_diagnostics_tests PRIVATE mqtt_volume_host)

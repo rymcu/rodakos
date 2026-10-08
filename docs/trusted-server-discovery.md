@@ -138,9 +138,15 @@ is accepted only for the private Rodak service and is not general WSS authority
 compatibility. The checked WebSocket overlay rejects redirects before another
 handshake; it must ship with numeric routing.
 
-MQTT route changes count as session-identity changes even if credentials are
-unchanged. They retain the existing controlled restart isolation. This is bounded
-recovery, not seamless live migration. Separately, once the current explicit WiFi
+MQTT route changes revoke the old connection epoch and SDK state. Since 2026-10-09,
+a changed STA IP/netmask/gateway schedules authenticated discovery even while the
+old client still appears connected. A verified numeric-route-only change under the
+same pinned authority can replace the SDK client without a device restart; broker
+ports, topics, binding or trust changes retain the existing restart isolation.
+Network generations prevent an older HTTP/SDK candidate from consuming a later
+GOT_IP event. See [credential refresh](mqtt-credential-refresh.md) for the exact
+scope and software evidence; this addition still needs a fresh device window.
+Separately, once the current explicit WiFi
 Connect generation has obtained an IP, the adapter keeps retrying after AP loss
 with a capped backoff and a 20-second connection deadline. Credentials that have
 never connected in this generation still use the finite initial-attempt policy.
@@ -172,7 +178,7 @@ downgrade rejection, same-port address failover, route persistence/reboot, v1/v2
 records, compact shared-trust migration with bounded writes, conflicting pins and
 ambiguous fields, fixed Host/SNI with numeric dialing, bounded address filtering and USB
 refresh serialization. The MQTT targets additionally verify numeric route client
-recreation and route-change restart isolation; voice-identity integration remains
+recreation and restart isolation outside the pinned GOT_IP exception; voice-identity integration remains
 green with the route source linked. The production WiFi adapter has 22 Debug and
 ASan/UBSan/leak host cases covering retry/cancellation/deadline and stale events.
 HTTP, mDNS and NVS are injected host boundaries; this suite does not implement a

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <arpa/inet.h>
 
 namespace {
 using rodakos::DeviceCloudConfig;
@@ -65,6 +66,10 @@ struct Fixture {
                               : rodakos::VoiceWakeStatus::kDisabled;
         voice.SetState(state);
     }
+    void Barrier(const DeviceCloudConfig& config) {
+        mqtt_host::Message("devices/" + config.mqtt_device_key + "/commands/host-barrier", "ping");
+        RODAK_CHECK(mqtt_host::WaitWorkerProcessed(mqtt_host::LastQueuedMessage()));
+    }
     mqtt_host::ResetGuard reset;
     rodakos::DeviceCloudConfigService cloud;
     rodakos::OtaUpdateService ota;
@@ -72,6 +77,156 @@ struct Fixture {
     rodakos::VoiceWakeService voice;
     rodakos::UnifiedMqttService mqtt{cloud, ota, &output};
 };
+
+void StationRoute(const char* address, const char* gateway, bool notify = true) {
+    if (notify) mqtt_host::GotIp(inet_addr(address), inet_addr("255.255.255.0"), inet_addr(gateway));
+    else mqtt_host::SetStationRoute(inet_addr(address), inet_addr("255.255.255.0"), inet_addr(gateway));
+}
+
+void OfferRoute(const std::string& address) {
+    const auto trust = trust_test::TestTrust();
+    trust_test::replies.clear();
+    trust_test::discoveries = {{trust.tls_name, trust.server_id, "1", 9443, {address}}};
+    trust_test::RespondBoundAt(address);
+}
+
+void CheckBoundIdentity(const DeviceCloudConfig& before, const DeviceCloudConfig& after) {
+    RODAK_CHECK_EQ(after.aiot_device_secret, before.aiot_device_secret);
+    RODAK_CHECK_EQ(after.mqtt_device_key, before.mqtt_device_key);
+    RODAK_CHECK_EQ(after.server_trust.server_id, before.server_trust.server_id);
+    RODAK_CHECK_EQ(after.server_trust.ca_pem, before.server_trust.ca_pem);
+    RODAK_CHECK(after.aiot_registered && after.aiot_activated);
+    RODAK_CHECK_FALSE(after.has_pairing_request || after.unbind_pending || after.server_trust_pending);
+    for (const auto& request : trust_test::requests) {
+        RODAK_CHECK(request.url.find("binding/request") == std::string::npos);
+        if (!request.body.empty()) RODAK_CHECK(request.tls_verified);
+    }
+}
+}
+
+RODAK_TEST("MQTT GOT_IP authenticates a numeric LAN route while the old SDK is still connected") {
+    Fixture f;
+    StationRoute("192.168.137.20", "192.168.137.1", false);
+    f.Start();
+    auto* original = mqtt_host::CurrentClient();
+    DeviceCloudConfig before;
+    RODAK_CHECK(f.cloud.Load(before));
+    trust_test::requests.clear();
+    OfferRoute("192.168.50.9");
+    RODAK_CHECK(f.mqtt.IsConnected());
+    StationRoute("192.168.50.20", "192.168.50.1");
+    RODAK_CHECK(mqtt_host::WaitUntil([&] {
+        return mqtt_host::Restarts() != 0 ||
+            (mqtt_host::CurrentClient() != original && f.mqtt.IsConnected());
+    }));
+    RODAK_CHECK_EQ(mqtt_host::Restarts(), 0U);
+    const auto tls = mqtt_host::BrokerTls();
+    DeviceCloudConfig after;
+    RODAK_CHECK(f.cloud.Load(after));
+    f.mqtt.Stop();
+    mqtt_host::JoinWorkers();
+    RODAK_CHECK_EQ(mqtt_host::ClientSnapshots().size(), 2U);
+    RODAK_CHECK(mqtt_host::ClientSnapshots().front().destroyed);
+    RODAK_CHECK_EQ(after.server_connect_address, "192.168.50.9");
+    RODAK_CHECK_EQ(after.provisioning_url, before.provisioning_url);
+    RODAK_CHECK(after.cloud_generation > before.cloud_generation);
+    RODAK_CHECK_EQ(tls.uri, "mqtts://192.168.50.9:8883");
+    RODAK_CHECK_EQ(tls.common_name, before.server_trust.tls_name);
+    RODAK_CHECK_EQ(tls.certificate, before.server_trust.ca_pem);
+    RODAK_CHECK_EQ(trust_test::discovery_calls, 1U);
+    CheckBoundIdentity(before, after);
+    rodakos::DeviceCloudConfigService rebooted;
+    DeviceCloudConfig persisted;
+    RODAK_CHECK(rebooted.Load(persisted));
+    RODAK_CHECK_EQ(persisted.server_connect_address, after.server_connect_address);
+}
+
+RODAK_TEST("MQTT GOT_IP during real token HTTP discovers the latest LAN before SDK attachment") {
+    Fixture f;
+    StationRoute("192.168.137.20", "192.168.137.1", false);
+    f.Start();
+    auto* original = mqtt_host::CurrentClient();
+    DeviceCloudConfig before;
+    RODAK_CHECK(f.cloud.Load(before));
+    trust_test::requests.clear();
+    OfferRoute("192.168.50.9");
+    const auto changed_again = std::make_shared<std::atomic<bool>>(false);
+    trust_test::on_http_open = [changed_again](const auto& url) {
+        if (url != "https://192.168.50.9:9443/api/v1/aiot/devices/auth/token" ||
+            changed_again->exchange(true)) return;
+        OfferRoute("192.168.60.9");
+        StationRoute("192.168.60.20", "192.168.60.1");
+    };
+    StationRoute("192.168.50.20", "192.168.50.1");
+    RODAK_CHECK(mqtt_host::WaitUntil([&] {
+        return mqtt_host::Restarts() != 0 ||
+            (mqtt_host::CurrentClient() != original && f.mqtt.IsConnected());
+    }));
+    RODAK_CHECK_EQ(mqtt_host::Restarts(), 0U);
+    const auto tls = mqtt_host::BrokerTls();
+    f.mqtt.Stop();
+    mqtt_host::JoinWorkers();
+    DeviceCloudConfig after;
+    RODAK_CHECK(f.cloud.Load(after));
+    RODAK_CHECK(changed_again->load());
+    RODAK_CHECK_EQ(after.server_connect_address, "192.168.60.9");
+    RODAK_CHECK_EQ(tls.uri, "mqtts://192.168.60.9:8883");
+    RODAK_CHECK_EQ(mqtt_host::ClientSnapshots().size(), 2U);
+    RODAK_CHECK_EQ(trust_test::discovery_calls, 2U);
+    CheckBoundIdentity(before, after);
+}
+
+RODAK_TEST("MQTT GOT_IP keeps the bound client on route TLS credential or persistence failure") {
+    for (const std::string failure : {"tls", "credentials", "persistence"}) {
+        Fixture f;
+        StationRoute("192.168.137.20", "192.168.137.1", false);
+        f.Start();
+        auto* original = mqtt_host::CurrentClient();
+        DeviceCloudConfig before;
+        RODAK_CHECK(f.cloud.Load(before));
+        trust_test::requests.clear();
+        OfferRoute("192.168.50.9");
+        const std::string token_url = "https://192.168.50.9:9443/api/v1/aiot/devices/auth/token";
+        if (failure == "tls") trust_test::replies[token_url].tls_ok = false;
+        if (failure == "credentials") {
+            trust_test::replies[token_url] = {401, R"({"code":401})"};
+            trust_test::discoveries.front().addresses.push_back("192.168.50.10");
+            trust_test::RespondBoundAt("192.168.50.10");
+        }
+        if (failure == "persistence") {
+            trust_test::write_error_key = "device_cloud/server_auth";
+            trust_test::write_error_remaining = 1;
+        }
+        const auto discovered = std::make_shared<std::atomic<bool>>(false);
+        trust_test::on_discovery = [discovered] { *discovered = true; };
+        StationRoute("192.168.50.20", "192.168.50.1");
+        RODAK_CHECK(mqtt_host::WaitUntil([&] { return discovered->load(); }));
+        f.Barrier(before);
+        RODAK_CHECK_EQ(mqtt_host::CurrentClient(), original);
+        RODAK_CHECK(f.mqtt.IsConnected());
+        f.mqtt.Stop();
+        mqtt_host::JoinWorkers();
+        RODAK_CHECK_EQ(mqtt_host::Restarts(), 0U);
+        RODAK_CHECK_EQ(mqtt_host::ClientSnapshots().size(), 1U);
+        DeviceCloudConfig after;
+        RODAK_CHECK(f.cloud.Load(after));
+        RODAK_CHECK_EQ(after.server_connect_address, before.server_connect_address);
+        RODAK_CHECK_EQ(after.server_authority_record, before.server_authority_record);
+        RODAK_CHECK_EQ(after.mqtt_password, before.mqtt_password);
+        CheckBoundIdentity(before, after);
+        unsigned candidate_token_requests = 0;
+        for (const auto& request : trust_test::requests) {
+            if (request.url == token_url) {
+                ++candidate_token_requests;
+                RODAK_CHECK_EQ(request.tls_verified, failure != "tls");
+                RODAK_CHECK_EQ(request.body.empty(), failure == "tls");
+            }
+            if (failure == "credentials")
+                RODAK_CHECK(request.url.find("192.168.50.10") == std::string::npos);
+        }
+        RODAK_CHECK_EQ(candidate_token_requests, 1U);
+        if (failure == "persistence") RODAK_CHECK_EQ(trust_test::write_error_remaining, 0U);
+    }
 }
 
 RODAK_TEST("MQTT reloads a real cloud rotation made while its refreshed credentials are deferred") {

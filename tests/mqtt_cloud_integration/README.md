@@ -4,9 +4,13 @@
 HTTP、NVS Settings、FreeRTOS 与 MQTT SDK 使用下层 host fake；通过
 `RODAK_MQTT_REAL_CLOUD` 排除 MQTT 测试运行时中的 Cloud 替身。
 
-6 个正向用例覆盖语音延期后的最新令牌、SDK 初始化与 attach 之间的真实
+9 个正向用例覆盖语音延期后的最新令牌、SDK 初始化与 attach 之间的真实
 `PrepareVoiceConfig` 轮换、USB 代次取消、跨 namespace 持久化与回滚失败、
 legacy MQTT-only 缓存，以及要求绑定身份但缺少 AIoT 凭据的缓存。
+新增网络用例从注册的 `GOT_IP` callback 进入，验证旧 client 仍在线时完成
+DNS-SD → pinned HTTPS → 设备认证 → authority 持久化 → 数值 MQTTS 新 client，
+并覆盖 token HTTP 中再次换网，以及 TLS、401 和 authority 写入失败。
+失败分支必须实际访问候选 token 端点；持久化分支必须消耗注入的写入错误。
 2 个独立完整 Cloud 源码负变体分别移除精确凭据比较或绕过接纳检查，必须编译成功，
 并由指定断言拒绝；编译失败、超时或 sanitizer 报错不计为成功检测。
 

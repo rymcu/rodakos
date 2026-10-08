@@ -10,11 +10,23 @@ generation 1→3 替换、65 秒服务中断和后续屏幕观察；精确包、
 
 ## 适用范围
 
-替换路径要求 `HasSameEffectAuthority()` 成立。它比较固定服务器信任、连接地址、broker/端口、设备与用户名、各 MQTT topic、provisioning URL、绑定 secret 和绑定状态等字段。正常密码或访问令牌更新不改变该去重域。
+通常的替换路径要求 `HasSameEffectAuthority()` 成立。它比较固定服务器信任、连接地址、broker/端口、设备与用户名、各 MQTT topic、provisioning URL、绑定 secret 和绑定状态等字段。正常密码或访问令牌更新不改变该去重域。
 
-这是一项保守的范围判断。`tokenVersion` 相同本身不等于全部 authority 相同；同一笔记本或同一设备也不能替代上述字段检查。authority、路由或显式 USB provisioning 变化继续使用既有隔离策略，可能重启设备。025 不承诺所有换网或配置变更都免重启。
+2026-10-09 增加一个受限例外：由 `GOT_IP` 触发的网络刷新，经真实 DeviceCloud 的固定证书验证、原设备凭据认证与持久化后，允许只改变数值连接地址。该路径要求原有非空 server pin、证书、TLS 名及版本相同，并继续比较 broker/端口、设备/用户名、topic、HTTP/provisioning URL 和绑定字段。未绑定信任、证书/身份或端口/topic 变化不适用此例外。
+
+`tokenVersion` 相同本身不等于全部 authority 相同；同一笔记本或同一设备也不能替代上述字段检查。例外范围以外的 authority、路由或显式 USB provisioning 变化继续使用既有隔离策略，可能重启设备。025 的历史边界保持，不据此承诺所有换网或配置变更都免重启。
 
 同 authority 的自动刷新始终替换整个 SDK client，包括旧 client 已连接、正在重连、已断开以及 outbox 非空的情况。实现不再通过旧 handle 的 `set_config + reconnect` 应用新凭据。
+
+## 网络地址变化
+
+启动时读取当前 STA 的 IP、子网掩码和网关作为基线。有效 `GOT_IP` 与基线不同时推进网络版本；相同三元组去重，空事件和零地址忽略。即使旧 MQTT client 仍在线，也将刷新排入已有 worker；IP callback 不执行 HTTP 或停止 SDK。
+
+每次 HTTP 刷新和客户端附着均核对网络版本。HTTP、SDK 初始化或语音延期期间再次换网时，丢弃旧候选并处理最新网络；最后的云凭据精确检查仍比较完整路由及令牌，不能只靠网络版本放行。完成一轮恢复只消费该轮网络事件，不会清掉后来的换网或新 client 认证拒绝。服务停止后不重建连接。
+
+可信数值路由迁移保留同一 boot 的 command/volume/light 去重记录；旧连接 epoch、SDK outbox、排队结果和媒体租约仍在替换时撤销。语音活动继续延后刷新和应用。失败的迁址不会自动解绑或改 pin；后续 TCP 故障恢复继续使用原三次失败与 60 秒节流策略。
+
+本变化不提供未知 SSID 的自动选择。设备三元组不变时也不会凭空得到新的 `GOT_IP` 迁址证据，服务器单独换址仍需原传输恢复路径。真实换网、媒体/语音并发及设备资源门禁须单独验证。
 
 ## 正常替换流程
 
@@ -88,6 +100,25 @@ SDK overlay 的七个函数级场景及八个生成器检查另外验证，其�
 测试与边界见 [MQTT suite](../tests/mqtt_volume_service/README.md) 和
 [Cloud 组合 suite](../tests/mqtt_cloud_integration/README.md)。完整仓库回归、固件和设备
 窗口分别记录，不能由这些定向案例代替。
+
+## 2026-10-09 GOT_IP 软件验证
+
+WSL Debian 的 Debug 和 ASan/UBSan/leak 均通过完整 MQTT 的 8 个 CTest：
+162 个正向用例（其中网络变化 19 项）、6 个诊断负变体及 4 个凭据负变体。
+共享 fake 的真实 Wake/MQTT identity 集成在两种构建中各通过 4 项。
+
+完整 MQTT 与真实 DeviceCloud 同目标各通过 9 个用例、头文件隔离回归及 2 个凭据
+精确比较负变体。失败分支必须实际访问候选 token 端点，并验证 TLS 失败没有发送
+请求正文、401 终止候选搜索、持久化错误确实命中后原配置保留。旧 MQTT 完整源码
+`f58fdf7` 可编译，但在新增的“仍在线时 GOT_IP 数值迁址”用例中未发生替换，命中指定
+等待断言；没有把构建失败、超时或 sanitizer 异常记为成功检出。
+
+本轮主机源码 SHA-256：`unified_mqtt_service.cc`
+`1facb05c81ffae04f629e9a27d00851061451b505d398e37f98757c1d83fb27e`；头文件
+`ed290871d041294168a3a55188ce9a569750374b14f8a8709ee14ac074eb422a`。
+原始证据在本机 WSL `~/.cache/rodakos-mqtt-network-route*`、
+`rodakos-mqtt-roaming-cloud*`、`rodakos-mqtt-roaming-old-control`，不提交测试产物。
+这些结果尚未证明真实 WiFi 漫游、TLS 堆余量或设备长稳通过。
 
 ## 实机验收方法
 

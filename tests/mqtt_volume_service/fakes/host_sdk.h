@@ -21,14 +21,24 @@ inline const char* esp_err_to_name(int) { return "host error"; }
 using esp_event_base_t = const char*;
 using esp_event_handler_instance_t = void*;
 using esp_event_handler_t = void (*)(void*, esp_event_base_t, int32_t, void*);
-inline constexpr const char* IP_EVENT = "ip";
+struct esp_netif_t {};
+struct esp_ip4_addr_t {
+    uint32_t addr = 0;
+};
+struct esp_netif_ip_info_t {
+    esp_ip4_addr_t ip;
+    esp_ip4_addr_t netmask;
+    esp_ip4_addr_t gw;
+};
+struct ip_event_got_ip_t {
+    esp_netif_t* esp_netif = nullptr;
+    esp_netif_ip_info_t ip_info;
+};
+inline constexpr char IP_EVENT[] = "ip";
 constexpr int IP_EVENT_STA_GOT_IP = 1;
-inline int esp_event_handler_instance_register(esp_event_base_t, int, esp_event_handler_t,
-                                               void*, void** handle) {
-    *handle = reinterpret_cast<void*>(1);
-    return ESP_OK;
-}
-inline int esp_event_handler_instance_unregister(esp_event_base_t, int, void*) { return ESP_OK; }
+int esp_event_handler_instance_register(esp_event_base_t, int, esp_event_handler_t, void*,
+                                        void** handle);
+int esp_event_handler_instance_unregister(esp_event_base_t, int, void* handle);
 
 #ifdef RODAK_IDENTITY_WITH_RETIREMENT
 // Only the real wake/MQTT integration fixture opts in. Keep the ordinary MQTT
@@ -139,7 +149,7 @@ inline const esp_app_desc_t* esp_app_get_description() { static esp_app_desc_t a
 struct esp_partition_t { const char* label = "ota_0"; };
 inline const esp_partition_t* esp_ota_get_running_partition() { static esp_partition_t part; return &part; }
 struct wifi_ap_record_t { int rssi = -40; };
-inline int esp_wifi_sta_get_ap_info(wifi_ap_record_t*) { return ESP_OK; }
+int esp_wifi_sta_get_ap_info(wifi_ap_record_t*);
 inline unsigned esp_get_free_heap_size() { return 1024 * 1024; }
 inline unsigned esp_get_minimum_free_heap_size() { return 1024 * 1024; }
 namespace mqtt_host { inline thread_local std::atomic<bool>* clock_read_observed = nullptr; }

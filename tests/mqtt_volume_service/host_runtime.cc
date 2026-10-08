@@ -69,10 +69,29 @@ std::function<void(mqtt_host::SdkOperation, esp_mqtt_client_handle_t)> sdk_hook;
 std::function<bool(unsigned, rodakos::DeviceCloudConfig&)> refresh_hook;
 std::atomic<unsigned> refresh_calls{0};
 std::vector<mqtt_host::LifecycleEvent> lifecycle_events;
+struct NetworkEventRegistration {
+    esp_event_base_t event_base = nullptr;
+    int32_t event_id = 0;
+    esp_event_handler_t callback = nullptr;
+    void* context = nullptr;
+    void* handle = nullptr;
+};
+std::recursive_mutex network_event_mutex;
+std::vector<NetworkEventRegistration> network_event_registrations;
+esp_netif_t station_netif;
+esp_netif_ip_info_t station_route;
+std::atomic<bool> station_connected{true};
 
 void RecordLifecycle(HostMqttClient* client, const char* action) {
     std::lock_guard<std::mutex> lock(control_mutex);
     lifecycle_events.push_back({client == nullptr ? 0u : client->id, action});
+}
+
+void ClearNetworkEventRegistrations() {
+    std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+    for (const auto& registration : network_event_registrations)
+        delete static_cast<unsigned char*>(registration.handle);
+    network_event_registrations.clear();
 }
 bool SdkEntry(mqtt_host::SdkOperation operation, HostMqttClient* client) {
     std::function<void(mqtt_host::SdkOperation, esp_mqtt_client_handle_t)> hook;
@@ -186,6 +205,52 @@ bool RunOneCustomEvent(HostMqttClient* client) {
     RunNativeEvents(client);
     return true;
 }
+}
+
+int esp_event_handler_instance_register(esp_event_base_t event_base, int event_id,
+                                        esp_event_handler_t callback, void* context,
+                                        void** handle) {
+    if (callback == nullptr || handle == nullptr) return ESP_FAIL;
+    auto* token = new unsigned char(0);
+    {
+        std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+        network_event_registrations.push_back(
+            {event_base, event_id, callback, context, static_cast<void*>(token)});
+    }
+    *handle = token;
+    return ESP_OK;
+}
+
+int esp_event_handler_instance_unregister(esp_event_base_t event_base, int event_id,
+                                          void* handle) {
+    std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+    const auto it = std::find_if(network_event_registrations.begin(),
+                                 network_event_registrations.end(),
+                                 [&](const NetworkEventRegistration& registration) {
+                                     return registration.event_base == event_base &&
+                                         registration.event_id == event_id &&
+                                         registration.handle == handle;
+                                 });
+    if (it == network_event_registrations.end()) return ESP_FAIL;
+    delete static_cast<unsigned char*>(it->handle);
+    network_event_registrations.erase(it);
+    return ESP_OK;
+}
+
+esp_netif_t* esp_netif_get_handle_from_ifkey(const char* ifkey) {
+    if (ifkey == nullptr || std::string(ifkey) != "WIFI_STA_DEF") return nullptr;
+    return &station_netif;
+}
+
+esp_err_t esp_netif_get_ip_info(esp_netif_t* netif, esp_netif_ip_info_t* info) {
+    if (netif != &station_netif || info == nullptr) return ESP_FAIL;
+    std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+    *info = station_route;
+    return ESP_OK;
+}
+
+int esp_wifi_sta_get_ap_info(wifi_ap_record_t*) {
+    return station_connected ? ESP_OK : ESP_FAIL;
 }
 
 int xTaskCreate(TaskFunction_t entry, const char*, uint32_t, void* argument,
@@ -591,6 +656,9 @@ void Reset() {
     publications.clear();
     wire_publications.clear();
     direct_publish_attempts.clear();
+    ClearNetworkEventRegistrations();
+    station_route = {};
+    station_connected = true;
     stored_config = {};
     tls_uri.clear(); tls_certificate = nullptr; tls_common_name = nullptr;
     stored_config.mqtt_protocol_version = 2;
@@ -637,6 +705,29 @@ rodakos::DeviceCloudConfig Config() {
     std::lock_guard<std::mutex> lock(state_mutex);
     return stored_config;
 }
+void SetStationRoute(uint32_t ip, uint32_t netmask, uint32_t gateway) {
+    std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+    station_route.ip.addr = ip;
+    station_route.netmask.addr = netmask;
+    station_route.gw.addr = gateway;
+}
+void GotIp(uint32_t ip, uint32_t netmask, uint32_t gateway) {
+    // Match synchronous event delivery: unregister cannot return while its callback runs.
+    std::lock_guard<std::recursive_mutex> lock(network_event_mutex);
+    station_connected = true;
+    SetStationRoute(ip, netmask, gateway);
+    ip_event_got_ip_t event;
+    event.esp_netif = &station_netif;
+    event.ip_info = station_route;
+    const auto callbacks = network_event_registrations;
+    for (const auto& registration : callbacks) {
+        if (registration.event_base != IP_EVENT ||
+            registration.event_id != IP_EVENT_STA_GOT_IP || registration.callback == nullptr)
+            continue;
+        registration.callback(registration.context, IP_EVENT, IP_EVENT_STA_GOT_IP, &event);
+    }
+}
+void SetWifiConnected(bool connected) { station_connected = connected; }
 BrokerTlsSnapshot BrokerTls() {
     std::lock_guard<std::mutex> lock(state_mutex);
     return {tls_uri, tls_certificate == nullptr ? "" : tls_certificate,

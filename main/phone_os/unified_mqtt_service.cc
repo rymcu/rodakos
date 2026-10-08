@@ -15,6 +15,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
+#include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
@@ -203,9 +204,11 @@ esp_mqtt_client_config_t BuildMqttClientConfig(const DeviceCloudConfig& config,
 }
 
 bool HasSameMqttSessionIdentity(const DeviceCloudConfig& current,
-                                const DeviceCloudConfig& refreshed) {
+                                const DeviceCloudConfig& refreshed,
+                                bool require_same_route = true) {
     return current.server_trust.server_id == refreshed.server_trust.server_id &&
-           current.server_connect_address == refreshed.server_connect_address &&
+           (!require_same_route ||
+            current.server_connect_address == refreshed.server_connect_address) &&
            current.server_trust.ca_pem == refreshed.server_trust.ca_pem &&
            current.server_trust.tls_name == refreshed.server_trust.tls_name &&
            current.mqtt_protocol_version == refreshed.mqtt_protocol_version &&
@@ -265,14 +268,28 @@ bool IsPingCommand(const std::string& payload) {
 }
 
 bool HasSameEffectAuthority(const DeviceCloudConfig& current,
-                            const DeviceCloudConfig& next) {
-    // 密码正常轮换不改变同一 boot 的去重域；重新绑定、authority 或路由变化必须隔离。
-    return HasSameMqttSessionIdentity(current, next) &&
+                            const DeviceCloudConfig& next,
+                            bool require_same_route = true) {
+    // 数值路由例外只能由完整的 pinned authority 校验开启。
+    return HasSameMqttSessionIdentity(current, next, require_same_route) &&
            current.provisioning_url == next.provisioning_url &&
            current.aiot_device_secret == next.aiot_device_secret &&
            current.aiot_registered == next.aiot_registered &&
            current.aiot_activated == next.aiot_activated &&
            current.unbind_pending == next.unbind_pending;
+}
+
+bool HasSamePinnedAuthority(const DeviceCloudConfig& current,
+                            const DeviceCloudConfig& next) {
+    const auto numeric_route = [](const std::string& address) {
+        return address.empty() || NormalizeServerRouteAddress(address) == address;
+    };
+    return !current.server_trust.empty() && !current.server_trust.ca_pem.empty() &&
+           !current.server_trust.tls_name.empty() &&
+           current.server_trust.version == next.server_trust.version &&
+           numeric_route(current.server_connect_address) &&
+           numeric_route(next.server_connect_address) &&
+           HasSameEffectAuthority(current, next, false);
 }
 
 bool HasUsableMqttConfig(const DeviceCloudConfig& config) {
@@ -468,6 +485,19 @@ bool UnifiedMqttService::Start() {
     ESP_LOGI(TAG, "Waiting for WiFi before starting MQTT");
     wifi_ap_record_t access_point = {};
     if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        esp_netif_t* station = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t info = {};
+        if (station != nullptr && esp_netif_get_ip_info(station, &info) == ESP_OK &&
+            info.ip.addr != 0) {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            // A registered GOT_IP callback may already own a newer baseline.
+            if (!station_ip_valid_) {
+                station_ip_ = info.ip.addr;
+                station_netmask_ = info.netmask.addr;
+                station_gateway_ = info.gw.addr;
+                station_ip_valid_ = true;
+            }
+        }
         StartConnectionAsync();
     }
     return true;
@@ -520,6 +550,13 @@ void UnifiedMqttService::Stop() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         transport_recovery_ = {};
         transport_refresh_scheduled_ = false;
+        network_route_refresh_scheduled_ = false;
+        station_ip_valid_ = false;
+        station_ip_ = 0;
+        station_netmask_ = 0;
+        station_gateway_ = 0;
+        ++network_route_generation_;
+        refresh_route_generation_ = 0;
         auth_refresh_generation_ = 0;
     }
     std::lock_guard<std::mutex> reliable_lock(reliable_publish_mutex_);
@@ -550,12 +587,45 @@ void UnifiedMqttService::RequestCredentialRefresh() {
 void UnifiedMqttService::NetworkEventHandler(void* arg, esp_event_base_t event_base,
                                              int32_t event_id, void* event_data) {
     (void)event_base;
-    (void)event_id;
-    (void)event_data;
     auto* service = static_cast<UnifiedMqttService*>(arg);
-    if (service != nullptr) {
-        service->StartConnectionAsync();
+    if (service == nullptr || event_id != IP_EVENT_STA_GOT_IP) return;
+    const auto* event = static_cast<const ip_event_got_ip_t*>(event_data);
+    service->HandleNetworkAddress(event == nullptr ? 0 : event->ip_info.ip.addr,
+                                  event == nullptr ? 0 : event->ip_info.netmask.addr,
+                                  event == nullptr ? 0 : event->ip_info.gw.addr);
+}
+
+void UnifiedMqttService::HandleNetworkAddress(uint32_t address, uint32_t netmask,
+                                              uint32_t gateway) {
+    bool route_changed = false;
+    bool start_connection = false;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (!started_.load() || client_lifecycle_failed_.load() || address == 0) return;
+        const bool same_route = station_ip_valid_ && station_ip_ == address &&
+            station_netmask_ == netmask && station_gateway_ == gateway;
+        route_changed = !same_route &&
+            (station_ip_valid_ || client_ != nullptr || connecting_.load());
+        if (!same_route) {
+            station_ip_ = address;
+            station_netmask_ = netmask;
+            station_gateway_ = gateway;
+            station_ip_valid_ = true;
+            ++network_route_generation_;
+        }
+        if (route_changed) {
+            network_route_refresh_scheduled_ = true;
+            bool expected = false;
+            reset_scheduled_.compare_exchange_strong(expected, true);
+        } else if (client_ == nullptr) {
+            start_connection = true;
+        }
     }
+    if (route_changed) {
+        ESP_LOGI(TAG, "WiFi route changed; scheduling authenticated MQTT route refresh");
+        return;
+    }
+    if (start_connection) StartConnectionAsync();
 }
 
 void UnifiedMqttService::StartConnectionAsync() {
@@ -667,10 +737,18 @@ std::unique_ptr<DeviceCloudConfig> UnifiedMqttService::LoadMqttSnapshot() {
 }
 
 void UnifiedMqttService::Connect() {
+    uint64_t route_generation = 0;
+    bool route_refresh = false;
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        route_generation = network_route_generation_;
+        route_refresh = network_route_refresh_scheduled_;
+        if (route_refresh) refresh_route_generation_ = route_generation;
+    }
     auto next = LoadMqttSnapshot();
     if (next == nullptr) return;
     DeviceCloudConfig& next_config = *next;
-    if (force_refresh_.exchange(false) || !next_config.has_mqtt_config ||
+    if (force_refresh_.exchange(false) || route_refresh || !next_config.has_mqtt_config ||
         NeedsV2Refresh(next_config)) {
         ESP_LOGI(TAG, "Refreshing bootstrap to obtain unified MQTT v2 credentials");
         auto refreshed = std::unique_ptr<DeviceCloudConfig>(
@@ -690,10 +768,11 @@ void UnifiedMqttService::Connect() {
         return;
     }
 
-    StartClient(next_config);
+    if (StartClient(next_config, route_generation) && route_refresh) FinishCredentialRefresh();
 }
 
-bool UnifiedMqttService::StartClient(DeviceCloudConfig& next_config) {
+bool UnifiedMqttService::StartClient(DeviceCloudConfig& next_config,
+                                     uint64_t route_generation) {
     auto instance = std::unique_ptr<ClientInstance>(new (std::nothrow) ClientInstance);
     if (instance == nullptr) {
         ESP_LOGE(TAG, "Cannot allocate MQTT client lifetime");
@@ -738,8 +817,12 @@ bool UnifiedMqttService::StartClient(DeviceCloudConfig& next_config) {
     const bool attached = config_service_.ApplyIfMqttConfigCurrent(next_config, [&]() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!started_.load() || client_ != nullptr || client_lifecycle_failed_.load() ||
-            client_generation_ != instance->generation) return false;
-        if (!HasSameEffectAuthority(config_, next_config)) ResetEffectAuthorityLocked();
+            client_generation_ != instance->generation ||
+            route_generation != network_route_generation_) return false;
+        if (!HasSameEffectAuthority(config_, next_config) &&
+            !(network_route_refresh_scheduled_ && HasSamePinnedAuthority(config_, next_config))) {
+            ResetEffectAuthorityLocked();
+        }
         config_ = next_config;
         effect_authority_active_ = true;
         client_ = instance->handle;
@@ -871,12 +954,27 @@ void UnifiedMqttService::FinishCredentialRefresh() {
     client_replacement_retry_ms_ = kConnectionRetryInitialMs;
     std::lock_guard<std::mutex> lock(mqtt_mutex_);
     transport_refresh_scheduled_ = false;
+    if (!started_.load()) {
+        network_route_refresh_scheduled_ = false;
+        refresh_route_generation_ = 0;
+        reset_scheduled_.store(false);
+        return;
+    }
+    const bool route_pending = network_route_refresh_scheduled_ &&
+        refresh_route_generation_ != network_route_generation_;
+    if (!route_pending) {
+        network_route_refresh_scheduled_ = false;
+        refresh_route_generation_ = 0;
+    }
     // Only a rejection from the newly attached instance survives replacement.
     const bool pending = client_ != nullptr && auth_refresh_generation_ == client_generation_;
-    reset_scheduled_.store(pending);
+    reset_scheduled_.store(route_pending || pending);
     if (pending) {
         ESP_LOGI(TAG, "MQTT auth refresh retained for current generation %u",
                  static_cast<unsigned>(client_generation_));
+    }
+    if (route_pending) {
+        ESP_LOGI(TAG, "MQTT route refresh retained for newer network generation");
     }
 }
 
@@ -938,6 +1036,8 @@ void UnifiedMqttService::RefreshCredentials() {
         }
         return;
     }
+    bool route_refresh = false;
+    uint64_t route_generation = 0;
     if (pending_credential_config_ == nullptr) {
         DelayWhileStarted(started_, kCredentialRefreshDelayMs);
         if (!started_.load()) {
@@ -949,7 +1049,11 @@ void UnifiedMqttService::RefreshCredentials() {
         }
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
-            if (transport_refresh_scheduled_ && connected_.load()) {
+            route_refresh = network_route_refresh_scheduled_;
+            route_generation = network_route_generation_;
+            if (route_refresh) refresh_route_generation_ = route_generation;
+            if (transport_refresh_scheduled_ && !network_route_refresh_scheduled_ &&
+                connected_.load()) {
                 reset_scheduled_.store(false);
                 transport_refresh_scheduled_ = false;
                 ESP_LOGI(TAG, "MQTT reconnected before TCP recovery; refresh cancelled");
@@ -967,7 +1071,8 @@ void UnifiedMqttService::RefreshCredentials() {
         {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);
             if (refreshed->unbind_pending || !refreshed->has_mqtt_config ||
-                !HasSameEffectAuthority(config_, *refreshed)) {
+                (!HasSameEffectAuthority(config_, *refreshed) &&
+                 !(network_route_refresh_scheduled_ && HasSamePinnedAuthority(config_, *refreshed)))) {
                 effect_authority_active_ = false;
                 AdvanceConnectionEpochLocked();
                 ResetEffectAuthorityLocked();
@@ -984,6 +1089,14 @@ void UnifiedMqttService::RefreshCredentials() {
             FinishCredentialRefresh();
             return;
         }
+        {
+            std::lock_guard<std::mutex> lock(mqtt_mutex_);
+            if (route_refresh && route_generation != network_route_generation_) {
+                ESP_LOGI(TAG, "MQTT route changed again during bootstrap refresh; retrying latest route");
+                pending_credential_config_.reset();
+                return;
+            }
+        }
         // HTTP rotates credentials. Retain this result if voice became active
         // so the worker can keep processing events without repeating the request.
         pending_credential_config_ = std::move(refreshed);
@@ -991,6 +1104,15 @@ void UnifiedMqttService::RefreshCredentials() {
     if (!started_.load() || ShouldDeferCredentialRefresh() ||
         esp_timer_get_time() / 1000 < client_replacement_retry_at_ms_) {
         return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mqtt_mutex_);
+        if (network_route_refresh_scheduled_ &&
+            refresh_route_generation_ != network_route_generation_) {
+            pending_credential_config_.reset();
+            return;
+        }
+        route_generation = network_route_generation_;
     }
     // Voice may have rotated credentials while HTTP, teardown or a retry was
     // deferred. SDK creation failure must not rotate them by repeating HTTP.
@@ -1019,7 +1141,9 @@ void UnifiedMqttService::RefreshCredentials() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         // config_ retains the prior authority while its replacement is offline.
         state.has_client = client_ != nullptr || config_.has_mqtt_config;
-        state.same_effect_authority = HasSameEffectAuthority(config_, *pending_credential_config_);
+        state.same_effect_authority = HasSameEffectAuthority(config_, *pending_credential_config_) ||
+            (network_route_refresh_scheduled_ &&
+             HasSamePinnedAuthority(config_, *pending_credential_config_));
     }
     const auto action = DecideMqttCredentialRefreshAction(state);
     if (action == MqttCredentialRefreshAction::kRestart && started_.load()) {
@@ -1051,12 +1175,14 @@ void UnifiedMqttService::RefreshCredentials() {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!HasUsableMqttConfig(*pending_credential_config_) ||
             (config_.has_mqtt_config &&
-             !HasSameEffectAuthority(config_, *pending_credential_config_))) {
+             !HasSameEffectAuthority(config_, *pending_credential_config_) &&
+             !(network_route_refresh_scheduled_ &&
+               HasSamePinnedAuthority(config_, *pending_credential_config_)))) {
             RetryClientReplacement();
             return;
         }
     }
-    if (!StartClient(*pending_credential_config_)) {
+    if (!StartClient(*pending_credential_config_, route_generation)) {
         if (started_.load() && !client_lifecycle_failed_.load()) RetryClientReplacement();
         return;
     }

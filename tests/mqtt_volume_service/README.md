@@ -221,9 +221,35 @@ PUBACK 等待者取消、片段与已出队命令的代次隔离、语音期间�
 吞掉新 client 拒绝、丢失同 authority 去重结果、未确认 stop 就调用 destroy，以及旧拒绝
 跨代次继续触发 HTTP。每个变体必须在指定断言失败，构建失败、超时、崩溃或 sanitizer
 错误均不算检测成功。源码、日志与来源哈希保存在 `replacement-negative-controls/`。
-两个 negative-control 目标与五个正常目标合计 7 个 CTest；凭据正常目标限时 90 秒，
-negative-control 目标各限时 480 秒。
+025 登记两个 negative-control 目标与五个正常目标；下方 GOT_IP 回归再增加一个正常目标，
+当前合计 8 个 CTest。凭据正常目标限时 90 秒，negative-control 目标各限时 480 秒。
 
 完整旧版对照可同时设置 `RODAK_MQTT_SERVICE_SOURCE`、`RODAK_MQTT_POLICY_SOURCE`
 和 `RODAK_MQTT_INCLUDE_ROOT`，使 service、policy 与 header 均来自同一 baseline。
 这些选项只影响 host 编译；`production-sources.json` 记录实际选用的 service/header 哈希。
+
+## GOT_IP 路由变更（2026-10-09）
+
+`rodakos_mqtt_network_route` 编译完整生产 MQTT 服务，新增 19 项回归：初次 GOT_IP、已联网
+启动时的 baseline、同 IP/掩码/网关去重、单独网关或掩码变化、HTTP 中再次变网、初始 HTTP
+没有地址 baseline，以及 SDK init/register 期间变网。代次案例保持凭据完全相同，旧候选
+必须在启动前销毁，防止凭据版本检查代替网络代次检查。另覆盖 voice active 延后、旧连接
+恢复后仍保留认证拒绝、Stop 取消及注销后的事件、零地址与 null 事件。
+
+数值地址迁移只对相同固定证书和完整既有 MQTT 权限范围生效。回归验证迁移后重放旧音量
+effect 不会覆盖更新后的音量，重复 stream Start 只返回原 ACK、不重新启动已回收的 peer；
+未 pin 的 broker 变更、证书变更，以及同 pin 下的 broker port 或 command topic 变更仍以
+重启隔离，不因 GOT_IP 放宽授权边界。
+
+host fake 提供 `SetStationRoute(ip, mask, gateway)` 仅设置当前 station 路由，`GotIp(...)`
+设置路由并同步派发已注册事件；`SetWifiConnected(bool)` 控制初始是否已有 AP。事件 base
+使用跨翻译单元唯一地址，注册返回独立 instance，注销与正在执行的回调同步。Fake 不提供
+真实 DNS、WiFi 或 TLS 验证；真实 Cloud 持久化与候选校验由
+[`mqtt_cloud_integration`](../mqtt_cloud_integration/README.md) 单独覆盖，漫游和设备资源
+仍需硬件门禁。
+
+本轮六个正常 CTest 共 162 个用例：volume/light 36、command 70、voice identity 8、credential
+replacement 18、network route 19、diagnostics 11。WSL Debian Debug 和 ASan/UBSan/leak 均通过
+全部 8 个 CTest：162 项正向通过，另有诊断 6 项和凭据 4 项完整源码负变体在指定断言检出，
+不把负例崩溃或构建失败算作通过。共享 fake 的 `voice_identity_integration` 在两种构建中
+均通过 1 个 CTest／4 个真实 Wake/MQTT 服务用例。
