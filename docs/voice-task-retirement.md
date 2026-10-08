@@ -20,6 +20,8 @@
 
 034 已实现完整AFE输出帧门控、暖机/停滞诊断、有限自动恢复和phase快照，软件与TEST112651制品独审通过；TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。033及更早历史保持原身份，资源/生产NO_GO不变。
 
+当前035：035源码 `b5c17a9e5d35e07714b8f3b07e9160be0a319512` 新增AFE阶段、返回记账和等待闭合观测；49项Debug、49项ASan/UBSan/leak及14个精确负控通过。TEST与普通OFF制品已核，闭合窗口分别保留4次running与1次warmup W，五个gap均recovered；普通OFF已恢复原绑定与MQTT/Wake终态，闭合硬件独审通过有限窗口检查。API边界、消费者观察和between_reads的长墙钟尚无统一根因，实际余量及资源/生产NO_GO保持；034及更早历史不改写。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本
@@ -153,6 +155,30 @@ feed尾部则仅AFE gap。SDK仍保留不足160样本的WebRTC残余与AEC状态
 35项frontend及30/36项Assistant/Wake host验证、TEST/普通两包和有限硬件窗口已分别独审；
 TEST一格idle、三格Listening及同第三会话自然TTL600刷新已闭合独审；普通OFF包20261008-113338已恢复并完成独立cold与stop/rearm。TEST generation15仍有一次running stall待定位。任务观察不证明全PCM声学、全物理
 资源归还、任意OOM或真实安全余量。见[034证据](ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034)。
+
+## 035 AFE停滞观测边界
+
+源码 `b5c17a9e5d35e07714b8f3b07e9160be0a319512` 在普通与TEST中使用同一64B诊断对象。
+Capture单写者通过独立portMUX发布56B元组；timer在临界区外，临界区仅作有界字段更新/
+复制，没有SDK、业务锁、日志或分配。SDK返回状态在重取frontend mutex前发布，
+区分raw、准备/准入、API边界及return-to-publish。API与锁调用只测墙钟，不能据此
+断言DSP执行时间或TLS根因；返回记账完成也不保证0/非法输出增加credit。
+
+同generation/epoch的gap保留首W的gap_id与各次count，瞬态错误后的重复W不合并删除。
+仅有效完整fetch记recovered，取消/reset分别闭合；stall与closed在业务锁内先复制
+producer元组、后采时，锁外打印冻结记录。闭合包含producer epoch最大值以及首W前后、
+fetch返回再次取锁的consumer最大观察/锁墙钟。旧producer scope只标stale，最大值
+不能当本gap唯一原因；`UINT32_MAX`耗时是饱和下界。原100ms、credit、取消排空、
+raw gap、epoch、有限重同步与terminal准入完全保留。
+
+完整TU49项Debug、49项ASan/UBSan/leak、五组CTest及14个精确负控通过；详见
+[域测试合同](../tests/voice_audio_frontend_identity/README.md#035-afe-阶段与输出等待观测)。
+隔离目标检查为Frontend576→640B、Capture固定帧176→240B、Fetch112→368B；普通/TEST
+布局一致，仍有正常热路径开销。这些不是运行时HWM或实际资源余量。
+035两份制品已独审，TEST四个running gap与普通OFF一个warmup gap均恢复完整输出；
+普通OFF已恢复原绑定与空闲终态，闭合硬件独审通过有限窗口检查。五次W与阶段差异仍保留；
+不把恢复输出等同根因已解，也不改写034历史。
+当前根因和资源/生产**NO_GO**见[035证据](ota-release-readiness.md#2026-10-08-afe-stall-observability-035)。
 
 ## 仍未关闭的门禁
 

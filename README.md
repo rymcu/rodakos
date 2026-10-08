@@ -7,14 +7,17 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-034 source `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` adds complete AFE output
-gating, visible stall diagnostics, bounded automatic recovery and a narrow phase snapshot.
-Closed review records one idle and three Listening cycles, with natural TTL600 refresh
-and cycle3404 in the same third session. Ordinary OFF `20261008-113338` is restored,
-with separate cold and explicit WSS stop/rearm windows; original binding/token4 remains.
-One TEST running stall in AFE generation15 remains unresolved. Actual headroom, full
-physical-resource return, broader concurrency, acoustics and soak remain **NO_GO**.
-030–033 retain their historical identities. See [034 evidence](docs/ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
+035 source `b5c17a9e5d35e07714b8f3b07e9160be0a319512` adds AFE producer-stage,
+return-to-publication and closed-gap observations in both ordinary and TEST flavors.
+The full-TU suite passes 49 Debug and 49 sanitizer/leak tests plus 14 precise negative
+controls. Both packages are independently verified. Closed captures retain four TEST
+running warnings and one ordinary-OFF warmup warning, with all five gaps recovered;
+ordinary OFF is restored with the original binding and idle MQTT/Wake state.
+Independent hardware review passes the limited closed-window scope. Long API-boundary,
+consumer-observation and between-read intervals do not establish a common cause.
+Actual heap/stack headroom, physical-resource return, acoustics, concurrency and soak
+remain **NO_GO**. Earlier source/package/session results retain their original identities.
+See [035 evidence](docs/ota-release-readiness.md#2026-10-08-afe-stall-observability-035) and the retained [034 evidence](docs/ota-release-readiness.md#2026-10-08-afe-output-readiness-and-voice-recovery-034).
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.

@@ -14,14 +14,17 @@ production-root, power-loss, resource and soak gates retain their existing accep
 
 ## Current evidence
 
-034 source `66ab25cd7d1b2af8aa0fa1de8d4012fbc3d51781` adds complete AFE output
-gating, visible stall diagnostics, bounded automatic recovery and a narrow phase snapshot.
-Closed review records one idle and three Listening cycles, with natural TTL600 refresh
-and cycle3404 in the same third session. Ordinary OFF `20261008-113338` is restored,
-with separate cold and explicit WSS stop/rearm windows; original binding/token4 remains.
-One TEST running stall in AFE generation15 remains unresolved. Actual headroom, full
-physical-resource return, broader concurrency, acoustics and soak remain **NO_GO**.
-030–033 retain their historical identities. See [034 evidence](#2026-10-08-afe-output-readiness-and-voice-recovery-034).
+035 source `b5c17a9e5d35e07714b8f3b07e9160be0a319512` adds AFE producer-stage,
+return-to-publication and closed-gap observations in both ordinary and TEST flavors.
+The full-TU suite passes 49 Debug and 49 sanitizer/leak tests plus 14 precise negative
+controls. Both packages are independently verified. Closed captures retain four TEST
+running warnings and one ordinary-OFF warmup warning, with all five gaps recovered;
+ordinary OFF is restored with the original binding and idle MQTT/Wake state.
+Independent hardware review passes the limited closed-window scope. Long API-boundary,
+consumer-observation and between-read intervals do not establish a common cause.
+Actual heap/stack headroom, physical-resource return, acoustics, concurrency and soak
+remain **NO_GO**. Earlier source/package/session results retain their original identities.
+See [035 evidence](#2026-10-08-afe-stall-observability-035) and the retained [034 evidence](#2026-10-08-afe-output-readiness-and-voice-recovery-034).
 
 Evidence review updated on 2026-10-08. The earlier source baseline `c64cf06` / `f7e8c91`
 includes successful ESP-IDF 6.0.2 builds for normal and fault-injection firmware. The last
@@ -2335,3 +2338,130 @@ inFlight/blocked、无COM/JTAG helper。桌面运行身份按进程/既有构建
 恢复，仍需定位generation15的running stall和实际余量；全PCM声学、全部DMA/IRQ/
 codec/TCB/heap资源归还、任意OOM、更广取消/并发、实体触摸及八小时长稳未关闭。
 资源和生产继续**NO_GO**。
+
+## 2026-10-08 AFE stall observability 035
+
+035源码 [`b5c17a9e5d35e07714b8f3b07e9160be0a319512`](https://github.com/rymcu/rodakos/commit/b5c17a9e5d35e07714b8f3b07e9160be0a319512)
+只补齐034 running stall的分段观测，不把`124 feeds / 123 returns`改写为DSP内部阻塞。
+原100ms、完整帧credit、取消排空、保守库存、epoch/raw gap、有限reset与terminal判断
+保持；034包、会话、水位和一次running W仍归上一节，根因与资源/生产**NO_GO**不变。
+
+### 已验证的软件与观测合同
+
+Capture用独立portMUX发布generation/epoch/stage/seq及阶段时点，返回后先发布
+`returned_wait_publish`，再获取业务锁记账。`raw_read`包含输入锁、调度和codec调用；
+`api_boundary`包含标记后的抢占、SDK内部计算或等待；return-to-publish包含诊断发布、
+调度与业务锁调用。它们都是墙钟区间，不能自动归因TLS、DSP或互斥锁竞争。
+`credit_published`只表示返回校验/记账结束，不保证credit增加。
+
+每个W保留count和首W的稳定gap_id，失败fetch后重复W不抑制。仅同generation/epoch
+的完整有效fetch闭合为recovered，取消/reset另列；stall与closed都在业务锁内冻结
+独立producer元组、再采观察时点，锁外输出。closed保留完成后的read/API/记账最大值
+和首W前后、fetch返回再次取锁的consumer最大墙钟。producer最大值属于整个epoch，
+可能早于该gap；不匹配元组标stale。u32耗时等于4294967295时为饱和下界。
+
+| 检查 | 结果与范围 |
+| --- | --- |
+| 完整Frontend TU | 49项Debug、49项ASan/UBSan/leak；原35项加14项观测用例 |
+| 五组CTest / 14个精确负控 | retirement2 + MultiNet2 + AFE8 + 新观测2；返回标记移到锁后与日志放回锁内均以专属断言拒绝，编译失败/超时不算检出 |
+| 输入冻结 | 三配置各84个非系统输入before/after一致，实际Ninja非系统依赖无遗漏；系统输入只记构建后provenance |
+| device AEC OFF | 仅命名格式/启动输出1例，含6种错误格式；不宣称全OFF suite或设备验收 |
+
+测试直接运行真实TU，host私有锁/计数仅用于定点门闩；新观测测试单TU使用
+`-fno-access-control`，生产正常编译，没有新增生产测试回调。覆盖SDK返回先于业务锁、
+日志阻塞时producer进入第二次SDK调用、旧raw跨代stale、consumer延迟、同gap多W、
+快照后采时及日志阻塞后仍保持冻结tuple。codec、DSP与FreeRTOS调度仍是host替身。
+软件封存SHA：`6a9eee95769ee2516d418b25d5391d4c4239170e5aadfd9f30a92ce706549f1c`。
+
+### 已测静态成本，不是运行时余量
+
+固定034普通编译参数的隔离完整TU检查，普通/TEST布局相同：
+
+| 项目 | 034 → 035 |
+| --- | --- |
+| Frontend实例 | 576→640B，+64B：56B payload + 8B portMUX |
+| Capture固定帧 | 176→240B，+64B |
+| Fetch固定帧 | 112→368B，+256B |
+| gap / producer日志helper | 128B / 112B；非tail调用相叠，不能只看Fetch一帧 |
+
+已知Fetch入口32+Fetch368+gap128+producer112为640B应用帧叠加，仍不包含完整logger、
+ROM、port/RTOS链，更不是HWM或整栈最大值。快照临界区有固定56B memcpy；正常每个
+conversation read有6次Publish、每feed另4次，存在持续timer与临界区成本。未增加任务、
+调整优先级/核或使用64位atomic。正式包最终ELF已核对如下；实际水位与时序不能由静态帧推定。
+
+### 035制品与闭合设备观察
+
+两份主构建/包均使用本节源码和既有开发签名根；签名、不可变区、输入前后hash及
+最终ELF已独立核对。普通OFF包未包含TEST生命周期诊断入口，保留本节AFE观测。
+制品审核只证明包内容；实机来源仍以root的刷写/启动记录和对应闭合窗口关联。
+
+| 制品 | Main bytes / SHA256 | ELF SHA256 | 制品独审SHA256 |
+| --- | --- | --- | --- |
+| TEST `20261008-134654` | 7,160,688 / `c8e98083de8511939461aafb32178ba7bccc27e9f18cc7a75fb20adeb4a7d5a3` | `7a36d53ac4ca7ee67966c9498baa223a0ce8076a50ff33ecb8468cc4a595c5b4` | `5bae7ae01a2728a2732b9c2b2bf6d283114bef56a04037ecbefc8dbf69721bb9` |
+| 普通OFF `20261008-140725` | 7,154,016 / `8e8aacdd9a6c4c86e38ffdf45cf689fc98e1db1b8d99928ccac07523a3535f24` | `79061e6f20483cbe76e4ae5d7409aaf839b4337c3238ffbd6265468d0e9111e0` | `a4c9d642b179181301d343657fb83758b86a7ebf669bf7b42b354fe760cc9740` |
+
+最终两份ELF均确认Capture240B、Fetch368B、gap/producer helper128/112B；已知应用帧
+叠加640B仍排除完整logger/ROM/RTOS链。普通OFF相对034普通的`.bss`与heap起点增加64B；
+TEST相对034普通增加128B，后者是跨flavor比较。它们均不表示净空闲heap或实际HWM。
+
+| 独立wake窗口 | session / AFE generation | 首次完整输出 | 显式停止后到下一TX前的实际RX |
+| --- | --- | --- | --- |
+| TEST同boot未到期 | `27cfd426-c308-40e2-8d2e-2de8d8a89c10` / gen3 | 79ms / 1024B | 552.4325703s；至下一TX的边界间隔552.5384871s |
+| TEST自然到期后的新wake | `1934799f-8541-486e-b130-89dd0679b002` / gen7 | 85ms / 1024B | 84.9470201s；至下一TX的边界间隔86.2447437s |
+| 普通OFF独立wake | `2d869f75-9560-45bb-a036-df1d017495fc` / 本boot gen3 | 740ms / 1024B | 130.8833851s；Wake重启后实际RX130.2058565s |
+
+五组gap均发生在所属显式wake尝试的后续唯一WSS session ready之前，GUID用于尝试关联，
+不表示这些AFE行发生于已ready的WSS内。三个尝试分别正常显式stop，随后Wake重新启用；
+闭合会话窗口没有watchdog记录，不合并
+不同session。停止汇总的current failures、feed errors、resync、discard与uncertain均为0；
+末credit分别1472/960/768B，并不宣称停止时库存归零。普通OFF的完整冷窗口在首次命令前
+有75.1242935s实际RX。三个stop后窗口分别收到19/3/5条新遥测，OFF冷窗口另有3条。
+
+TTL600资格使用较晚的保守上界：初始enrollment发生在boot/capture缺口，
+`2026-10-08T06:02:50.816Z`的已在线快照之后，首实际RX至资格末RX为640.5252232s，
+无中间refresh/enrollment/reset标记，资格快照为空闲。这段凭据年龄下界包含首session，
+不是连续idle640秒，也不是同一WSS存活600秒。首stop至expiry-begin为552.5384871s，
+至expiry-wake为585.0383592s。新wake的AFE先输出，随后凭据刷新；enrollment完成在
+uptime703840ms，第三个gap在此之后、session ready之前。仅此次TEST新wake有自然到期
+资格，不将该结论移植给普通OFF窗口，也不假称测到了原token签发时刻。
+
+五个gap均为epoch0、scope=current，stall/producer/max及closed/producer/max配对完整，
+每个gap只有一次W并以同代完整fetch闭合recovered。下表全部耗时为微秒墙钟。
+
+| 窗口 / gen / gap | W时stage与关联序号 | wait → closed elapsed | consumer最大观察 / 最大取锁调用 | 本gap已完成API边界或证据限制 |
+| --- | --- | --- | --- | --- |
+| TEST未到期 / 3 / 1 running | api_boundary，seq5，age202594；feeds5/returns4 | 225235 → 241883 | 204102 / 8 | closed补齐seq5 API213131；return-to-publish最大14 |
+| TEST自然到期 / 7 / 1 running | api_boundary，seq4，age636167；feeds4/returns3 | 637036 → 668587 | 637024 / 5 | closed补齐seq4 API646182；return-to-publish最大14 |
+| TEST自然到期 / 7 / 2 running | api_boundary，seq6，age677955；feeds6/returns5 | 669168 → 699652 | 629032 / 224 | closed补齐seq6 API691280；该API可以早于首次不足credit观察 |
+| TEST自然到期 / 7 / 3 running | between_reads，read_seq1840，age329577；feeds12/returns12，feed_active0 | 425016 → 451725 | 333975 / 7 | epoch最大API691280仍属先前seq6，不能当作本gap的SDK调用；return-to-publish最大35属seq12 |
+| 普通OFF / 3 / 1 warmup | api_boundary，seq3，age634066；feeds3/returns2 | 678184 → 698849 | 624356 / 39996 | closed补齐seq3 API640988；return-to-publish最大13；首fetch735ms |
+
+四个API边界gap均同时出现较长消费者观察间隔；未到期与普通OFF也可复现，故不能只归因
+自然到期刷新。`between_reads`一项证明不同停滞不一定有进行中的feed。普通OFF的39996us
+是业务锁获取调用的墙钟，仍包含调度，不能直接等同互斥锁持有时间。上述数字不证明DSP、
+TLS或输入驱动为根因；保留所有W，不用一次完整fetch恢复宣布根因修复。
+
+两个采集窗口均已`portClosed=true`，无未完成TX/写错误/尾部残行；TEST为9条命令/9个
+匹配ok回复，普通OFF为5/5。未执行旧`voice_cycle`。会话捕获内TEST4W、OFF1W，无额外E；
+启动日志的TEST10W、OFF9W独立保留，不能以会话窗口无额外E掩盖boot告警。
+TEST raw为72,688B，SHA256 `4daa8aac7eff62b71b668d116e5842e50b32b12123ac4b521667279deff535b2`；普通OFF为26,310B，
+SHA256 `667fad6528bd450a0259ff70e7e349b0e4261ed930557e3412d3308d19168f5a`。完整采集存活时间不充当stop后的实际RX。
+
+普通OFF终态快照`2026-10-08T06:24:04.446Z`仍为原ID
+`c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、MAC`44:1b:f6:c3:b4:30`、bound、activated、
+tokenVersion4，MQTT=true、voice=false、sessions=[]；UI串口断开、屏幕同传停止，
+串口助手进程在稍后的`06:26:48.434Z`检查为owners=[]，不回填成设备快照时刻的结果。
+API事件是有限列表，不以单次快照证明全部历史或物理资源释放。
+
+闭合硬件独审为`PASS_LIMITED_CLOSED_WINDOWS_WITH_STALLS_NOT_RELEASE_ACCEPTANCE`，
+openBlockingFindings=[]；SHA256
+`aaf588c1046c667e6b118ffc13c2a6ace951592ac693490a1eb39324e8b35d6c`。
+TEST/OFF观测internal最小值分别4499/4743B；既有USB诊断worker的生命周期栈最小值分别
+为2460/2460/1308/1308B与2348/2348B，重复值为累计水位，不是独立测量，也不表示
+实际余量充足。两flavor属不同boot，不能相减为净收益。独审通过范围是闭合证据完整性，
+不是零stall、声学或物理资源验收。原件根`D:/workspace/rodak/.codex-temp/voice-stall-035/`。
+
+后续只在现有五个gap证据上规划有界的任务调度/中断/cache停顿与API内部等待观测，
+区分API执行前抢占、内部等待、返回后发布及两次read之间的producer推进；先定义成本和
+退出条件，不调整100ms、TTL600、优先级、核绑定或缓冲参数来消除日志。全PCM声学、
+实际heap/stack余量、完整物理资源、任意OOM、并发与长稳尚未关闭，资源/生产继续**NO_GO**。
