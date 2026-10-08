@@ -7,9 +7,8 @@ tests does not close physical power-loss or full heap-exhaustion gates.
 
 Decision updated 2026-10-09: release evidence is collected through local tests, firmware builds,
 package verification and the physical gates below without depending on hosted GitHub Actions.
-Do not wait for or rerun hosted checks or pursue billing, quota or required-check setup. Low-risk
-workflow configuration may be repaired and checked locally, but a hosted result is not a release
-gate. Preserve existing CI outcomes with their original candidates as history, including failures.
+Do not run or repair Actions, including static workflow changes, billing, quota or required-check
+setup. Preserve existing CI outcomes with their original candidates as history, including failures.
 Missing or unavailable Actions do not make the release NO_GO; the unresolved software,
 production-root, power-loss, resource and soak gates retain their existing acceptance criteria.
 
@@ -3074,5 +3073,9 @@ free board-manager handle，使失败状态可能留下悬空句柄，下一次�
 随后 `4e08efa` 让 `CameraDevice::Release()` 返回失败并保留 `release_retry_required_`，
 由下一次 `Acquire()` 先重试释放再重新初始化；`51927b0` 让 `CloseStream()` 仅在释放成功时
 记录 complete，失败时明确记录 deferred-for-retry；capture fake 已同步错误返回接口。当前 10 项 host source-contract 回归全部通过。
+后续完整调用链审查发现外层 `dev_camera_deinit()` 仍吞掉 subtype 错误，因此以上分层变更
+还不能使上层真实进入失败重试；SDK 原顺序还可能在 sensor 释放后因 VFS 注销分配失败而
+保留悬空指针。下一候选须补齐外层传播、逐阶段 SDK 清理和对应编译负控后再验收，不能把
+此前字符串检查或 Camera capture fake 通过写成完整释放链通过。
 当前 COM3 运行的旧包未包含这些修复，必须重新构建、核验并在新的设备窗口复验 Camera 重复
 启动/关闭；本条观察保持资源/生产 **NO_GO**。

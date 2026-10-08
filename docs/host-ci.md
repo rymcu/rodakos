@@ -1,7 +1,7 @@
 # RodakOS 主机测试 CI
 
-2026-10-09 更新：后续交付不依赖 hosted GitHub Actions，也不等待或重跑 Actions，或处理其
-账单、额度与 required checks。工作流可以做低风险静态修复并在本地做语法检查；本文带日期
+2026-10-09 更新：后续交付不依赖、运行或修复 GitHub Actions，包括 workflow 静态修改、
+账单、额度与 required checks；本文带日期
 的失败、修复和成功记录只属于各自历史候选。当前软件验收继续使用下述本地 runner、语法
 检查及源码/日志核验，Actions 缺失或不可用不构成交付阻塞，实际测试失败和硬件门禁继续独立处理。
 
