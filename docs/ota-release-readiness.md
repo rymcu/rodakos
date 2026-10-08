@@ -2959,6 +2959,10 @@ MQTT 在线、语音连接关闭，普通 OFF boot confirmation 成功。
 窗口内无 reset、panic、watchdog、内存失败或 transport failure；stop 后出现
 `Interaction stopped`、Voice websocket cleanup 完成和 wake monitoring rearm。原始串口与
 工具摘要保存在 `D:/workspace/rodakos/.codex-temp/voice-six-turn-20261009/`。
+`serial.log` SHA-256 为 `01222b60275392fb3f6708f7b4e3637d6bf4f35ec0d01476d8d23d88801cebd6`，
+`serial.summary.json` SHA-256 为 `d756e4a0d8cbdeb212e6bf85543225b63fc3be091903aad3baef1f2103e052e5`；
+本地 IPC 事件快照 `server-events-cdp.json` SHA-256 为
+`9f5977c4f9023e2b270a7894ae4734c07d5f69e28c8a6549072feee2234fa1e6`。
 
 通过本地 Electron 的 `window.api.server.listEvents(4000)` 复核同一时间窗，得到一次
 `session.open` 响应、一次 `wake.detected`、六次 `input.start`、最终 `input.stop`、两条
