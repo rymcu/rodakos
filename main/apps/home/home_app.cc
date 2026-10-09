@@ -46,6 +46,19 @@ constexpr int kBatteryRefreshTicks = 30;
 const std::vector<rodakos::HomeAppIdMigration> kHomeAppIdMigrations;
 rodakos::HomePageSession g_home_page_session;
 
+void LogHomeResources(const char* phase) {
+    ESP_LOGI(TAG,
+             "Home resources: phase=%s internal_free=%u internal_largest=%u "
+             "dma_free=%u dma_largest=%u",
+             phase,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)));
+}
+
 const char* LayoutSaveFailureText(rodakos::HomeLayoutSaveStatus status) {
     switch (status) {
         case rodakos::HomeLayoutSaveStatus::kConflict:
@@ -398,6 +411,7 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     }
     page_tiles_.clear();
     ESP_LOGI(TAG, "Layout containers created");
+    LogHomeResources("containers");
 
     // ===== HEADER 区域：手机状态栏 =====
     lv_obj_set_style_pad_left(header, 14, 0);
@@ -434,6 +448,7 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     lv_label_set_text(battery_label_, "--%");
     lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
     lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
+    LogHomeResources("status-bar");
 
     // ===== BODY 区域 =====
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
@@ -485,6 +500,7 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
             initial_tile = tile;
         }
     }
+    LogHomeResources("tile-shells");
 
     if (initial_tile == nullptr && !page_tiles_.empty()) {
         initial_tile = page_tiles_.front();
@@ -533,6 +549,7 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
 
     UpdateClock();
     clock_timer_ = lv_timer_create(ClockTimerCallback, 1000, this);
+    LogHomeResources("footer-timer");
 
     if (collection_state_.kind == CollectionKind::kFolder) {
         OpenFolder(collection_state_.folder_id);
@@ -705,6 +722,9 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
     ESP_LOGI(TAG, "Rendered Home page %u with %u slot(s)",
              static_cast<unsigned>(page_index + 1),
              static_cast<unsigned>(last_item - first_item));
+    char phase[24];
+    std::snprintf(phase, sizeof(phase), "page-%u", static_cast<unsigned>(page_index + 1));
+    LogHomeResources(phase);
     return true;
 }
 
