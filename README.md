@@ -7,12 +7,16 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-Camera candidates 048–050 now release Camera UI/timers/pixels, DVP preview and audio focus before
-Home creation, with failed replacement rebuilding Camera and restarting preview. COM3 snapshots
-retain a 16,384-byte largest internal/DMA block after every Camera release phase; Home reconstruction
-then reduces it to 6,144 bytes. Camera/DVP release is closed at this boundary, while resource and
-production remain **NO_GO** on Home reconstruction, Voice stack margin, physical image, arbitrary
-OOM and qualification soak. See the [048–050 evidence](docs/ota-release-readiness.md#2026-10-09-camera-切换前释放与-home-重建边界-048050).
+Camera candidates 048–050 release Camera UI/timers/pixels, DVP preview and audio focus before
+Home creation. Candidates 051–055 then reduced the first Home page's internal allocation from about
+14.8 KiB to about 6.2 KiB, but Camera runtime fragmentation still left only a 7,680-byte block before
+Home reconstruction. Candidate 056 reserves an 8,192-byte internal/DMA block while Camera is active
+and releases it after preview shutdown. Its COM3 Camera → Home window retained an 8,192-byte largest
+internal/DMA block through Home ready and the 65-second MQTT/Main/Voice health window, with a normal
+6,144-byte DVP ring, software first frame, all close stages and no Camera/DVP errors. The short-window
+continuous-block gate now passes, while production remains **NO_GO** on the 2,384-byte Voice
+supervisor stack margin, physical image, arbitrary OOM/concurrency and qualification soak. See the
+[051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056).
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

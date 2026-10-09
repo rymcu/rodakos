@@ -66,11 +66,22 @@ MQTT connectivity; the workspace switch is OFF and the ordinary image contains n
 
 Candidates 048–050 (`d988c95`, `686d9bb`, `d0ce53b`) move Camera pause ahead of candidate
 `OnCreate`, release Camera UI/timers/pixels, stop DVP and release audio focus before Home creation,
-and restore Camera on replacement rollback. COM3 snapshots show the largest internal/DMA block is
-16,384 bytes after each Camera release phase, then falls to 6,144 bytes during Home reconstruction.
-The remaining short-window headroom failure is now owned by Home reconstruction/allocation behavior,
-not an unclosed Camera/DVP resource. Resource and production remain **NO_GO**; no qualification soak
-has started.
+and restore Camera on replacement rollback. Candidate 051 (`ba58fe4`) localized the first largest-
+block drop to Home page 1. Candidates 052–055 (`fd975c6`, `1d20a4b`, `65de5bc`, `9312e1e`) merged
+tile callbacks, moved tile payloads to PSRAM and removed redundant tile objects, reducing first-page
+internal allocation from about 14.8 KiB to about 6.2 KiB. Camera runtime layout still reduced the
+pre-Home largest block to 7,680 bytes.
+
+Candidate 056 (`e754869`, package `20261009-230114`, task `camera-home-reserve-056`) reserves the
+largest available 12,288/10,240/8,192-byte internal/DMA block before Camera starts and releases it
+after preview shutdown. COM3 selected the 8,192-byte reserve and a normal 6,144-byte DVP ring,
+produced a software first frame, completed all six close stages and retained an 8,192-byte largest
+internal/DMA block through every Home reconstruction phase and the 65-second MQTT/Main/Voice health
+window. `E:RX`, overflow, DQBUF, panic and abort counts were zero; heap median drop was zero. This
+closes the current short-window continuous-block gate. Resource and production remain **NO_GO**
+because Voice supervisor stack headroom is still 2,384 bytes and physical image, arbitrary OOM,
+mixed media/network/audio concurrency and qualification soak remain open. No new eight-hour run has
+started.
 
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.

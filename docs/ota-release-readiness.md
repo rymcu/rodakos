@@ -3311,6 +3311,61 @@ Home 重建的 LVGL/内部堆分配与碎片化，不启动八小时资格长稳
 `.codex-temp/camera-pause-resource-050/`；050 首启日志为
 `build/logs/first-boot-20261009-215216.log`。
 
+## 2026-10-09 Home 重建与返回连续内存 051–056
+
+051 源码 `ba58fe4` 在 Home 重建的 containers、status-bar、tile-shells、page-N 和
+footer-timer 阶段记录 internal/DMA 快照，确认 Camera 释放后的 16 KiB 连续块首次在 page-1
+降到 6,144 B。052–055 继续缩减首屏磁贴分配：`fd975c6` 把每个磁贴的 7 个事件描述符合并为
+一个 `LV_EVENT_ALL` 回调；`1d20a4b` 将 `TilePayload` 优先放入 PSRAM；`65de5bc` 合并普通
+应用图标背景与图标标签；`9312e1e` 改为在按钮 draw 事件中直接绘制图标。冷启动 page-1 的
+内部占用由约 14.8 KiB 降至约 6.2 KiB，055 冷启动 Home ready 最大连续块为 59,392 B。
+
+Camera 运行仍会改变内部堆布局。055 的 Camera 释放后最大连续块只有 7,680 B，Home page-2
+后降为 6,912 B，footer 后为 6,400 B，健康期最低为 6,144 B。056 源码 `e754869` 因此在
+旧 Home 销毁后、DVP 启动前依次尝试保留 12,288、10,240、8,192 B 的 internal/DMA 连续块；
+Camera 启动失败、preview timer 创建失败、暂停和销毁路径均幂等释放。Camera UI 生命周期
+回归新增对运行期保留、暂停释放和回滚重建的直接检查，Debug 与 ASan/UBSan 均通过；普通
+OFF ESP-IDF 6.0.2 构建、Camera teardown ELF 与 JPEG allocator 最终审计通过。
+
+六份开发签名普通包均复用 046 的 immutable Recovery `20261009-202156`，先通过 COM3
+VerifyOnly，再保留 NVS 只写 `otadata + ota_0`，未使用 `-Erase`：
+
+| 候选 | 包 / task | 主镜像 SHA-256 |
+| --- | --- | --- |
+| 051 | `20261009-221637` / `home-resource-diagnostic-051` | `bcf230c6f58d29d8e03fd3ab87c442e4ccd62e6b5e9ea16b9d6b9ec5a37a4c05` |
+| 052 | `20261009-222502` / `home-tile-events-052` | `4ab667813ec34f766902dabf002b29bdf84417248468c604db3bbad937fe2b62` |
+| 053 | `20261009-223447` / `home-tile-payload-053` | `e772b435ec4c6bfec58564b74d70703f97d8db78cc69a5c8b67d949ff39c8bfb` |
+| 054 | `20261009-224209` / `home-tile-objects-054` | `d14b703b57e056cdec745a6bcd8c92fad6ca040f9c3f63267f5331c3decba308` |
+| 055 | `20261009-224924` / `home-tile-draw-055` | `bad3e486ad5725db5d1ee1d10d101f09dbc819e1d54cfc9481779fc8dd799e2f` |
+| 056 | `20261009-230114` / `camera-home-reserve-056` | `8f424317df2fd168fb158583b3a90748d2dae798478dcdb17352ea6e6701cb88` |
+
+056 manifest SHA-256 为
+`732b3dac50cf10fdb4cfb9778e38491c4325f2816c9995162ffb2e78ae9445f4`，合并镜像 SHA-256
+为 `db407dac5ff3812730b911a158b49d4d9b5ec0b9f36f4ceb9a86c065956b8f3f`，ZIP SHA-256 为
+`f0aa60184a9ece1e7bb8027ce8ebb8bf319a3beb77c6983f47211b0c8c01fd5c`。Recovery → Main →
+OTA confirmation → Home 通过，设备 MAC 为 `44:1b:f6:c3:b4:30`。本轮未做主镜像 readback，
+也未重新取得服务器侧绑定快照，因此不把包上下文或既有 NVS 保留扩大为安装镜像/绑定复核。
+
+056 的单串口 Camera → Home 窗口实际选择 8,192 B reserve 和普通 6,144 B DVP ring，在
+67 ms 取得 Camera 首帧并提交软件预览，随后完整记录六个关闭阶段。关键阶段为：
+
+| 阶段 | internal free / largest | DMA free / largest |
+| --- | --- | --- |
+| Camera UI 已释放 | 20,651 / 5,632 B | 14,139 / 3,712 B |
+| DVP preview 已停止 | 28,035 / 7,680 B | 21,523 / 7,680 B |
+| 8,192 B reserve 已释放 | 36,231 / 8,192 B | 29,719 / 8,192 B |
+| Home page-1 | 27,383 / 8,192 B | 20,871 / 8,192 B |
+| Home page-2 | 26,203 / 8,192 B | 20,095 / 8,192 B |
+| Home footer / ready | 26,031 / 8,192 B | 19,519 / 8,192 B |
+
+后续 65.016 秒窗口取得 3 个 MQTT、2 个 Main 和 1 个 Voice 新鲜健康样本，internal/DMA
+largest 最低均为 8,192 B，heap median drop 为 0；`E:RX`、overflow、DQBUF、panic、abort
+均为 0。当前短窗口连续块门禁通过，但资源与生产仍为 **NO_GO**：Voice supervisor 最低剩余
+栈仍为 2,384 B，内部历史最低为 3,395 B，物理画质、任意 OOM、异常媒体/网络/音频并发和
+长期稳定性未证明，因此不启动八小时资格长稳。证据位于
+`.codex-temp/camera-home-reserve-056/`，首启日志为
+`build/logs/first-boot-20261009-230150.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录
