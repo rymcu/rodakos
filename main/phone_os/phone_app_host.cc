@@ -123,22 +123,45 @@ bool PhoneAppHost::CreateAndReplace(const PhoneAppDescriptor& descriptor,
         return false;
     }
 
+    const bool paused_current = current_ != nullptr;
+    if (paused_current) {
+        try {
+            current_->OnPause();
+        } catch (...) {
+            ESP_LOGE(TAG, "App pause threw before replacement");
+            std::abort();
+        }
+    }
+
+    const auto resume_current = [&]() {
+        if (!paused_current) return;
+        try {
+            current_->OnResume();
+        } catch (...) {
+            ESP_LOGE(TAG, "App resume threw after replacement rollback");
+            std::abort();
+        }
+        context.ui().ResetInputState();
+    };
+
     bool created = false;
     try {
         created = next->OnCreate(context);
     } catch (...) {
         DestroyApp(*next);
+        resume_current();
         ESP_LOGE(TAG, "App creation threw: %s", descriptor.id.c_str());
         return false;
     }
     if (!created) {
         DestroyApp(*next);
+        resume_current();
         ESP_LOGE(TAG, "App %s OnCreate failed; keeping current app", descriptor.id.c_str());
         return false;
     }
 
     context.ui().ResetInputState();
-    DestroyCurrent();
+    DestroyCurrent(false);
     current_ = std::move(next);
     current_app_id_ = std::move(next_app_id);
     current_capabilities_ = descriptor.capabilities;
@@ -166,7 +189,7 @@ void PhoneAppHost::CloseCurrent() {
     DestroyCurrent();
 }
 
-void PhoneAppHost::DestroyCurrent() {
+void PhoneAppHost::DestroyCurrent(bool pause_current) {
     if (!current_) {
         current_app_id_.clear();
         current_capabilities_ = PhoneCapability::kNone;
@@ -174,11 +197,13 @@ void PhoneAppHost::DestroyCurrent() {
         return;
     }
     ESP_LOGI(TAG, "Closing app: %s", current_app_id_.c_str());
-    try {
-        current_->OnPause();
-    } catch (...) {
-        ESP_LOGE(TAG, "App pause threw during teardown");
-        std::abort();
+    if (pause_current) {
+        try {
+            current_->OnPause();
+        } catch (...) {
+            ESP_LOGE(TAG, "App pause threw during teardown");
+            std::abort();
+        }
     }
     DestroyApp(*current_);
     current_.reset();

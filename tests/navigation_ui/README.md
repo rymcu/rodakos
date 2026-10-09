@@ -4,17 +4,19 @@
 `PhoneAppHost`、`CameraApp`、`PhoneUi` 及相关 UI 组件，并链接仓库锁定的真实 LVGL。
 相机设备、音频焦点、Shell 行为、Home 内容和设备字体为 fixture；不连接硬件或串口。
 
-030 当前 12 项用例在 Debug 与 ASan/UBSan/leak 下通过：
+048 当前 13 项用例在 Debug 与 ASan/UBSan/leak 下通过：
 
 - Camera Start 持有外层 UI 锁时，旧式 1000 ms 加锁准入会被拒绝，新队列仍保留 Home；
   Camera Stop 尚未完成时，后续 Home 可独立准入，完成回调等实际退出后才执行。
 - 真实 LVGL display flush 事件被阻塞时，串口请求可入队，释放事件后再执行。
 - 四个 pending 槽满后不覆盖旧请求；空、未知、过长、内含 NUL 的 ID 均不产生后续执行。
 - 实际 Camera Back/Home 事件、重复 Home、快速 Camera/Home 切换，最终对象和 timer 数恢复
-  基线；队满拒绝显示“返回桌面失败，请重试”，后续新点击可恢复。
+  基线；切换时 Camera 在 Home `OnCreate` 前暂停 timer、停止预览并释放音频焦点，销毁阶段仍
+  执行幂等停止以保留待重试释放；队满拒绝显示“返回桌面失败，请重试”，后续新点击可恢复。
 - 关闭队列逐一取消待执行请求，禁止新准入；完成回调可重入 Close，不重复执行或取消。
 - factory 和部分 `OnCreate` 抛异常后，失败完成、transition RAII 恢复、旧 app 保持；部分
-  UI/timer 清理后没有遗留 tick。completion 抛异常不会阻断后续 dispatch 或 Close 取消。
+  UI/timer 清理后没有遗留 tick。旧 Camera 在候选 `OnCreate` 失败后恢复预览；completion 抛
+  异常不会阻断后续 dispatch 或 Close 取消。
 - 3 个子进程分别进入旧 app teardown 失败、部分创建的 teardown 失败、未知 dispatch 异常；
   必须先观察指定 `T` marker，再以 SIGABRT 结束。任意崩溃或正常继续均不算通过。
 
@@ -40,9 +42,9 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
   ctest --test-dir "$HOME/.cache/rodakos-navigation-ui-asan" --output-on-failure -V
 ```
 
-最终异常边界记录为 Rodak `.codex-temp/task-retirement-030/navigation-debug-test-6.log` 和
-`navigation-asan-test-4.log`；此前 11 项版本和早先失败继续保留。一个 CTest 内执行 12 项用例，
-其中一项运行 3 个预期中止子进程，不是 12 个 CTest 或 3 次普通成功退出。
+048 本地构建目录为 `~/.cache/rodakos-navigation-ui-048-debug` 与
+`~/.cache/rodakos-navigation-ui-048-asan`。一个 CTest 内执行 13 项用例，其中一项运行
+3 个预期中止子进程，不是 13 个 CTest 或 3 次普通成功退出；030 的旧封存记录保持原身份。
 
 只有 factory/预分配，以及部分 `OnCreate` 成功清理后的失败才可恢复。未知生命周期异常或
 teardown 失败必须中止；completion 通知异常仍隔离且不重试。测试不把任意异常一律解释为可恢复。

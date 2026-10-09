@@ -202,6 +202,88 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
+void CameraApp::OnResume() {
+    if (!preview_paused_for_transition_) {
+        return;
+    }
+    preview_paused_for_transition_ = false;
+
+    if (preview_start_timer_ != nullptr) {
+        if (ui_ != nullptr) {
+            PhoneUiLock lock(*ui_, 0);
+            if (lock.locked()) {
+                lv_timer_resume(preview_start_timer_);
+            }
+        }
+        return;
+    }
+    if (preview_timer_ == nullptr) {
+        return;
+    }
+
+    RequestAudioResources();
+    if (camera_ == nullptr || !camera_->StartPreview()) {
+        const std::string error = camera_ != nullptr
+                                      ? camera_->last_error()
+                                      : "Camera service is not available";
+        if (ui_ != nullptr) {
+            PhoneUiLock lock(*ui_, 0);
+            if (lock.locked()) {
+                UpdateStatus(error.c_str(), true);
+                if (placeholder_label_ != nullptr) {
+                    lv_obj_clear_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
+                    lv_label_set_text(placeholder_label_, "Camera unavailable");
+                }
+            }
+        }
+        ReleaseAudioResources();
+        return;
+    }
+
+    if (ui_ != nullptr) {
+        PhoneUiLock lock(*ui_, 0);
+        if (lock.locked()) {
+            UpdateStatus("Waiting for preview...");
+            lv_timer_resume(preview_timer_);
+        }
+    }
+}
+
+void CameraApp::OnPause() {
+    bool preview_active = false;
+    if (ui_ != nullptr) {
+        PhoneUiLock lock(*ui_, 0);
+        if (lock.locked()) {
+            if (preview_start_timer_ != nullptr) {
+                lv_timer_pause(preview_start_timer_);
+                preview_active = true;
+            }
+            if (preview_timer_ != nullptr) {
+                lv_timer_pause(preview_timer_);
+                preview_active = true;
+            }
+            if (preview_active) {
+                preview_ready_ = false;
+                displayed_sequence_ = 0;
+                if (capture_button_ != nullptr) {
+                    lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
+                }
+                if (placeholder_label_ != nullptr) {
+                    lv_obj_clear_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
+                    lv_label_set_text(placeholder_label_, "Waiting for preview...");
+                }
+                UpdateStatus("Pausing camera...");
+            }
+        }
+    }
+    if (camera_ != nullptr && camera_->GetState().preview_running) {
+        preview_active = true;
+        camera_->StopPreview();
+    }
+    preview_paused_for_transition_ = preview_active;
+    ReleaseAudioResources();
+}
+
 void CameraApp::OnDestroy() {
     ESP_LOGI(TAG, "Destroy: capture guard begin");
     if (capture_guard_) {
@@ -255,6 +337,7 @@ void CameraApp::OnDestroy() {
     preview_pixels_.clear();
     displayed_sequence_ = 0;
     preview_ready_ = false;
+    preview_paused_for_transition_ = false;
     capture_guard_.reset();
     camera_ = nullptr;
     audio_focus_ = nullptr;

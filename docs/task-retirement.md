@@ -1,8 +1,13 @@
 # 030 视频任务回收与延后导航合同
 
-更新：2026-10-08。030 源码 `34c9e645` 已完成制品独审，并以包 `20261008-055334` 保 NVS 部署；
+更新：2026-10-09。030 源码 `34c9e645` 已完成制品独审，并以包 `20261008-055334` 保 NVS 部署；
 有限正常视频、四格启停顺序与远程 pointer Home 证据见下文。028 的 Home `queued:false`、
 027 的停顿及资源、并发、质量和长稳门禁继续保留，不追溯改写历史结果。
+
+048 在该导航合同上补充应用替换顺序：候选 app 的 factory 成功后，宿主先暂停当前 app，
+再调用候选 `OnCreate`；候选创建失败时恢复当前 app，创建成功后才销毁已暂停的旧 app。
+Camera 的暂停会等待 LVGL 所有权、暂停 preview timer、停止预览并释放音频焦点；销毁阶段仍保留
+一次幂等停止，供底层待重试释放继续收敛。此源码与软件验证不替代 048 实机资源门禁。
 
 后续 [031 语音回收](voice-task-retirement.md) 已在本地源码中迁移三个语音任务并完成软件与
 构建验证，尚未构包部署。本页的 030 软件计数、五条视频范围和有限设备证据保持原身份。
@@ -87,6 +92,12 @@ timer 在 LVGL 线程每次至多执行一个请求；当前事件/生命周期�
 Camera 的 Back/Home 按钮使用同一个预建入口。拒绝时显示“返回桌面失败，请重试”，后续点击是
 一次新请求。其他应用和其他 `lv_async_call` 路径没有在本次批量迁移。
 
+应用替换不再先创建新页面再暂停旧页面。候选 factory 仍在暂停前运行；factory 失败或返回空对象
+不会扰动当前 app。factory 成功后，当前 app 的 `OnPause` 必须完成，候选 `OnCreate` 才开始。
+候选创建失败且清理成功时，宿主调用旧 app 的 `OnResume` 并重置输入状态；候选创建成功时，
+旧 app 不重复暂停，直接销毁后再恢复新 app。Camera 因此在 Home `OnCreate` 前停止预览；若候选
+创建失败，原 preview timer 或 Camera preview 会恢复。未知 pause/resume/teardown 异常仍中止。
+
 串口仍区分 `RODAK_APP_LAUNCH_RESULT {"queued":true}` 与稍后的
 `RODAK_APP_LAUNCH_COMPLETE {"ok":...}`。准入不代表已进入 Home，也没有 30 ms 完成期限：
 LVGL 正在绘制、Camera Start/Stop、前序请求或其他生命周期工作都可能延后执行。
@@ -111,7 +122,7 @@ dispatch 异常或 teardown 清理失败则中止，避免把可能悬挂的 tim
 | [Camera 服务](../tests/camera_capture/README.md) | Debug、Release、ASan/UBSan/leak 各 7 CTest，含 45 项 Camera 用例 | 两条旧源码退出红例；创建失败丢失前代票据的负控；设备/编码器仍为替身 |
 | [Display 服务](../tests/display_service/README.md) | Debug 与 ASan/UBSan/leak：33 项正向、2 个退役负控 | 完整生产 TU；旧完整源/头另行命中预期 IDF cleanup 分配失败 |
 | [两种 peer/ACK](../tests/display_control_ack_service/README.md) | Debug 与 ASan/UBSan/leak：61 项正向、既有 5+4 个负控、新增 4 个退役负控 | 真实服务与 SDK 头；传输替身；两份旧完整源/头各有独立红例 |
-| [真实 LVGL 导航](../tests/navigation_ui/README.md) | Debug 与 ASan/UBSan/leak 各 12 项通过 | 实际 System/Navigation/Registry/Host/CameraApp/PhoneUi；含 3 个指定 marker + SIGABRT 的子进程负控 |
+| [真实 LVGL 导航](../tests/navigation_ui/README.md) | Debug 与 ASan/UBSan/leak 各 13 项通过 | 实际 System/Navigation/Registry/Host/CameraApp/PhoneUi；覆盖旧 app 先暂停、候选失败恢复及 3 个指定 marker + SIGABRT 的子进程负控 |
 | [Camera UI](../tests/camera_ui/README.md)、app-model | Camera UI Debug 与 ASan/UBSan/leak 各 13 项；app-model Debug 278 项通过 | 与新导航专用目标、设备验证分别记账 |
 
 主机删除替身在真实 IDF 外部删除路径检查核收敛，并实际 join worker 后才允许取出和释放其

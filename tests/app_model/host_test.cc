@@ -46,14 +46,14 @@ RODAK_TEST("host switches apps in transactional lifecycle order") {
 
     CheckEvents(
         *trace,
-        {"second.create", "first.pause", "first.destroy", "second.resume"});
+        {"first.pause", "second.create", "first.destroy", "second.resume"});
     RODAK_CHECK_EQ(first->pause_calls, 1);
     RODAK_CHECK_EQ(first->destroy_calls, 1);
     RODAK_CHECK_EQ(second->resume_calls, 1);
     RODAK_CHECK_EQ(fixture.host.current_app_id(), std::string("second"));
 }
 
-RODAK_TEST("host preserves current app when candidate creation fails") {
+RODAK_TEST("host resumes current app when candidate creation fails") {
     HostFixture fixture;
     auto trace = std::make_shared<EventTrace>();
     auto current = std::make_shared<AppProbe>("current", trace);
@@ -67,12 +67,15 @@ RODAK_TEST("host preserves current app when candidate creation fails") {
     const int reset_count = fixture.ui.input_reset_count();
     RODAK_CHECK_FALSE(fixture.host.Launch(failed_descriptor, fixture.context));
 
-    CheckEvents(*trace, {"failed.create", "failed.destroy"});
-    RODAK_CHECK_EQ(current->pause_calls, 0);
+    CheckEvents(
+        *trace,
+        {"current.pause", "failed.create", "failed.destroy", "current.resume"});
+    RODAK_CHECK_EQ(current->pause_calls, 1);
+    RODAK_CHECK_EQ(current->resume_calls, 2);
     RODAK_CHECK_EQ(current->destroy_calls, 0);
     RODAK_CHECK_EQ(failed->resume_calls, 0);
     RODAK_CHECK_EQ(failed->destroy_calls, 1);
-    RODAK_CHECK_EQ(fixture.ui.input_reset_count(), reset_count);
+    RODAK_CHECK_EQ(fixture.ui.input_reset_count(), reset_count + 1);
     RODAK_CHECK_EQ(fixture.host.current_app_id(), std::string("current"));
 }
 
@@ -125,7 +128,7 @@ RODAK_TEST("host rejects reentrant launch and clears transition guard") {
     RODAK_CHECK(fixture.host.Launch(nested_descriptor, fixture.context));
     CheckEvents(
         *trace,
-        {"nested.create", "outer.pause", "outer.destroy", "nested.resume"});
+        {"outer.pause", "nested.create", "outer.destroy", "nested.resume"});
 }
 
 RODAK_TEST("host refreshes a supported theme without recreating app") {
@@ -163,7 +166,7 @@ RODAK_TEST("host force recreate does not repeat rejected theme callback") {
 
     CheckEvents(
         *trace,
-        {"theme.theme", "theme.create", "theme.pause", "theme.destroy", "theme.resume"});
+        {"theme.theme", "theme.pause", "theme.create", "theme.destroy", "theme.resume"});
     RODAK_CHECK_EQ(probe->theme_calls, 1);
     RODAK_CHECK_EQ(probe->factory_calls, 2);
     RODAK_CHECK_EQ(probe->pause_calls, 1);

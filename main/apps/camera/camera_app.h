@@ -21,8 +21,8 @@ struct CameraCaptureGuard;
 class CameraApp : public PhoneApp {
 public:
     bool OnCreate(PhoneAppContext& context) override;
-    void OnResume() override {}
-    void OnPause() override {}
+    void OnResume() override;
+    void OnPause() override;
     void OnDestroy() override;
 
     void CapturePhoto();
@@ -62,6 +62,7 @@ private:
     std::vector<uint8_t> preview_pixels_;
     uint32_t displayed_sequence_ = 0;
     bool preview_ready_ = false;
+    bool preview_paused_for_transition_ = false;
     std::shared_ptr<CameraCaptureGuard> capture_guard_;
 };
 

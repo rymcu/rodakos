@@ -35,6 +35,8 @@ int home_requests = 0;
 int partial_cleanups = 0;
 int stale_partial_ticks = 0;
 int teardown_pipe = -1;
+rodakos::CameraService* active_camera = nullptr;
+bool home_created_while_camera_running = false;
 class TeardownFailure : public PhoneApp {
 public:
     explicit TeardownFailure(bool fail_create) : fail_create_(fail_create) {}
@@ -72,7 +74,10 @@ private:
 };
 class HomeFixture : public PhoneApp {
 public:
-    bool OnCreate(PhoneAppContext&) override { return true; }
+    bool OnCreate(PhoneAppContext&) override {
+        home_created_while_camera_running = active_camera != nullptr && active_camera->running;
+        return true;
+    }
     void OnResume() override {}
     void OnPause() override {}
     void OnDestroy() override {}
@@ -108,6 +113,8 @@ struct Fixture {
     uint32_t home_children = 0;
     Fixture() {
         home_requests = 0;
+        home_created_while_camera_running = false;
+        active_camera = &camera;
         camera_test::fail_next_ui_lock = false;
         services.SetCamera(&camera);
         services.SetAudioFocus(&focus);
@@ -125,6 +132,7 @@ struct Fixture {
         Pump(2000);
         lv_obj_clean(lv_screen_active());
         lv_obj_clean(lv_layer_top());
+        active_camera = nullptr;
     }
     PhoneNavigation& navigation() { return system->navigation(); }
     bool Enqueue(const char* id, Completion& result) {
@@ -141,6 +149,7 @@ struct Fixture {
     void CheckHome() {
         RODAK_CHECK_EQ(system->GetAppHostState().current_app_id, "home");
         RODAK_CHECK_FALSE(camera.running);
+        RODAK_CHECK_FALSE(home_created_while_camera_running);
         RODAK_CHECK_EQ(lv_obj_get_child_count(lv_screen_active()), home_children);
         RODAK_CHECK_EQ(TimerCount(), home_timers);
     }
@@ -153,6 +162,22 @@ struct Fixture {
         lv_obj_send_event(lv_obj_get_child(header, index), LV_EVENT_CLICKED, nullptr);
     }
 };
+}
+
+RODAK_TEST("failed replacement resumes a Camera preview paused before OnCreate") {
+    Fixture f;
+    f.LaunchCamera();
+
+    Completion failed;
+    RODAK_CHECK(f.Enqueue("create-error", failed));
+    Pump(500);
+
+    RODAK_CHECK_EQ(failed.calls, 1);
+    RODAK_CHECK_FALSE(failed.ok);
+    RODAK_CHECK_EQ(f.system->GetAppHostState().current_app_id, "camera");
+    RODAK_CHECK(f.camera.running);
+    RODAK_CHECK_EQ(f.camera.starts, 2);
+    RODAK_CHECK_EQ(f.camera.stops, 1);
 }
 
 void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
@@ -208,7 +233,7 @@ RODAK_TEST("serial Home is retained while Camera start holds the outer LVGL lock
     Pump(500);
     RODAK_CHECK_EQ(home.calls, 1);
     RODAK_CHECK(home.ok);
-    RODAK_CHECK_EQ(f.camera.stops, 1);
+    RODAK_CHECK_EQ(f.camera.stops, 2);
     f.CheckHome();
 }
 

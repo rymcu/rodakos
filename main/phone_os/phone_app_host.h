@@ -31,7 +31,7 @@ public:
 private:
     bool RefreshThemeIfNeeded(PhoneApp& app, PhoneAppContext& context, uint32_t& app_theme_revision);
     bool CreateAndReplace(const PhoneAppDescriptor& descriptor, PhoneAppContext& context);
-    void DestroyCurrent();
+    void DestroyCurrent(bool pause_current = true);
 
     std::unique_ptr<PhoneApp> current_;
     std::string current_app_id_;
