@@ -3404,6 +3404,57 @@ cache-off/NVS/OTA 并发恢复、生产签名/readback/power-cut 和长期稳定
 `349a39e38fc9804695825043f8df5559457433cde6c1cfa58bfc3b2678b3407e`，首启日志为
 `build/logs/first-boot-20261009-232019.log`。
 
+## 2026-10-10 Camera STREAMON 失败清理 058
+
+057 在 Display 同传占用内部/DMA 连续内存时实际触发 `VIDIOC_STREAMON` 内部的 DVP ring
+分配失败。驱动未进入流状态，但旧 `CameraService::CloseStream()` 仍调用 `VIDIOC_STREAMOFF`；
+该调用返回 `EBUSY` 后，现有安全边界会保留 fd、mmap 与 Board Manager ownership，后续 Camera
+因此持续报告 cleanup pending。源码 `9babfae` 新增独立的 `stream_started_` 状态，只在
+STREAMON 成功后执行 STREAMOFF；启动前或 STREAMON 内失败直接释放 mappings、fd 和设备。
+真实流启动后 STREAMOFF 失败仍保留全部 ownership 等待重试，没有削弱原有保护。
+
+Camera host 目标直接编译完整生产 `camera_service.cc`。新增用例让 open/mmap/QBUF 成功、
+STREAMON 以 `ENOMEM` 失败，同时预置 STREAMOFF 为 `EBUSY`，断言 STREAMOFF 调用数为 0、
+映射归零，并在恢复后允许第二次 Start/Stop。Camera 可执行文件现为 **46/46**；Camera capture、
+四个 teardown diagnostics 与两个 worker retirement 共 **7/7 CTest**，在 Debug 和
+ASan/UBSan/leak 两种配置均通过。把相同用例链接到修复前完整生产 TU 时，因错误调用
+STREAMOFF 命中负控。ESP-IDF 6.0.2 构建、Camera teardown linked-ELF 与 JPEG allocator
+linked-ELF 审计通过。
+
+开发签名普通包 `20261009-234829` / `camera-streamon-cleanup-058` 复用 immutable Recovery
+`20261009-202156`。主镜像 7,161,264 B，SHA-256
+`e107bc0901707b3ec5d33f2c035633b662e99b29d9e00d90abd0fd0708f1503f`；manifest SHA-256
+`62c7c50320f4de4e7621738b48a5f293e94e171361a8dbae3c7129473a11ff2e`，合并镜像 SHA-256
+`e8b1cddc0571ec7292a1445c7b94f737983d25890e6980242fd003444aa99a09`，ZIP SHA-256
+`353d8d77d1c92faeea3c30abb5a45afbe9703e6ef8ddfee1c3ecd3e700815b7b`。COM3 VerifyOnly 后
+只写 `otadata + ota_0`，未使用 `-Erase`；Recovery → Main → OTA confirmation → Home 通过，
+WiFi、MQTT、Voice listening 和 8,192 B 启动健康连续块恢复。服务器最终快照仍为设备
+`44:1b:f6:c3:b4:30`、`bound`、tokenVersion 4、MQTT connected、voice inactive。
+
+普通 058 未再次触发 STREAMON OOM。Display 同传保持运行时，本地 Camera 连续三次启动，
+DVP ring 实际依次选择 6,144、4,096、4,096 B，首帧分别为 128、162、133 ms；前两次显式
+返回 Home 均完成 STREAMOFF、fd close、device release，并在 reserve 释放后恢复 8,192 B
+最大连续块。第三次之后原 MQTT 信令连接发生自然 epoch 切换，桌面会话被撤销；设备随后已在
+Home 建立新的 Display 会话并正常停止。两份串口中 `Failed to start camera stream`、DVP ring
+`no mem`、`STREAMOFF failed`、panic/assert/Backtrace 计数均为 0。
+
+Display 停止后，Remote Camera 在同一启动周期选择 6,144 B ring，74 ms 取得首帧，运行
+25.604 秒 / 389 帧。WebRTC Camera connected 期间 internal/DMA largest 最低为 2,560 B；
+停止完整经过 STREAMOFF、fd close、device release，恢复为 6,144 B，随后 51 秒 Main/MQTT
+窗口保持 6,144 B，并取得新的 Voice health，supervisor 剩余栈仍为 4,432 B。远端收到的
+320×240 JPEG SHA-256 为
+`7b68a3de4667b8288ebd434177f0344b58e198e53c67bef7fc51dfb5851b5f46`，但所有像素均为同一
+RGB 值 `(23, 28, 24)`，三个通道标准差均为 0。因此真实 sensor → JPEG → WebRTC 传输链路
+通过，物理画质门禁不通过。
+
+资源与生产仍为 **NO_GO**：本包没有在硬件上重现失败 STREAMON，不能用成功并发倒推失败
+清理已获实机证明；任意 OOM、均匀暗帧根因、异常媒体/SD/音频/TLS/MQTT/cache-off/NVS/OTA
+并发、生产签名/readback/power-cut 和长期资格测试仍未完成，没有启动新的八小时长稳。
+Rodak 证据位于 `D:\workspace\rodak\.codex-temp\camera-physical-058\`；两份串口 SHA-256
+分别为 `521a8340080f555dc1f0c59c3f554c725513d9e8cdc08a1716bf07f36329d766` 和
+`0823322787681d09cafa16037f8d52ca1b6b3b300b53e9a54e5f5e6bacd34d4a`，首启日志为
+`build/logs/first-boot-20261009-234849.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录

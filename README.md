@@ -19,8 +19,15 @@ supervisor stack margin. Candidate 057 raises the PSRAM supervisor stack to 6,14
 4,432 bytes of remaining stack after the same Camera → Home path while preserving the 8,192-byte
 internal/DMA block. The bounded continuous-memory and supervisor-stack gates now pass; production
 remains **NO_GO** on physical image, arbitrary OOM/concurrency, production signing/power-cut and
-qualification soak. See the [051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056)
-and [057 evidence](docs/ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057).
+qualification soak. Candidate 058 separates failed `STREAMON` from a running stream so startup OOM
+can release mappings, the fd and device ownership without an invalid `STREAMOFF`. Its COM3 window
+did not reproduce startup OOM: three local Camera starts while Display was active selected
+6,144/4,096/4,096-byte rings, and a later remote Camera start after Display stopped selected 6,144 B;
+all produced first frames. The remote Camera stop recovered a 6,144-byte largest block after the
+WebRTC window reached 2,560 B. Its sensor JPEG was a uniform dark frame, so transport is proven but
+physical image quality still fails. See the [051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056),
+[057 evidence](docs/ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057) and
+[058 evidence](docs/ota-release-readiness.md#2026-10-10-camera-streamon-失败清理-058).
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

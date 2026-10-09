@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Decision updated 2026-10-09: delivery proceeds through local tests, builds and recorded device
+Decision updated 2026-10-10: delivery proceeds through local tests, builds and recorded device
 validation without depending on GitHub Actions. Do not run or repair Actions, including static
 workflow changes, billing, quota or required-check setup. Existing runs remain
 evidence for their original candidates; missing or unavailable Actions do not block delivery.
@@ -91,6 +91,20 @@ requires at least 6,144 bytes configured capacity and 4,096 bytes remaining supe
 stack gates now pass. Resource and production remain **NO_GO** for physical image, arbitrary OOM,
 mixed media/network/audio concurrency, production signing/readback/power-cut and qualification soak.
 No new eight-hour run has started.
+
+Candidate 058 (`9babfae`, package `20261009-234829`, task `camera-streamon-cleanup-058`) records
+whether `VIDIOC_STREAMON` actually succeeded. A startup failure now releases mapped buffers, the fd
+and Board Manager ownership without issuing `VIDIOC_STREAMOFF`; a stream that did start retains the
+existing retry-on-STREAMOFF-failure boundary. The production Camera translation unit passes 46 cases
+and all seven Camera CTests in Debug and ASan/UBSan/leak mode; the pre-fix full translation unit fails
+the new negative control by issuing STREAMOFF after failed STREAMON. ESP-IDF 6.0.2 and final Camera/
+JPEG ELF audits pass. COM3 did not reproduce startup OOM: three local Camera starts with Display
+active selected 6,144/4,096/4,096-byte rings, and a remote Camera start after Display stopped selected
+6,144 B and reached first frame in 74 ms. Its clean stop recovered a 6,144-byte largest internal/DMA
+block after WebRTC had reduced it to 2,560 B. The captured 320×240 sensor JPEG contained one uniform
+dark RGB value, so physical transport passed while image quality did not. Failed-STREAMON hardware
+cleanup, arbitrary OOM, broader concurrency and qualification soak remain open; release stays
+**NO_GO** and no new eight-hour run has started.
 
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
