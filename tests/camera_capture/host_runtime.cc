@@ -82,6 +82,8 @@ std::function<void()> streamoff_hook;
 std::function<void(const char*)> log_hook;
 std::atomic<int> streamon_result{0}, streamoff_result{0};
 std::atomic<unsigned> streamon_calls{0}, streamoff_calls{0};
+std::atomic<unsigned> test_pattern_calls{0};
+std::atomic<int> test_pattern_value{0};
 void ObserveLog(const char* format) {
     if (log_hook) log_hook(format);
 }
@@ -92,6 +94,8 @@ void Reset(const std::string& path) {
     retirement_host::SetAutoStart(true);
     new_failures = dequeued_buffers = requeued_buffers = 0;
     streamon_calls = streamoff_calls = 0;
+    test_pattern_calls = 0;
+    test_pattern_value = 0;
     mount_path = path;
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
@@ -235,6 +239,16 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         const int result = camera_host::streamoff_result.load();
         if (result != 0) errno = EBUSY;
         return result;
+    } else if (request == VIDIOC_S_EXT_CTRLS) {
+        const auto* controls = static_cast<v4l2_ext_controls*>(argument);
+        if (controls == nullptr || controls->count != 1 || controls->controls == nullptr ||
+            controls->controls[0].id != V4L2_CID_TEST_PATTERN) {
+            errno = EINVAL;
+            return -1;
+        }
+        ++camera_host::test_pattern_calls;
+        camera_host::test_pattern_value = controls->controls[0].value;
+        return 0;
     } else if (request == VIDIOC_QUERYCAP) {
         static_cast<v4l2_capability*>(argument)->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
     } else if (request == VIDIOC_S_FMT) {

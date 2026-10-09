@@ -26,6 +26,7 @@
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
 #include <esp_video_ioctl.h>
 #include <fcntl.h>
+#include <linux/v4l2-controls.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -870,6 +871,21 @@ bool CameraService::OpenStream(int width, int height) {
         SetError("Camera returned an unsupported RGB format");
         return false;
     }
+
+#ifdef RODAKOS_CAMERA_TEST_PATTERN
+    v4l2_ext_control pattern_control = {};
+    pattern_control.id = V4L2_CID_TEST_PATTERN;
+    pattern_control.value = 1;
+    v4l2_ext_controls pattern_controls = {};
+    pattern_controls.ctrl_class = V4L2_CTRL_CLASS_IMAGE_PROC;
+    pattern_controls.count = 1;
+    pattern_controls.controls = &pattern_control;
+    if (ioctl(fd_, VIDIOC_S_EXT_CTRLS, &pattern_controls) != 0) {
+        SetError(std::string("Failed to enable camera test pattern: ") + ErrnoName());
+        return false;
+    }
+    ESP_LOGW(TAG, "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_test_pattern=1");
+#endif
 
     v4l2_requestbuffers req = {};
     req.count = kBufferCount;

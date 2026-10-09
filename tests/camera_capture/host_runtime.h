@@ -27,6 +27,8 @@ extern std::function<void()> streamoff_hook;
 extern std::function<void(const char*)> log_hook;
 extern std::atomic<int> streamon_result, streamoff_result;
 extern std::atomic<unsigned> streamon_calls, streamoff_calls;
+extern std::atomic<unsigned> test_pattern_calls;
+extern std::atomic<int> test_pattern_value;
 void ObserveLog(const char* format);
 extern std::string collision_path;
 bool IsCameraConfigured();

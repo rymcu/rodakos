@@ -28,6 +28,8 @@ The 46 tests cover:
 - A failed `VIDIOC_STREAMON` never enters the running-stream teardown path: mapped buffers, the fd
   and Board Manager ownership are released without `VIDIOC_STREAMOFF`, and a later preview can start.
   A stream that did start still retains all ownership when `VIDIOC_STREAMOFF` fails.
+- A separate production-TU probe compiles the default-off GC0308 test-pattern path, verifies the
+  V4L2 control is applied before streaming, and confirms normal worker/resource retirement.
 - Concurrent snapshot readers and a blocked final worker state read verify that stop cannot publish
   completion while the worker still accesses service state. The allocation wrappers track the real
   preview worker's 2×2 RGB565 payload, so clearing vector size without freeing its capacity fails.

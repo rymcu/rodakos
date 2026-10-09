@@ -7,6 +7,7 @@ option(
 set(RODAK_OTA_FAULT_INJECTION_PHASE "" CACHE STRING
     "Main OTA reset-injection phase for journal recovery tests")
 option(RODAKOS_RELEASE_TESTS "Enable serial release diagnostics and one-shot resource failure injection" OFF)
+option(RODAKOS_CAMERA_TEST_PATTERN "Enable the GC0308 diagnostic test pattern" OFF)
 
 set(SOURCES
     "main.cc"
@@ -196,6 +197,11 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 if(RODAKOS_RELEASE_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_RELEASE_TESTS=1)
     message(WARNING "RodakOS serial release diagnostics are ENABLED; this is not a production build")
+endif()
+
+if(RODAKOS_CAMERA_TEST_PATTERN)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_CAMERA_TEST_PATTERN=1)
+    message(WARNING "RodakOS Camera test pattern is ENABLED; this is not a production build")
 endif()
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)
