@@ -17,6 +17,8 @@ set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${LVGL_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/lvgl")
+set(RODAK_TASK_RETIREMENT_BUILD_TESTS OFF)
+add_subdirectory("${RODAKOS_ROOT}/tests/task_retirement" "${CMAKE_CURRENT_BINARY_DIR}/task-retirement")
 
 add_executable(rodakos_home_ui_tests
     test_main.cc
@@ -58,7 +60,7 @@ target_include_directories(rodakos_home_ui_tests BEFORE PRIVATE
     "${RODAKOS_ROOT}/components/rodak_appearance/include"
 )
 
-target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl)
+target_link_libraries(rodakos_home_ui_tests PRIVATE lvgl rodakos_task_retirement_host)
 foreach(symbol jpeg_calloc jpeg_calloc_inner jpeg_calloc_align jpeg_calloc_align_inner)
     target_link_options(rodakos_home_ui_tests PRIVATE "-Wl,--wrap=${symbol}")
 endforeach()
