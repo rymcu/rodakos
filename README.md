@@ -7,12 +7,12 @@ RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a sma
 Current trusted-server work starts from `7101282`; source, build and hardware
 validation identities are recorded in the linked roadmap and feature documents.
 Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-Camera candidate 047 has now exercised the test-only 4,096-byte non-JPEG DVP ring on COM3: one
-software first frame, all six close stages and a 65-second MQTT/Main/Voice window completed with
-zero DVP/error logs. The device and workspace were restored to ordinary OFF/046 afterward. Resource
-and production remain **NO_GO** because continuous-memory and stack margins still fail the release
-gate; physical image, arbitrary OOM, complete recovery and qualification soak remain open. See the
-[047 evidence](docs/ota-release-readiness.md#2026-10-09-cameradvp-4096-b-fallback-故障注入候选-047).
+Camera candidates 048–050 now release Camera UI/timers/pixels, DVP preview and audio focus before
+Home creation, with failed replacement rebuilding Camera and restarting preview. COM3 snapshots
+retain a 16,384-byte largest internal/DMA block after every Camera release phase; Home reconstruction
+then reduces it to 6,144 bytes. Camera/DVP release is closed at this boundary, while resource and
+production remain **NO_GO** on Home reconstruction, Voice stack margin, physical image, arbitrary
+OOM and qualification soak. See the [048–050 evidence](docs/ota-release-readiness.md#2026-10-09-camera-切换前释放与-home-重建边界-048050).
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

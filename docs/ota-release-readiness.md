@@ -3273,6 +3273,44 @@ fault 首启与恢复首启日志分别为 `build/logs/first-boot-20261009-20525
 `build/logs/first-boot-20261009-205719.log`。资源/生产发布保持 **NO_GO**，尚未启动八小时
 资格长稳。
 
+## 2026-10-09 Camera 切换前释放与 Home 重建边界 048–050
+
+048 源码 `d988c95` 将当前 app 的 `OnPause` 移到候选 `OnCreate` 之前；候选创建失败时恢复
+旧 app。049 源码 `686d9bb` 进一步在暂停阶段删除 Camera UI、三个 timer 和预览像素，停止
+DVP preview 并释放音频焦点；回滚时重建 UI 并重新调度 preview。app-model 278 项、
+navigation Debug/ASan 各 13 项、Camera UI Debug/ASan 各 13 项通过；Camera capture 45 项加
+6 个关闭/回收 CTest、device lifecycle 4 项、teardown 39 项、worker lifecycle 17 项及源码
+负控通过。普通 OFF ESP-IDF 6.0.2 构建、Camera teardown ELF 和 JPEG allocator 审计通过。
+
+三份开发签名普通包均复用 046 已验证的 immutable Recovery，均先通过 COM3 VerifyOnly，再只
+写入 `otadata + ota_0`，未使用 `-Erase`，Recovery → Main → OTA confirmation → Home 通过：
+
+| 候选 | task / 主镜像 SHA-256 | manifest / 合并镜像 SHA-256 |
+| --- | --- | --- |
+| 048 `20261009-213419` | `camera-app-lifecycle-048` / `6e10c47d846097d5c387f32d38f2f5519d66a9504756a3e7a9abe35671cb778f` | `f051ce2b448f16ff6b1c8a1ec43a6b83741075904b5dc49b081e3a6d22a8bce7` / `d13f6292a4b4af0c64b7614de76a8ac885172d843fbb134315faaee62ae434e0` |
+| 049 `20261009-214503` | `camera-ui-release-049` / `9dd853e42cd42a00ae3673dd6a095e697192c0ee7f4db3504dcd3afabfbef081` | `5f8b51670f1319575ee2da1176af2d39a0898ce1a51e6a052588a12422103305` / `437984e1f547b2e782f355cef0003f412391b6c6b0d63f5aae1e214c1f06e550` |
+| 050 `20261009-215157` | `camera-pause-resource-050` / `d84fa396d29121bf5e4de6758696f14f13bbd09d3424a12856d813199d619abc` | `e9ed8e7dffbdbcd73daf15e3dd9cc205f5a0ae4852a21c91a056ac52f9af3283` / `88d42ca060521c00cb5b1b75d2910bd9cefdbf6ff0c13b4fedbbd02b27871c37` |
+
+048、049、050 的独立单串口 Camera → Home 均选择普通 6,144 B ring，取得软件首帧、六个关闭
+阶段和至少 60 秒 MQTT/Main/Voice 健康观察；error、`E:RX`、overflow、DQBUF 为 0，heap
+median drop 为 0。048 证明 DVP/device/audio 在 Home `OnCreate` 前释放；049 证明旧 Camera
+UI/timer/像素也在 Home 前释放。050 的阶段快照把剩余边界定位为：
+
+| 阶段 | internal free / largest | DMA free / largest |
+| --- | --- | --- |
+| Camera UI 已释放 | 31,603 / 16,384 B | 26,063 / 16,384 B |
+| DVP preview 已停止 | 38,983 / 16,384 B | 33,443 / 16,384 B |
+| 音频焦点已释放 | 38,983 / 16,384 B | 33,443 / 16,384 B |
+| Home UI ready | 19,451 / 6,144 B | 后续健康期最低 13,379 / 6,144 B |
+
+因此 Camera/DVP 切换前释放已在该短窗口达到 16 KiB 连续块；连续块降至 6,144 B 发生在
+Home 重建期间。050 仍为 **NO_GO**：Voice supervisor 最低剩余栈 2,388 B，内部历史最低
+3,395 B；物理画质、任意 OOM、异常媒体/网络/音频并发和长期稳定性未证明。后续工作转为
+Home 重建的 LVGL/内部堆分配与碎片化，不启动八小时资格长稳。证据位于
+`.codex-temp/camera-lifecycle-048/`、`.codex-temp/camera-ui-release-049/` 和
+`.codex-temp/camera-pause-resource-050/`；050 首启日志为
+`build/logs/first-boot-20261009-215216.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录
