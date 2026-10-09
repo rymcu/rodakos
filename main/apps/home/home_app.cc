@@ -671,65 +671,75 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
                 });
         }
 
-        auto* icon_bg = lv_obj_create(btn);
-        lv_obj_remove_style_all(icon_bg);
-        lv_obj_set_size(icon_bg, kIconSize, kIconSize);
-        lv_obj_align(icon_bg, LV_ALIGN_TOP_MID, 0, 0);
-        lv_obj_set_style_radius(
-            icon_bg, app != nullptr ? LV_RADIUS_CIRCLE : static_cast<lv_coord_t>(8), 0);
-        lv_obj_set_style_bg_color(
-            icon_bg,
-            app != nullptr ? rodakos_theme_icon_color(IconColorIndex(app->id))
-            : all_apps    ? rodakos_theme_secondary()
-                           : rodakos_theme_bg_tertiary(),
-            0);
-        lv_obj_set_style_bg_opa(icon_bg, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
-
         if (app != nullptr) {
-            auto* icon_label = lv_label_create(icon_bg);
-            lv_label_set_text(icon_label, app->icon.c_str());
+            auto* icon_label = lv_label_create(btn);
+            lv_label_set_text_static(icon_label, app->icon.c_str());
+            lv_obj_set_size(icon_label, kIconSize, kIconSize);
+            lv_obj_align(icon_label, LV_ALIGN_TOP_MID, 0, 0);
+            lv_obj_set_style_radius(icon_label, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_color(
+                icon_label, rodakos_theme_icon_color(IconColorIndex(app->id)), 0);
+            lv_obj_set_style_bg_opa(icon_label, LV_OPA_COVER, 0);
             lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
             lv_obj_set_style_text_font(icon_label, PhoneIconFontLarge(), 0);
-            lv_obj_center(icon_label);
-        } else if (all_apps) {
-            auto* icon_label = lv_label_create(icon_bg);
-            lv_label_set_text(icon_label, FONT_AWESOME_ARROW_RIGHT);
-            lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
-            lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
-            lv_obj_center(icon_label);
-
-            auto* count_label = lv_label_create(icon_bg);
-            const std::string count = std::to_string(projection_.overflow_items.size());
-            lv_label_set_text(count_label, count.c_str());
-            lv_obj_set_style_text_color(count_label, lv_color_white(), 0);
-            lv_obj_set_style_text_font(count_label, &phone_font_12, 0);
-            lv_obj_align(count_label, LV_ALIGN_TOP_RIGHT, -3, 2);
+            lv_obj_set_style_text_align(icon_label, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_pad_top(
+                icon_label,
+                static_cast<lv_coord_t>((kIconSize - PhoneIconFontLarge()->line_height) / 2), 0);
+            lv_obj_clear_flag(icon_label, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(icon_label, LV_OBJ_FLAG_CLICKABLE);
         } else {
-            const size_t preview_count = std::min<size_t>(item->apps.size(), 4);
-            for (size_t preview_index = 0; preview_index < preview_count; ++preview_index) {
-                auto* preview = lv_obj_create(icon_bg);
-                lv_obj_remove_style_all(preview);
-                lv_obj_set_size(preview, 16, 16);
-                const lv_coord_t x = preview_index % 2 == 0 ? -9 : 9;
-                const lv_coord_t y = preview_index < 2 ? -9 : 9;
-                lv_obj_align(preview, LV_ALIGN_CENTER, x, y);
-                lv_obj_set_style_radius(preview, 5, 0);
-                lv_obj_set_style_bg_color(
-                    preview,
-                    rodakos_theme_icon_color(IconColorIndex(item->apps[preview_index])), 0);
-                lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
-                lv_obj_clear_flag(preview, LV_OBJ_FLAG_CLICKABLE);
-                lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
+            auto* icon_bg = lv_obj_create(btn);
+            lv_obj_remove_style_all(icon_bg);
+            lv_obj_set_size(icon_bg, kIconSize, kIconSize);
+            lv_obj_align(icon_bg, LV_ALIGN_TOP_MID, 0, 0);
+            lv_obj_set_style_radius(icon_bg, static_cast<lv_coord_t>(8), 0);
+            lv_obj_set_style_bg_color(
+                icon_bg,
+                all_apps ? rodakos_theme_secondary() : rodakos_theme_bg_tertiary(), 0);
+            lv_obj_set_style_bg_opa(icon_bg, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
+
+            if (all_apps) {
+                auto* icon_label = lv_label_create(icon_bg);
+                lv_label_set_text(icon_label, FONT_AWESOME_ARROW_RIGHT);
+                lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
+                lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
+                lv_obj_center(icon_label);
+
+                auto* count_label = lv_label_create(icon_bg);
+                const std::string count = std::to_string(projection_.overflow_items.size());
+                lv_label_set_text(count_label, count.c_str());
+                lv_obj_set_style_text_color(count_label, lv_color_white(), 0);
+                lv_obj_set_style_text_font(count_label, &phone_font_12, 0);
+                lv_obj_align(count_label, LV_ALIGN_TOP_RIGHT, -3, 2);
+            } else {
+                const size_t preview_count = std::min<size_t>(item->apps.size(), 4);
+                for (size_t preview_index = 0; preview_index < preview_count; ++preview_index) {
+                    auto* preview = lv_obj_create(icon_bg);
+                    lv_obj_remove_style_all(preview);
+                    lv_obj_set_size(preview, 16, 16);
+                    const lv_coord_t x = preview_index % 2 == 0 ? -9 : 9;
+                    const lv_coord_t y = preview_index < 2 ? -9 : 9;
+                    lv_obj_align(preview, LV_ALIGN_CENTER, x, y);
+                    lv_obj_set_style_radius(preview, 5, 0);
+                    lv_obj_set_style_bg_color(
+                        preview,
+                        rodakos_theme_icon_color(IconColorIndex(item->apps[preview_index])), 0);
+                    lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
+                    lv_obj_clear_flag(preview, LV_OBJ_FLAG_CLICKABLE);
+                    lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
+                }
             }
         }
 
         auto* name_label = lv_label_create(btn);
-        lv_label_set_text(name_label,
-                          app != nullptr ? app->title.c_str()
-                          : all_apps    ? "All Apps"
-                                        : item->name.c_str());
+        if (app != nullptr) {
+            lv_label_set_text_static(name_label, app->title.c_str());
+        } else {
+            lv_label_set_text(name_label, all_apps ? "All Apps" : item->name.c_str());
+        }
         lv_obj_set_width(name_label, kCellWidth);
         lv_label_set_long_mode(name_label, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
