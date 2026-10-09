@@ -918,6 +918,7 @@ bool CameraService::OpenStream(int width, int height) {
         SetError(std::string("Failed to start camera stream: ") + ErrnoName());
         return false;
     }
+    stream_started_ = true;
 
     timeval dequeue_timeout = {};
     dequeue_timeout.tv_usec = kDequeueTimeoutUs;
@@ -942,7 +943,7 @@ bool& CameraService::PreviewLease(PreviewOwner owner) {
 
 void CameraService::CloseStream() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-    if (fd_ >= 0) {
+    if (fd_ >= 0 && stream_started_) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ESP_LOGI(TAG, "CloseStream: STREAMOFF begin");
         rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_IOCTL_ENTER, xPortGetCoreID(), 0);
@@ -959,6 +960,7 @@ void CameraService::CloseStream() {
                                          streamoff_result);
             return;
         }
+        stream_started_ = false;
         ESP_LOGI(TAG, "CloseStream: STREAMOFF complete");
         rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_AFTER_LOG, xPortGetCoreID(),
                                      streamoff_result);
@@ -988,6 +990,7 @@ void CameraService::CloseStream() {
     active_height_ = 0;
     active_stride_ = 0;
     active_pixelformat_ = 0;
+    stream_started_ = false;
     streamoff_retry_required_.store(false, std::memory_order_release);
 #endif
 }

@@ -80,7 +80,8 @@ std::function<void()> write_hook;
 std::function<void()> preview_state_query_hook;
 std::function<void()> streamoff_hook;
 std::function<void(const char*)> log_hook;
-std::atomic<int> streamoff_result{0};
+std::atomic<int> streamon_result{0}, streamoff_result{0};
+std::atomic<unsigned> streamon_calls{0}, streamoff_calls{0};
 void ObserveLog(const char* format) {
     if (log_hook) log_hook(format);
 }
@@ -90,6 +91,7 @@ void Reset(const std::string& path) {
     retirement_host::Reset();
     retirement_host::SetAutoStart(true);
     new_failures = dequeued_buffers = requeued_buffers = 0;
+    streamon_calls = streamoff_calls = 0;
     mount_path = path;
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
@@ -101,7 +103,7 @@ void Reset(const std::string& path) {
     preview_state_query_hook = {};
     streamoff_hook = {};
     log_hook = {};
-    streamoff_result = 0;
+    streamon_result = streamoff_result = 0;
     collision_path.clear();
 }
 void FailNew(size_t bytes, size_t nth, size_t count, AllocationThread thread) {
@@ -222,9 +224,17 @@ int __wrap_close(int fd) { return fd == kCameraFd ? 0 : __real_close(fd); }
 int __wrap_ioctl(int fd, unsigned long request, ...) {
     va_list args; va_start(args, request); void* argument = va_arg(args, void*); va_end(args);
     if (fd != kCameraFd) return __real_ioctl(fd, request, argument);
-    if (request == VIDIOC_STREAMOFF) {
+    if (request == VIDIOC_STREAMON) {
+        ++camera_host::streamon_calls;
+        const int result = camera_host::streamon_result.load();
+        if (result != 0) errno = ENOMEM;
+        return result;
+    } else if (request == VIDIOC_STREAMOFF) {
+        ++camera_host::streamoff_calls;
         if (camera_host::streamoff_hook) camera_host::streamoff_hook();
-        return camera_host::streamoff_result.load();
+        const int result = camera_host::streamoff_result.load();
+        if (result != 0) errno = EBUSY;
+        return result;
     } else if (request == VIDIOC_QUERYCAP) {
         static_cast<v4l2_capability*>(argument)->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
     } else if (request == VIDIOC_S_FMT) {

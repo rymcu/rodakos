@@ -642,6 +642,27 @@ RODAK_TEST("camera video buffer table allocation failure closes the device and p
     f.Preview();
 }
 
+RODAK_TEST("camera STREAMON failure releases unopened stream resources and permits retry") {
+    Fixture f;
+    camera_host::streamon_result = -1;
+    camera_host::streamoff_result = -1;
+    RODAK_CHECK_FALSE(f.camera->StartPreview(2, 2));
+    RODAK_CHECK_EQ(camera_host::streamon_calls.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::streamoff_calls.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+    RODAK_CHECK_FALSE(f.camera->GetState().preview_running);
+    RODAK_CHECK(f.camera->last_error().find("Failed to start camera stream") != std::string::npos);
+
+    camera_host::streamon_result = 0;
+    camera_host::streamoff_result = 0;
+    f.Preview();
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+    RODAK_CHECK_EQ(camera_host::streamon_calls.load(), 2u);
+    RODAK_CHECK_EQ(camera_host::streamoff_calls.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
+}
+
 RODAK_TEST("camera successful file write publishes results without allocating afterward") {
     Fixture f; f.Preview();
     camera_host::write_hook = [] {

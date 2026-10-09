@@ -109,6 +109,8 @@ private:
     // until STREAMOFF succeeds; closing them after a failed stop strands the
     // lower-level DVP controller and makes a later retry impossible.
     std::atomic_bool streamoff_retry_required_{false};
+    // STREAMOFF is valid only after STREAMON completed successfully.
+    bool stream_started_ = false;
     uint8_t jpeg_stream_fps_ = 0;
     JpegFrameCallback jpeg_stream_callback_;
     int fd_ = -1;
