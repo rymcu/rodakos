@@ -3614,3 +3614,17 @@ Home 请求、不复位、不抢占其他串口进程。
 包、刷写记录与 boot log 仅作为外部提供的上下文；结果明确
 `installed_image_verified=false`、`binding_verified=false`。`software-smoke-observed` 不是
 物理成像或资源回收证明，`eight_hour_gate_passed` 始终为 false。
+
+## 2026-10-10 Camera DVP 信号诊断 065 与普通恢复 066
+
+为区分 DVP 电气输入与软件采集链路，新增默认关闭的 `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS`。诊断只通过 PCNT 输入矩阵读取 GPIO5 XCLK、GPIO7 PCLK、GPIO44 VSYNC，不写 GPIO、不改 DVP 控制器或 GC0308 寄存器；每个计数器配置高低 watch point，使 `accum_count` 在高频 XCLK 下正确跨越 16 位边界。普通构建保持 `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS=OFF`。
+
+开发候选 `20261010-073131` / `camera-signal-diagnostics-065` 的主镜像 SHA-256 为 `f63ac0f000e2c6829ea540179e696e7ab0e5b24fff8929a819a1cca3090b72f7`。设备 `44:1b:f6:c3:b4:30` 通过 COM3 VerifyOnly 与保留 NVS 的增量刷写后，单一串口 Camera → Home 窗口得到：
+
+- first-frame：`interval_us=91200`，`xclk_edges=1826378`（约 20.0 MHz），`pclk_edges=850293`，`vsync_edges=3`
+- settled：`interval_us=4485919`，`xclk_edges=89718275`（约 20.0 MHz），`pclk_edges=44859235`，`vsync_edges=89`
+- Camera 关闭：STREAMOFF、fd close、device release 均完成，运行 180 帧
+
+原始串口证据保存在 `D:/workspace/rodakos/.codex-temp/camera-signal-065/serial.log`；此前未加 watch point 的计数低估了 XCLK，已由 065 修正。信号活动证明输入时钟、像素时钟和帧同步均在工作，但不证明 JPEG 画质、镜头/遮挡、模拟供电或颜色输出正确。
+
+诊断完成后已恢复普通 `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS=OFF`，普通包 `20261010-074226` / `camera-normal-066` 主镜像 7,161,360 B，SHA-256 `df135a8584439cf778b0b72f1c2eeec645d1cd67339887b4a67f631b7cd190a3`；通过包验签、COM3 VerifyOnly、保留 NVS 刷写和 Recovery → Main → Home 启动，当前设备回到普通 OFF。物理画质、资源/任意 OOM、生产签名和八小时资格长稳仍未通过，发布状态保持 **NO_GO**。

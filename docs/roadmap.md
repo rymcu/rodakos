@@ -579,3 +579,9 @@ establish the new recovery UI or immediate cancellation of active DNS/HTTP calls
 
 Runtime binary plug-in loading, execution of application images directly from SD, and a parallel
 hand-written board layer remain outside the current scope.
+
+### 2026-10-10 DVP signal diagnostics 065 / normal 066
+
+The default-OFF `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS` build now counts BigSmart GPIO5 XCLK, GPIO7 PCLK and GPIO44 VSYNC through PCNT input bypass. High/low watch points are required for `accum_count`; without them, the 20 MHz XCLK counter wrapped and under-reported. Candidate `20261010-073131` (`camera-signal-diagnostics-065`) measured approximately 20.0 MHz XCLK in both first-frame and settled windows, non-zero PCLK, and periodic VSYNC, while STREAMOFF/fd close/device release all completed. The diagnostic serial evidence is kept in `.codex-temp/camera-signal-065/serial.log`.
+
+After the window, the workspace and device were restored to ordinary OFF. Package `20261010-074226` (`camera-normal-066`) passed signed package verification, COM3 VerifyOnly, NVS-preserving `otadata + ota_0` refresh, and Recovery → Main → Home boot. These counters establish DVP signal activity only; physical image quality, resource/OOM, production signing, and the eight-hour qualification gate remain **NO_GO**.

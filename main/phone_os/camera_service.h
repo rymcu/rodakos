@@ -12,6 +12,7 @@
 #include <freertos/task.h>
 
 #include "rodakos_adapters/camera_device.h"
+#include "phone_os/camera_signal_diagnostics.h"
 #include "task-retirement.h"
 
 namespace rodakos {
@@ -91,6 +92,7 @@ private:
 
     FileService* file_service_ = nullptr;
     CameraDevice camera_device_;
+    CameraSignalDiagnostics signal_diagnostics_;
     std::mutex lifecycle_mutex_;
     std::mutex capture_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;

@@ -9,6 +9,7 @@ set(RODAK_OTA_FAULT_INJECTION_PHASE "" CACHE STRING
 option(RODAKOS_RELEASE_TESTS "Enable serial release diagnostics and one-shot resource failure injection" OFF)
 option(RODAKOS_CAMERA_TEST_PATTERN "Enable the GC0308 diagnostic test pattern" OFF)
 option(RODAKOS_CAMERA_SENSOR_DIAGNOSTICS "Enable read-only GC0308 register diagnostics" OFF)
+option(RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS "Enable read-only DVP signal edge diagnostics" OFF)
 
 set(SOURCES
     "main.cc"
@@ -43,6 +44,7 @@ set(SOURCES
     "phone_os/motion_service.cc"
     "phone_os/button_binding_service.cc"
     "phone_os/camera_service.cc"
+    "phone_os/camera_signal_diagnostics.cc"
     "phone_os/camera-teardown-diagnostics.cc"
     "phone_os/webrtc_camera_service.cc"
     "phone_os/display_service.cc"
@@ -161,6 +163,7 @@ idf_component_register(
         lwip
         esp_board_manager
         esp_driver_i2c
+        esp_driver_pcnt
         esp_driver_usb_serial_jtag
         espressif__esp_websocket_client
         esp_peer
@@ -208,6 +211,11 @@ endif()
 if(RODAKOS_CAMERA_SENSOR_DIAGNOSTICS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_CAMERA_SENSOR_DIAGNOSTICS=1)
     message(WARNING "RodakOS Camera sensor diagnostics are ENABLED; this is not a production build")
+endif()
+
+if(RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS=1)
+    message(WARNING "RodakOS Camera DVP signal diagnostics are ENABLED; this is not a production build")
 endif()
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)

@@ -859,11 +859,17 @@ void CameraService::PreviewTask() {
 #ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
                         LogGc0308RegisterSnapshot(fd_, "first-frame");
 #endif
+#ifdef RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS
+                        signal_diagnostics_.Sample("first-frame");
+#endif
                     }
 #ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
                     if (frame_count_ == 60) {
                         LogGc0308RegisterSnapshot(fd_, "settled");
                     }
+#endif
+#ifdef RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS
+                    if (frame_count_ == 60) signal_diagnostics_.Sample("settled");
 #endif
                     received_frame = true;
                     last_frame_at_us = esp_timer_get_time();
@@ -970,6 +976,10 @@ bool CameraService::OpenStream(int width, int height) {
     LogGc0308RegisterSnapshot(fd_, "configured");
 #endif
 
+#ifdef RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS
+    signal_diagnostics_.Start();
+#endif
+
 #ifdef RODAKOS_CAMERA_TEST_PATTERN
     v4l2_ext_control pattern_control = {};
     pattern_control.id = V4L2_CID_TEST_PATTERN;
@@ -1061,6 +1071,7 @@ bool& CameraService::PreviewLease(PreviewOwner owner) {
 
 void CameraService::CloseStream() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+    signal_diagnostics_.Stop();
     if (fd_ >= 0 && stream_started_) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ESP_LOGI(TAG, "CloseStream: STREAMOFF begin");
