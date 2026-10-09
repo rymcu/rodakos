@@ -314,12 +314,30 @@ RODAK_TEST("unavailable camera cannot start a capture and releases the audio foc
     Fixture f;
     f.camera.start_ok = false;
     f.Create();
+    RODAK_CHECK(f.app().home_return_reserve_ == nullptr);
+    RODAK_CHECK_EQ(f.app().home_return_reserve_size_, 0U);
     RODAK_CHECK(f.Disabled());
     RODAK_CHECK_EQ(f.focus.releases, 1);
     f.app().CapturePhoto();
     RODAK_CHECK_EQ(f.camera.captures.load(), 0U);
     Pump(2000);
     SaveScreenshot("camera-unavailable.ppm");
+}
+
+RODAK_TEST("home return reserve follows the preview lifecycle") {
+    Fixture f;
+    f.Create();
+    RODAK_CHECK(f.app().home_return_reserve_ != nullptr);
+    RODAK_CHECK_EQ(f.app().home_return_reserve_size_, 12288U);
+
+    f.app().OnPause();
+    RODAK_CHECK(f.app().home_return_reserve_ == nullptr);
+    RODAK_CHECK_EQ(f.app().home_return_reserve_size_, 0U);
+
+    f.app().OnResume();
+    Pump(180);
+    RODAK_CHECK(f.app().home_return_reserve_ != nullptr);
+    RODAK_CHECK_EQ(f.app().home_return_reserve_size_, 12288U);
 }
 
 RODAK_TEST("long saved paths stay on one status line below the capture button") {

@@ -46,6 +46,7 @@ constexpr lv_coord_t kPreviewBoxHeight = 184;
 constexpr lv_coord_t kCaptureButtonSize = 54;
 constexpr uint32_t kCaptureTaskStackBytes = 4096;
 constexpr uint32_t kPreviewStartDelayMs = 30;
+constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
 
 struct CameraCapturePayload {
     std::shared_ptr<CameraCaptureGuard> guard;
@@ -251,6 +252,8 @@ void CameraApp::OnPause() {
     }
     ESP_LOGI(TAG, "Pause: preview stop complete");
     LogPauseResources("preview-stopped");
+    ReleaseHomeReturnMemory();
+    LogPauseResources("home-reserve-released");
     ReleaseAudioResources();
     ESP_LOGI(TAG, "Pause: audio release complete");
     LogPauseResources("audio-released");
@@ -277,6 +280,7 @@ void CameraApp::OnDestroy() {
         camera_->StopPreview();
     }
     ESP_LOGI(TAG, "Destroy: preview stop complete");
+    ReleaseHomeReturnMemory();
     ESP_LOGI(TAG, "Destroy: audio release begin");
     ReleaseAudioResources();
     ESP_LOGI(TAG, "Destroy: audio release complete");
@@ -332,6 +336,7 @@ void CameraApp::PreviewStartTimerCallback(lv_timer_t* timer) {
 }
 
 void CameraApp::StartPreview() {
+    ReserveHomeReturnMemory();
     RequestAudioResources();
     if (camera_ == nullptr || !camera_->StartPreview()) {
         const std::string error = camera_ != nullptr
@@ -341,6 +346,7 @@ void CameraApp::StartPreview() {
         if (placeholder_label_ != nullptr) {
             lv_label_set_text(placeholder_label_, "Camera unavailable");
         }
+        ReleaseHomeReturnMemory();
         ReleaseAudioResources();
         return;
     }
@@ -349,9 +355,38 @@ void CameraApp::StartPreview() {
     preview_timer_ = lv_timer_create(PreviewTimerCallback, 120, this);
     if (preview_timer_ == nullptr) {
         camera_->StopPreview();
+        ReleaseHomeReturnMemory();
         ReleaseAudioResources();
         UpdateStatus("Failed to monitor camera preview", true);
     }
+}
+
+void CameraApp::ReserveHomeReturnMemory() {
+    if (home_return_reserve_ != nullptr) {
+        return;
+    }
+    for (size_t size : kHomeReturnReserveSizes) {
+        home_return_reserve_ = heap_caps_calloc(
+            1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        if (home_return_reserve_ != nullptr) {
+            home_return_reserve_size_ = size;
+            ESP_LOGI(TAG, "Reserved %u bytes for Home return",
+                     static_cast<unsigned>(size));
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "Unable to reserve contiguous memory for Home return");
+}
+
+void CameraApp::ReleaseHomeReturnMemory() {
+    if (home_return_reserve_ == nullptr) {
+        return;
+    }
+    heap_caps_free(home_return_reserve_);
+    ESP_LOGI(TAG, "Released %u-byte Home return reserve",
+             static_cast<unsigned>(home_return_reserve_size_));
+    home_return_reserve_ = nullptr;
+    home_return_reserve_size_ = 0;
 }
 
 void CameraApp::CapturePhoto() {

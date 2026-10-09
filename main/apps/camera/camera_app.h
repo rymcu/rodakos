@@ -35,6 +35,8 @@ private:
     bool CreateUi(int lock_timeout_ms = 1000);
     void DestroyUi();
     void StartPreview();
+    void ReserveHomeReturnMemory();
+    void ReleaseHomeReturnMemory();
     void UpdatePreview();
     void ConsumeCaptureResult();
     bool CaptureInFlight() const;
@@ -65,6 +67,8 @@ private:
     uint32_t displayed_sequence_ = 0;
     bool preview_ready_ = false;
     bool preview_paused_for_transition_ = false;
+    void* home_return_reserve_ = nullptr;
+    size_t home_return_reserve_size_ = 0;
     std::shared_ptr<CameraCaptureGuard> capture_guard_;
 };
 
