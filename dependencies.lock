@@ -47,7 +47,7 @@ dependencies:
       public: true
       version: ^1.2.0
     source:
-      path: components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/components/esp_io_expander_pca9557
+      path: components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/components/esp_io_expander_pca9557
       type: local
     version: 0.1.0
   espressif/button:
@@ -426,6 +426,6 @@ direct_dependencies:
 - espressif/usb_host_uvc
 - idf
 - lvgl/lvgl
-manifest_hash: c6e8b8573e302d31d1cd7a03c4451daa0278af31c725a1c246d3ec3a879c8749
+manifest_hash: a0a6097a7f2c51e09e68dc1ba8bc7b7ddf262bd5dca45ba0f877c0e912b64638
 target: esp32s3
 version: 3.0.0

@@ -1,6 +1,23 @@
 # Dependency Maintenance
 
 `main/idf_component.yml` pins direct dependencies; `dependencies.lock` records the resolved graph.
+
+The 2026-10-09 board-component migration moves BigSmart and its PCA9557 driver into
+`components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`. Dependency resolution changes only
+that local driver's path and the generated top-level manifest hash; all versions and package
+hashes remain unchanged. The Camera overlay's reviewed graph digest is updated for this path
+change, with its full-graph rejection policy intact. The board sources and license are preserved.
+Cold generation also retains the existing `CONFIG_LV_USE_IMGFONT=y` through `sdkconfig.defaults`.
+
+Migration validation passed the [board-generation regression](../tests/board_generation/README.md)
+(4 tests), existing Board Manager generator tests (55), and Camera overlay tests (11).
+Two-pass cold generation preserved the generated C tables and final `sdkconfig`; only the source
+path comment changed in the generated board defaults. The ESP-IDF 6.0.2 isolated build under
+`build/hal-boards-rename/` produced a 7,157,216-byte main image with SHA-256
+`866e97e38a42b4c1027057a3c06c3d0088ab45dca01680e974af6f2416204d4c`, unchanged partition table,
+one BigSmart setup source, and three strong factory symbols. The linked JPEG/Camera audits passed.
+This is local build evidence, not a signed OTA package or hardware acceptance; the ongoing soak
+retains its original firmware identity.
 Keep ESP-IDF 6.0.2 and the existing SDK versions unless a dependency change is explicitly reviewed.
 The component manager owns `managed_components/`; local edits there are not a durable repair.
 

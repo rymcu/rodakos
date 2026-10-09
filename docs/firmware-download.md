@@ -51,6 +51,13 @@ The script:
 3. Calls `generate_board_config.ps1` for cold bootstrap, path normalization, and reconfiguration.
 4. Verifies the generated component and builds the project.
 
+Board generation reads `components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`. This
+RodakOS-owned component retains the BigSmart YAML, board defaults, setup hooks and PCA9557 driver;
+Board Manager and the runtime adapters remain in use. After the component migration, regenerate
+the gitignored board component before building so its CMake and manifest use the current paths.
+Only BigSmart is supported by this build entry; adding a directory for another board does not
+enable or validate that target.
+
 Manual equivalent:
 
 ```powershell

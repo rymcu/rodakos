@@ -3,7 +3,7 @@
   "idf_version": "6.0.2",
   "idf_commit": "7101770dc6db2667b3c477cc31365dd1acd6db4e",
   "project_manifest_sha256_lf": "01ea966fba1cc7f99c5c982d7108eec18f5e4f27cd31e44037591eb4e55a444f",
-  "lock_graph_sha256_canonical_json": "d5192f21b9566ec7ff4a4b083e93444e1a3ff2ec722a9d244c9e4a8262140523",
+  "lock_graph_sha256_canonical_json": "1f38ed022abef3ec937ed378e5a5c0c43ed596f062a9378af953dce2821340be",
   "lock_graph_ignored_top_level_keys": [
     "manifest_hash"
   ],

@@ -1972,7 +1972,7 @@ idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)
             if board_path and os.path.exists(board_path):
                 board_path = Path(board_path).as_posix()
                 if selected_board == 'rymcu_bigsmart':
-                    self.logger.info('   Board source is owned by brookesia_hal_boards')
+                    self.logger.info('   Board source is owned by rodakos_hal_boards')
                 else:
                     # Calculate relative path from gen_bmgr_codes to board directory
                     board_relative_path = os.path.relpath(board_path, gen_bmgr_codes_dir)
@@ -2035,7 +2035,7 @@ message(STATUS "Board Path: {board_path if board_path else 'Not specified'}")
             cmakelists_content = f"""{board_info_output}idf_component_register(
     SRC_DIRS {src_dirs_str}
     INCLUDE_DIRS {include_dirs_str}
-    REQUIRES brookesia_hal_boards esp_board_manager
+    REQUIRES rodakos_hal_boards esp_board_manager
 )
 
 # This is equivalent to adding WHOLE_ARCHIVE option to the idf_component_register call above:

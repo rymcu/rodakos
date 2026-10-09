@@ -136,7 +136,7 @@ class CameraGeneratorTests(unittest.TestCase):
                 result = subprocess.run([
                     "cmake", "-S", str(ROOT / "tests/camera_teardown_patch/cmake_fixture"),
                     "-B", str(self.root / ("cmake-" + scenario)),
-                    "-DRODAKOS_ROOT=" + str(ROOT), "-DRODAKOS_IDF_PATH=" + str(IDF_PATH),
+                    "-DRODAKOS_ROOT=" + ROOT.as_posix(), "-DRODAKOS_IDF_PATH=" + IDF_PATH.as_posix(),
                     "-DPython3_EXECUTABLE=" + sys.executable,
                     "-DFIXTURE_CASE=" + scenario], capture_output=True, text=True, timeout=20)
                 output = result.stdout + result.stderr

@@ -65,7 +65,10 @@ Check these files if needed:
 - `components/gen_bmgr_codes/idf_component.yml`
 - `components/gen_bmgr_codes/CMakeLists.txt`
 
-They should point to `../../components/brookesia_hal_boards`, not `managed_components`.
+The generated CMake dependency must name `rodakos_hal_boards`, and local driver paths must resolve
+inside `components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`. Regenerate after the board
+component migration; editing the gitignored output alone will be overwritten on the next run.
+Do not restore the removed upstream board collection to satisfy a stale generated dependency.
 
 ## Missing partitions_16m.csv
 
@@ -188,7 +191,7 @@ static PhoneUi ui(lcd_cfg->lcd_width, lcd_cfg->lcd_height);
 
 Symptom: missing `dev_ledc_ctrl_set_brightness_percent` or invalid cast errors.
 
-Cause: the esp-brookesia LEDC device layer exposes handles; RodakOS controls brightness through ESP-IDF LEDC APIs.
+Cause: the Board Manager LEDC device layer exposes handles; RodakOS controls brightness through ESP-IDF LEDC APIs.
 
 Pattern:
 
@@ -432,7 +435,7 @@ migration; changing manifest fields cannot upgrade its verifier. No production k
 default, and a test key does not establish release readiness.
 
 Board Manager's default recursive scan does not reach
-`components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart` on a clean checkout.
+`components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart` on a clean checkout.
 `generate_board_config.ps1` now passes the supported `--customer-path` explicitly, then normalizes
 generated paths and reconfigures as before. Do not repair missing `g_esp_board_devices` linker
 symbols by adding handwritten board tables.

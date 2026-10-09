@@ -33,12 +33,23 @@ flowchart TD
 
 ## Board And HAL
 
-The board layer is esp-brookesia plus Board Manager generated code. RodakOS does not keep a hand-written `main/board/` implementation anymore.
+The board layer combines the RodakOS-owned `rodakos_hal_boards` component with Espressif Board
+Manager and its generated code. Board definitions and setup hooks stay in the board component;
+runtime adaptation stays in `main/rodakos_adapters/`. There is no parallel `main/board/` implementation.
 
-- Board YAML lives under `components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/`.
+- Board YAML, board defaults, setup hooks and the local PCA9557 driver live under
+  `components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`.
+- Only the RYMCU BigSmart board is retained and supported today. Future vendors and boards use
+  `boards/<vendor>/<board>/`; each port needs explicit build selection and hardware acceptance.
 - `generate_board_config.ps1` owns Board Manager generation, including cold-bootstrap passes,
   generated-path normalization, and reconfiguration.
-- Device handles are acquired through `esp_board_manager_get_device_handle()` and adapted by RodakOS services.
+- `rodakos_hal_boards` compiles the BigSmart `setup_device.c` once; the generated component
+  depends on it and compiles only generated tables, without compiling the setup hooks again.
+- Board Manager owns the generated device/peripheral tables and device lifecycle. Device handles
+  are acquired through `esp_board_manager_get_device_handle()` and wrapped by the existing
+  RodakOS adapters before injection into services.
+- The board-component migration preserves `rymcu_bigsmart`, device names, pins and configuration.
+  Recovery has its own build and depends on `rodak_ota_state`, not this board component.
 
 ## Phone OS
 

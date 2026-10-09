@@ -1,16 +1,12 @@
-# RodakOS - esp-brookesia HAL 路径自动修正脚本
-#
-# 参考: Espressif esp-brookesia HAL (https://github.com/espressif/esp-brookesia)
+# RodakOS - 板级组件生成路径归一化
 # 用途: 在 idf.py bmgr 后修正生成代码中的绝对路径为相对路径
 #
 $ErrorActionPreference = "Stop"
 $repoRoot = $PSScriptRoot
 $genDir = Join-Path $repoRoot "components/gen_bmgr_codes"
 $repoForward = $repoRoot.Replace('\', '/')
-$boardForward = "$repoForward/components/brookesia_hal_boards"
+$boardForward = "$repoForward/components/rodakos_hal_boards"
 $boardBackward = $boardForward.Replace('/', '\')
-$managedForward = "$repoForward/managed_components/espressif__brookesia_hal_boards"
-$managedBackward = $managedForward.Replace('/', '\')
 
 Write-Host "修正生成代码中的路径..." -ForegroundColor Yellow
 
@@ -31,21 +27,18 @@ if ($missingPortableFiles.Count -gt 0) {
 
 # 1. 修正 idf_component.yml
 $content = Get-Content -Raw -LiteralPath $componentManifest
-$content = $content.Replace($managedForward, '../../components/brookesia_hal_boards')
-$content = $content.Replace($managedBackward, '..\..\components\brookesia_hal_boards')
-$content = $content.Replace($boardForward, '../brookesia_hal_boards')
-$content = $content.Replace($boardBackward, '..\brookesia_hal_boards')
+$content = $content.Replace($boardForward, '../rodakos_hal_boards')
+$content = $content.Replace($boardBackward, '../rodakos_hal_boards')
+$content = $content.Replace('\', '/')
 Set-Content -LiteralPath $componentManifest -Value $content -Encoding utf8 -NoNewline
 Write-Host "  ✅ idf_component.yml 路径已修正" -ForegroundColor Green
 
 # 2. 修正 CMakeLists.txt
 $content = Get-Content -Raw -LiteralPath $generatedCmake
-$content = $content.Replace('../../managed_components/espressif__brookesia_hal_boards',
-                            '../../components/brookesia_hal_boards')
-$content = $content.Replace($managedForward,
-                            '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
 $content = $content.Replace($boardForward,
-                            '${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards')
+                            '${CMAKE_SOURCE_DIR}/components/rodakos_hal_boards')
+$content = $content.Replace($boardBackward,
+                            '${CMAKE_SOURCE_DIR}/components/rodakos_hal_boards')
 Set-Content -LiteralPath $generatedCmake -Value $content -Encoding utf8 -NoNewline
 Write-Host "  ✅ CMakeLists.txt 路径已修正" -ForegroundColor Green
 

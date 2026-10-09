@@ -7,6 +7,17 @@ evidence for their original candidates; missing or unavailable Actions do not bl
 Actual software failures and the remaining physical and production-release gates still require
 their own evidence.
 
+Board-component migration on 2026-10-09 adopts `components/rodakos_hal_boards/`, retaining only
+`boards/rymcu/rymcu_bigsmart/` and its local PCA9557 driver. The directory layout reserves
+`boards/<vendor>/<board>/` for future ports; BigSmart remains the only supported build target.
+Board Manager generation, runtime adapters, board/device identities and Recovery layout remain.
+Local validation passed 4 board-generation tests, 55 existing generator tests and 11 Camera
+overlay tests, followed by two-pass cold generation and an ESP-IDF 6.0.2 isolated build.
+The 7,157,216-byte main image fits `ota_0`; board setup has one compilation owner and all three
+factory symbols are linked. The final `sdkconfig` is byte-identical to the previous configuration.
+No hardware was flashed for this migration; retain the existing long-soak candidate's evidence
+identity and complete separate device acceptance. See [dependency maintenance](dependency-maintenance.md).
+
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

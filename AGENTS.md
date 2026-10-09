@@ -30,7 +30,9 @@ Do not duplicate content from those files here. Keep this file focused on agent 
 
 ## Core Architectural Rules
 
-- The board layer is esp-brookesia + Board Manager. Do not reintroduce a hand-written `main/board/`.
+- The board layer is RodakOS-owned `components/rodakos_hal_boards/` + Espressif Board Manager.
+  Only `boards/rymcu/rymcu_bigsmart/` is currently supported; future board definitions belong under
+  `boards/<vendor>/<board>/` with explicit build selection. Do not reintroduce a hand-written `main/board/`.
 - RodakOS services open heavy hardware (codec, camera, voice) on demand, not at boot.
 - WiFi credentials live in NVS via `WiFiConfig`; auto-connect starts after `PhoneSystem::Start()`.
 - GT911 touch uses a cached polling bridge in `main.cc`. Do not call I2C inside the LVGL task.
@@ -47,8 +49,8 @@ Do not duplicate content from those files here. Keep this file focused on agent 
 ## Service Authoring
 
 - New system services live in `main/phone_os/` and are exposed via `PhoneServices` (see `main/phone_os/phone_services.h`).
-- Adapt raw esp-brookesia devices in `main/rodakos_adapters/` and inject them into services from `main.cc`.
-- Document any esp-brookesia API references in adapter comments, not in service headers.
+- Adapt raw Board Manager devices in `main/rodakos_adapters/` and inject them into services from `main.cc`.
+- Document Board Manager and ESP-IDF driver API references in adapter comments, not in service headers.
 
 ## Code Style
 

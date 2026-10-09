@@ -20,7 +20,7 @@ synthetic-input observations do not establish physical or acoustic acceptance. R
 
 
 - Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
-- Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and BigSmart board components.
+- Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and the RodakOS-owned `rodakos_hal_boards` component.
 - Optional USB-installed server trust now enables pinned HTTPS, MQTTS and WSS with
   a stable `.local` server name. Bounded DNS-SD address/port candidates are authenticated before
   endpoint promotion, preserving an existing device binding. Numeric routes now persist
@@ -235,7 +235,7 @@ main/
 └── usb_msc_mode.cc        # Early-boot USB mass-storage mode for SD card access
 
 components/
-├── brookesia_hal_boards/  # BigSmart board definition and board-specific helper components
+├── rodakos_hal_boards/    # RodakOS board definitions and board-specific helper components
 ├── esp_board_manager/     # Board Manager framework
 └── gen_bmgr_codes/        # Generated board config, ignored
 
@@ -263,14 +263,22 @@ tests/
 Board configuration lives in:
 
 ```text
-components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/
+components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/
 ```
 
 Key files:
 
 - `board_devices.yaml`: LCD, touch, audio codecs, SD card, camera, etc.
 - `board_peripherals.yaml`: GPIO, I2C, SPI, SDMMC, ADC, DVP, LEDC/RMT-level pins.
+- `board_info.yaml` and `sdkconfig.defaults.board`: board identity and build defaults.
 - `setup_device.c`: board-specific initialization hooks.
+- `components/esp_io_expander_pca9557/`: the board's local IO-expander driver.
+
+`rodakos_hal_boards` currently contains only `boards/rymcu/rymcu_bigsmart`. Future board ports
+belong under `boards/<vendor>/<board>/`, with explicit build selection and validation; the current
+build entry supports BigSmart only. Board Manager still owns generated tables and device lifecycle,
+while `main/rodakos_adapters/` adapts its handles for Phone OS services. Moving the board definitions
+does not change device names, pins, NVS identity or the Recovery layout.
 
 The project uses `partitions_16m.csv`. OTA payloads are staged on SD, so internal flash reserves an
 immutable Recovery and one large main application slot:

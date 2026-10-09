@@ -14,7 +14,7 @@ if ($Board -ne "rymcu_bigsmart") {
 
 $repoRoot = $PSScriptRoot
 $boardManagerRoot = Join-Path $repoRoot "components/esp_board_manager"
-$boardPath = Join-Path $repoRoot "components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart"
+$boardPath = Join-Path $repoRoot "components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart"
 $generatedCmake = Join-Path $repoRoot "components/gen_bmgr_codes/CMakeLists.txt"
 $fixPaths = Join-Path $repoRoot "fix_gen_paths.ps1"
 if (-not (Test-Path -LiteralPath $boardManagerRoot) -or
