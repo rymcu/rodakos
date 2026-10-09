@@ -81,6 +81,7 @@ struct esp_video { esp_video_device_common_t *common; };
 #define ESP_LOGE(...) fake_log()
 #define ESP_EARLY_LOGE(...) fake_log()
 #define ESP_LOGI(tag, ...) fake_dma_log(__VA_ARGS__)
+#define ESP_LOGW(tag, ...) fake_dma_fault_log(__VA_ARGS__)
 #define TAG "dvp_ext"
 #define DVP_CAM_BUFFER_COUNT 2
 #define DVP_CAM_DMA_BUFFER_SIZE 8192
@@ -90,6 +91,7 @@ struct esp_video { esp_video_device_common_t *common; };
 
 void fake_log(void);
 void fake_dma_log(const char *, ...);
+void fake_dma_fault_log(const char *, ...);
 uint32_t xPortGetCoreID(void);
 esp_err_t esp_cam_sensor_ioctl(void *, int, int *);
 esp_err_t esp_cam_ctlr_stop(esp_cam_ctlr_handle_t);

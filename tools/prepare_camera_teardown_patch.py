@@ -192,6 +192,13 @@ static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align
         if (candidate_index > 0 && candidate_size == dma_buffer_candidates[candidate_index - 1]) {
             continue;
         }
+#if defined(RODAKOS_CAMERA_DMA_FORCE_4096) && RODAKOS_CAMERA_DMA_FORCE_4096
+        if (!jpeg && candidate_size == 6144) {
+            ESP_LOGW(TAG,
+                     "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE: forcing DVP DMA ring fallback to 4096");
+            continue;
+        }
+#endif
         if (candidate_size > DVP_CAM_DMA_BUFFER_SIZE) {
             continue;
         }

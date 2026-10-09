@@ -272,8 +272,12 @@ try {
         $faultInjectionCache = Select-String -LiteralPath $cmakeCache `
             -Pattern '^RODAK_OTA_FAULT_INJECTION_PHASE:STRING=.+$' |
             Select-Object -First 1
-        if ($null -ne $faultInjectionCache -and -not $AllowReleaseFaultInjection) {
-            throw "OTA 故障注入配置仍启用；清空 RODAK_OTA_FAULT_INJECTION_PHASE 后才能打包"
+        $cameraDmaFaultInjectionCache = Select-String -LiteralPath $cmakeCache `
+            -Pattern '^RODAKOS_CAMERA_DMA_FORCE_4096:BOOL=(ON|TRUE|1)$' |
+            Select-Object -First 1
+        if (($null -ne $faultInjectionCache -or $null -ne $cameraDmaFaultInjectionCache) -and
+            -not $AllowReleaseFaultInjection) {
+            throw "故障注入配置仍启用；关闭测试开关或显式允许测试包后才能打包"
         }
     }
     if ($cacheRequestsHardwareTestPopulation -ne $homeHardwareTestPopulation) {

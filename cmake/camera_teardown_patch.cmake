@@ -1,4 +1,7 @@
 # Resolve and validate all inputs before replacing either managed translation unit.
+option(RODAKOS_CAMERA_DMA_FORCE_4096
+    "Test only: skip the preferred 6144-byte non-JPEG DVP DMA ring" OFF)
+
 idf_component_get_property(camera_video_dir espressif__esp_video COMPONENT_DIR)
 idf_component_get_property(camera_video_lib espressif__esp_video COMPONENT_LIB)
 idf_component_get_property(camera_sensor_dir espressif__esp_cam_sensor COMPONENT_DIR)
@@ -64,3 +67,7 @@ rodak_replace_camera_source("${camera_video_lib}" "${camera_video_dir}"
     "${camera_video_dir}/src/device/esp_video_device_common.c" "${camera_generated_video}")
 rodak_replace_camera_source("${camera_sensor_lib}" "${camera_sensor_dir}"
     "${camera_sensor_dir}/src/driver_dvp/esp_cam_ctlr_dvp_cam.c" "${camera_generated_sensor}")
+if(RODAKOS_CAMERA_DMA_FORCE_4096)
+    target_compile_definitions(${camera_sensor_lib} PRIVATE RODAKOS_CAMERA_DMA_FORCE_4096=1)
+    message(WARNING "Camera DMA 4096-byte fault injection is active; never ship this build")
+endif()

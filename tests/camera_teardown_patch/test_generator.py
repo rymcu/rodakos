@@ -134,6 +134,8 @@ class CameraGeneratorTests(unittest.TestCase):
         self.assertEqual(sensor.count("dvp_dma_deinit("), 3)
         self.assertIn("jpeg ? DVP_CAM_DMA_BUFFER_SIZE : 6144", sensor)
         self.assertIn("jpeg ? 6144 : 4096", sensor)
+        self.assertIn("RODAKOS_CAMERA_DMA_FORCE_4096", sensor)
+        self.assertIn("RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE", sensor)
         self.assertIn("DVP DMA ring selected: configured=%u selected=%u actual=%u half=%u desc_half=%u", sensor)
 
     def test_preferred_dma_layout_is_frame_aligned(self):
@@ -162,16 +164,19 @@ class CameraGeneratorTests(unittest.TestCase):
             overlay.require_controller_stop_before_sensor_stop(regressed)
 
     def test_production_cmake_replaces_exactly_one_source_per_component(self):
-        for scenario in ("valid", "missing_video", "duplicate_video", "missing_sensor", "duplicate_sensor"):
+        for scenario in ("valid", "fault", "missing_video", "duplicate_video", "missing_sensor", "duplicate_sensor"):
             with self.subTest(scenario=scenario):
-                result = subprocess.run([
+                command = [
                     "cmake", "-S", str(ROOT / "tests/camera_teardown_patch/cmake_fixture"),
                     "-B", str(self.root / ("cmake-" + scenario)),
                     "-DRODAKOS_ROOT=" + ROOT.as_posix(), "-DRODAKOS_IDF_PATH=" + IDF_PATH.as_posix(),
                     "-DPython3_EXECUTABLE=" + sys.executable,
-                    "-DFIXTURE_CASE=" + scenario], capture_output=True, text=True, timeout=20)
+                    "-DFIXTURE_CASE=" + scenario]
+                if scenario == "fault":
+                    command.append("-DRODAKOS_CAMERA_DMA_FORCE_4096=ON")
+                result = subprocess.run(command, capture_output=True, text=True, timeout=20)
                 output = result.stdout + result.stderr
-                if scenario == "valid":
+                if scenario in ("valid", "fault"):
                     self.assertEqual(result.returncode, 0, output)
                 else:
                     self.assertNotEqual(result.returncode, 0, output)

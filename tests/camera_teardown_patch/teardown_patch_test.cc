@@ -37,6 +37,7 @@ unsigned dma_log_actual = 0;
 unsigned dma_log_half = 0;
 unsigned dma_log_desc_half = 0;
 int dma_log_count = 0;
+int dma_fault_log_count = 0;
 dvp_cam_ctlr_t controller{};
 
 void reset_controller() {
@@ -63,6 +64,7 @@ void reset_dma_allocator() {
     dma_log_half = 0;
     dma_log_desc_half = 0;
     dma_log_count = 0;
+    dma_fault_log_count = 0;
 }
 
 void check(bool condition, const char *message) {
@@ -122,6 +124,7 @@ void fake_dma_log(const char *format, ...) {
     va_end(args);
     ++dma_log_count;
 }
+void fake_dma_fault_log(const char *, ...) { ++dma_fault_log_count; }
 esp_err_t esp_cam_sensor_ioctl(void *handle, int command, int *flags) {
     check(handle == &sensor && command == ESP_CAM_SENSOR_IOC_S_STREAM && *flags == 0, "sensor STREAMOFF arguments changed");
     return called("sensor");
@@ -261,7 +264,8 @@ int main(int argc, char **argv) {
         if (scenario == "startup_cleanup") expect_calls({"disconnect", "dma_delete"});
         else if (scenario == "startup_cleanup_error") expect_calls({"disconnect"});
         else check(calls.empty(), "null DMA remains a no-op");
-    } else if (scenario == "dma_preferred" || scenario == "dma_jpeg_configured" ||
+    } else if (scenario == "dma_preferred" || scenario == "dma_forced_fallback" ||
+               scenario == "dma_jpeg_configured" ||
                scenario == "dma_ring_fallback" ||
                scenario == "dma_desc_fallback" || scenario == "dma_exhausted") {
         reset_dma_allocator();
@@ -278,6 +282,15 @@ int main(int argc, char **argv) {
                   "preferred DMA layout differs");
             check(controller.dma_desc_hcnt == 1, "preferred descriptor count differs");
             check(dma_freed_pointers.empty(), "successful preferred allocation was freed");
+            check(dma_fault_log_count == 0, "ordinary preferred allocation emitted fault marker");
+        } else if (scenario == "dma_forced_fallback") {
+            check(result == ESP_OK, "forced DMA fallback succeeds");
+            check(dma_alloc_sizes == std::vector<size_t>({4096, 32}),
+                  "forced fallback attempted the preferred ring");
+            check(controller.dma_buffer_size == 4096 && controller.dma_buffer_hsize == 2048,
+                  "forced fallback layout differs");
+            check(controller.dma_desc_hcnt == 1, "forced fallback descriptor count differs");
+            check(dma_fault_log_count == 1, "forced fallback marker missing");
         } else if (scenario == "dma_jpeg_configured") {
             check(result == ESP_OK, "JPEG DMA allocation succeeds");
             check(dma_alloc_sizes == std::vector<size_t>({8192, 256}),

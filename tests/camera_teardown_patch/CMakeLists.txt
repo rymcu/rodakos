@@ -33,13 +33,21 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ext
 if(NOT extract_result EQUAL 0)
     message(FATAL_ERROR "Camera test extraction refused: ${extract_output}${extract_error}")
 endif()
-add_executable(rodakos_camera_teardown_patch_tests teardown_patch_test.cc "${generated_dir}/production_functions.c")
-target_include_directories(rodakos_camera_teardown_patch_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}" "${RODAKOS_ROOT}/main/phone_os")
-target_compile_features(rodakos_camera_teardown_patch_tests PRIVATE c_std_11 cxx_std_17)
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(rodakos_camera_teardown_patch_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
-endif()
+function(configure_camera_teardown_target target)
+    target_include_directories(${target} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${RODAKOS_ROOT}/main/phone_os")
+    target_compile_features(${target} PRIVATE c_std_11 cxx_std_17)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+    endif()
+endfunction()
+add_executable(rodakos_camera_teardown_patch_tests teardown_patch_test.cc
+    "${generated_dir}/production_functions.c")
+configure_camera_teardown_target(rodakos_camera_teardown_patch_tests)
+add_executable(rodakos_camera_dma_fault_tests teardown_patch_test.cc
+    "${generated_dir}/production_functions.c")
+configure_camera_teardown_target(rodakos_camera_dma_fault_tests)
+target_compile_definitions(rodakos_camera_dma_fault_tests PRIVATE RODAKOS_CAMERA_DMA_FORCE_4096=1)
 foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_interface
         common_fail_stop common_fail_disable common_fail_delete del_fail_gpio_disable
         del_fail_capture del_fail_gpio_remove del_fail_disconnect del_fail_dma_delete
@@ -53,6 +61,9 @@ foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_in
     add_test(NAME "camera_teardown_${scenario}" COMMAND rodakos_camera_teardown_patch_tests "${scenario}")
     set_tests_properties("camera_teardown_${scenario}" PROPERTIES TIMEOUT 10)
 endforeach()
+add_test(NAME camera_teardown_dma_forced_fallback
+    COMMAND rodakos_camera_dma_fault_tests dma_forced_fallback)
+set_tests_properties(camera_teardown_dma_forced_fallback PROPERTIES TIMEOUT 10)
 add_test(NAME camera_teardown_generator COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_generator.py" --idf-path "${RODAKOS_IDF_PATH}")
 set_tests_properties(camera_teardown_generator PROPERTIES TIMEOUT 60)
