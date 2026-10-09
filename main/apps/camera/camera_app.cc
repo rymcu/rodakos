@@ -132,6 +132,19 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     return true;
 }
 
+void LogPauseResources(const char* phase) {
+    ESP_LOGI(TAG,
+             "Pause resources: phase=%s internal_free=%u internal_largest=%u "
+             "dma_free=%u dma_largest=%u",
+             phase,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)));
+}
+
 bool CameraApp::CreateUi(int lock_timeout_ms) {
     if (ui_ == nullptr) {
         return false;
@@ -232,12 +245,15 @@ void CameraApp::OnPause() {
     ESP_LOGI(TAG, "Pause: UI cleanup begin");
     DestroyUi();
     ESP_LOGI(TAG, "Pause: UI cleanup complete");
+    LogPauseResources("ui-released");
     if (camera_ != nullptr) {
         camera_->StopPreview();
     }
     ESP_LOGI(TAG, "Pause: preview stop complete");
+    LogPauseResources("preview-stopped");
     ReleaseAudioResources();
     ESP_LOGI(TAG, "Pause: audio release complete");
+    LogPauseResources("audio-released");
     preview_paused_for_transition_ = ui_active;
 }
 
