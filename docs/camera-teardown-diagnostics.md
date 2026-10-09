@@ -283,3 +283,22 @@ confirmation → Home、WiFi/MQTT 恢复均通过，未使用 `-Erase`；普通�
 062 原始串口在 RodakOS `.codex-temp/camera-register-062/serial-062.log`，Remote Camera
 证据在 Rodak `.codex-temp/camera-physical-058/camera-stream-*-062-settled.*`。物理画质、
 任意 OOM、异常并发和八小时资格门禁继续 **NO_GO**，未启动新的长稳。
+
+## 062 后的软件输入审计
+
+为避免把已核对的 managed source 当成新的修复方向，补做了构建输入审计：
+
+- `managed_components/espressif__esp_cam_sensor/sensors/gc0308/gc0308.c` SHA-256 为
+  `36f221ef43559c9fc222a1dc23b91a5eb64fb899d521a8fbb11a08b305c2052a`，与
+  `patches/dvp_deinit/2.3.0/provenance.json` 中受审查版本完全一致。
+- BigSmart Board Manager 配置固定为 GC0308 DVP、20 MHz XCLK（GPIO5）、VSYNC GPIO44、
+  DE GPIO46、PCLK GPIO7，8-bit data mapping 为 `16/18/8/17/15/6/4/9`；sensor 没有独立
+  reset/pwdn GPIO。
+- PCA9557 的 DVP_EN 为低有效，默认输出 `[1, 1, 0]` 保持摄像头供电；063 构建的
+  `RODAKOS_CAMERA_DMA_FORCE_4096`、`RODAKOS_CAMERA_SENSOR_DIAGNOSTICS` 和
+  `RODAKOS_CAMERA_TEST_PATTERN` 均为 OFF。
+
+因此目前没有证据支持继续改 managed GC0308 寄存器表或 DVP 引脚映射。下一次硬件窗口应记录
+摄像头模组镜头/遮挡状态、DVP_EN 电平、GPIO5 XCLK、PCLK/VSYNC 活动和摄像头供电；若电气
+信号正常而普通帧仍为同一暗值，再考虑更换模组或针对模拟前端做板级维修。软件首帧、SCCB
+读取和 test pattern 仍不能替代这些物理证据。

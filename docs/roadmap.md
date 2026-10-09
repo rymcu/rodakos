@@ -141,6 +141,11 @@ confirmation → Home and WiFi/MQTT recovery passed without `-Erase`, and no fau
 Resource/production stays **NO_GO**; arbitrary OOM, broader concurrency, physical image, power-cut,
 production signing/readback and qualification soak remain open, so no new eight-hour run started.
 
+Input audit after 062 found no managed-source or board-contract drift: the GC0308 driver hash matches
+the reviewed 2.3.0 provenance, and BigSmart still uses 20 MHz XCLK, low-active DVP_EN and the recorded
+VSYNC/DE/PCLK/data pin mapping. The next image-quality window therefore requires physical evidence for
+DVP_EN, XCLK, PCLK/VSYNC, camera supply and lens/obstruction before any further register-table change.
+
 Evidence status updated on 2026-10-10. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
