@@ -125,10 +125,15 @@ class CameraGeneratorTests(unittest.TestCase):
         video = (self.output / "esp_video_device_common.c").read_text()
         sensor = (self.output / "esp_cam_ctlr_dvp_cam.c").read_text()
         self.assertEqual(video.count("rodak_camera_teardown_record("), 8)
-        self.assertEqual(sensor.count("rodak_camera_teardown_record("), 12)
+        self.assertEqual(sensor.count("rodak_camera_teardown_record("), 16)
         self.assertEqual(sensor.count("dvp_dma_deinit(*gdma_chan, false)"), 1)
         self.assertEqual(sensor.count("dvp_dma_deinit(ctlr->dma_chan, false)"), 1)
-        self.assertEqual(sensor.count("dvp_dma_deinit(ctlr->dma_chan, true)"), 1)
+        # The staged controller delete owns GDMA disconnect/delete directly;
+        # the helper remains only on startup/unwind call sites.
+        self.assertEqual(sensor.count("dvp_dma_deinit(ctlr->dma_chan, true)"), 0)
+        self.assertEqual(sensor.count("dvp_dma_deinit("), 3)
+        self.assertIn("DVP DMA ring fallback", sensor)
+        self.assertIn("DVP_CAM_DMA_BUFFER_SIZE, 6144, 4096", sensor)
 
     def test_production_cmake_replaces_exactly_one_source_per_component(self):
         for scenario in ("valid", "missing_video", "duplicate_video", "missing_sensor", "duplicate_sensor"):

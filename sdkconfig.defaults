@@ -9,8 +9,9 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 
-# The S3 DVP driver needs contiguous internal DMA SRAM even with PSRAM frames.
-# Keep its receive ring below the free-block budget of the resident voice runtime.
+# Keep the reviewed IDF range-valid setting. The overlay retries allocation with
+# smaller frame-aligned rings (6144 then 4096 bytes) when fragmentation leaves
+# less than the configured 7680-byte contiguous block.
 CONFIG_CAM_CTRL_DVP_DMA_BUFFER_SIZE=8192
 
 # Reserve shared SRAM for WiFi runtime buffers and concurrent voice/cloud tasks.

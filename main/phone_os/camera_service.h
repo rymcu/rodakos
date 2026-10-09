@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -104,6 +105,10 @@ private:
     bool remote_preview_lease_ = false;
     bool jpeg_stream_running_ = false;
     bool jpeg_stream_stop_requested_ = false;
+    // Keep the V4L2 fd, mapped buffers and Board Manager ownership together
+    // until STREAMOFF succeeds; closing them after a failed stop strands the
+    // lower-level DVP controller and makes a later retry impossible.
+    std::atomic_bool streamoff_retry_required_{false};
     uint8_t jpeg_stream_fps_ = 0;
     JpegFrameCallback jpeg_stream_callback_;
     int fd_ = -1;

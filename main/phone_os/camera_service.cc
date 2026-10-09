@@ -248,6 +248,13 @@ bool CameraService::IsAvailable() const {
 
 bool CameraService::StartPreview(PreviewOwner owner, int width, int height) {
     std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    if (streamoff_retry_required_.load(std::memory_order_acquire)) {
+        CloseStream();
+        if (streamoff_retry_required_.load(std::memory_order_acquire)) {
+            SetError("Camera stream cleanup is still pending");
+            return false;
+        }
+    }
     if (!IsAvailable()) {
         SetError("Camera device is not configured");
         return false;
@@ -377,6 +384,12 @@ void CameraService::StopPreview(PreviewOwner owner) {
         should_wait = bool(task) && !local_preview_lease_ && !remote_preview_lease_;
         if (should_wait && preview_running_) stop_requested_ = true;
         xSemaphoreGive(mutex_);
+        if (!should_wait && streamoff_retry_required_.load(std::memory_order_acquire)) {
+            // The worker may already have returned after a failed STREAMOFF.
+            // Retry the same fd/buffer/device ownership on a later Stop call
+            // before allowing the service to be destroyed or reopened.
+            CloseStream();
+        }
     }
     if (should_wait) ESP_LOGI(TAG, "StopPreview: stop requested");
     if (!should_wait || task.IsCurrentTask()) {
@@ -387,6 +400,9 @@ void CameraService::StopPreview(PreviewOwner owner) {
     // progress while this caller waits for its captured generation only.
     task.Join();
     ESP_LOGI(TAG, "StopPreview: worker stopped");
+    if (streamoff_retry_required_.load(std::memory_order_acquire)) {
+        CloseStream();
+    }
 }
 
 bool CameraService::GetLatestFrame(CameraFrame& frame) {
@@ -935,6 +951,14 @@ void CameraService::CloseStream() {
                                      streamoff_result);
         rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_BEFORE_LOG, xPortGetCoreID(),
                                      streamoff_result);
+        if (streamoff_result != 0) {
+            streamoff_retry_required_.store(true, std::memory_order_release);
+            ESP_LOGW(TAG, "CloseStream: STREAMOFF failed; retaining fd and buffers for retry: %s",
+                     ErrnoName());
+            rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_AFTER_LOG, xPortGetCoreID(),
+                                         streamoff_result);
+            return;
+        }
         ESP_LOGI(TAG, "CloseStream: STREAMOFF complete");
         rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_AFTER_LOG, xPortGetCoreID(),
                                      streamoff_result);
@@ -964,6 +988,7 @@ void CameraService::CloseStream() {
     active_height_ = 0;
     active_stride_ = 0;
     active_pixelformat_ = 0;
+    streamoff_retry_required_.store(false, std::memory_order_release);
 #endif
 }
 

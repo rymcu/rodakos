@@ -4,7 +4,9 @@
 127.583 秒。仅凭这条日志，不能确定 `ioctl` 尚未返回：实际使用的
 `esp_cam_sensor` 2.3.0 extended DVP 驱动会直接删除 worker，后续普通日志也可能阻塞。
 022 增加独立于日志的阶段记录，用于下一次故障取证；没有改变关闭顺序或修复任务生命周期。
-028 在同一受校验 overlay 中加入合作式 worker 退出，合同见下；027 故障与调试干预证据保留。
+028 在同一受校验 overlay 中加入合作式 worker 退出；本轮继续加入失败后可重试的 DVP
+分阶段 owner 释放，并为受 IDF 范围约束的8192配置增加6144→4096的连续块降级尝试。
+027 故障与调试干预证据保留。
 
 ## 记录合同
 
@@ -16,8 +18,9 @@ stop/disable/del，以及 DVP worker 删除、GPIO、capture stop 和 GDMA 清�
 
 写入只尝试一次 strong CAS，不分配、不等待、不调用日志。竞争或容量耗尽时保留已有记录，
 设置粘性 drop 标志；不重试、不循环覆盖、不提供在线 reset。每条 payload 写完后 release
-发布 `commit_seq`，认领后被停止的 writer 可留下 pending 槽。在线读者必须使用 bounded
-snapshot；调试器读取则须先确认两核停止。记录不跨设备复位保留。
+发布 `commit_seq`，认领后被停止的 writer 可留下 pending 槽。DVP 每个失败阶段只记录首次
+尝试，后续 owner release 仅重试未完成阶段；上层多次 ioctl 仍会追加服务层记录。在线读者
+必须使用 bounded snapshot；调试器读取则须先确认两核停止。记录不跨设备复位保留。
 
 序号表示认领顺序，不是跨核绝对时间；core 是调用点采样，不是 IRQ 注册核。状态保留被调用
 函数的原返回值，`ioctl=-1` 不包含 errno，也不是底层 `esp_err_t`。enter/void returned 为 0。
@@ -48,8 +51,11 @@ RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host �
 
 ## 028 worker 生命周期修正
 
-实际 extended DVP 仍使用 8,192 B ring 配置（当前几何生成 7,680 B）、3,072 B worker 栈、
-优先级 23 和长度 3 的队列。构造仅将 worker stack 改为
+实际 extended DVP 仍使用受 IDF 范围约束的 8,192 B 配置（当前几何生成约 7,680 B），并在
+连续块不足时尝试 6,144 B、再尝试 4,096 B 的帧对齐 ring；同时保留 3,072 B worker 栈、
+优先级 23 和长度 3 的队列。旧 8,192 B 配置当前几何生成 7,680 B，
+在长稳碎片化窗口中曾出现总 DMA 空闲 20–27 KiB 而最大连续块只有 5–7 KiB 的分配失败。
+构造仅将 worker stack 改为
 `xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`，不回退内部栈；TCB、
 controller、ring、descriptor 和 queue 保持原内部内存要求。目标 ELF DWARF 的 controller
 从 144 B 增至 148 B；3,072 B 栈迁移与 4 B 结构增量不是实机 free/largest 净收益。
@@ -74,8 +80,11 @@ provenance 约束。
 handle 发布前运行及处理中关闭回归，与实际 GPIO ISR drain、cache-off/NVS/OTA 并发、
 无线调度和资源回收仍是不同证据。最终记录器 ELF 门禁及 ioctl/日志区别回归继续保留。
 
-本地 Debug 与 ASan/UBSan/leak 各通过新 worker 13 正向案例 / 6 个源码负控、原 overlay
-26 CTest、Camera capture 33 案例及 4 个独立 ioctl/日志进程案例、诊断 13 CTest。
+本地 Windows Debug 已通过 Camera teardown overlay 33 个 CTest（含分阶段失败重试和
+self-delete 拒绝），生成器 Python 11/11；Camera deinit source contract 11/11；worker
+13 个正向案例仍可由既有 host 产物复核。本轮 ESP-IDF 6.0.2 隔离构建、Camera teardown
+ELF audit 和 JPEG allocator audit 均通过；构建只保留既有 Recovery 分区容量警告。这些
+离线结果不等于硬件首帧、吞吐或八小时长稳 GO。
 旧 027 的真实生成 worker 在持有日志锁时直接进入删除，明确触发指定断言；不以超时或
 sanitizer 崩溃冒充红例。028 的 ESP-IDF 6.0.2 编译及 recorder/JPEG 最终 ELF 门禁通过；
 实机结果须以相应已刷具名包的独立记录为准。

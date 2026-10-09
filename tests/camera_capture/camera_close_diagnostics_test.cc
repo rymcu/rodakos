@@ -110,6 +110,16 @@ void Run(bool block_log, int status) {
     camera_host::JoinTasks();
     CheckSnapshot(4, status);
     RODAK_CHECK_FALSE(fixture.camera.GetState().preview_running);
+    if (status != 0) {
+        // A failed STREAMOFF keeps the V4L2 ownership alive so the DVP
+        // controller can be stopped again. Releasing the fd or mappings here
+        // would make the lower-level cleanup permanently unrecoverable.
+        RODAK_CHECK(camera_host::frame_mappings.load() > 0u);
+        RODAK_CHECK(camera_host::preview_frame_bytes.load() > 0u);
+        camera_host::streamoff_result = 0;
+        fixture.camera.StopPreview();
+        camera_host::JoinTasks();
+    }
     RODAK_CHECK_EQ(camera_host::frame_mappings.load(), 0u);
     RODAK_CHECK_EQ(camera_host::preview_frame_bytes.load(), 0u);
 }

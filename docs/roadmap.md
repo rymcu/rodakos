@@ -18,6 +18,19 @@ factory symbols are linked. The final `sdkconfig` is byte-identical to the previ
 No hardware was flashed for this migration; retain the existing long-soak candidate's evidence
 identity and complete separate device acceptance. See [dependency maintenance](dependency-maintenance.md).
 
+Camera/DVP follow-up on 2026-10-09 remains software-only. The completed eight-hour window
+`20261009-014905` is **NO_GO** with 7/16 Camera requests succeeding and 9 DVP DMA allocation
+failures. Failure samples showed 20–27 KiB total internal DMA free but only 5–7 KiB contiguous,
+while the old 8,192-byte setting generated a 7,680-byte ring. The overlay now keeps the IDF-valid
+8,192-byte setting and retries allocation with 6,144-byte and 4,096-byte frame-aligned rings when
+the contiguous block is too small; that fallback still requires hardware throughput, first-frame
+and long-stability validation. CameraService retains fd/mmap/device ownership after a failed
+STREAMOFF for a later retry. The DVP overlay now performs staged, retryable task/GPIO/capture/HAL/
+GDMA release and rejects start/callback registration once teardown begins; successful phases are
+not repeated and their diagnostics are recorded once. Windows Debug overlay validation is 33/33
+CTest and the source-contract suite is 11/11. No device was flashed for this change; release
+status stays **NO_GO** until an isolated ESP-IDF build and a fresh verified hardware window pass.
+
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

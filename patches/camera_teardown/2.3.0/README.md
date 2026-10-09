@@ -1,6 +1,6 @@
 # Camera STREAMOFF 阶段诊断
 
-本 overlay 保留 Camera 停流阶段诊断，并在028加入 DVP worker 合作退出和 PSRAM 栈；不修改超时。
+本 overlay 保留 Camera 停流阶段诊断，并在028加入 DVP worker 合作退出、可重试的分阶段 owner 释放和 PSRAM 栈；不修改超时。
 `prepare_camera_teardown_patch.py` 校验两个 2.3.0 组件、完整依赖图、项目 manifest、
 诊断 C ABI 头及 ESP-IDF 6.0.2 的相关源文件。源文件哈希按 LF 归一化。
 依赖锁使用 IDF / host CI 已提供的 `ruamel.yaml` safe loader；与 `firmware_ci.py` 相同，
@@ -13,7 +13,10 @@ direct dependencies、target、锁格式版本及未知新增字段均不可漂�
 `common_video_stop` 在 sensor `S_STREAM`、controller stop、disable、del 前后各记一次。
 `dvp_cam_ctlr_del` 在 task delete、GPIO disable、capture stop、GPIO ISR remove 前后记录；
 其 DMA 清理在 GDMA disconnect、delete 前后记录。每次调用只求值一次，返回标记保存
-原始错误码；除下述 worker 删除合同外，原有早退、错误日志、忽略清理错误和硬件释放顺序保持。
+原始错误码。阶段状态会保留已经成功的 owner 释放，失败后再次调用只重试未完成阶段，
+不会重复释放已经断开的 GDMA、已删除的 task 或已移除的 GPIO。每个阶段只记录首次尝试，
+避免一次失败重试耗尽固定诊断槽位。除下述 worker 删除合同外，原有早退、错误日志和硬件
+释放顺序保持。
 
 正常路径的驱动阶段顺序为：
 
@@ -23,9 +26,10 @@ direct dependencies、target、锁格式版本及未知新增字段均不可漂�
 
 加服务层的 4 个标记共 24 个，低于一次开机固定 32 槽容量。诊断新增代码不创建日志、
 堆对象、任务、TLS 或锁。两个 DVP 内部启动失败 DMA 清理调用传 `false`，只保留原清理；
-正常 controller del 传 `true`。但 video 启动失败若走完整 controller del，仍会记录 DVP
-阶段。槽位不 reset、不环绕，第二次停流或此前失败清理可能导致满槽丢弃；必须结合诊断
-模块的 committed sequence、pending 与 drop 标志解释，不能假设每次运行都有完整 24 槽。
+controller del 的 staged owner release 直接执行 GDMA disconnect/delete 并传递错误。video
+启动失败的内部 DMA 清理仍不写阶段记录。槽位不 reset、不环绕；每个 DVP 阶段只占用一对
+首次尝试标记，但每次上层 ioctl 仍会追加服务层标记。必须结合诊断模块的 committed
+sequence、pending 与 drop 标志解释，不能假设长时间多次停流后仍有完整记录。
 
 以下间隙未单独标记：可选 `intf->stop` 在 sensor returned 与 controller stop enter 之间；
 `cam_hal_deinit` 在 capture returned 与 GPIO remove enter 之间；末尾 heap/queue 释放在
@@ -53,8 +57,10 @@ controller、queue、callback 或日志。owner 拿同一锁确认后才调用
 没有新增 cleanup task、任意硬超时或假 Stop 成功。
 
 创建改用 `xTaskCreateWithCaps`，3072 B 栈仅申请 PSRAM|8BIT，TCB 和 ISR 可访问对象仍内部；
-不 fallback 到 internal。ring 配置8192（320×240 RGB565实际7680 B）、任务优先级23、queue
-长度3保持。WithCaps 自删除会另建 internal cleanup task，因此使用已有 owner 删除；普通
+不 fallback 到 internal。默认 ring 配置仍为受 IDF 范围约束的8192（320×240 RGB565
+当前几何生成约7680 B）；分配 overlay 在连续块不足时依次尝试6144和4096字节的帧对齐
+ring，任务优先级23、queue 长度3保持。长稳失败时总DMA空闲仍有20–27 KiB但最大连续块
+只有5–7 KiB；降级路径只是软件候选，吞吐、首帧和长稳仍需实机验证。WithCaps 自删除会另建 internal cleanup task，因此使用已有 owner 删除；普通
 `vTaskDelete` 也不能替代它。相关 IDF WithCaps 实现、声明、Kconfig 和 heap 契约已加入 pins。
 
 phase13 现在包含合作等待和 WithCaps 删除，phase14 仍在成功删除后；记录 ABI、固定536 B、

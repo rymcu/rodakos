@@ -131,6 +131,21 @@ class CameraServiceReleaseLogContractTest(unittest.TestCase):
             close_stream.index('"CloseStream: device release complete"')
         )
 
+    def test_streamoff_failure_keeps_v4l2_ownership_for_retry(self) -> None:
+        source = CAMERA_SERVICE_SOURCE.read_text(encoding="utf-8")
+        close_stream = function_body(source, "CameraService::CloseStream")
+        failure = close_stream.index("streamoff_result != 0")
+        self.assertIn("streamoff_retry_required_", close_stream[failure:])
+        self.assertIn("return", close_stream[failure:])
+        self.assertLess(
+            close_stream.index("streamoff_retry_required_", failure),
+            close_stream.index("return", failure)
+        )
+        failure_body = close_stream[failure:close_stream.index("for (auto& buffer", failure)]
+        self.assertNotIn("munmap", failure_body)
+        self.assertNotIn("close(fd_)", failure_body)
+        self.assertNotIn("camera_device_.Release()", failure_body)
+
 
 if __name__ == "__main__":
     unittest.main()

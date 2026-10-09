@@ -24,7 +24,8 @@ int queue;
 int task;
 int channel;
 int sensor;
-dvp_cam_ctlr_t controller{&task, 7, &channel, 0, &descriptor, &buffer, &queue, 0, false, false};
+dvp_cam_ctlr_t controller{&task, 7, &channel, 0, &descriptor, &buffer, &queue, 0,
+                          DVP_CAM_FSM_STARTED};
 
 void check(bool condition, const char *message) {
     if (!condition) { std::fprintf(stderr, "FAIL: %s\n", message); ++failures; }
@@ -129,21 +130,65 @@ int main(int argc, char **argv) {
         check(log_count == 1, "common retains existing error log count");
     } else if (scenario.rfind("del_fail_", 0) == 0) {
         fail_at = scenario.substr(9);
-        check(run_dvp_del(&controller) == ESP_OK, "delete still ignores cleanup errors");
+        check(run_dvp_del(&controller) == -37, "delete propagates cleanup errors");
         if (fail_at == "disconnect") {
-            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "free_desc", "free_buffer", "queue", "free_ctlr"});
+            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect"});
             expect_phases({13, 14, 15, 16, 17, 18, 19, 20, 21, 22});
             expect_failure_status(22);
         } else {
-            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
-            expect_phases({13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
-            if (fail_at == "gpio_disable") expect_failure_status(16);
-            else if (fail_at == "capture") expect_failure_status(18);
-            else if (fail_at == "gpio_remove") expect_failure_status(20);
-            else if (fail_at == "dma_delete") expect_failure_status(24);
-            else check(false, "unknown delete failure");
+            if (fail_at == "dma_delete") {
+                expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "dma_delete"});
+                expect_phases({13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
+                expect_failure_status(24);
+            } else if (fail_at == "gpio_disable") {
+                expect_calls({"task", "gpio_disable"});
+                expect_phases({13, 14, 15, 16});
+                expect_failure_status(16);
+            } else if (fail_at == "capture") {
+                expect_calls({"task", "gpio_disable", "hal_stop", "capture"});
+                expect_phases({13, 14, 15, 16, 17, 18});
+                expect_failure_status(18);
+            } else if (fail_at == "gpio_remove") {
+                expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove"});
+                expect_phases({13, 14, 15, 16, 17, 18, 19, 20});
+                expect_failure_status(20);
+            }
         }
-        check(log_count == ((fail_at == "disconnect" || fail_at == "dma_delete") ? 2 : (fail_at == "capture" ? 1 : 0)), "existing cleanup log behavior retained");
+        check(log_count == (fail_at == "capture" ? 1 : 0), "failed staged cleanup logs only the failed capture stop");
+    } else if (scenario.rfind("del_retry_", 0) == 0) {
+        fail_at = scenario.substr(10);
+        check(run_dvp_del(&controller) == -37, "first staged delete reports failure");
+        fail_at.clear();
+        check(run_dvp_del(&controller) == ESP_OK, "second staged delete completes");
+        if (scenario == "del_retry_gpio_disable") {
+            expect_calls({"task", "gpio_disable", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        } else if (scenario == "del_retry_capture") {
+            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        } else if (scenario == "del_retry_gpio_remove") {
+            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "gpio_remove", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        } else if (scenario == "del_retry_disconnect") {
+            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        } else if (scenario == "del_retry_dma_delete") {
+            expect_calls({"task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect", "dma_delete", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        } else {
+            check(false, "unknown staged retry");
+        }
+        expect_phases({13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
+    } else if (scenario == "common_retry_disconnect") {
+        forward_delete = true;
+        fail_at = "disconnect";
+        check(run_video() == -37, "common stop exposes DVP delete failure");
+        fail_at.clear();
+        check(run_video() == ESP_OK, "common stop retries the staged delete");
+        expect_calls({"sensor", "stop", "disable", "delete", "task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect",
+                      "sensor", "stop", "disable", "delete", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        expect_phases({5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 12,
+                       5, 6, 7, 8, 9, 10, 11, 23, 24, 12});
+    } else if (scenario == "del_self_reject") {
+        controller.task_handle = &sensor;
+        check(run_dvp_del(&controller) == ESP_ERR_INVALID_STATE, "self deletion is rejected");
+        check(!controller.teardown_started, "self rejection does not arm teardown");
+        check(marks.empty(), "self rejection does not consume diagnostics slots");
     } else if (scenario == "startup_cleanup" || scenario == "startup_cleanup_error" || scenario == "null_dma") {
         if (scenario == "startup_cleanup_error") fail_at = "disconnect";
         check(run_dma_deinit(scenario == "null_dma" ? nullptr : &channel, scenario == "null_dma") ==

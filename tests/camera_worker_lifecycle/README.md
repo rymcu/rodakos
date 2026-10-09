@@ -40,7 +40,8 @@ ctest --test-dir ~/.cache/rodakos-camera-worker --output-on-failure
 CTest 分别执行正向场景与六个完整编译的负变体。
 
 ASan/UBSan/leak 使用独立目录，并给 C、C++、链接器加相应 sanitizer 参数。原
-`camera_teardown_patch` 继续验证24标记预算、真实关闭函数、错误返回和生成器漂移拒绝；
+`camera_teardown_patch` 继续验证24标记预算、真实关闭函数、分阶段错误重试（阶段标记只
+记录首次尝试）和生成器漂移拒绝；
 `camera_capture` 保留 ioctl 内与返回后日志阻塞的区分；最终固件仍需 recorder ELF 门禁。
 
 本目标不模拟真实 GPIO/GDMA IRQ drain、cache-off、传感器数据质量、PSRAM stack 实时时序

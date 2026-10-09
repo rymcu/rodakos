@@ -43,6 +43,9 @@ endif()
 foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_interface
         common_fail_stop common_fail_disable common_fail_delete del_fail_gpio_disable
         del_fail_capture del_fail_gpio_remove del_fail_disconnect del_fail_dma_delete
+        del_retry_gpio_disable del_retry_capture del_retry_gpio_remove del_retry_disconnect
+        del_retry_dma_delete common_retry_disconnect
+        del_self_reject
         startup_cleanup startup_cleanup_error null_dma blocked_sensor blocked_stop
         blocked_disable blocked_delete blocked_task blocked_gpio_disable blocked_capture
         blocked_gpio_remove blocked_disconnect blocked_dma_delete)

@@ -17,6 +17,11 @@ typedef int cam_hal_context_t;
 typedef void* TaskHandle_t;
 typedef int portMUX_TYPE;
 typedef struct { int type; } dvp_cam_event_t;
+typedef enum {
+    DVP_CAM_FSM_INIT = 1,
+    DVP_CAM_FSM_STARTED,
+    DVP_CAM_FSM_RXING,
+} dvp_cam_fsm_t;
 #define DVP_CAM_EVENT_SHUTDOWN 2
 #define portENTER_CRITICAL(p) ((void)(p))
 #define portEXIT_CRITICAL(p) ((void)(p))
@@ -29,6 +34,21 @@ typedef struct dvp_cam_ctlr {
     void *dma_buffer;
     void *event_queue;
     portMUX_TYPE spinlock;
+    dvp_cam_fsm_t dvp_fsm;
+    bool teardown_started;
+    bool teardown_task_deleted;
+    bool teardown_gpio_disabled;
+    bool teardown_capture_stopped;
+    bool teardown_hal_deinitialized;
+    bool teardown_gpio_removed;
+    bool teardown_dma_disconnected;
+    bool teardown_dma_deleted;
+    bool teardown_task_marked;
+    bool teardown_gpio_disable_marked;
+    bool teardown_capture_marked;
+    bool teardown_gpio_remove_marked;
+    bool teardown_dma_disconnect_marked;
+    bool teardown_dma_delete_marked;
     bool shutdown_requested;
     bool worker_quiesced;
 } dvp_cam_ctlr_t;
@@ -76,6 +96,7 @@ void heap_caps_free(void *);
 void vQueueDelete(void *);
 esp_err_t run_common_stop(struct esp_video *);
 esp_err_t run_dvp_del(dvp_cam_ctlr_t *);
+esp_err_t run_dvp_stop(dvp_cam_ctlr_t *);
 esp_err_t run_dma_deinit(gdma_channel_handle_t, bool);
 
 #ifdef __cplusplus
