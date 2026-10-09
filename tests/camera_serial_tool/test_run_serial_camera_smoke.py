@@ -18,7 +18,8 @@ def health(source, uptime, connected=1):
         "MQTT": f"connected={connected} telemetry_queued=1 stack_min_free=2048 internal_free=40000 "
                 "internal_largest=16384 psram_free=3000000 psram_largest=2097152",
         "Main": "stack_min_free=2048 internal_free=40000 internal_largest=16384",
-        "Voice": "enabled=1 listening=1 supervisor_stack_min_free=1796 internal_free=40000 internal_largest=16384",
+        "Voice": "enabled=1 listening=1 supervisor_stack_bytes=6144 "
+                 "supervisor_stack_min_free=4432 internal_free=40000 internal_largest=16384",
     }
     return f"I ({uptime}) Runtime: {source} health: {fields[source]}"
 
@@ -216,10 +217,11 @@ class CameraSmokeTests(unittest.TestCase):
     def test_low_stack_and_trailing_panic_cannot_be_hidden(self):
         report, _, _ = self.run_trace()
         self.assertEqual(report["status"], "software-smoke-observed")
-        entries = [(30, health(source, 30000).replace("supervisor_stack_min_free=1796", "supervisor_stack_min_free=128"))
+        entries = [(30, health(source, 30000).replace("supervisor_stack_min_free=4432", "supervisor_stack_min_free=128"))
                    for source in tool.HEALTH_FIELDS]
         entries += [(60, health(source, 60000)) for source in tool.HEALTH_FIELDS]
-        self.assertIn("insufficient_memory_or_stack_headroom", tool.health_evidence(entries, 0, 65, 1000)["failures"])
+        self.assertIn("insufficient_voice_supervisor_stack_headroom",
+                      tool.health_evidence(entries, 0, 65, 1000)["failures"])
         clock = Clock()
         with patch.object(tool.time, "monotonic", clock):
             session = tool.CameraSmokeSession(FakePort(clock), io.BytesIO())

@@ -8,6 +8,9 @@ import re
 import statistics
 import time
 
+MIN_VOICE_SUPERVISOR_STACK_BYTES = 6144
+MIN_VOICE_SUPERVISOR_STACK_HEADROOM = 4096
+
 
 class Evidence:
     def __init__(self):
@@ -208,6 +211,12 @@ class Evidence:
             failures.add("health_gap_over_90_seconds")
         if self.minima.get("internal_largest", 8192) < 8192 or self.minima.get("stack_min_free", 512) < 512:
             failures.add("insufficient_memory_or_stack_headroom")
+        voice = self.resource_minima.get("voice", {})
+        if voice:
+            if voice.get("supervisor_stack_bytes", 0) < MIN_VOICE_SUPERVISOR_STACK_BYTES:
+                failures.add("insufficient_voice_supervisor_stack_capacity")
+            if voice.get("supervisor_stack_min_free", 0) < MIN_VOICE_SUPERVISOR_STACK_HEADROOM:
+                failures.add("insufficient_voice_supervisor_stack_headroom")
         drop = statistics.median(self.first) - statistics.median(self.last) if self.first else None
         if self.samples >= 20 and drop > 8192:
             failures.add("internal_heap_median_drop_over_8KiB")

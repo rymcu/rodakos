@@ -144,7 +144,7 @@ class SoakTests(unittest.TestCase):
             "I (100) VoiceWakeService: Voice health: enabled=1 status=1 listening=1 "
             "internal_free=1000 internal_min=275 internal_largest=9000 "
             "psram_free=200000 psram_min=150000 psram_largest=120000 "
-            "supervisor_stack_min_free=1796",
+            "supervisor_stack_bytes=4096 supervisor_stack_min_free=1796",
             1,
         )
         evidence.accept(
@@ -170,26 +170,30 @@ class SoakTests(unittest.TestCase):
         self.assertNotIn("reset_or_runtime_failure", report["failures"])
         self.assertIn("error_log_present", report["failures"])
 
-    def test_voice_supervisor_stack_uses_the_shared_headroom_threshold(self):
-        for stack, expected in ((128, "no-go"), (511, "no-go"), (512, "pass-observed"),
-                                (2048, "pass-observed")):
+    def test_voice_supervisor_has_separate_capacity_and_headroom_thresholds(self):
+        for capacity, stack, expected in ((4096, 4432, "no-go"), (6144, 4095, "no-go"),
+                                          (6144, 4096, "pass-observed"),
+                                          (6144, 4432, "pass-observed")):
             with self.subTest(supervisor_stack_min_free=stack):
                 evidence = Evidence()
                 for index in range(960):
                     evidence.accept(line(index * 30000), index * 30)
                 evidence.accept(
                     f"I (28780000) VoiceWakeService: Voice health: enabled=1 listening=1 "
-                    f"internal_free=40000 internal_largest=16384 supervisor_stack_min_free={stack}",
+                    f"internal_free=40000 internal_largest=16384 "
+                    f"supervisor_stack_bytes={capacity} supervisor_stack_min_free={stack}",
                     28780,
                 )
                 report = evidence.report(28800, 28800, True)
                 self.assertEqual(report["status"], expected)
-                self.assertEqual(report["minima"]["stack_min_free"], stack)
+                self.assertEqual(report["minima"]["stack_min_free"], min(2048, stack))
                 self.assertEqual(report["resource_minima"]["mqtt"]["stack_min_free"], 2048)
                 self.assertEqual(report["resource_minima"]["voice"]["supervisor_stack_min_free"], stack)
                 self.assertNotIn("stack_min_free", report["resource_minima"]["voice"])
-                self.assertEqual("insufficient_memory_or_stack_headroom" in report["failures"],
-                                 stack < 512)
+                self.assertEqual("insufficient_voice_supervisor_stack_capacity" in report["failures"],
+                                 capacity < 6144)
+                self.assertEqual("insufficient_voice_supervisor_stack_headroom" in report["failures"],
+                                 stack < 4096)
 
     def test_stack_minimum_combines_sources_without_later_samples_hiding_pressure(self):
         for observations in (

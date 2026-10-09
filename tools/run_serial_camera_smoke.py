@@ -32,7 +32,8 @@ CLOSE_MARKERS = (
 HEALTH_FIELDS = {
     "MQTT": {"connected", "telemetry_queued", "stack_min_free", "internal_largest"},
     "Main": {"stack_min_free", "internal_free", "internal_largest"},
-    "Voice": {"enabled", "listening", "supervisor_stack_min_free", "internal_free", "internal_largest"},
+    "Voice": {"enabled", "listening", "supervisor_stack_bytes",
+              "supervisor_stack_min_free", "internal_free", "internal_largest"},
 }
 
 
