@@ -3197,6 +3197,42 @@ MQTT/Main/Voice 健康观察；Voice 均恢复 listening。三份串口日志 er
 `.codex-temp/camera-stop-045/`，首次启动日志为
 `build/logs/first-boot-20261009-193709.log`。
 
+## 2026-10-09 Camera/DVP DMA headroom 候选 046
+
+046 使用源码 `0e29b14`，将非 JPEG DVP ring 从配置值优先改为 6,144 B 首选、4,096 B
+回退；JPEG 仍按配置值优先。320×240 RGB565 的 6,144 B 档实际 half 为 3,072 B、每帧
+50 个接收事件，非 JPEG 每半区仍为一个 descriptor。Camera teardown 38/38、worker 17/17
+加 7 组源码负控在 Debug 与 ASan/UBSan 下通过；Camera capture 7/7、device lifecycle 4/4、
+DVP deinit 13/13、DVP RCC 6/6、ESP-IDF 6.0.2 构建和最终 ELF/JPEG 审计均通过。
+
+开发签名普通包 `build/packages/ota/20261009-202156` 的 task 为
+`camera-dma-headroom-046`，version 为 `0.1.2-dev.1`，复用已验证的 immutable Recovery。
+
+| 制品 | 大小 / SHA-256 |
+| --- | --- |
+| `rodakos.bin` | 7,158,464 B / `fe29de1ef0410876bccdb34dfcc4584cf791f7a4facf3758bea407dcdfcccd9d` |
+| manifest | `e10a432612cc19942d2532fca27d966ccc48a996429486e03a471d792da250e0` |
+| 合并首刷镜像 | `7466fc4c2f80f4f9397ce64fa97a7843645c6b19c21ba80b44a0f6f9f67800a4` |
+| ZIP | `5e406f7fbee62240744b34f6e77d75f58b88178293f1eaa6380141eff43684fe` |
+
+签名验包通过。COM3 VerifyOnly 匹配 bootloader、partition table 与 immutable Recovery；
+随后只写入 `0xf000` otadata 和 `0x2a0000` ota_0，未使用 `-Erase`。Recovery → Main →
+OTA confirmation → Home 首启通过。只读 DeviceCloud 快照确认原 ID
+`c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、设备 key `44:1b:f6:c3:b4:30`、`bound`、
+`tokenVersion=4`、MQTT 在线和 voice idle 保持。
+
+一个独立 Camera → Home 窗口明确记录
+`configured=8192 selected=6144 actual=6144 half=3072 desc_half=1`，取得软件首帧、六个关闭
+阶段和 65.093 秒新鲜 MQTT/Main/Voice 健康样本，Voice 为 listening。随后单串口 5 次
+循环每次均选择 6,144 B、取得软件首帧和六个关闭阶段。六次合计 `E:RX`、overflow、DQBUF
+及 error 日志均为 0；5 次循环的内部 heap median drop 为 0。
+
+本轮仍为 **NO_GO**。单次窗口应用最大连续内部块最低 4,352 B，5 次循环最低 5,120 B；
+健康期 DMA largest 均为 6,144 B。该结果证明 6,144 B 实际路径可重复工作，但没有证明
+4,096 B fallback、充足连续内存余量、物理画质、任意 OOM、完整资源回收或长期稳定性，
+因此未启动新的八小时资格长稳。证据位于 `.codex-temp/camera-dma-046/`，首次启动日志为
+`build/logs/first-boot-20261009-202314.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录

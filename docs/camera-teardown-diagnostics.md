@@ -199,6 +199,18 @@ DVP deinit 13/13、DVP RCC 6/6 通过。ESP-IDF 6.0.2 构建、Camera teardown �
 JPEG allocator 审计通过。主镜像为 7,158,464 B，SHA-256
 `fe29de1ef0410876bccdb34dfcc4584cf791f7a4facf3758bea407dcdfcccd9d`。
 
-该结果仍是软件候选，发布状态保持 **NO_GO**。必须在具名 046 包上确认日志实际选中
-6,144 B、重复首帧与完整关闭、无 `E:RX`/overflow/DQBUF 错误、停止后连续内存余量和有界
-重复循环；这些通过后才能启动新的八小时资格长稳。
+源码 `0e29b14` 已打包为开发签名普通包 `20261009-202156` / `camera-dma-headroom-046`。
+签名验包、COM3 VerifyOnly、保留 NVS 的 `otadata + ota_0` 刷写及 Recovery → Main → OTA
+confirmation → Home 均通过；原设备 ID、`44:1b:f6:c3:b4:30`、`bound`、tokenVersion 4 和
+MQTT 在线状态保持。
+
+一个独立 Camera → Home 窗口明确记录 `selected=6144 actual=6144 half=3072 desc_half=1`，
+取得软件首帧、六阶段关闭和 65.093 秒新鲜 MQTT/Main/Voice 健康样本；随后一个单串口
+5 次循环每次都选择 6,144 B、取得首帧和六阶段关闭。六次合计 `E:RX`、overflow、DQBUF
+和 error 均为 0，5 次循环的内部 heap median drop 为 0。
+
+发布状态仍为 **NO_GO**。单次应用窗口最低连续内部块为 4,352 B，5 次循环为 5,120 B；
+健康期 DMA largest 仍只有 6,144 B。当前结果证明 6,144 B 实际路径可重复运行，但没有证明
+4,096 B fallback、充足连续内存余量、物理画质、任意 OOM、完整资源释放或长期稳定性，
+因此没有启动新的八小时资格长稳。证据位于 `.codex-temp/camera-dma-046/`，首次启动日志为
+`build/logs/first-boot-20261009-202314.log`。
