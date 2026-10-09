@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <ctime>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -155,6 +156,26 @@ struct HomeApp::TilePayload {
     bool long_press_pending = false;
 };
 
+HomeApp::TilePayload* HomeApp::AllocateTilePayload() {
+    void* storage = heap_caps_calloc(
+        1, sizeof(HomeApp::TilePayload), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (storage == nullptr) {
+        storage = heap_caps_calloc(1, sizeof(HomeApp::TilePayload), MALLOC_CAP_8BIT);
+    }
+    if (storage == nullptr) {
+        return nullptr;
+    }
+    return new (storage) HomeApp::TilePayload();
+}
+
+void HomeApp::ReleaseTilePayload(HomeApp::TilePayload* payload) {
+    if (payload == nullptr) {
+        return;
+    }
+    payload->~TilePayload();
+    heap_caps_free(payload);
+}
+
 void HomeApp::AppButtonEvent(lv_event_t* event) {
     auto* payload = static_cast<TilePayload*>(lv_event_get_user_data(event));
     if (payload == nullptr || payload->owner == nullptr) {
@@ -231,7 +252,7 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
             }
             break;
         case LV_EVENT_DELETE:
-            delete payload;
+            HomeApp::ReleaseTilePayload(payload);
             break;
         default:
             break;
@@ -906,7 +927,11 @@ void HomeApp::BindTileAction(
     TileAction action,
     std::string id,
     std::optional<LayoutEditTarget> editable_target) {
-    auto* payload = new TilePayload;
+    auto* payload = AllocateTilePayload();
+    if (payload == nullptr) {
+        ESP_LOGE(TAG, "Failed to allocate Home tile payload");
+        return;
+    }
     payload->owner = this;
     payload->action = action;
     payload->id = std::move(id);
