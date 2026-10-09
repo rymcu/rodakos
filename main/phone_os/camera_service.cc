@@ -7,6 +7,7 @@
 #include "sdkconfig.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -220,6 +221,91 @@ const char* PixelFormatName(uint32_t pixelformat) {
             return "unknown";
     }
 }
+
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+constexpr std::array<uint8_t, 26> kGc0308Page0Registers = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x0f, 0x14, 0x1a, 0x20, 0x21, 0x22, 0x24, 0x25,
+    0x2e, 0x50, 0x70, 0xb1, 0xb2, 0xb3, 0xb6, 0xd0, 0xd2, 0xd3, 0xf2, 0xf7, 0xf8
+};
+constexpr std::array<uint8_t, 31> kGc0308Page1Registers = {
+    0x02, 0x04, 0x05, 0x06, 0x08, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x19, 0x1a, 0x32, 0x35, 0x36, 0x37, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x62, 0x63, 0x64, 0x65, 0x66
+};
+
+bool SensorRegisterIoctl(int fd, unsigned long request, uint32_t command,
+                         esp_cam_sensor_reg_val_t& sensor_register) {
+    v4l2_ext_control control = {};
+    control.id = command;
+    control.size = sizeof(sensor_register);
+    control.p_u8 = reinterpret_cast<uint8_t*>(&sensor_register);
+
+    v4l2_ext_controls controls = {};
+    controls.ctrl_class = V4L2_CTRL_CLASS_ESP_CAM_IOCTL;
+    controls.count = 1;
+    controls.controls = &control;
+    return ioctl(fd, request, &controls) == 0;
+}
+
+bool SelectSensorRegisterPage(int fd, uint8_t page) {
+    esp_cam_sensor_reg_val_t sensor_register = {};
+    sensor_register.regaddr = 0xfe;
+    sensor_register.value = page;
+    return SensorRegisterIoctl(fd, VIDIOC_S_EXT_CTRLS, ESP_CAM_SENSOR_IOC_S_REG,
+                               sensor_register);
+}
+
+bool ReadSensorRegister(int fd, uint8_t address, uint8_t& value) {
+    esp_cam_sensor_reg_val_t sensor_register = {};
+    sensor_register.regaddr = address;
+    if (!SensorRegisterIoctl(fd, VIDIOC_G_EXT_CTRLS, ESP_CAM_SENSOR_IOC_G_REG,
+                             sensor_register)) {
+        return false;
+    }
+    value = static_cast<uint8_t>(sensor_register.value);
+    return true;
+}
+
+template <size_t N>
+void LogGc0308RegisterPage(int fd, const char* phase, uint8_t page,
+                           const std::array<uint8_t, N>& addresses) {
+    std::array<char, 256> values = {};
+    size_t used = 0;
+    unsigned failures = 0;
+
+    if (!SelectSensorRegisterPage(fd, page)) {
+        ++failures;
+    } else {
+        for (const uint8_t address : addresses) {
+            uint8_t value = 0;
+            if (!ReadSensorRegister(fd, address, value)) {
+                ++failures;
+                continue;
+            }
+            const int written = std::snprintf(values.data() + used, values.size() - used,
+                                              "%02x=%02x ", address, value);
+            if (written <= 0 || static_cast<size_t>(written) >= values.size() - used) {
+                ++failures;
+                break;
+            }
+            used += static_cast<size_t>(written);
+        }
+    }
+
+    ESP_LOGW(TAG,
+             "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_sensor_registers=1 "
+             "phase=%s page=%u values=%s failures=%u",
+             phase, static_cast<unsigned>(page), values.data(), failures);
+}
+
+void LogGc0308RegisterSnapshot(int fd, const char* phase) {
+    LogGc0308RegisterPage(fd, phase, 0, kGc0308Page0Registers);
+    LogGc0308RegisterPage(fd, phase, 1, kGc0308Page1Registers);
+    if (!SelectSensorRegisterPage(fd, 0)) {
+        ESP_LOGW(TAG, "GC0308 register diagnostics failed to restore page 0: phase=%s", phase);
+    }
+}
+#endif
 #endif
 
 }  // namespace
@@ -770,7 +856,15 @@ void CameraService::PreviewTask() {
                         ESP_LOGI(TAG, "Camera first frame ready: %dx%d stride=%d elapsed_ms=%" PRId64,
                                  active_width_, active_height_, active_stride_,
                                  (esp_timer_get_time() - started_at_us) / 1000);
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+                        LogGc0308RegisterSnapshot(fd_, "first-frame");
+#endif
                     }
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+                    if (frame_count_ == 60) {
+                        LogGc0308RegisterSnapshot(fd_, "settled");
+                    }
+#endif
                     received_frame = true;
                     last_frame_at_us = esp_timer_get_time();
                 }
@@ -872,6 +966,10 @@ bool CameraService::OpenStream(int width, int height) {
         return false;
     }
 
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+    LogGc0308RegisterSnapshot(fd_, "configured");
+#endif
+
 #ifdef RODAKOS_CAMERA_TEST_PATTERN
     v4l2_ext_control pattern_control = {};
     pattern_control.id = V4L2_CID_TEST_PATTERN;
@@ -935,6 +1033,10 @@ bool CameraService::OpenStream(int width, int height) {
         return false;
     }
     stream_started_ = true;
+
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+    LogGc0308RegisterSnapshot(fd_, "streaming");
+#endif
 
     timeval dequeue_timeout = {};
     dequeue_timeout.tv_usec = kDequeueTimeoutUs;

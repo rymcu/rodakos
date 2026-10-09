@@ -67,3 +67,11 @@ configure_camera_host_target(rodakos_camera_test_pattern_probe)
 target_compile_definitions(rodakos_camera_test_pattern_probe PRIVATE RODAKOS_CAMERA_TEST_PATTERN=1)
 add_test(NAME rodakos_camera_test_pattern COMMAND rodakos_camera_test_pattern_probe)
 set_tests_properties(rodakos_camera_test_pattern PROPERTIES TIMEOUT 15)
+
+add_executable(rodakos_camera_sensor_diagnostics_probe
+    camera_sensor_diagnostics_probe.cc ${CAMERA_HOST_SOURCES})
+configure_camera_host_target(rodakos_camera_sensor_diagnostics_probe)
+target_compile_definitions(
+    rodakos_camera_sensor_diagnostics_probe PRIVATE RODAKOS_CAMERA_SENSOR_DIAGNOSTICS=1)
+add_test(NAME rodakos_camera_sensor_diagnostics COMMAND rodakos_camera_sensor_diagnostics_probe)
+set_tests_properties(rodakos_camera_sensor_diagnostics PROPERTIES TIMEOUT 15)

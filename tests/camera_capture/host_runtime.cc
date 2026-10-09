@@ -84,6 +84,9 @@ std::atomic<int> streamon_result{0}, streamoff_result{0};
 std::atomic<unsigned> streamon_calls{0}, streamoff_calls{0};
 std::atomic<unsigned> test_pattern_calls{0};
 std::atomic<int> test_pattern_value{0};
+std::atomic<unsigned> sensor_register_reads{0}, sensor_register_writes{0};
+std::atomic<unsigned> sensor_register_page{0};
+std::array<std::array<uint8_t, 256>, 2> sensor_registers{};
 void ObserveLog(const char* format) {
     if (log_hook) log_hook(format);
 }
@@ -96,6 +99,13 @@ void Reset(const std::string& path) {
     streamon_calls = streamoff_calls = 0;
     test_pattern_calls = 0;
     test_pattern_value = 0;
+    sensor_register_reads = sensor_register_writes = 0;
+    sensor_register_page = 0;
+    for (size_t page = 0; page < sensor_registers.size(); ++page) {
+        for (size_t address = 0; address < sensor_registers[page].size(); ++address) {
+            sensor_registers[page][address] = static_cast<uint8_t>((page << 7) ^ address);
+        }
+    }
     mount_path = path;
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
@@ -239,15 +249,45 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         const int result = camera_host::streamoff_result.load();
         if (result != 0) errno = EBUSY;
         return result;
-    } else if (request == VIDIOC_S_EXT_CTRLS) {
-        const auto* controls = static_cast<v4l2_ext_controls*>(argument);
-        if (controls == nullptr || controls->count != 1 || controls->controls == nullptr ||
-            controls->controls[0].id != V4L2_CID_TEST_PATTERN) {
+    } else if (request == VIDIOC_S_EXT_CTRLS || request == VIDIOC_G_EXT_CTRLS) {
+        auto* controls = static_cast<v4l2_ext_controls*>(argument);
+        if (controls == nullptr || controls->count != 1 || controls->controls == nullptr) {
+            errno = EINVAL;
+            return -1;
+        }
+        auto& control = controls->controls[0];
+        if (controls->ctrl_class == V4L2_CTRL_CLASS_ESP_CAM_IOCTL) {
+            if (control.p_u8 == nullptr || control.size != sizeof(esp_cam_sensor_reg_val_t)) {
+                errno = EINVAL;
+                return -1;
+            }
+            auto* sensor_register = reinterpret_cast<esp_cam_sensor_reg_val_t*>(control.p_u8);
+            if (request == VIDIOC_S_EXT_CTRLS && control.id == ESP_CAM_SENSOR_IOC_S_REG) {
+                ++camera_host::sensor_register_writes;
+                if (sensor_register->regaddr == 0xfe) {
+                    camera_host::sensor_register_page = sensor_register->value & 1;
+                } else {
+                    camera_host::sensor_registers[camera_host::sensor_register_page.load()]
+                                                 [sensor_register->regaddr & 0xff] =
+                        static_cast<uint8_t>(sensor_register->value);
+                }
+                return 0;
+            }
+            if (request == VIDIOC_G_EXT_CTRLS && control.id == ESP_CAM_SENSOR_IOC_G_REG) {
+                ++camera_host::sensor_register_reads;
+                sensor_register->value = camera_host::sensor_registers[camera_host::sensor_register_page.load()]
+                    [sensor_register->regaddr & 0xff];
+                return 0;
+            }
+            errno = EINVAL;
+            return -1;
+        }
+        if (request != VIDIOC_S_EXT_CTRLS || control.id != V4L2_CID_TEST_PATTERN) {
             errno = EINVAL;
             return -1;
         }
         ++camera_host::test_pattern_calls;
-        camera_host::test_pattern_value = controls->controls[0].value;
+        camera_host::test_pattern_value = control.value;
         return 0;
     } else if (request == VIDIOC_QUERYCAP) {
         static_cast<v4l2_capability*>(argument)->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;

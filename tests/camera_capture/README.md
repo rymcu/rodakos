@@ -30,6 +30,9 @@ The 46 tests cover:
   A stream that did start still retains all ownership when `VIDIOC_STREAMOFF` fails.
 - A separate production-TU probe compiles the default-off GC0308 test-pattern path, verifies the
   V4L2 control is applied before streaming, and confirms normal worker/resource retirement.
+- A second production-TU probe compiles the default-off GC0308 register diagnostic, verifies the
+  configured/streaming/first-frame page 0 and page 1 snapshots, page restoration and normal
+  worker/resource retirement without enabling the test pattern.
 - Concurrent snapshot readers and a blocked final worker state read verify that stop cannot publish
   completion while the worker still accesses service state. The allocation wrappers track the real
   preview worker's 2×2 RGB565 payload, so clearing vector size without freeing its capacity fails.
