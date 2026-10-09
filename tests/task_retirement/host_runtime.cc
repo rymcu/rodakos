@@ -192,7 +192,7 @@ void retirement_host_exit_critical(portMUX_TYPE* mux) {
     Check(pthread_mutex_unlock(&mux->mutex) == 0, "critical unlock failed");
 }
 TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t entry, const char* name,
-    configSTACK_DEPTH_TYPE, void* context, UBaseType_t priority, StackType_t* stack,
+    configSTACK_DEPTH_TYPE depth, void* context, UBaseType_t priority, StackType_t* stack,
     StaticTask_t* tcb, BaseType_t core) {
     Task* task;
     void (*hook)(TaskHandle_t);
@@ -211,6 +211,7 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t entry, const char* nam
         tasks.push_back(std::move(next));
         ++resources.tasks_created;
         ++resources.live_tasks;
+        resources.last_stack_bytes = static_cast<size_t>(depth) * sizeof(StackType_t);
     }
     task->thread = std::thread([task, entry, context] {
         current_task = task;

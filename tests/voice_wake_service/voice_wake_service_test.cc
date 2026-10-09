@@ -574,7 +574,9 @@ RODAK_TEST("service reads owned runtime error snapshots while errors change conc
 RODAK_TEST("wake retirement reclaims the complete supervisor without allocating on Stop") {
     Fixture f;
     f.Start();
-    const auto allocations = retirement_host::Snapshot().allocation_calls;
+    const auto running = retirement_host::Snapshot();
+    RODAK_CHECK_EQ(running.last_stack_bytes, 6144U);
+    const auto allocations = running.allocation_calls;
     f.service->Stop();
     RODAK_CHECK_EQ(retirement_host::Snapshot().allocation_calls, allocations);
     CheckReclaimed();

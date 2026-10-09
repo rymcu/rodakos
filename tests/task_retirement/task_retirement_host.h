@@ -20,6 +20,7 @@ struct Resources {
     size_t yields = 0;
     size_t external_suspends = 0;
     size_t dynamic_tasks_created = 0;
+    size_t last_stack_bytes = 0;
 };
 
 class Gate {

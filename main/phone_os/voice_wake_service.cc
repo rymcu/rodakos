@@ -14,6 +14,7 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "VoiceWakeService";
+constexpr uint32_t kSupervisorTaskStackBytes = 6144;
 constexpr TickType_t kSupervisorIntervalTicks = pdMS_TO_TICKS(1000);
 constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(120000);
 constexpr TickType_t kHealthLogIntervalTicks = pdMS_TO_TICKS(60000);
@@ -479,12 +480,13 @@ void VoiceWakeService::EnsureSupervisorTaskLocked() {
     TaskHandle_t created = nullptr;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     const BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
-        TaskRetirementEntry, "voice_wake", 4096, TaskRetirementContext(ticket), 2, &created, 0,
+        TaskRetirementEntry, "voice_wake", kSupervisorTaskStackBytes,
+        TaskRetirementContext(ticket), 2, &created, 0,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
     const BaseType_t ret = xTaskCreateWithCaps(
-        TaskRetirementEntry, "voice_wake", 4096, TaskRetirementContext(ticket), 2, &created,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        TaskRetirementEntry, "voice_wake", kSupervisorTaskStackBytes,
+        TaskRetirementContext(ticket), 2, &created, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (ret != pdPASS || created == nullptr) {
         CancelTaskRetirement(ticket);
@@ -511,7 +513,7 @@ void VoiceWakeService::LogHealthIfDueLocked() {
              "Voice health: enabled=%d status=%u listening=%d assistant_starting=%d "
              "internal_free=%u internal_min=%u internal_largest=%u "
              "psram_free=%u psram_min=%u psram_largest=%u "
-             "supervisor_stack_min_free=%u",
+             "supervisor_stack_bytes=%u supervisor_stack_min_free=%u",
              enabled_, static_cast<unsigned>(status_), listening_, assistant_starting_,
              static_cast<unsigned>(
                  heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
@@ -525,6 +527,7 @@ void VoiceWakeService::LogHealthIfDueLocked() {
                  heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(
                  heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(kSupervisorTaskStackBytes),
              static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
 }
 
