@@ -48,7 +48,8 @@ foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_in
         del_self_reject
         startup_cleanup startup_cleanup_error null_dma blocked_sensor blocked_stop
         blocked_disable blocked_delete blocked_task blocked_gpio_disable blocked_capture
-        blocked_gpio_remove blocked_disconnect blocked_dma_delete)
+        blocked_gpio_remove blocked_disconnect blocked_dma_delete
+        dma_preferred dma_jpeg_configured dma_ring_fallback dma_desc_fallback dma_exhausted)
     add_test(NAME "camera_teardown_${scenario}" COMMAND rodakos_camera_teardown_patch_tests "${scenario}")
     set_tests_properties("camera_teardown_${scenario}" PROPERTIES TIMEOUT 10)
 endforeach()

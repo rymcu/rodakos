@@ -7,7 +7,7 @@ SDK/FreeRTOS 类型和 API 是 host fake，不能将宿主类型大小视为 ESP
 
 13 项正向场景覆盖：
 
-- PSRAM-only 的 3,072 B 栈、优先级 23、原实际 7,680 B ring；WithCaps 创建/删除配对。
+- PSRAM-only 的 3,072 B 栈、优先级 23、首选 6,144 B ring；WithCaps 创建/删除配对。
 - controller/ring/descriptor 分配失败，queue 创建失败，以及实际 WithCaps 调用返回
   stack/TCB 分配失败时的既有资源清理。stack/TCB 两种原因由 SDK fake 建模，不是执行
   FreeRTOS 分配器。

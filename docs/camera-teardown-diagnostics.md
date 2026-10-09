@@ -4,8 +4,9 @@
 127.583 秒。仅凭这条日志，不能确定 `ioctl` 尚未返回：实际使用的
 `esp_cam_sensor` 2.3.0 extended DVP 驱动会直接删除 worker，后续普通日志也可能阻塞。
 022 增加独立于日志的阶段记录，用于下一次故障取证；没有改变关闭顺序或修复任务生命周期。
-028 在同一受校验 overlay 中加入合作式 worker 退出；本轮继续加入失败后可重试的 DVP
-分阶段 owner 释放，并为受 IDF 范围约束的8192配置增加6144→4096的连续块降级尝试。
+028 在同一受校验 overlay 中加入合作式 worker 退出；后续加入失败后可重试的 DVP
+分阶段 owner 释放。046 保留受 IDF 范围约束的 8192 配置上限，将非 JPEG ring 改为
+6144 首选、4096 回退；JPEG 仍先使用配置值。
 027 故障与调试干预证据保留。
 
 ## 记录合同
@@ -51,10 +52,13 @@ RAM 地址。输出 `build/camera-teardown-linked.json`；对象文件或 host �
 
 ## 028 worker 生命周期修正
 
-实际 extended DVP 仍使用受 IDF 范围约束的 8,192 B 配置（当前几何生成约 7,680 B），并在
-连续块不足时尝试 6,144 B、再尝试 4,096 B 的帧对齐 ring；同时保留 3,072 B worker 栈、
-优先级 23 和长度 3 的队列。旧 8,192 B 配置当前几何生成 7,680 B，
-在长稳碎片化窗口中曾出现总 DMA 空闲 20–27 KiB 而最大连续块只有 5–7 KiB 的分配失败。
+实际 extended DVP 保留受 IDF 范围约束的 8,192 B 配置上限。046 之前先尝试配置值，
+连续块不足时再尝试 6,144 B 和 4,096 B；046 起，非 JPEG 模式直接首选 6,144 B，失败后
+回退 4,096 B，JPEG 模式仍按 8,192→6,144→4,096 B。320×240 RGB565 下三档实际 ring /
+half / 每帧接收事件分别为 7,680/3,840/40、6,144/3,072/50、4,096/2,048/75 B；首选档
+相对旧档增加 25% 接收事件，但非 JPEG 每半区仍只需一个 DMA descriptor。同时保留
+3,072 B worker 栈、优先级 23 和长度 3 的队列。旧长稳碎片化窗口曾出现总 DMA 空闲
+20–27 KiB 而最大连续块只有 5–7 KiB 的分配失败。
 构造仅将 worker stack 改为
 `xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`，不回退内部栈；TCB、
 controller、ring、descriptor 和 queue 保持原内部内存要求。目标 ELF DWARF 的 controller
@@ -179,3 +183,22 @@ MQTT/Main/Voice 健康样本，Voice 均为 listening，三份原始串口日志
 该局部故障已关闭，但结果仍为 **NO_GO**：三个应用窗口的最大连续内部块均为 4,096 B，
 健康期 DMA largest 均为 7,680 B，尚未证明 6,144/4,096 ring fallback、资源余量、物理画质、
 任意 OOM 或长期稳定性，因此没有启动新的八小时资格长稳。
+
+## 046：非 JPEG DMA headroom 候选
+
+045 三次启动前的 `internal_dma_largest` 均为 15–16 KiB，因此旧顺序总会选择 7,680 B
+实际 ring，无法覆盖 6,144/4,096 分支。046 将非 JPEG 选择顺序改为 6,144→4,096，保留
+`CONFIG_CAM_CTRL_DVP_DMA_BUFFER_SIZE=8192` 作为合法上限；JPEG 路径保持配置值优先。每次
+成功选择都会记录 configured、selected、actual ring、half 和每半 descriptor 数，供实机
+日志直接核对。
+
+真实生成函数的 host 回归覆盖 6,144 首选、JPEG 保留 8,192、ring 分配失败回退、descriptor
+分配失败释放 ring 后回退，以及全部失败无泄漏。Camera teardown 38/38、worker 17/17 加
+7 组源码负控均在 Debug 与 ASan/UBSan 下通过；Camera capture 7/7、device lifecycle 4/4、
+DVP deinit 13/13、DVP RCC 6/6 通过。ESP-IDF 6.0.2 构建、Camera teardown 最终 ELF 审计和
+JPEG allocator 审计通过。主镜像为 7,158,464 B，SHA-256
+`fe29de1ef0410876bccdb34dfcc4584cf791f7a4facf3758bea407dcdfcccd9d`。
+
+该结果仍是软件候选，发布状态保持 **NO_GO**。必须在具名 046 包上确认日志实际选中
+6,144 B、重复首帧与完整关闭、无 `E:RX`/overflow/DQBUF 错误、停止后连续内存余量和有界
+重复循环；这些通过后才能启动新的八小时资格长稳。

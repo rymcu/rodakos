@@ -175,10 +175,70 @@ def instrument_sensor(source: str) -> str:
     source = replace_exact(source, original, patched)
     source = replace_exact(source, "    dvp_dma_deinit(*gdma_chan);", "    dvp_dma_deinit(*gdma_chan, false);")
     source = replace_exact(source, "    dvp_dma_deinit(ctlr->dma_chan);", "    dvp_dma_deinit(ctlr->dma_chan, false);")
+    dma_allocator = r'''
+static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align_size,
+                                       size_t fb_size_in_bytes, bool jpeg)
+{
+    const size_t dma_buffer_candidates[] = {
+        jpeg ? DVP_CAM_DMA_BUFFER_SIZE : 6144,
+        jpeg ? 6144 : 4096,
+        4096,
+    };
+
+    for (size_t candidate_index = 0;
+         candidate_index < sizeof(dma_buffer_candidates) / sizeof(dma_buffer_candidates[0]);
+         ++candidate_index) {
+        const size_t candidate_size = dma_buffer_candidates[candidate_index];
+        if (candidate_index > 0 && candidate_size == dma_buffer_candidates[candidate_index - 1]) {
+            continue;
+        }
+        if (candidate_size > DVP_CAM_DMA_BUFFER_SIZE) {
+            continue;
+        }
+        const size_t candidate_hsize = dvp_get_dma_buffer_hsize(
+            candidate_size, buffer_align_size, fb_size_in_bytes, jpeg);
+        if (candidate_hsize == 0) {
+            continue;
+        }
+        ctlr->dma_buffer_hsize = candidate_hsize;
+        ctlr->dma_buffer_size = candidate_hsize * DVP_CAM_BUFFER_COUNT;
+        ctlr->dma_buffer = heap_caps_aligned_alloc(
+            buffer_align_size, ctlr->dma_buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (ctlr->dma_buffer == NULL) {
+            continue;
+        }
+        ctlr->dma_desc_hcnt =
+            (candidate_hsize + ctlr->dma_desc_size - 1) / ctlr->dma_desc_size;
+        const size_t dma_desc_buffer_size = DVP_CAM_UP_ALIGN(
+            DVP_CAM_BUFFER_COUNT * ctlr->dma_desc_hcnt * sizeof(dma_descriptor_t),
+            buffer_align_size);
+        ctlr->dma_desc = heap_caps_aligned_alloc(
+            buffer_align_size, dma_desc_buffer_size, MALLOC_CAP_DMA);
+        if (ctlr->dma_desc != NULL) {
+            ESP_LOGI(TAG,
+                     "DVP DMA ring selected: configured=%u selected=%u actual=%u half=%u desc_half=%u",
+                     (unsigned)DVP_CAM_DMA_BUFFER_SIZE, (unsigned)candidate_size,
+                     (unsigned)ctlr->dma_buffer_size, (unsigned)ctlr->dma_buffer_hsize,
+                     (unsigned)ctlr->dma_desc_hcnt);
+            return ESP_OK;
+        }
+        heap_caps_free(ctlr->dma_buffer);
+        ctlr->dma_buffer = NULL;
+    }
+
+    ctlr->dma_buffer_hsize = 0;
+    ctlr->dma_buffer_size = 0;
+    ctlr->dma_desc_hcnt = 0;
+    return ESP_ERR_NO_MEM;
+}
+'''
+    source = replace_exact(source, "\nesp_err_t esp_cam_new_dvp_ctlr_ext(",
+                           "\n" + dma_allocator + "\nesp_err_t esp_cam_new_dvp_ctlr_ext(")
     original = function_text(source, "esp_cam_new_dvp_ctlr_ext")
     patched = replace_exact(original,
         '''    size_t dma_buffer_max_size = DVP_CAM_DMA_BUFFER_SIZE;''',
-        '''    const size_t dma_buffer_candidates[] = {DVP_CAM_DMA_BUFFER_SIZE, 6144, 4096};''')
+        '''    ESP_RETURN_ON_FALSE(DVP_CAM_DMA_BUFFER_SIZE >= 6144, ESP_ERR_INVALID_ARG, TAG,
+                        "configured DVP DMA buffer is smaller than the RodakOS preferred ring");''')
     patched = replace_exact(patched,
         '''    ctlr->dma_buffer_hsize = dvp_get_dma_buffer_hsize(dma_buffer_max_size, buffer_align_size, fb_size_in_bytes, config->pic_format_jpeg);
     ESP_GOTO_ON_FALSE(ctlr->dma_buffer_hsize > 0, ESP_ERR_INVALID_ARG, fail0, TAG, "invalid argument: dma_buffer_hsize is 0");
@@ -195,41 +255,9 @@ def instrument_sensor(source: str) -> str:
     ctlr->dma_desc = heap_caps_aligned_alloc(buffer_align_size, dma_desc_buffer_size, MALLOC_CAP_DMA);
     ESP_GOTO_ON_FALSE(ctlr->dma_desc, ESP_ERR_NO_MEM, fail1, TAG, "no mem for CAM DVP DMA receive description");''',
         '''    ctlr->dma_desc_size = config->pic_format_jpeg ? DVP_CAM_JPEG_DMA_DESC_SIZE : DVP_CAM_DMA_DESC_BUFFER_SIZE;
-    for (size_t candidate_index = 0; candidate_index < sizeof(dma_buffer_candidates) / sizeof(dma_buffer_candidates[0]); ++candidate_index) {
-        const size_t candidate_size = dma_buffer_candidates[candidate_index];
-        if (candidate_size > DVP_CAM_DMA_BUFFER_SIZE) {
-            continue;
-        }
-        const size_t candidate_hsize = dvp_get_dma_buffer_hsize(candidate_size, buffer_align_size,
-                                                                 fb_size_in_bytes, config->pic_format_jpeg);
-        if (candidate_hsize == 0) {
-            continue;
-        }
-        ctlr->dma_buffer_hsize = candidate_hsize;
-        ctlr->dma_buffer_size = candidate_hsize * DVP_CAM_BUFFER_COUNT;
-        ctlr->dma_buffer = heap_caps_aligned_alloc(buffer_align_size, ctlr->dma_buffer_size,
-                                                   MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (ctlr->dma_buffer == NULL) {
-            continue;
-        }
-        ctlr->dma_desc_hcnt = (candidate_hsize + ctlr->dma_desc_size - 1) / ctlr->dma_desc_size;
-        const size_t dma_desc_buffer_size = DVP_CAM_UP_ALIGN(
-            DVP_CAM_BUFFER_COUNT * ctlr->dma_desc_hcnt * sizeof(dma_descriptor_t), buffer_align_size);
-        ctlr->dma_desc = heap_caps_aligned_alloc(buffer_align_size, dma_desc_buffer_size, MALLOC_CAP_DMA);
-        if (ctlr->dma_desc != NULL) {
-            if (candidate_size != DVP_CAM_DMA_BUFFER_SIZE) {
-                ESP_LOGW(TAG, "DVP DMA ring fallback: configured=%u selected=%u",
-                         (unsigned)DVP_CAM_DMA_BUFFER_SIZE, (unsigned)candidate_size);
-            }
-            break;
-        }
-        heap_caps_free(ctlr->dma_buffer);
-        ctlr->dma_buffer = NULL;
-    }
-    if (ctlr->dma_buffer == NULL || ctlr->dma_desc == NULL) {
-        ret = ESP_ERR_NO_MEM;
-        goto fail0;
-    }
+    ESP_GOTO_ON_ERROR(dvp_allocate_dma_ring(ctlr, buffer_align_size, fb_size_in_bytes,
+                                             config->pic_format_jpeg),
+                      fail0, TAG, "no mem for CAM DVP DMA ring");
     memset(ctlr->dma_buffer, 0, ctlr->dma_buffer_size);''')
     patched = replace_exact(patched,
         '''fail2:

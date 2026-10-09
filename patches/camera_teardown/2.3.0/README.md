@@ -57,10 +57,11 @@ controller、queue、callback 或日志。owner 拿同一锁确认后才调用
 没有新增 cleanup task、任意硬超时或假 Stop 成功。
 
 创建改用 `xTaskCreateWithCaps`，3072 B 栈仅申请 PSRAM|8BIT，TCB 和 ISR 可访问对象仍内部；
-不 fallback 到 internal。默认 ring 配置仍为受 IDF 范围约束的8192（320×240 RGB565
-当前几何生成约7680 B）；分配 overlay 在连续块不足时依次尝试6144和4096字节的帧对齐
-ring，任务优先级23、queue 长度3保持。长稳失败时总DMA空闲仍有20–27 KiB但最大连续块
-只有5–7 KiB；降级路径只是软件候选，吞吐、首帧和长稳仍需实机验证。WithCaps 自删除会另建 internal cleanup task，因此使用已有 owner 删除；普通
+不 fallback 到 internal。默认 ring 配置仍为受 IDF 范围约束的8192上限；非 JPEG 模式首选
+6144，失败后尝试4096，JPEG 模式保持8192→6144→4096。320×240 RGB565 的实际 ring 为
+6144/4096 B，对应每帧50/75次接收事件；旧8192配置生成7680 B和40次事件。任务优先级23、
+queue 长度3保持。长稳失败时总DMA空闲仍有20–27 KiB但最大连续块只有5–7 KiB；新首选
+路径只是软件候选，吞吐、首帧和长稳仍需实机验证。WithCaps 自删除会另建 internal cleanup task，因此使用已有 owner 删除；普通
 `vTaskDelete` 也不能替代它。相关 IDF WithCaps 实现、声明、Kconfig 和 heap 契约已加入 pins。
 
 phase13 现在包含合作等待和 WithCaps 删除，phase14 仍在成功删除后；记录 ABI、固定536 B、

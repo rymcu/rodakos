@@ -40,7 +40,8 @@ def main():
     source = path.read_text().replace('\r\n', '\n')
     types = source[source.index('typedef enum dvp_cam_event_type'):source.index('static const char *TAG')]
     overlay.write_if_changed(args.output_dir / 'production_types.h', types)
-    names = ['dvp_get_dma_buffer_hsize', 'dvp_dma_deinit', 'dvp_stop_capturing']
+    names = ['dvp_get_dma_buffer_hsize', 'dvp_allocate_dma_ring',
+             'dvp_dma_deinit', 'dvp_stop_capturing']
     if 'static bool dvp_worker_shutdown_requested' in source:
         names += ['dvp_worker_shutdown_requested', 'dvp_stream_stop_requested', 'dvp_worker_quiesce']
     names += ['dvp_cam_ctlr_del', 'dvp_cam_ctlr_register_event_callbacks', 'dvp_cam_ctlr_start',

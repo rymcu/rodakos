@@ -36,6 +36,17 @@ did not start because each application window still fell to a 4,096-byte largest
 the health windows reported a 7,680-byte DMA largest block. The 6,144/4,096 fallback, physical image,
 arbitrary OOM, complete resource margin and long-duration stability remain unproved.
 
+Software candidate 046 changes the non-JPEG DVP ring policy from 8,192-first fallback to a
+6,144-byte preferred ring with a 4,096-byte fallback, while keeping the IDF-valid 8,192-byte
+configuration ceiling and retaining configured-first behavior for JPEG. For 320×240 RGB565 this
+reduces the normal actual ring from 7,680 to 6,144 bytes and raises receive events per frame from
+40 to 50; both normal sizes still use one descriptor per half. Generated-function allocation,
+fallback and leak tests bring Camera teardown to 38/38; worker 17/17 plus seven source negatives,
+Camera capture 7/7, device lifecycle 4/4, DVP deinit 13/13 and DVP RCC 6/6 pass, including Debug and
+ASan/UBSan on the changed suites. ESP-IDF 6.0.2 build and final ELF/JPEG audits pass. The 7,158,464-
+byte image SHA-256 is `fe29de1ef0410876bccdb34dfcc4584cf791f7a4facf3758bea407dcdfcccd9d`.
+No 046 package or hardware result is claimed yet; release remains **NO_GO**.
+
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
@@ -427,7 +438,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 045 retains retryable STREAMOFF/DVP release and 8192→6144→4096 allocation fallback, and three independent first-frame/close windows now contain zero `E:RX`. Application contiguous internal headroom still falls to 4,096 B and health DMA largest is 7,680 B, so fallback throughput and qualification soak remain open. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [045 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-停流修复候选-045-实机窗口), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
+| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 045 closes stop-time `E:RX` in three bounded windows. Software candidate 046 now prefers a 6,144 B non-JPEG ring and falls back to 4,096 B, but has no package or hardware evidence yet. Verify selected-ring logs, repeated first frame/close, error-free throughput, resource margin and bounded loops before qualification soak. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [045 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-停流修复候选-045-实机窗口), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns, delayed follow-up/silence timeout, live-mic playback, and one VAD barge-in abort; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, real acoustic AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [barge-in evidence](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

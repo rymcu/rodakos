@@ -14,6 +14,7 @@ typedef int esp_err_t;
 typedef void *gdma_channel_handle_t;
 typedef void *esp_cam_ctlr_handle_t;
 typedef int cam_hal_context_t;
+typedef struct { uint32_t words[4]; } dma_descriptor_t;
 typedef void* TaskHandle_t;
 typedef int portMUX_TYPE;
 typedef struct { int type; } dvp_cam_event_t;
@@ -32,6 +33,10 @@ typedef struct dvp_cam_ctlr {
     cam_hal_context_t hal;
     void *dma_desc;
     void *dma_buffer;
+    size_t dma_buffer_size;
+    size_t dma_buffer_hsize;
+    size_t dma_desc_size;
+    size_t dma_desc_hcnt;
     void *event_queue;
     portMUX_TYPE spinlock;
     dvp_cam_fsm_t dvp_fsm;
@@ -65,6 +70,7 @@ struct esp_video_device_common {
 struct esp_video { esp_video_device_common_t *common; };
 #define VIDEO_DEVICE_COMMON(video) ((video)->common)
 #define ESP_OK 0
+#define ESP_ERR_NO_MEM 257
 #define ESP_ERR_INVALID_ARG 258
 #define ESP_ERR_INVALID_STATE 259
 #define ESP_CAM_SENSOR_IOC_S_STREAM 123
@@ -74,8 +80,16 @@ struct esp_video { esp_video_device_common_t *common; };
 } while (0)
 #define ESP_LOGE(...) fake_log()
 #define ESP_EARLY_LOGE(...) fake_log()
+#define ESP_LOGI(tag, ...) fake_dma_log(__VA_ARGS__)
+#define TAG "dvp_ext"
+#define DVP_CAM_BUFFER_COUNT 2
+#define DVP_CAM_DMA_BUFFER_SIZE 8192
+#define DVP_CAM_UP_ALIGN(x, align) (((x) + (align) - 1) & ~((align) - 1))
+#define MALLOC_CAP_DMA 1
+#define MALLOC_CAP_INTERNAL 2
 
 void fake_log(void);
+void fake_dma_log(const char *, ...);
 uint32_t xPortGetCoreID(void);
 esp_err_t esp_cam_sensor_ioctl(void *, int, int *);
 esp_err_t esp_cam_ctlr_stop(esp_cam_ctlr_handle_t);
@@ -94,11 +108,13 @@ esp_err_t gpio_isr_handler_remove(int);
 void cam_hal_stop_streaming(cam_hal_context_t *);
 void cam_hal_deinit(cam_hal_context_t *);
 void heap_caps_free(void *);
+void *heap_caps_aligned_alloc(size_t, size_t, uint32_t);
 void vQueueDelete(void *);
 esp_err_t run_common_stop(struct esp_video *);
 esp_err_t run_dvp_del(dvp_cam_ctlr_t *);
 esp_err_t run_dvp_stop(dvp_cam_ctlr_t *);
 esp_err_t run_dma_deinit(gdma_channel_handle_t, bool);
+esp_err_t run_dma_allocate(dvp_cam_ctlr_t *, size_t, size_t, bool);
 
 #ifdef __cplusplus
 }

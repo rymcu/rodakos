@@ -1,5 +1,7 @@
 #include "camera_teardown_fakes.h"
 
+#include <algorithm>
+#include <cstdarg>
 #include <csetjmp>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +26,17 @@ int queue;
 int task;
 int channel;
 int sensor;
+int dma_alloc_slots[8];
+std::vector<size_t> dma_alloc_sizes;
+std::vector<void *> dma_alloc_pointers;
+std::vector<void *> dma_freed_pointers;
+std::vector<int> dma_fail_calls;
+unsigned dma_log_configured = 0;
+unsigned dma_log_selected = 0;
+unsigned dma_log_actual = 0;
+unsigned dma_log_half = 0;
+unsigned dma_log_desc_half = 0;
+int dma_log_count = 0;
 dvp_cam_ctlr_t controller{};
 
 void reset_controller() {
@@ -35,6 +48,21 @@ void reset_controller() {
     controller.dma_buffer = &buffer;
     controller.event_queue = &queue;
     controller.dvp_fsm = DVP_CAM_FSM_STARTED;
+}
+
+void reset_dma_allocator() {
+    controller = {};
+    controller.dma_desc_size = 4092;
+    dma_alloc_sizes.clear();
+    dma_alloc_pointers.clear();
+    dma_freed_pointers.clear();
+    dma_fail_calls.clear();
+    dma_log_configured = 0;
+    dma_log_selected = 0;
+    dma_log_actual = 0;
+    dma_log_half = 0;
+    dma_log_desc_half = 0;
+    dma_log_count = 0;
 }
 
 void check(bool condition, const char *message) {
@@ -83,6 +111,17 @@ uint32_t rodak_camera_teardown_record(uint32_t phase, uint32_t core, int32_t sta
 }
 uint32_t xPortGetCoreID() { return 1; }
 void fake_log() { ++log_count; }
+void fake_dma_log(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    dma_log_configured = va_arg(args, unsigned);
+    dma_log_selected = va_arg(args, unsigned);
+    dma_log_actual = va_arg(args, unsigned);
+    dma_log_half = va_arg(args, unsigned);
+    dma_log_desc_half = va_arg(args, unsigned);
+    va_end(args);
+    ++dma_log_count;
+}
 esp_err_t esp_cam_sensor_ioctl(void *handle, int command, int *flags) {
     check(handle == &sensor && command == ESP_CAM_SENSOR_IOC_S_STREAM && *flags == 0, "sensor STREAMOFF arguments changed");
     return called("sensor");
@@ -107,9 +146,23 @@ esp_err_t gpio_isr_handler_remove(int pin) { check(pin == 7, "GPIO remove pin");
 void cam_hal_stop_streaming(cam_hal_context_t *hal) { check(hal == &controller.hal, "capture HAL"); (void)called("hal_stop"); }
 void cam_hal_deinit(cam_hal_context_t *hal) { check(hal == &controller.hal, "delete HAL"); (void)called("hal_delete"); }
 void heap_caps_free(void *pointer) {
-    if (pointer == &descriptor) (void)called("free_desc");
+    if (std::find(dma_alloc_pointers.begin(), dma_alloc_pointers.end(), pointer) !=
+        dma_alloc_pointers.end()) {
+        dma_freed_pointers.push_back(pointer);
+    } else if (pointer == &descriptor) (void)called("free_desc");
     else if (pointer == &buffer) (void)called("free_buffer");
     else { check(pointer == &controller, "free controller"); (void)called("free_ctlr"); }
+}
+void *heap_caps_aligned_alloc(size_t align, size_t size, uint32_t) {
+    check(align == 4, "DMA allocation alignment changed");
+    const int call = static_cast<int>(dma_alloc_sizes.size()) + 1;
+    dma_alloc_sizes.push_back(size);
+    if (std::find(dma_fail_calls.begin(), dma_fail_calls.end(), call) != dma_fail_calls.end()) {
+        return nullptr;
+    }
+    void *pointer = &dma_alloc_slots[dma_alloc_pointers.size()];
+    dma_alloc_pointers.push_back(pointer);
+    return pointer;
 }
 void vQueueDelete(void *handle) { check(handle == &queue, "queue handle"); (void)called("queue"); }
 }
@@ -208,6 +261,73 @@ int main(int argc, char **argv) {
         if (scenario == "startup_cleanup") expect_calls({"disconnect", "dma_delete"});
         else if (scenario == "startup_cleanup_error") expect_calls({"disconnect"});
         else check(calls.empty(), "null DMA remains a no-op");
+    } else if (scenario == "dma_preferred" || scenario == "dma_jpeg_configured" ||
+               scenario == "dma_ring_fallback" ||
+               scenario == "dma_desc_fallback" || scenario == "dma_exhausted") {
+        reset_dma_allocator();
+        if (scenario == "dma_jpeg_configured") controller.dma_desc_size = 512;
+        if (scenario == "dma_ring_fallback") dma_fail_calls = {1};
+        if (scenario == "dma_desc_fallback") dma_fail_calls = {2};
+        if (scenario == "dma_exhausted") dma_fail_calls = {2, 4};
+        const esp_err_t result = run_dma_allocate(
+            &controller, 4, 320 * 240 * 2, scenario == "dma_jpeg_configured");
+        if (scenario == "dma_preferred") {
+            check(result == ESP_OK, "preferred DMA allocation succeeds");
+            check(dma_alloc_sizes == std::vector<size_t>({6144, 32}), "preferred ring and descriptor sizes");
+            check(controller.dma_buffer_size == 6144 && controller.dma_buffer_hsize == 3072,
+                  "preferred DMA layout differs");
+            check(controller.dma_desc_hcnt == 1, "preferred descriptor count differs");
+            check(dma_freed_pointers.empty(), "successful preferred allocation was freed");
+        } else if (scenario == "dma_jpeg_configured") {
+            check(result == ESP_OK, "JPEG DMA allocation succeeds");
+            check(dma_alloc_sizes == std::vector<size_t>({8192, 256}),
+                  "JPEG keeps the configured ring and descriptor sizes");
+            check(controller.dma_buffer_size == 8192 && controller.dma_buffer_hsize == 4096,
+                  "JPEG configured DMA layout differs");
+            check(controller.dma_desc_hcnt == 8, "JPEG descriptor count differs");
+            check(dma_freed_pointers.empty(), "successful JPEG allocation was freed");
+        } else if (scenario == "dma_ring_fallback") {
+            check(result == ESP_OK, "ring allocation failure falls back");
+            check(dma_alloc_sizes == std::vector<size_t>({6144, 4096, 32}),
+                  "ring failure fallback order differs");
+            check(controller.dma_buffer_size == 4096 && controller.dma_buffer_hsize == 2048,
+                  "ring fallback layout differs");
+            check(dma_freed_pointers.empty(), "failed ring allocation created ownership");
+        } else if (scenario == "dma_desc_fallback") {
+            check(result == ESP_OK, "descriptor allocation failure falls back");
+            check(dma_alloc_sizes == std::vector<size_t>({6144, 32, 4096, 32}),
+                  "descriptor failure fallback order differs");
+            check(dma_freed_pointers.size() == 1 &&
+                      dma_freed_pointers.front() == dma_alloc_pointers.front(),
+                  "descriptor failure did not free the selected ring");
+            check(controller.dma_buffer_size == 4096 && controller.dma_buffer_hsize == 2048,
+                  "descriptor fallback layout differs");
+        } else {
+            check(result == ESP_ERR_NO_MEM, "exhausted DMA candidates report no memory");
+            check(dma_alloc_sizes == std::vector<size_t>({6144, 32, 4096, 32}),
+                  "exhausted candidate order differs");
+            check(dma_freed_pointers.size() == 2, "exhausted descriptor failures leaked rings");
+            check(controller.dma_buffer == nullptr && controller.dma_desc == nullptr,
+                  "exhausted allocation retained pointers");
+            check(controller.dma_buffer_size == 0 && controller.dma_buffer_hsize == 0 &&
+                      controller.dma_desc_hcnt == 0,
+                  "exhausted allocation retained layout state");
+        }
+        if (result == ESP_OK) {
+            check(dma_log_count == 1 && dma_log_configured == 8192,
+                  "successful DMA selection log missing configured size");
+            const unsigned expected_selected = scenario == "dma_jpeg_configured"
+                                                   ? 8192u
+                                                   : (scenario == "dma_preferred" ? 6144u : 4096u);
+            check(dma_log_selected == expected_selected,
+                  "DMA selection log has wrong candidate");
+            check(dma_log_actual == controller.dma_buffer_size &&
+                      dma_log_half == controller.dma_buffer_hsize &&
+                      dma_log_desc_half == controller.dma_desc_hcnt,
+                  "DMA selection log differs from controller layout");
+        } else {
+            check(dma_log_count == 0, "failed DMA selection emitted a success log");
+        }
     } else if (scenario.rfind("blocked_", 0) == 0) {
         block_at = scenario.substr(8);
         forward_delete = true;

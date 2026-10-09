@@ -31,15 +31,15 @@ struct Fixture {
 };
 }  // namespace
 
-RODAK_TEST("worker constructor uses PSRAM only with original stack priority queue and ring") {
+RODAK_TEST("worker constructor uses PSRAM only with preferred stack priority queue and ring") {
     Fixture fixture;
     fixture.Create();
     auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
     RODAK_CHECK_EQ(host::CreatedStackCaps(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     RODAK_CHECK_EQ(host::CreatedStackBytes(), 3072u);
     RODAK_CHECK_EQ(host::CreatedPriority(), 23u);
-    RODAK_CHECK_EQ(ctlr->dma_buffer_hsize, 3840u);
-    RODAK_CHECK_EQ(ctlr->dma_buffer_size, 7680u);
+    RODAK_CHECK_EQ(ctlr->dma_buffer_hsize, 3072u);
+    RODAK_CHECK_EQ(ctlr->dma_buffer_size, 6144u);
     RODAK_CHECK_EQ(ctlr->dma_desc_hcnt, 1u);
     RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
     host::Join();
@@ -57,13 +57,14 @@ RODAK_TEST("worker constructor controller allocation failure owns no resources")
     RODAK_CHECK_EQ(host::DeleteCalls(), 0u);
 }
 
-RODAK_TEST("worker constructor retries smaller rings after one allocation failure") {
+RODAK_TEST("worker constructor falls back to 4096 after ring or descriptor allocation failure") {
     for (int index : {2, 3}) {
         Fixture fixture;
         host::FailAllocation(index);
         RODAK_CHECK_EQ(worker_create(&fixture.controller), ESP_OK);
         auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
-        RODAK_CHECK_EQ(ctlr->dma_buffer_size, 6144u);
+        RODAK_CHECK_EQ(ctlr->dma_buffer_hsize, 2048u);
+        RODAK_CHECK_EQ(ctlr->dma_buffer_size, 4096u);
         RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
         host::Join();
         RODAK_CHECK_EQ(host::LiveAllocations(), 0u);

@@ -132,8 +132,23 @@ class CameraGeneratorTests(unittest.TestCase):
         # the helper remains only on startup/unwind call sites.
         self.assertEqual(sensor.count("dvp_dma_deinit(ctlr->dma_chan, true)"), 0)
         self.assertEqual(sensor.count("dvp_dma_deinit("), 3)
-        self.assertIn("DVP DMA ring fallback", sensor)
-        self.assertIn("DVP_CAM_DMA_BUFFER_SIZE, 6144, 4096", sensor)
+        self.assertIn("jpeg ? DVP_CAM_DMA_BUFFER_SIZE : 6144", sensor)
+        self.assertIn("jpeg ? 6144 : 4096", sensor)
+        self.assertIn("DVP DMA ring selected: configured=%u selected=%u actual=%u half=%u desc_half=%u", sensor)
+
+    def test_preferred_dma_layout_is_frame_aligned(self):
+        frame_size = 320 * 240 * 2
+
+        def half_size(candidate):
+            value = candidate // 2
+            while frame_size % value != 0 and value > 4:
+                value -= 4
+            return value
+
+        layouts = [(candidate, half_size(candidate)) for candidate in (8192, 6144, 4096)]
+        self.assertEqual(layouts, [(8192, 3840), (6144, 3072), (4096, 2048)])
+        self.assertEqual([(candidate, half * 2, frame_size // half) for candidate, half in layouts],
+                         [(8192, 7680, 40), (6144, 6144, 50), (4096, 4096, 75)])
 
     def test_sensor_first_stop_regression_is_rejected(self):
         source = overlay.read_lf(self.video / overlay.VIDEO_SOURCE).decode()
