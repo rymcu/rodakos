@@ -230,13 +230,12 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
                 owner->ActivateTile(action, id);
             }
             break;
+        case LV_EVENT_DELETE:
+            delete payload;
+            break;
         default:
             break;
     }
-}
-
-void HomeApp::AppButtonDeleteEvent(lv_event_t* event) {
-    delete static_cast<TilePayload*>(lv_event_get_user_data(event));
 }
 
 void HomeApp::TileviewEvent(lv_event_t* event) {
@@ -912,13 +911,7 @@ void HomeApp::BindTileAction(
     payload->action = action;
     payload->id = std::move(id);
     payload->editable_target = std::move(editable_target);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_PRESSED, payload);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_PRESSING, payload);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_LONG_PRESSED, payload);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_SHORT_CLICKED, payload);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_RELEASED, payload);
-    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_PRESS_LOST, payload);
-    lv_obj_add_event_cb(object, AppButtonDeleteEvent, LV_EVENT_DELETE, payload);
+    lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_ALL, payload);
 }
 
 void HomeApp::ActivateTile(TileAction action, const std::string& id) {

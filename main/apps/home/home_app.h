@@ -103,7 +103,6 @@ private:
     };
 
     static void AppButtonEvent(lv_event_t* event);
-    static void AppButtonDeleteEvent(lv_event_t* event);
     static void TileviewEvent(lv_event_t* event);
     static void RunDeferredEdit(void* data);
     static void RunDeferredLaunch(void* data);
