@@ -237,3 +237,20 @@ heap median drop 为 0。
 均未证明。测试后已恢复普通 046，确认 Home、原 ID、`bound`、tokenVersion 4、MQTT 在线，
 并把工作区开关恢复 OFF、重建普通固件；fault 包不得用于生产。证据位于
 `.codex-temp/camera-dma-047/`。
+
+## 059/060：GC0308 test pattern 定位与普通恢复
+
+`5972684` 增加默认关闭的 `RODAKOS_CAMERA_TEST_PATTERN`。059 诊断包在 Camera 打开后通过
+`V4L2_CID_TEST_PATTERN` 请求 GC0308 彩条，并输出受控 fault marker。实机 Remote Camera
+取得 320×240 彩条 JPEG，RGB 标准差约为 102.38/111.83/106.62；串口记录 6,144 B ring、
+125 ms 首帧、258 帧和完整 STREAMOFF/fd/device release，停止后 internal/DMA largest 恢复
+6,144 B。该结果证明 SCCB test-pattern 控制和 DVP/RGB565/JPEG/WebRTC 链路能传输动态像素，
+普通单色暗帧不应继续归因于 JPEG 或 WebRTC 数据通路。
+
+诊断后已恢复 `RODAKOS_CAMERA_TEST_PATTERN=OFF`，普通 060 包
+`20261010-003215` / `camera-test-pattern-off-060` 通过验签、VerifyOnly、保留 NVS 刷写及
+Recovery → Main → OTA confirmation → Home。普通二进制不含 fault marker；一次 Remote
+Camera 在 91 ms 取得首帧、完整释放且无 Camera/DVP 错误，但 JPEG 仍与 058 的单色暗帧
+逐字节一致。后续诊断应比较普通模式 GC0308 初始化后的关键寄存器和 test-pattern 切换前后
+状态，并检查曝光/增益、XCLK/供电及镜头/遮挡。该证据不关闭物理画质、失败 STREAMON、
+任意 OOM、完整并发或八小时资格门禁，状态仍为 **NO_GO**。

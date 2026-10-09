@@ -3455,6 +3455,47 @@ Rodak 证据位于 `D:\workspace\rodak\.codex-temp\camera-physical-058\`；两�
 `0823322787681d09cafa16037f8d52ca1b6b3b300b53e9a54e5f5e6bacd34d4a`，首启日志为
 `build/logs/first-boot-20261009-234849.log`。
 
+## 2026-10-10 GC0308 test-pattern 定位 059 与普通恢复 060
+
+源码 `5972684` 增加默认关闭的 `RODAKOS_CAMERA_TEST_PATTERN` 诊断开关。开启时仅在
+Camera 打开后通过 `V4L2_CID_TEST_PATTERN` 请求 GC0308 内建彩条，并输出
+`RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_test_pattern=1`；打包与刷写均要求显式
+release-fault allow，普通 OFF 构建不含该 marker。Camera Debug 与 ASan/UBSan/leak 均为
+**8/8 CTest**，ESP-IDF 6.0.2 构建及最终 Camera/JPEG linked-ELF 审计通过。
+
+受控诊断包 `20261010-001850` / `camera-test-pattern-059` 的主镜像为 7,161,808 B，
+SHA-256 `96e0a7ed9a011a5dba79afe0b59c9011583ea5f1eda7f998ea6f47496c27e734`。包先通过
+fault-aware 验签与 COM3 VerifyOnly，再保留 NVS 只写 `otadata + ota_0`，未使用 `-Erase`；
+Recovery → Main → OTA confirmation → Home 通过。实机 Remote Camera 串口明确出现诊断
+marker，选择 6,144 B ring，125 ms 取得首帧，16.957 秒输出 258 帧并完整完成 STREAMOFF、
+fd close 与 Board Manager release。Rodak 收到的 320×240 JPEG 为标准彩条，10,341 B，
+SHA-256 `fccaff659ef625cfda7426896d8895fdee44a6aa32249979a69a9f7d173496e2`；RGB 通道标准差
+分别约为 102.38、111.83、106.62，包含 10,254 个颜色值。WebRTC 期间 internal/DMA largest
+最低 2,560 B，停止后恢复 6,144 B，串口无 DVP、panic、abort 或 watchdog 错误。
+
+该结果证明 GC0308 的 SCCB 控制可切入 test pattern，且 sensor 数字输出、DVP/RGB565、JPEG、
+WebRTC 与 Rodak 显示链路能够传递非均匀像素；它不证明普通成像模式的曝光、增益、时钟、
+供电、寄存器表或光学输入正确。059 诊断结束后已将 CMake cache 恢复为
+`RODAKOS_CAMERA_TEST_PATTERN=OFF`，普通二进制不含 fault marker，并生成开发签名 production
+flavor 包 `20261010-003215` / `camera-test-pattern-off-060`。060 主镜像仍为 7,161,264 B，
+SHA-256 `40d344680d4c6004ed4b07d0d47ef7a9b53cd93603809dc9e2a1f8b3c5284d41`；manifest、merged、
+ZIP SHA-256 分别为 `dd33c22768dff337b310470655c944681258cfff3960d32dd28e2949da405b52`、
+`d900913c09c8333be80646a443907e14bf61ac54d6df45974c06143cc866c82b`、
+`d92f95d1917e036be269637a40d3d3d52baab802d582dc7ea372d41bb64ced81`。
+
+060 通过验签、COM3 VerifyOnly 与保留 NVS 的 `otadata + ota_0` 刷写，未使用 `-Erase`；
+Recovery → Main → OTA confirmation → Home、`RodakOS-Lab` 自动联网及 MQTT 恢复通过。服务器
+快照仍为设备 `44:1b:f6:c3:b4:30`、原 device ID、`bound`、tokenVersion 4、MQTT connected。
+普通模式对照在 91 ms 取得首帧并完整关闭，串口无 fault marker 与 Camera/DVP 错误；JPEG
+重新得到与 058 完全相同的单色暗帧，SHA-256
+`7b68a3de4667b8288ebd434177f0344b58e198e53c67bef7fc51dfb5851b5f46`。因此下一步应直接核对
+普通模式 GC0308 初始化后的关键寄存器、曝光/增益与时钟/电源状态，不再优先怀疑 JPEG 或
+WebRTC 传输。物理画质、失败 STREAMON 实机清理、任意 OOM、并发矩阵和资格长稳仍开放，
+发布保持 **NO_GO**，没有启动新的八小时长稳。证据位于 Rodak
+`.codex-temp/camera-physical-059/`、`.codex-temp/camera-physical-060/` 及
+`.codex-temp/camera-physical-058/camera-stream-*-059-pattern*`、`camera-stream-*-060-off*`；
+060 首启日志为 `build/logs/first-boot-20261010-003900.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录

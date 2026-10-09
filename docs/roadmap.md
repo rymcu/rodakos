@@ -106,6 +106,21 @@ dark RGB value, so physical transport passed while image quality did not. Failed
 cleanup, arbitrary OOM, broader concurrency and qualification soak remain open; release stays
 **NO_GO** and no new eight-hour run has started.
 
+Candidate 059 (`5972684`, package `20261010-001850`, task `camera-test-pattern-059`) adds a
+default-OFF, release-fault-guarded GC0308 test-pattern diagnostic. COM3 emitted the explicit marker,
+selected a 6,144-byte ring and delivered a 320×240 color-bar JPEG with high per-channel variance,
+then completed STREAMOFF and restored a 6,144-byte largest internal/DMA block. This proves the SCCB
+control path and the sensor digital-output → DVP/RGB565 → JPEG → WebRTC → Rodak display chain can
+carry non-uniform pixels. It narrows the ordinary uniform dark frame to normal sensor-mode
+initialization, exposure/gain, clock/power or optical input. The device and workspace were restored
+to ordinary OFF package 060 (`20261010-003215`, task `camera-test-pattern-off-060`), whose binary
+contains no fault marker. Package verification, COM3 VerifyOnly, NVS-preserving refresh and
+Recovery → Main → OTA confirmation → Home passed; the original ID, binding, token version 4 and
+MQTT connectivity remain. Ordinary Camera again produced the identical one-color JPEG, while the
+test pattern did not. Physical image quality, failed-STREAMON hardware cleanup, arbitrary OOM,
+broader concurrency and qualification soak remain open; release stays **NO_GO** and no eight-hour
+run has started.
+
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
