@@ -129,7 +129,7 @@ private:
     void CancelPendingEditAction();
     void UpdatePageIndicator();
     void UpdateBatteryStatus();
-    void BindTileAction(
+    TilePayload* BindTileAction(
         lv_obj_t* object,
         TileAction action,
         std::string id = {},

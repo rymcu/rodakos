@@ -154,6 +154,8 @@ struct HomeApp::TilePayload {
     bool pointer_moved = false;
     bool press_cancelled = false;
     bool long_press_pending = false;
+    const char* icon = nullptr;
+    lv_color_t icon_color{};
 };
 
 HomeApp::TilePayload* HomeApp::AllocateTilePayload() {
@@ -203,6 +205,46 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
     };
 
     switch (lv_event_get_code(event)) {
+        case LV_EVENT_DRAW_MAIN_END: {
+            if (payload->icon == nullptr) {
+                break;
+            }
+            lv_obj_t* object = lv_event_get_target_obj(event);
+            lv_layer_t* layer = lv_event_get_layer(event);
+            lv_area_t object_area;
+            lv_obj_get_coords(object, &object_area);
+            lv_area_t icon_area = {
+                .x1 = static_cast<lv_coord_t>(object_area.x1 + (kCellWidth - kIconSize) / 2),
+                .y1 = object_area.y1,
+                .x2 = static_cast<lv_coord_t>(object_area.x1 + (kCellWidth + kIconSize) / 2 - 1),
+                .y2 = static_cast<lv_coord_t>(object_area.y1 + kIconSize - 1),
+            };
+            lv_draw_rect_dsc_t background;
+            lv_draw_rect_dsc_init(&background);
+            background.radius = LV_RADIUS_CIRCLE;
+            background.bg_color = payload->icon_color;
+            background.bg_opa = LV_OPA_COVER;
+            background.border_width = 0;
+            lv_draw_rect(layer, &background, &icon_area);
+
+            lv_point_t icon_size;
+            lv_text_get_size(&icon_size, payload->icon, PhoneIconFontLarge(), 0, 0,
+                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            lv_area_t text_area = {
+                .x1 = 0,
+                .y1 = 0,
+                .x2 = static_cast<lv_coord_t>(icon_size.x - 1),
+                .y2 = static_cast<lv_coord_t>(icon_size.y - 1),
+            };
+            lv_area_align(&icon_area, &text_area, LV_ALIGN_CENTER, 0, 0);
+            lv_draw_label_dsc_t label;
+            lv_draw_label_dsc_init(&label);
+            label.color = lv_color_white();
+            label.font = PhoneIconFontLarge();
+            label.text = payload->icon;
+            lv_draw_label(layer, &label, &text_area);
+            break;
+        }
         case LV_EVENT_PRESSED: {
             payload->launch_guard.BeginPress();
             payload->pointer_tracking = false;
@@ -652,7 +694,7 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
         if (all_apps) {
             BindTileAction(btn, TileAction::kOpenAllApps);
         } else if (app != nullptr) {
-            BindTileAction(
+            auto* payload = BindTileAction(
                 btn, TileAction::kLaunchApp, app->id,
                 LayoutEditTarget{
                     .kind = LayoutEditTargetKind::kRootItem,
@@ -660,6 +702,10 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
                     .folder_id = {},
                     .app_id = {},
                 });
+            if (payload != nullptr) {
+                payload->icon = app->icon.c_str();
+                payload->icon_color = rodakos_theme_icon_color(IconColorIndex(app->id));
+            }
         } else {
             BindTileAction(
                 btn, TileAction::kOpenFolder, item->id,
@@ -672,22 +718,7 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
         }
 
         if (app != nullptr) {
-            auto* icon_label = lv_label_create(btn);
-            lv_label_set_text_static(icon_label, app->icon.c_str());
-            lv_obj_set_size(icon_label, kIconSize, kIconSize);
-            lv_obj_align(icon_label, LV_ALIGN_TOP_MID, 0, 0);
-            lv_obj_set_style_radius(icon_label, LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_bg_color(
-                icon_label, rodakos_theme_icon_color(IconColorIndex(app->id)), 0);
-            lv_obj_set_style_bg_opa(icon_label, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
-            lv_obj_set_style_text_font(icon_label, PhoneIconFontLarge(), 0);
-            lv_obj_set_style_text_align(icon_label, LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_set_style_pad_top(
-                icon_label,
-                static_cast<lv_coord_t>((kIconSize - PhoneIconFontLarge()->line_height) / 2), 0);
-            lv_obj_clear_flag(icon_label, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(icon_label, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_invalidate(btn);
         } else {
             auto* icon_bg = lv_obj_create(btn);
             lv_obj_remove_style_all(icon_bg);
@@ -932,7 +963,7 @@ bool HomeApp::LoadLayout(PhoneAppContext& context) {
     return true;
 }
 
-void HomeApp::BindTileAction(
+HomeApp::TilePayload* HomeApp::BindTileAction(
     lv_obj_t* object,
     TileAction action,
     std::string id,
@@ -940,13 +971,14 @@ void HomeApp::BindTileAction(
     auto* payload = AllocateTilePayload();
     if (payload == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate Home tile payload");
-        return;
+        return nullptr;
     }
     payload->owner = this;
     payload->action = action;
     payload->id = std::move(id);
     payload->editable_target = std::move(editable_target);
     lv_obj_add_event_cb(object, AppButtonEvent, LV_EVENT_ALL, payload);
+    return payload;
 }
 
 void HomeApp::ActivateTile(TileAction action, const std::string& id) {
