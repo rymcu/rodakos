@@ -45,6 +45,8 @@ bool block_callback = false, callback_entered = false, release_callback = false;
 bool delete_from_callback = false;
 int callback_delete_result = -999;
 size_t callback_calls = 0;
+size_t partial_frame_logs = 0;
+size_t invalid_state_logs = 0;
 bool block_final_unlock = false, final_unlock_entered = false, release_final_unlock = false;
 bool unsafe_final_unlock = false;
 size_t owner_lock_waiting = 0;
@@ -53,11 +55,13 @@ bool provide_frame = false;
 uint8_t callback_frame[64]{};
 bool block_capture_start = false, capture_start_entered = false, release_capture_start = false;
 bool capture_start_delete = false;
+bool block_capture_stop = false, capture_stop_entered = false, release_capture_stop = false;
 bool unsafe_delete = false, callback_delete = false, owner_waiting = false;
 bool fail_task = false, fail_queue = false;
 bool fail_task_stack = false, fail_task_tcb = false;
 int fail_allocation = 0, allocation_count = 0;
 size_t delete_calls = 0, with_caps_deletes = 0, full_wakeups = 0;
+size_t capture_start_calls = 0, gpio_enable_calls = 0;
 size_t stack_bytes = 0;
 unsigned stack_caps = 0, priority = 0;
 std::vector<std::string> calls;
@@ -147,15 +151,19 @@ void Reset() {
     delete_from_callback = false;
     callback_delete_result = -999;
     callback_calls = 0;
+    partial_frame_logs = 0;
+    invalid_state_logs = 0;
     block_final_unlock = final_unlock_entered = release_final_unlock = unsafe_final_unlock = false;
     owner_lock_waiting = 0;
     early_task_run = provide_frame = false;
     block_capture_start = capture_start_entered = release_capture_start = capture_start_delete =
         false;
+    block_capture_stop = capture_stop_entered = release_capture_stop = false;
     unsafe_delete = callback_delete = owner_waiting = fail_task = fail_queue = false;
     fail_task_stack = fail_task_tcb = false;
     fail_allocation = allocation_count = 0;
     delete_calls = with_caps_deletes = full_wakeups = 0;
+    capture_start_calls = gpio_enable_calls = 0;
     stack_bytes = stack_caps = priority = 0;
 }
 void BlockLog() {
@@ -280,6 +288,14 @@ size_t CallbackCalls() {
     std::lock_guard<std::mutex> lock(mutex);
     return callback_calls;
 }
+size_t PartialFrameLogs() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return partial_frame_logs;
+}
+size_t InvalidStateLogs() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return invalid_state_logs;
+}
 void BlockFinalUnlock() {
     std::lock_guard<std::mutex> lock(mutex);
     block_final_unlock = true;
@@ -308,6 +324,21 @@ void ReleaseCaptureStart() {
     condition.notify_all();
 }
 bool DeletedDuringCaptureStart() { return capture_start_delete; }
+void BlockCaptureStop() { block_capture_stop = true; }
+bool WaitCaptureStop() { return Wait([] { return capture_stop_entered; }); }
+void ReleaseCaptureStop() {
+    std::lock_guard<std::mutex> lock(mutex);
+    release_capture_stop = true;
+    condition.notify_all();
+}
+size_t CaptureStartCalls() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return capture_start_calls;
+}
+size_t GpioEnableCalls() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return gpio_enable_calls;
+}
 size_t QueueFullWakeups() { return full_wakeups; }
 std::vector<std::string> Calls() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -354,9 +385,15 @@ void worker_unlock(portMUX_TYPE* key) {
     value->unlock();
 }
 void worker_log(const char*, const char* format, ...) {
+    if (std::string(format).find("RX:%d-%d") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++partial_frame_logs;
+        return;
+    }
     if (std::string(format).find("invalid state") == std::string::npos) return;
     std::unique_lock<std::mutex> output_lock(stdout_mutex);
     std::unique_lock<std::mutex> lock(mutex);
+    ++invalid_state_logs;
     log_held = true;
     log_entered = true;
     condition.notify_all();
@@ -471,9 +508,21 @@ esp_err_t gdma_del_channel(gdma_channel_handle_t) {
     Record("dma-delete");
     return ESP_OK;
 }
-esp_err_t gdma_stop(gdma_channel_handle_t) { return ESP_OK; }
+esp_err_t gdma_stop(gdma_channel_handle_t) {
+    std::unique_lock<std::mutex> lock(mutex);
+    if (current_task) {
+        capture_stop_entered = true;
+        condition.notify_all();
+        if (block_capture_stop) condition.wait(lock, [] { return release_capture_stop; });
+    }
+    return ESP_OK;
+}
 esp_err_t gpio_intr_disable(int) { return ESP_OK; }
-esp_err_t gpio_intr_enable(int) { return ESP_OK; }
+esp_err_t gpio_intr_enable(int) {
+    std::lock_guard<std::mutex> lock(mutex);
+    ++gpio_enable_calls;
+    return ESP_OK;
+}
 esp_err_t gpio_isr_handler_remove(int) { return ESP_OK; }
 esp_err_t gpio_install_isr_service(int) { return ESP_OK; }
 esp_err_t gpio_set_intr_type(int, int) { return ESP_OK; }
@@ -503,6 +552,7 @@ uint32_t dvp_get_dma_valid_size(dvp_cam_ctlr_t*, uint32_t) { return 0; }
 uint32_t dvp_calculate_jpeg_size(const uint8_t*, size_t) { return 0; }
 esp_err_t dvp_start_capturing(dvp_cam_ctlr_t*) {
     std::unique_lock<std::mutex> lock(mutex);
+    ++capture_start_calls;
     capture_start_entered = true;
     condition.notify_all();
     if (block_capture_start) condition.wait(lock, [] { return release_capture_start; });

@@ -24,8 +24,18 @@ int queue;
 int task;
 int channel;
 int sensor;
-dvp_cam_ctlr_t controller{&task, 7, &channel, 0, &descriptor, &buffer, &queue, 0,
-                          DVP_CAM_FSM_STARTED};
+dvp_cam_ctlr_t controller{};
+
+void reset_controller() {
+    controller = {};
+    controller.task_handle = &task;
+    controller.vsync_pin = 7;
+    controller.dma_chan = &channel;
+    controller.dma_desc = &descriptor;
+    controller.dma_buffer = &buffer;
+    controller.event_queue = &queue;
+    controller.dvp_fsm = DVP_CAM_FSM_STARTED;
+}
 
 void check(bool condition, const char *message) {
     if (!condition) { std::fprintf(stderr, "FAIL: %s\n", message); ++failures; }
@@ -105,6 +115,7 @@ void vQueueDelete(void *handle) { check(handle == &queue, "queue handle"); (void
 }
 
 int main(int argc, char **argv) {
+    reset_controller();
     check(argc == 2, "one test scenario required");
     if (argc != 2) return 1;
     std::string scenario = argv[1];
@@ -112,20 +123,20 @@ int main(int argc, char **argv) {
         forward_delete = true;
         drop_records = scenario == "record_drop";
         check(run_video() == ESP_OK, "complete stop succeeds");
-        expect_calls({"sensor", "stop", "disable", "delete", "task", "gpio_disable", "hal_stop", "capture",
+        expect_calls({"stop", "sensor", "disable", "delete", "task", "gpio_disable", "hal_stop", "capture",
                       "hal_delete", "gpio_remove", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
-        expect_phases({5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 12});
+        expect_phases({7, 8, 5, 6, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 12});
         check(marks.size() + 4 == 24 && marks.size() + 4 <= RODAK_CAMERA_TEARDOWN_CAPACITY, "root + overlay mark budget");
         check(log_count == 0, "success adds no log calls");
     } else if (scenario.rfind("common_fail_", 0) == 0) {
         fail_at = scenario.substr(12);
         interface_stop = true;
         check(run_video() == -37, "common preserves first failure");
-        if (fail_at == "sensor") { expect_calls({"sensor"}); expect_phases({5, 6}); expect_failure_status(6); }
-        else if (fail_at == "interface") { expect_calls({"sensor", "interface"}); expect_phases({5, 6}); }
-        else if (fail_at == "stop") { expect_calls({"sensor", "interface", "stop"}); expect_phases({5, 6, 7, 8}); expect_failure_status(8); }
-        else if (fail_at == "disable") { expect_calls({"sensor", "interface", "stop", "disable"}); expect_phases({5, 6, 7, 8, 9, 10}); expect_failure_status(10); }
-        else if (fail_at == "delete") { expect_calls({"sensor", "interface", "stop", "disable", "delete"}); expect_phases({5, 6, 7, 8, 9, 10, 11, 12}); expect_failure_status(12); }
+        if (fail_at == "sensor") { expect_calls({"stop", "sensor"}); expect_phases({7, 8, 5, 6}); expect_failure_status(6); }
+        else if (fail_at == "interface") { expect_calls({"stop", "sensor", "interface"}); expect_phases({7, 8, 5, 6}); }
+        else if (fail_at == "stop") { expect_calls({"stop"}); expect_phases({7, 8}); expect_failure_status(8); }
+        else if (fail_at == "disable") { expect_calls({"stop", "sensor", "interface", "disable"}); expect_phases({7, 8, 5, 6, 9, 10}); expect_failure_status(10); }
+        else if (fail_at == "delete") { expect_calls({"stop", "sensor", "interface", "disable", "delete"}); expect_phases({7, 8, 5, 6, 9, 10, 11, 12}); expect_failure_status(12); }
         else check(false, "unknown common failure");
         check(log_count == 1, "common retains existing error log count");
     } else if (scenario.rfind("del_fail_", 0) == 0) {
@@ -180,10 +191,10 @@ int main(int argc, char **argv) {
         check(run_video() == -37, "common stop exposes DVP delete failure");
         fail_at.clear();
         check(run_video() == ESP_OK, "common stop retries the staged delete");
-        expect_calls({"sensor", "stop", "disable", "delete", "task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect",
-                      "sensor", "stop", "disable", "delete", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
-        expect_phases({5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 12,
-                       5, 6, 7, 8, 9, 10, 11, 23, 24, 12});
+        expect_calls({"stop", "sensor", "disable", "delete", "task", "gpio_disable", "hal_stop", "capture", "hal_delete", "gpio_remove", "disconnect",
+                      "stop", "sensor", "disable", "delete", "disconnect", "dma_delete", "free_desc", "free_buffer", "queue", "free_ctlr"});
+        expect_phases({7, 8, 5, 6, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 12,
+                       7, 8, 5, 6, 9, 10, 11, 23, 24, 12});
     } else if (scenario == "del_self_reject") {
         controller.task_handle = &sensor;
         check(run_dvp_del(&controller) == ESP_ERR_INVALID_STATE, "self deletion is rejected");

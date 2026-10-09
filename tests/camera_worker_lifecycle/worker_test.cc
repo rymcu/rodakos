@@ -17,6 +17,7 @@ struct Fixture {
         host::ReleaseCallback();
         host::ReleaseFinalUnlock();
         host::ReleaseCaptureStart();
+        host::ReleaseCaptureStop();
         if (controller) worker_delete(controller);
         host::Join();
         host::Reset();
@@ -46,15 +47,27 @@ RODAK_TEST("worker constructor uses PSRAM only with original stack priority queu
     RODAK_CHECK_EQ(host::WithCapsDeleteCalls(), 1u);
 }
 
-RODAK_TEST("worker constructor allocation failures release every owned object") {
-    for (int index = 1; index <= 3; ++index) {
+RODAK_TEST("worker constructor controller allocation failure owns no resources") {
+    Fixture fixture;
+    host::FailAllocation(1);
+    RODAK_CHECK_EQ(worker_create(&fixture.controller), ESP_ERR_NO_MEM);
+    RODAK_CHECK_EQ(fixture.controller, nullptr);
+    RODAK_CHECK_EQ(host::LiveAllocations(), 0u);
+    RODAK_CHECK_EQ(host::LiveQueues(), 0u);
+    RODAK_CHECK_EQ(host::DeleteCalls(), 0u);
+}
+
+RODAK_TEST("worker constructor retries smaller rings after one allocation failure") {
+    for (int index : {2, 3}) {
         Fixture fixture;
         host::FailAllocation(index);
-        RODAK_CHECK_EQ(worker_create(&fixture.controller), ESP_ERR_NO_MEM);
-        RODAK_CHECK_EQ(fixture.controller, nullptr);
+        RODAK_CHECK_EQ(worker_create(&fixture.controller), ESP_OK);
+        auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
+        RODAK_CHECK_EQ(ctlr->dma_buffer_size, 6144u);
+        RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
+        host::Join();
         RODAK_CHECK_EQ(host::LiveAllocations(), 0u);
         RODAK_CHECK_EQ(host::LiveQueues(), 0u);
-        RODAK_CHECK_EQ(host::DeleteCalls(), 0u);
     }
 }
 
@@ -120,6 +133,75 @@ RODAK_TEST("worker shutdown rechecks after a queued event has already been recei
     host::Join();
     RODAK_CHECK(owner_progressed);
     RODAK_CHECK_EQ(host::CallbackCalls(), 0u);
+}
+
+RODAK_TEST("stream stop drops an admitted partial frame without restart or error") {
+    static uint8_t frame[153600]{};
+    Fixture fixture;
+    host::BlockAfterReceive();
+    fixture.Create();
+    auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
+    ctlr->cbs.on_get_new_trans = host::Callback;
+    ctlr->cbs.on_trans_finished = host::Callback;
+    ctlr->dvp_fsm = DVP_CAM_FSM_RXING;
+    ctlr->trans.buffer = frame;
+    ctlr->trans.buflen = 153600;
+    ctlr->trans.received_size = 30720;
+    host::QueueEvent(fixture.controller, DVP_CAM_EVENT_SYNC_END);
+    RODAK_CHECK(host::WaitAfterReceive());
+    RODAK_CHECK_EQ(worker_stop(fixture.controller), ESP_OK);
+    host::ReleaseAfterReceive();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    RODAK_CHECK_EQ(host::CallbackCalls(), 0u);
+    RODAK_CHECK_EQ(host::PartialFrameLogs(), 0u);
+    RODAK_CHECK_EQ(host::InvalidStateLogs(), 0u);
+    RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
+    host::Join();
+}
+
+RODAK_TEST("non stop partial frame retains the production data error") {
+    static uint8_t frame[153600]{};
+    Fixture fixture;
+    fixture.Create();
+    auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
+    ctlr->cbs.on_get_new_trans = host::Callback;
+    ctlr->cbs.on_trans_finished = host::Callback;
+    ctlr->dvp_fsm = DVP_CAM_FSM_RXING;
+    ctlr->trans.buffer = frame;
+    ctlr->trans.buflen = 153600;
+    ctlr->trans.received_size = 30720;
+    host::QueueEvent(fixture.controller, DVP_CAM_EVENT_SYNC_END);
+    for (int i = 0; i < 2000 && host::PartialFrameLogs() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    RODAK_CHECK_EQ(host::PartialFrameLogs(), 1u);
+    RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
+    host::Join();
+}
+
+RODAK_TEST("stream stop suppresses a partial frame already inside capture shutdown") {
+    static uint8_t frame[153600]{};
+    Fixture fixture;
+    host::BlockCaptureStop();
+    fixture.Create();
+    auto* ctlr = static_cast<dvp_cam_ctlr_t*>(fixture.controller);
+    ctlr->cbs.on_get_new_trans = host::Callback;
+    ctlr->cbs.on_trans_finished = host::Callback;
+    ctlr->dvp_fsm = DVP_CAM_FSM_RXING;
+    ctlr->trans.buffer = frame;
+    ctlr->trans.buflen = 153600;
+    ctlr->trans.received_size = 30720;
+    host::QueueEvent(fixture.controller, DVP_CAM_EVENT_SYNC_END);
+    RODAK_CHECK(host::WaitCaptureStop());
+    RODAK_CHECK_EQ(worker_stop(fixture.controller), ESP_OK);
+    host::ReleaseCaptureStop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    RODAK_CHECK_EQ(host::CallbackCalls(), 0u);
+    RODAK_CHECK_EQ(host::PartialFrameLogs(), 0u);
+    RODAK_CHECK_EQ(host::InvalidStateLogs(), 0u);
+    RODAK_CHECK_EQ(host::CaptureStartCalls(), 0u);
+    RODAK_CHECK_EQ(host::GpioEnableCalls(), 0u);
+    RODAK_CHECK_EQ(fixture.Delete(), ESP_OK);
+    host::Join();
 }
 
 RODAK_TEST("worker shutdown permits an admitted callback to finish before deletion") {

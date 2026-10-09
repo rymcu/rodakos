@@ -103,7 +103,7 @@ class CameraGeneratorTests(unittest.TestCase):
 
     def test_exact_replacement_counts(self):
         source = overlay.read_lf(self.video / overlay.VIDEO_SOURCE).decode()
-        anchor = '    ESP_RETURN_ON_ERROR(esp_cam_ctlr_stop(common->cam_ctrl_handle), TAG, "failed to stop CAM ctlr");'
+        anchor = '#include "esp_check.h"\n'
         with self.assertRaises(ValueError):
             overlay.instrument_video(source.replace(anchor, anchor + "\n" + anchor))
         sensor = overlay.read_lf(self.sensor / overlay.SENSOR_SOURCE).decode()
@@ -134,6 +134,17 @@ class CameraGeneratorTests(unittest.TestCase):
         self.assertEqual(sensor.count("dvp_dma_deinit("), 3)
         self.assertIn("DVP DMA ring fallback", sensor)
         self.assertIn("DVP_CAM_DMA_BUFFER_SIZE, 6144, 4096", sensor)
+
+    def test_sensor_first_stop_regression_is_rejected(self):
+        source = overlay.read_lf(self.video / overlay.VIDEO_SOURCE).decode()
+        generated = overlay.instrument_video(source)
+        common = overlay.function_text(generated, "common_video_stop")
+        controller = common.index("esp_cam_ctlr_stop(common->cam_ctrl_handle)")
+        sensor = common.index("esp_cam_sensor_ioctl(common->cam.sensor")
+        self.assertLess(controller, sensor)
+        regressed = (common[:controller] + common[sensor:] + common[controller:sensor])
+        with self.assertRaisesRegex(ValueError, "controller must stop before"):
+            overlay.require_controller_stop_before_sensor_stop(regressed)
 
     def test_production_cmake_replaces_exactly_one_source_per_component(self):
         for scenario in ("valid", "missing_video", "duplicate_video", "missing_sensor", "duplicate_sensor"):

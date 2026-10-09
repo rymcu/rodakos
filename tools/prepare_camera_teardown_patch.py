@@ -74,30 +74,65 @@ def mark(phase: str, status: str = "0", indent: str = "    ") -> str:
             f"{indent}    (uint32_t)xPortGetCoreID(), {status});\n")
 
 
+def require_controller_stop_before_sensor_stop(source: str) -> None:
+    common = function_text(source, "common_video_stop")
+    controller = common.find("esp_cam_ctlr_stop(common->cam_ctrl_handle)")
+    sensor = common.find("esp_cam_sensor_ioctl(common->cam.sensor")
+    require(controller >= 0 and sensor >= 0 and controller < sensor,
+            "Camera controller must stop before the sensor STREAMOFF command")
+
+
 def instrument_video(source: str) -> str:
     require("rodak_camera_teardown_" not in source, "Video source already contains diagnostics")
     source = replace_exact(source, '#include "esp_check.h"\n',
                            '#include "esp_check.h"\n#include "freertos/FreeRTOS.h"\n'
                            '#include "camera-teardown-diagnostics.h"\n')
     original = function_text(source, "common_video_stop")
-    patched = replace_exact(original,
-        "    ESP_RETURN_ON_ERROR(esp_cam_sensor_ioctl(common->cam.sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &flags),\n"
-        '                        TAG, "failed to stop sensor stream");',
-        mark("SENSOR_ENTER") +
-        "    esp_err_t rodak_teardown_result = esp_cam_sensor_ioctl(common->cam.sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &flags);\n" +
-        mark("SENSOR_RETURNED", "rodak_teardown_result") +
-        '    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to stop sensor stream");')
-    for phase, function, error in (("STOP", "stop", "stop"),
-                                   ("DISABLE", "disable", "disable"),
-                                   ("DEL", "del", "delete")):
-        patched = replace_exact(patched,
-            f'    ESP_RETURN_ON_ERROR(esp_cam_ctlr_{function}(common->cam_ctrl_handle), TAG, "failed to {error} CAM ctlr");',
-            mark(phase + "_ENTER") +
-            f"    rodak_teardown_result = esp_cam_ctlr_{function}(common->cam_ctrl_handle);\n" +
-            mark(phase + "_RETURNED", "rodak_teardown_result") +
-            f'    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to {error} CAM ctlr");')
+    patched = '''static esp_err_t common_video_stop(struct esp_video *video, uint32_t type)
+{
+    esp_video_device_common_t *common = VIDEO_DEVICE_COMMON(video);
+
+    assert(common->cam.sensor);
+
+    int flags = 0;
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_STOP_ENTER,
+        (uint32_t)xPortGetCoreID(), 0);
+    esp_err_t rodak_teardown_result = esp_cam_ctlr_stop(common->cam_ctrl_handle);
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_STOP_RETURNED,
+        (uint32_t)xPortGetCoreID(), rodak_teardown_result);
+    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to stop CAM ctlr");
+
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_SENSOR_ENTER,
+        (uint32_t)xPortGetCoreID(), 0);
+    rodak_teardown_result = esp_cam_sensor_ioctl(common->cam.sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &flags);
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_SENSOR_RETURNED,
+        (uint32_t)xPortGetCoreID(), rodak_teardown_result);
+    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to stop sensor stream");
+
+    if (common->intf->stop) {
+        ESP_RETURN_ON_ERROR(common->intf->stop(common), TAG, "device stop failed");
+    }
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_DISABLE_ENTER,
+        (uint32_t)xPortGetCoreID(), 0);
+    rodak_teardown_result = esp_cam_ctlr_disable(common->cam_ctrl_handle);
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_DISABLE_RETURNED,
+        (uint32_t)xPortGetCoreID(), rodak_teardown_result);
+    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to disable CAM ctlr");
+
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_DEL_ENTER,
+        (uint32_t)xPortGetCoreID(), 0);
+    rodak_teardown_result = esp_cam_ctlr_del(common->cam_ctrl_handle);
+    (void)rodak_camera_teardown_record(RODAK_CAMERA_TEARDOWN_DEL_RETURNED,
+        (uint32_t)xPortGetCoreID(), rodak_teardown_result);
+    ESP_RETURN_ON_ERROR(rodak_teardown_result, TAG, "failed to delete CAM ctlr");
+    common->cam_ctrl_handle = NULL;
+
+    return ESP_OK;
+}'''
     require(patched.count("rodak_camera_teardown_record(") == 8, "Video mark budget changed")
-    return replace_exact(source, original, patched)
+    source = replace_exact(source, original, patched)
+    require_controller_stop_before_sensor_stop(source)
+    return source
 
 
 def instrument_sensor(source: str) -> str:
@@ -122,6 +157,7 @@ def instrument_sensor(source: str) -> str:
         '    bool teardown_gpio_remove_marked;                 /*!< Diagnostics GPIO remove entry emitted */\n'
         '    bool teardown_dma_disconnect_marked;              /*!< Diagnostics GDMA disconnect entry emitted */\n'
         '    bool teardown_dma_delete_marked;                  /*!< Diagnostics GDMA delete entry emitted */\n'
+        '    bool stream_stop_requested;                       /*!< Owner is stopping capture */\n'
         '')
     original = function_text(source, "dvp_dma_deinit")
     patched = replace_exact(original,
@@ -213,7 +249,10 @@ fail1:
     }
 
     return ret;''',
-        '''    ctlr->dvp_fsm = DVP_CAM_FSM_INIT;
+        '''    portENTER_CRITICAL(&ctlr->spinlock);
+    ctlr->stream_stop_requested = true;
+    ctlr->dvp_fsm = DVP_CAM_FSM_INIT;
+    portEXIT_CRITICAL(&ctlr->spinlock);
     if (!ctlr->teardown_gpio_disabled) {
         ret = gpio_intr_disable(ctlr->vsync_pin);
         if (ret != ESP_OK) {
@@ -254,7 +293,22 @@ fail1:
         '    }\n'
         '    ctlr->teardown_gpio_disabled = false;\n'
         '    ctlr->teardown_capture_stopped = false;\n'
-        '    ctlr->dvp_fsm = DVP_CAM_FSM_STARTED;')
+        '    portENTER_CRITICAL(&ctlr->spinlock);\n'
+        '    ctlr->stream_stop_requested = false;\n'
+        '    ctlr->dvp_fsm = DVP_CAM_FSM_STARTED;\n'
+        '    portEXIT_CRITICAL(&ctlr->spinlock);')
+    patched = replace_exact(patched,
+        '''    if (ret != ESP_OK) {
+        ctlr->dvp_fsm = DVP_CAM_FSM_INIT;
+        ESP_EARLY_LOGE(TAG, "failed to enable vsync interrupt");
+    }''',
+        '''    if (ret != ESP_OK) {
+        portENTER_CRITICAL(&ctlr->spinlock);
+        ctlr->dvp_fsm = DVP_CAM_FSM_INIT;
+        ctlr->stream_stop_requested = true;
+        portEXIT_CRITICAL(&ctlr->spinlock);
+        ESP_EARLY_LOGE(TAG, "failed to enable vsync interrupt");
+    }''')
     source = replace_exact(source, original, patched)
     original = function_text(source, "dvp_cam_ctlr_register_event_callbacks")
     patched = replace_exact(original,
@@ -284,6 +338,14 @@ def instrument_worker_lifecycle(source: str) -> str:
 {
     portENTER_CRITICAL(&ctlr->spinlock);
     bool requested = ctlr->shutdown_requested;
+    portEXIT_CRITICAL(&ctlr->spinlock);
+    return requested;
+}
+
+static bool dvp_stream_stop_requested(dvp_cam_ctlr_t *ctlr)
+{
+    portENTER_CRITICAL(&ctlr->spinlock);
+    bool requested = ctlr->stream_stop_requested;
     portEXIT_CRITICAL(&ctlr->spinlock);
     return requested;
 }
@@ -463,6 +525,96 @@ static void dvp_worker_quiesce(dvp_cam_ctlr_t *ctlr)
             break;
         }
         if (received != pdPASS) {''')
+    patched = patched.replace(
+        '''        if (received != pdPASS) {
+            ESP_LOGE(TAG, "failed to receive message");
+            continue;
+        }
+
+        switch (event.type) {''',
+        '''        if (received != pdPASS) {
+            ESP_LOGE(TAG, "failed to receive message");
+            continue;
+        }
+        if (dvp_stream_stop_requested(ctlr)) {
+            continue;
+        }
+
+        switch (event.type) {''', 1)
+    patched = patched.replace(
+        'if (ctlr->dvp_fsm == DVP_CAM_FSM_RXING) {',
+        'if (!dvp_stream_stop_requested(ctlr) && ctlr->dvp_fsm == DVP_CAM_FSM_RXING) {', 1)
+    patched = replace_exact(patched,
+        '                    DVP_CAM_ERROR("RX-DA OVF");',
+        '''                    if (!dvp_stream_stop_requested(ctlr)) {
+                        DVP_CAM_ERROR("RX-DA OVF");
+                    }''')
+    patched = patched.replace(
+        '} else if (ctlr->dvp_fsm == DVP_CAM_FSM_RXING) {',
+        '} else if (!dvp_stream_stop_requested(ctlr) && ctlr->dvp_fsm == DVP_CAM_FSM_RXING) {', 1)
+    patched = patched.replace(
+        'if (trans->buffer && trans->buflen > 0) {',
+        'if (!dvp_stream_stop_requested(ctlr) && trans->buffer && trans->buflen > 0) {')
+    patched = patched.replace(
+        'if (ctlr->dvp_fsm == DVP_CAM_FSM_STARTED) {',
+        'if (!dvp_stream_stop_requested(ctlr) && ctlr->dvp_fsm == DVP_CAM_FSM_STARTED) {', 1)
+    patched = replace_exact(patched,
+        '                    DVP_CAM_ERROR("RX-SV OVF");',
+        '''                    if (!dvp_stream_stop_requested(ctlr)) {
+                        DVP_CAM_ERROR("RX-SV OVF");
+                    }''')
+    patched = replace_exact(patched,
+        '''                        if (ctlr->fb_size_in_bytes != trans->received_size) {
+                            DVP_CAM_ERROR("RX:%d-%d", (int)ctlr->fb_size_in_bytes, (int)trans->received_size);
+                            trans->received_size = 0;
+                        }''',
+        '''                        if (ctlr->fb_size_in_bytes != trans->received_size) {
+                            if (!dvp_stream_stop_requested(ctlr)) {
+                                DVP_CAM_ERROR("RX:%d-%d", (int)ctlr->fb_size_in_bytes, (int)trans->received_size);
+                            }
+                            trans->received_size = 0;
+                        }''')
+    patched = patched.replace(
+        '                if (trans->received_size) {',
+        '                if (trans->received_size && !dvp_stream_stop_requested(ctlr)) {', 1)
+    patched = replace_exact(patched,
+        '''                    } else {
+                        ctlr->dvp_fsm = DVP_CAM_FSM_STARTED;
+                    }''',
+        '''                    } else if (!dvp_stream_stop_requested(ctlr)) {
+                        ctlr->dvp_fsm = DVP_CAM_FSM_STARTED;
+                    }''')
+    patched = patched.replace(
+        '''                } else {
+                    trans->received_size = 0;
+
+                    ctlr->dma_desc_index = 0;
+                    ctlr->dvp_fsm = DVP_CAM_FSM_RXING;
+                    dvp_start_capturing(ctlr);
+                }
+
+                gpio_intr_enable(ctlr->vsync_pin);''',
+        '''                } else if (!dvp_stream_stop_requested(ctlr)) {
+                    trans->received_size = 0;
+
+                    ctlr->dma_desc_index = 0;
+                    ctlr->dvp_fsm = DVP_CAM_FSM_RXING;
+                    dvp_start_capturing(ctlr);
+                }
+
+                if (!dvp_stream_stop_requested(ctlr)) {
+                    gpio_intr_enable(ctlr->vsync_pin);
+                    if (dvp_stream_stop_requested(ctlr)) {
+                        gpio_intr_disable(ctlr->vsync_pin);
+                    }
+                }''', 1)
+    patched = patched.replace(
+        '''            } else {
+                ESP_LOGW(TAG, "invalid state %d\\n", ctlr->dvp_fsm);
+            }''',
+        '''            } else if (!dvp_stream_stop_requested(ctlr)) {
+                ESP_LOGW(TAG, "invalid state %d\\n", ctlr->dvp_fsm);
+            }''', 1)
     require(patched.endswith('    }\n}\n'), 'Worker terminal boundary drifted')
     patched = patched[:-2] + '''    portENTER_CRITICAL(&ctlr->spinlock);
     ctlr->worker_quiesced = true;

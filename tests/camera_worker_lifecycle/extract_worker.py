@@ -42,7 +42,7 @@ def main():
     overlay.write_if_changed(args.output_dir / 'production_types.h', types)
     names = ['dvp_get_dma_buffer_hsize', 'dvp_dma_deinit', 'dvp_stop_capturing']
     if 'static bool dvp_worker_shutdown_requested' in source:
-        names += ['dvp_worker_shutdown_requested', 'dvp_worker_quiesce']
+        names += ['dvp_worker_shutdown_requested', 'dvp_stream_stop_requested', 'dvp_worker_quiesce']
     names += ['dvp_cam_ctlr_del', 'dvp_cam_ctlr_register_event_callbacks', 'dvp_cam_ctlr_start',
               'dvp_cam_ctlr_stop', 'dvp_cam_ctlr_enable', 'dvp_cam_ctlr_disable',
               'dvp_task', 'esp_cam_new_dvp_ctlr_ext']
@@ -53,6 +53,7 @@ esp_err_t worker_create(esp_cam_ctlr_handle_t *out) {
     return esp_cam_new_dvp_ctlr_ext(&config, out);
 }
 esp_err_t worker_delete(esp_cam_ctlr_handle_t handle) { return dvp_cam_ctlr_del(handle); }
+esp_err_t worker_stop(esp_cam_ctlr_handle_t handle) { return dvp_cam_ctlr_stop(handle); }
 '''
     marker = '#define RODAK_WORKER_COOPERATIVE 1\n' if 'bool shutdown_requested;' in source else ''
     overlay.write_if_changed(args.output_dir / 'production_mode.h', marker)

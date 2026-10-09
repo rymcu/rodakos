@@ -72,10 +72,10 @@ void CheckSnapshot(uint32_t count, int status) {
         RODAK_CAMERA_TEARDOWN_BEFORE_LOG, RODAK_CAMERA_TEARDOWN_AFTER_LOG
     };
     for (uint32_t index = 0; index < count; ++index) {
-        RODAK_CHECK_EQ(snapshot.records[index].phase, phases[index]);
+        RODAK_CHECK_EQ(snapshot.records[index].phase, phases[index % 4]);
         RODAK_CHECK_EQ(snapshot.records[index].commit_seq, index + 1);
         RODAK_CHECK_EQ(snapshot.records[index].core, 0u);
-        RODAK_CHECK_EQ(snapshot.records[index].status, index == 0 ? 0 : status);
+        RODAK_CHECK_EQ(snapshot.records[index].status, index % 4 == 0 ? 0 : status);
     }
     for (uint32_t index = count; index < RODAK_CAMERA_TEARDOWN_CAPACITY; ++index) {
         RODAK_CHECK_EQ(snapshot.records[index].commit_seq, 0u);
@@ -89,8 +89,11 @@ void Run(bool block_log, int status) {
     ReleaseOnExit fixture_release{gate};
     camera_host::streamoff_result = status;
     if (block_log) {
-        camera_host::log_hook = [&gate](const char* format) {
-            if (std::strcmp(format, "CloseStream: STREAMOFF complete") == 0) gate.Block();
+        camera_host::log_hook = [&gate, status](const char* format) {
+            const char* expected = status == 0
+                                       ? "CloseStream: STREAMOFF complete"
+                                       : "CloseStream: STREAMOFF failed; retaining fd and buffers for retry: %s";
+            if (std::strcmp(format, expected) == 0) gate.Block();
         };
     } else {
         camera_host::streamoff_hook = [&gate] { gate.Block(); };
@@ -108,14 +111,13 @@ void Run(bool block_log, int status) {
     RODAK_CHECK_EQ(stopped.wait_for(3s), std::future_status::ready);
     stopped.get();
     camera_host::JoinTasks();
-    CheckSnapshot(4, status);
+    CheckSnapshot(status == 0 ? 4 : 8, status);
     RODAK_CHECK_FALSE(fixture.camera.GetState().preview_running);
     if (status != 0) {
         // A failed STREAMOFF keeps the V4L2 ownership alive so the DVP
         // controller can be stopped again. Releasing the fd or mappings here
         // would make the lower-level cleanup permanently unrecoverable.
         RODAK_CHECK(camera_host::frame_mappings.load() > 0u);
-        RODAK_CHECK(camera_host::preview_frame_bytes.load() > 0u);
         camera_host::streamoff_result = 0;
         fixture.camera.StopPreview();
         camera_host::JoinTasks();

@@ -42,7 +42,22 @@ def main():
          '        portENTER_CRITICAL(&ctlr->spinlock);\n        bool quiesced = ctlr->worker_quiesced;\n'
          '        portEXIT_CRITICAL(&ctlr->spinlock);',
          '        bool quiesced = ctlr->worker_quiesced;',
-         'worker final access confirmation', 'retained')]
+         'worker final access confirmation', 'retained'),
+        ('missing-stream-stop-check',
+         '''static bool dvp_stream_stop_requested(dvp_cam_ctlr_t *ctlr)
+{
+    portENTER_CRITICAL(&ctlr->spinlock);
+    bool requested = ctlr->stream_stop_requested;
+    portEXIT_CRITICAL(&ctlr->spinlock);
+    return requested;
+}''',
+         '''static bool dvp_stream_stop_requested(dvp_cam_ctlr_t *ctlr)
+{
+    (void)ctlr;
+    return false;
+}''',
+         'stream stop drops an admitted partial frame without restart or error',
+         'host::InvalidStateLogs() == 0u')]
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
     for name, before, after, test_filter, expected in variants:

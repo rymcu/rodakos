@@ -49,6 +49,7 @@ typedef struct dvp_cam_ctlr {
     bool teardown_gpio_remove_marked;
     bool teardown_dma_disconnect_marked;
     bool teardown_dma_delete_marked;
+    bool stream_stop_requested;
     bool shutdown_requested;
     bool worker_quiesced;
 } dvp_cam_ctlr_t;

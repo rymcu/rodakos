@@ -174,6 +174,7 @@ esp_err_t dvp_start_capturing(dvp_cam_ctlr_t*);
 #define dvp_receive_isr NULL
 esp_err_t worker_create(esp_cam_ctlr_handle_t*);
 esp_err_t worker_delete(esp_cam_ctlr_handle_t);
+esp_err_t worker_stop(esp_cam_ctlr_handle_t);
 #ifdef __cplusplus
 }
 #endif
