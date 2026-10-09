@@ -3496,6 +3496,32 @@ WebRTC 传输。物理画质、失败 STREAMON 实机清理、任意 OOM、并�
 `.codex-temp/camera-physical-058/camera-stream-*-059-pattern*`、`camera-stream-*-060-off*`；
 060 首启日志为 `build/logs/first-boot-20261010-003900.log`。
 
+## 2026-10-10 GC0308 寄存器诊断 062 与普通恢复 063
+
+提交 `c73c08f` 增加默认关闭的 `RODAKOS_CAMERA_SENSOR_DIAGNOSTICS`。诊断包
+`20261010-011055` / `camera-register-settled-062` 通过 fault-aware 验签、COM3 VerifyOnly
+及保留 NVS 的 `otadata + ota_0` 刷写，未使用 `-Erase`；Recovery → Main → OTA confirmation
+→ Home、WiFi/MQTT 和绑定保留均通过。设备串口在 configured、streaming、first-frame 和第
+60 帧输出 page 0/1 快照，全部 `failures=0`；首帧 94 ms、运行 328 帧，STREAMOFF、fd close
+和 device release 完整。
+
+第 60 帧时 page 0 的曝光候选由 `03=00 04=96` 变为 `03=01 04=e0`，page 1 的动态值由
+first-frame 的 `62=69 63=1f 64=56 65=5f` 收敛为 `62=1c 63=1c 64=1c 65=1c`，证明
+AEC/AGC 已经在改变传感器状态。Remote Camera 仍得到与 058/060/061 完全相同的单色暗帧，
+JPEG SHA-256 为 `7b68a3de4667b8288ebd434177f0344b58e198e53c67bef7fc51dfb5851b5f46`。
+因此当前软件证据排除了“曝光未运行”与 JPEG/WebRTC 传输链路，下一步应检查模拟前端、
+镜头/遮挡、供电和普通 RGB 输出配置；物理画质仍未通过。
+
+诊断后已恢复普通 063 包 `20261010-064533` / `camera-register-off-063`：
+`RODAKOS_CAMERA_SENSOR_DIAGNOSTICS=OFF`、`RODAKOS_CAMERA_TEST_PATTERN=OFF`，主镜像
+7,161,264 B，SHA-256 `846b585769b96b6c6e77cc996d5442fabd19435bb30ab93d2f278d0b58b52ec3`。
+普通包通过验签、COM3 VerifyOnly、保留 NVS 刷写、Recovery → Main → OTA confirmation →
+Home、自动联网和 MQTT 恢复；无 fault marker，未使用 `-Erase`。原始 062 串口为
+`.codex-temp/camera-register-062/serial-062.log`，Rodak 侧帧证据位于
+`D:\workspace\rodak\.codex-temp\camera-physical-058\camera-stream-*-062-settled.*`。
+本条不关闭任意 OOM、异常并发、生产签名/readback/power-cut 或资格长稳，发布继续 **NO_GO**，
+未启动新的八小时长稳。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录

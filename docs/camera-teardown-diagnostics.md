@@ -254,3 +254,32 @@ Camera 在 91 ms 取得首帧、完整释放且无 Camera/DVP 错误，但 JPEG 
 逐字节一致。后续诊断应比较普通模式 GC0308 初始化后的关键寄存器和 test-pattern 切换前后
 状态，并检查曝光/增益、XCLK/供电及镜头/遮挡。该证据不关闭物理画质、失败 STREAMON、
 任意 OOM、完整并发或八小时资格门禁，状态仍为 **NO_GO**。
+
+## 062/063：GC0308 寄存器收敛与普通恢复
+
+提交 `c73c08f` 增加默认关闭的 `RODAKOS_CAMERA_SENSOR_DIAGNOSTICS`。诊断包
+`20261010-011055` / `camera-register-settled-062` 在配置、STREAMON、首帧和第 60 帧
+分别读取 GC0308 page 0/1，所有 SCCB 读取 `failures=0`，每次读取后恢复 page 0。实机首帧
+94 ms、运行 328 帧，关闭阶段完成 `STREAMOFF`、fd close 和 Board Manager device release。
+
+关键快照如下：
+
+| 阶段 | page 0 暴光候选 | page 1 动态寄存器 |
+| --- | --- | --- |
+| configured | `03=00 04=96` | `62=81 63=21 64=69 65=69` |
+| streaming | `03=00 04=96` | `62=81 63=21 64=69 65=69` |
+| first-frame | `03=00 04=96` | `62=69 63=1f 64=56 65=5f` |
+| settled（第 60 帧） | `03=01 04=e0` | `62=1c 63=1c 64=1c 65=1c` |
+
+因此 AEC/AGC 已经在运行并改变了曝光相关寄存器；但 Remote Camera JPEG 仍与 058/060/061
+完全同哈希 `7b68a3de4667b8288ebd434177f0344b58e198e53c67bef7fc51dfb5851b5f46`。这将问题
+进一步收窄到模拟前端、镜头/遮挡、供电或普通 RGB 输出配置，不能据此声称物理画质通过。
+
+诊断结束后已恢复普通 063：包 `20261010-064533` / `camera-register-off-063`，
+`RODAKOS_CAMERA_SENSOR_DIAGNOSTICS=OFF`、`RODAKOS_CAMERA_TEST_PATTERN=OFF`，主镜像
+7,161,264 B，SHA-256 `846b585769b96b6c6e77cc996d5442fabd19435bb30ab93d2f278d0b58b52ec3`。
+本地验签、COM3 VerifyOnly、保留 NVS 的 `otadata + ota_0` 刷写、Recovery → Main → OTA
+confirmation → Home、WiFi/MQTT 恢复均通过，未使用 `-Erase`；普通设备无 fault marker。
+062 原始串口在 RodakOS `.codex-temp/camera-register-062/serial-062.log`，Remote Camera
+证据在 Rodak `.codex-temp/camera-physical-058/camera-stream-*-062-settled.*`。物理画质、
+任意 OOM、异常并发和八小时资格门禁继续 **NO_GO**，未启动新的长稳。

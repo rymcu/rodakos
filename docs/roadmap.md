@@ -121,7 +121,27 @@ test pattern did not. Physical image quality, failed-STREAMON hardware cleanup, 
 broader concurrency and qualification soak remain open; release stays **NO_GO** and no eight-hour
 run has started.
 
-Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
+Candidate 062 (`c73c08f`, package `20261010-011055`, task `camera-register-settled-062`) adds a
+default-OFF GC0308 register diagnostic. Configured, streaming, first-frame and settled snapshots
+read page 0/1 through SCCB with zero read failures. At the 60th frame exposure candidates changed
+from `03=00 04=96` to `03=01 04=e0`, while page-1 dynamic values converged to `1c/1c/1c/1c`;
+this proves AEC/AGC activity. The package passed fault-aware verification, COM3 VerifyOnly and an
+NVS-preserving `otadata + ota_0` refresh. Hardware produced a 94 ms software first frame, 328 frames,
+and complete STREAMOFF/fd/device release, but its Remote Camera JPEG retained the historical dark
+frame hash `7b68a3de4667b8288ebd434177f0344b58e198e53c67bef7fc51dfb5851b5f46`. The remaining image
+failure is now narrowed to the analog front end, lens/obstruction, power or ordinary RGB output
+configuration; software exposure activity and the digital transport chain are evidenced, while
+physical image quality remains unproved.
+
+The device was restored to ordinary OFF candidate 063 (`20261010-064533`, task
+`camera-register-off-063`, main SHA-256
+`846b585769b96b6c6e77cc996d5442fabd19435bb30ab93d2f278d0b58b52ec3`). Diagnostics and test pattern
+are both OFF; package verification, COM3 VerifyOnly, NVS-preserving refresh, Recovery → Main → OTA
+confirmation → Home and WiFi/MQTT recovery passed without `-Erase`, and no fault marker remains.
+Resource/production stays **NO_GO**; arbitrary OOM, broader concurrency, physical image, power-cut,
+production signing/readback and qualification soak remain open, so no new eight-hour run started.
+
+Evidence status updated on 2026-10-10. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
 forwarded zero over 110.1013822 seconds; the target PC stream is not necessary for this Q stall.
