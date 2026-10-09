@@ -52,6 +52,18 @@ zero `E:RX`, overflow, DQBUF or error logs. The five-cycle heap median drop is z
 **NO_GO** because application largest blocks were 4,352/5,120 bytes and health DMA largest remained
 6,144 bytes; 4,096 fallback, sufficient headroom, physical image and qualification soak remain open.
 
+Candidate 047 (`4bf341f`) adds a default-OFF, package-guarded Camera-only fault switch and verifies
+the 4,096-byte branch on COM3. Development fault package `20261009-205201`
+(`camera-dma-fallback-047`) passed fault-aware signature verification, VerifyOnly and an
+NVS-preserving refresh. One single-serial Camera → Home window emitted the fault marker, selected
+`4096/2048/1`, produced a software first frame and all six close markers, then retained fresh
+MQTT/Main/Voice health for 65.000 seconds with zero `E:RX`, overflow, DQBUF or ESP error logs.
+Release remains **NO_GO**: application largest was 6,400 bytes, health DMA largest 6,656 bytes,
+Voice supervisor stack minimum 2,388 bytes and internal historical minimum 2,123 bytes. Physical
+image, sufficient margin, arbitrary OOM, complete resource recovery and qualification soak remain
+open. The device was restored to ordinary 046 with the original ID, binding, token version 4 and
+MQTT connectivity; the workspace switch is OFF and the ordinary image contains no fault marker.
+
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
@@ -443,7 +455,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 045 closes stop-time `E:RX`. Candidate 046 covers the actual 6,144 B path for six first-frame/close cycles with zero DVP errors and no five-cycle heap median drop, but health DMA largest is still 6,144 B and application largest falls to 4,352 B. Verify 4,096 fallback and sufficient resource margin before qualification soak. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [046 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-dma-headroom-候选-046), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
+| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 045 closes stop-time `E:RX`; 046 covers repeated 6,144 B operation; 047 explicitly executes the 4,096 B fallback with a software first frame, six close stages and zero DVP errors. Resource headroom still fails: 047 application largest is 6,400 B, health DMA largest 6,656 B, Voice supervisor stack minimum 2,388 B and internal historical minimum 2,123 B. Prove sufficient resource margin, physical image and complete recovery before qualification soak. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [047 evidence](ota-release-readiness.md#2026-10-09-cameradvp-4096-b-fallback-故障注入候选-047), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns, delayed follow-up/silence timeout, live-mic playback, and one VAD barge-in abort; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, real acoustic AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [barge-in evidence](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

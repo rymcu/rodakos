@@ -3233,6 +3233,46 @@ OTA confirmation → Home 首启通过。只读 DeviceCloud 快照确认原 ID
 因此未启动新的八小时资格长稳。证据位于 `.codex-temp/camera-dma-046/`，首次启动日志为
 `build/logs/first-boot-20261009-202314.log`。
 
+## 2026-10-09 Camera/DVP 4,096 B fallback 故障注入候选 047
+
+源码 `4bf341f` 增加默认关闭的 `RODAKOS_CAMERA_DMA_FORCE_4096` 测试开关。开关只作用于
+Camera sensor 组件，非 JPEG 路径跳过 6,144 B 候选并输出
+`RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE`；普通构建保持原选择顺序。打包脚本会拒绝未显式
+允许的 fault image。generator 13/13、Camera teardown 39/39 在 Debug 与 ASan/UBSan 下通过，
+worker lifecycle 17/17 与 7 组源码负控通过；普通 OFF 和 fault ON 的 ESP-IDF 6.0.2 构建、
+Camera teardown ELF 与 JPEG allocator 审计均通过。
+
+开发签名 fault 包 `build/packages/ota/20261009-205201` 的 task 为
+`camera-dma-fallback-047`，version 为 `0.1.2-dev.1`，复用 046 已验证的 immutable Recovery。
+
+| 制品 | 大小 / SHA-256 |
+| --- | --- |
+| `rodakos_release_test.bin` | 7,158,512 B / `b0e298cbef5774d1d8382440f4c2a01cab72f1df8e1d5a876e2be988110395b2` |
+| manifest | `705367a18ec7a9439c46e0b854393fc009d411c5fa3a82f59bf3739b63025c09` |
+| 合并首刷镜像 | `c3cfb9dcabbc75acbddf1d85d5de5b71d7978353181276a39a632d70905d3024` |
+
+`verify-package --allow-faults`、COM3 VerifyOnly 与保留 NVS 的 `otadata + ota_0` 刷写通过，
+未使用 `-Erase`。Recovery → Main → OTA confirmation → Home 首启通过。一个单串口 Camera →
+Home 窗口记录一次 fault marker，并明确选择
+`configured=8192 selected=4096 actual=4096 half=2048 desc_half=1`。该轮取得软件首帧和六个
+关闭阶段，预览记录 6 帧；`E:RX`、overflow、DQBUF 与 ESP error 均为 0。随后 65.000 秒内
+取得两次 MQTT、两次 Main 和一次 Voice 新鲜健康样本，MQTT connected、Voice listening；
+内部 heap median drop 为 0。
+
+该轮仍为 **NO_GO**。应用窗口最大连续内部块最低 6,400 B，健康期 DMA largest 最低
+6,656 B，Voice supervisor 最低剩余栈 2,388 B，内部历史最低 2,123 B；采集器因此继续报告
+`insufficient_memory_or_stack_headroom`。047 证明 4,096 B 软件 fallback 可取得首帧并完成
+关闭，不证明充足资源余量、物理画质、任意 OOM、完整资源释放或长期稳定性。
+
+验证后已重新刷回普通 046 包 `20261009-202156`，再次通过 VerifyOnly、Recovery → Main →
+OTA confirmation → Home；只读 Rodak 快照确认原设备 ID
+`c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、设备 key `44:1b:f6:c3:b4:30`、`bound`、
+`tokenVersion=4`、MQTT 在线、voice idle，COM3 已释放。工作区也已将测试开关恢复 OFF 并
+重建普通固件，最终二进制不含 fault marker。证据位于 `.codex-temp/camera-dma-047/`；
+fault 首启与恢复首启日志分别为 `build/logs/first-boot-20261009-205256.log` 和
+`build/logs/first-boot-20261009-205719.log`。资源/生产发布保持 **NO_GO**，尚未启动八小时
+资格长稳。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录

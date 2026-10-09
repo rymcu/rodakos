@@ -214,3 +214,26 @@ MQTT 在线状态保持。
 4,096 B fallback、充足连续内存余量、物理画质、任意 OOM、完整资源释放或长期稳定性，
 因此没有启动新的八小时资格长稳。证据位于 `.codex-temp/camera-dma-046/`，首次启动日志为
 `build/logs/first-boot-20261009-202314.log`。
+
+## 047：受控 4,096 B fallback 实机覆盖
+
+源码 `4bf341f` 增加默认关闭的 `RODAKOS_CAMERA_DMA_FORCE_4096`，只给 Camera sensor 组件
+注入编译定义。开启时，非 JPEG 分配器跳过 6,144 B 候选并输出明确的 release fault marker；
+JPEG 和普通 OFF 构建不改变。打包、验包和刷写均要求显式 fault allow 开关，避免测试镜像
+进入普通发布流。host 回归新增独立 fault executable，验证仅尝试 4,096 B ring、half 为
+2,048 B、每半一个 descriptor 且 marker 存在；Camera teardown 39/39 在 Debug 与
+ASan/UBSan 下通过，generator 13/13，worker 17/17 与 7 组源码负控通过。
+
+fault 包 `20261009-205201` / `camera-dma-fallback-047` 通过签名验包、COM3 VerifyOnly 与保留
+NVS 的 `otadata + ota_0` 刷写。单串口窗口记录
+`RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE` 和
+`selected=4096 actual=4096 half=2048 desc_half=1`，随后取得软件首帧、六阶段关闭和
+65.000 秒 MQTT/Main/Voice 健康观察。`E:RX`、overflow、DQBUF、ESP error 均为 0，内部
+heap median drop 为 0。
+
+这只关闭“4,096 B 分支从未在实机执行”的覆盖缺口。应用最大连续内部块最低 6,400 B，
+健康期 DMA largest 最低 6,656 B，Voice supervisor 最低剩余栈 2,388 B，内部历史最低
+2,123 B；资源采集仍为 **NO_GO**。物理成像、充足连续余量、任意 OOM、完整资源释放和长稳
+均未证明。测试后已恢复普通 046，确认 Home、原 ID、`bound`、tokenVersion 4、MQTT 在线，
+并把工作区开关恢复 OFF、重建普通固件；fault 包不得用于生产。证据位于
+`.codex-temp/camera-dma-047/`。
