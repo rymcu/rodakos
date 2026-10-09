@@ -18,7 +18,8 @@ factory symbols are linked. The final `sdkconfig` is byte-identical to the previ
 No hardware was flashed for this migration; retain the existing long-soak candidate's evidence
 identity and complete separate device acceptance. See [dependency maintenance](dependency-maintenance.md).
 
-Camera/DVP follow-up on 2026-10-09 remains software-only. The completed eight-hour window
+Camera/DVP follow-up on 2026-10-09 has now reached a fresh device candidate, but remains
+**NO_GO**. The completed eight-hour window
 `20261009-014905` is **NO_GO** with 7/16 Camera requests succeeding and 9 DVP DMA allocation
 failures. Failure samples showed 20–27 KiB total internal DMA free but only 5–7 KiB contiguous,
 while the old 8,192-byte setting generated a 7,680-byte ring. The overlay now keeps the IDF-valid
@@ -28,8 +29,14 @@ and long-stability validation. CameraService retains fd/mmap/device ownership af
 STREAMOFF for a later retry. The DVP overlay now performs staged, retryable task/GPIO/capture/HAL/
 GDMA release and rejects start/callback registration once teardown begins; successful phases are
 not repeated and their diagnostics are recorded once. Windows Debug overlay validation is 33/33
-CTest and the source-contract suite is 11/11. No device was flashed for this change; release
-status stays **NO_GO** until an isolated ESP-IDF build and a fresh verified hardware window pass.
+CTest and the source-contract suite is 11/11. Source `a9c68bd` was built with ESP-IDF 6.0.2 as
+development-signed candidate 044 (`20261009-174828`, task `camera-dvp-release-044`). VerifyOnly
+matched the installed bootloader, partition table and immutable Recovery, and the NVS-preserving
+refresh retained device `44:1b:f6:c3:b4:30`, `bound`, token version 4 and MQTT connectivity.
+Three separate Camera starts produced software preview frames and all six close markers, but each
+stop also emitted a raw partial-frame `E:RX`; the strict windows additionally observed application
+largest contiguous internal blocks below 4.5 KiB. Release remains **NO_GO** and a new eight-hour
+soak must wait for this stop-path failure and headroom to be resolved.
 
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
@@ -73,38 +80,38 @@ library rescan publishes a new track list. These are software and host-fake resu
 DAC/ADC, touch, physical audio focus, Music/Recorder/Voice preemption and audible playback remain
 hardware gates.
 
-The formal 28,800-second capture on ordinary OFF `20261009-014905` was still running at the
-2026-10-09 06:45:37 local snapshot: elapsed 8,490.5 seconds, `status=no-go`, `complete=false`.
-It had already recorded warning/error lines and insufficient resource headroom; request/ACK/
-completion counts of 28/28/28 do not establish successful app operation or resource release.
-This is an interim failure observation, not a completed eight-hour result. Wait for the existing
-capture to exit and COM3 to be released before finalizing evidence or opening a new device window.
-See [interim evidence](ota-release-readiness.md#2026-10-09-正式八小时采集中间快照).
+The formal 28,800-second capture on ordinary OFF `20261009-014905` completed with
+`status=no-go`, `complete=true`. It recorded 960 health samples and 95/95/95 application
+request/ACK/completion events, but only 7 of 16 Camera requests succeeded; nine failed to allocate
+the DVP DMA ring. The final serial log is 2,099,134 bytes with SHA-256
+`f1717ea5ef0f511a171285099186512abfe9c67bddc47e3e50d223720741534d`.
+The final status SHA-256 is
+`c7da28066ee15572489f413dac368a08183463fa86d59078398295cb674a45ce`.
+See [final evidence](ota-release-readiness.md#2026-10-09-正式八小时采集最终结果).
 
-The formal-soak interim log exposed a DVP cleanup failure during a Camera → Home transition:
+The formal-soak final log exposed a DVP cleanup failure during a Camera → Home transition:
 STREAMOFF returned, but SCCB/I2C removal and DVP deinit reported errors before the app returned
 Home. RodakOS `29aaacd` retains the board handle and I2C reference across failed deinit, and
 `4e08efa` propagates release errors so `CameraDevice::Acquire()` retries cleanup before a new
 initialization, and `51927b0` makes `CloseStream()` report deferred cleanup instead of false
-completion. The capture package predates these fixes; a fresh repeated Camera window is
-required. `cc32989` now includes outer error propagation, a pinned DVP
+completion. The capture package predates these fixes. `cc32989` added outer error propagation, a pinned DVP
 teardown overlay and board-peripheral retry coverage. Debug/ASan host checks cover the
 Camera wrapper 4/4 and DVP teardown 13/13; the capture source-contract suite remains 10/10.
 A separate IDF 6.0.2 RCC overlay fixes the DVP deinit acquire/release mismatch and passes
 six Debug and six ASan/UBSan CTests for single, repeated and shared-owner lifecycles. These
-are software/host boundaries; hardware Camera validation remains open.
+were software/host boundaries. Candidate 044 has now exercised the path on hardware, but the
+repeated windows remain NO_GO because every stop produced raw `E:RX` and low contiguous headroom.
 Earlier full-chain review found that the outer `dev_camera_deinit()` swallowed subtype errors
 and that partial SDK teardown could leave a registered video device pointing at a freed sensor;
-`cc32989` addresses those paths in source and host failure contracts. The result still does not
-establish safe physical retries until the candidate is exercised on the device.
+`cc32989` addresses those paths in source and host failure contracts. Candidate 044 confirms
+repeatable software first-frame and close completion, but does not establish full physical recovery.
 
-Candidate 043 has now been built locally with ESP-IDF 6.0.2 from `abecfb2`, paired with Rodak
-`474b2e85`, and its development-signed package `20261009-063127` passes `ota_security.py
-verify-package`. Its task is `network-camera-rcc-043`; main image SHA-256 begins `ddc7927c`.
-The package includes GOT_IP refresh and the Camera/RCC corrections but has not been flashed.
-Device `flash_and_test.ps1 -VerifyOnly` has not run because it resets the device; it must wait for
-the current capture and COM3 ownership to end. Offline package verification does not establish an
-installed immutable-Recovery match or hardware acceptance. See [043 package identity](ota-release-readiness.md#2026-10-09-网络与-camera-修复候选-043).
+Candidate 043 remains the historical network/RCC package. The current Camera/DVP candidate is 044,
+built from `a9c68bd` and packaged at `20261009-174828`; its main SHA-256 is
+`54f96dcc539add0d45e3dda38b99e6156f6e422c72e5c4e5bac7c39887d1b747`.
+Package authentication, immutable-device verification, the NVS-preserving refresh and first boot
+passed. Its repeated Camera evidence remains NO_GO because of raw `E:RX` partial frames and low
+contiguous application headroom. See [044 device evidence](ota-release-readiness.md#2026-10-09-camera-dvp-修复候选-044-实机窗口).
 
 The same ordinary-OFF package also passed one bounded follow-up-silence run: after about 28 seconds
 of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before
@@ -421,7 +428,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | 040 added a TEST-only 200 B prepare observer and captured four priority endpoints once; WSS failed the 6144-byte internal stack allocation, so PI, resource headroom, acoustic behavior and soak remain open. 039 same-boot normal/quiet/normal remains bounded evidence. The later 30-minute ordinary-OFF smoke reports Voice `internal_min=275 B` and application `internal_largest=3584 B`; its 5/5 app ACK/completions do not close headroom or the eight-hour gate. The formal-soak interim log also exposed Camera DVP/SCCB cleanup errors. Candidate 043 includes `abecfb2` and its prerequisite failure-retention, outer-propagation, phased-cleanup and RCC fixes; local build/package verification pass, device verification and flash remain pending. Root cause INCONCLUSIVE; resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [043 package](ota-release-readiness.md#2026-10-09-网络与-camera-修复候选-043), [040 evidence](ota-release-readiness.md#2026-10-09-准备阶段优先级观察与-testoff-恢复-040), [voice contract](voice-task-retirement.md) |
+| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 044 contains retryable STREAMOFF/DVP release and 8192→6144→4096 allocation fallback. VerifyOnly, NVS-preserving flash, identity retention and three software first-frame/close observations completed, but every stop emitted raw `E:RX` and application contiguous internal headroom fell below 4.5 KiB. No new soak may be treated as qualified until these failures are resolved. Root cause remains incomplete; resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [044 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-修复候选-044-实机窗口), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns, delayed follow-up/silence timeout, live-mic playback, and one VAD barge-in abort; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, real acoustic AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [barge-in evidence](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

@@ -145,3 +145,18 @@ semihosting/cache-error panic 路径。原故障与调试干预后的 panic 分�
 软件验证分别覆盖记录发布协议、真实 C 驱动函数的原语义与漂移拒绝，以及生产
 CameraService 在 ioctl 内和返回后日志处受控阻塞的区别。它们不关闭 Camera 退出、
 媒体并发、资源归还或八小时 soak 门禁；发布仍为 **NO_GO**。
+
+## 044：最新修复包实机窗口
+
+源码 `a9c68bd454d697df6bc2120bd884fb44daebcf29` 已打包为
+`20261009-174828` / `camera-dvp-release-044`。ESP-IDF 6.0.2 构建、签名包校验、
+设备 VerifyOnly 和保留 NVS 的增量刷新均通过；设备 ID、绑定和 token version 保持。
+
+三个独立 Camera 启动均提交了软件预览首帧。每次返回 Home 时都按顺序出现 STREAMOFF、
+fd close、device release、preview stop、preview destroy、audio release 六个关闭阶段，
+随后至少 65 秒的 MQTT/Main/Voice 健康样本保持新鲜且 Voice 恢复 listening。
+
+该结果仍为 **NO_GO**。三次停止均在 STREAMOFF 期间输出 raw partial-frame `E:RX`；严格
+应用样本的最大连续内部块低于 4.5 KiB。Camera 启动前 DMA largest 仍为 16 KiB，因此
+没有实际触发 6144/4096 ring fallback，也没有取得降级吞吐证据。软件首帧和关闭日志不能
+替代物理画质、任意 OOM、完整资源归还或八小时新包长稳。
