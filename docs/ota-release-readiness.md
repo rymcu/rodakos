@@ -3366,6 +3366,44 @@ largest 最低均为 8,192 B，heap median drop 为 0；`E:RX`、overflow、DQBU
 `.codex-temp/camera-home-reserve-056/`，首启日志为
 `build/logs/first-boot-20261009-230150.log`。
 
+## 2026-10-09 Voice supervisor 栈余量 057
+
+057 源码 `7400ed5` 将 `voice_wake` 的 WithCaps PSRAM 栈从 4,096 B 提高到 6,144 B，并在
+Voice health 中同时输出 `supervisor_stack_bytes` 与 `supervisor_stack_min_free`。宿主回收
+模型新增实际创建栈大小观测，直接断言生产调用传入 6,144 B。VoiceWakeService 36 项和旧源
+SIGABRT 负控在 Debug、ASan/UBSan 下通过；共享 task-retirement 14 项、Voice identity 集成
+Debug/ASan、普通 OFF ESP-IDF 6.0.2 构建、Camera teardown ELF 与 JPEG allocator 审计通过。
+
+后续工具提交 `49e09f0` 将独立门禁固化为 supervisor 配置容量至少 6,144 B、历史最低剩余栈
+至少 4,096 B；这不提高 Main/MQTT 的共享 512 B 解析下限。release evidence 32 项和单串口
+Camera smoke 13 项通过。056 原始日志在新规则下会因 2,384 B 余量失败；057 原始串口日志的
+离线复核没有 stack failure。
+
+开发签名普通包 `20261009-231940` / `voice-supervisor-stack-057` 复用 immutable Recovery
+`20261009-202156`。主镜像 7,161,216 B，SHA-256
+`28f760c01bea2dda77e29a04e47dfda49f51168e04250e4ac7ec9ffe0595241a`；manifest SHA-256
+`6682417c60e580576b6cf1a1a754bb9bf99283dffd662ed3ae71f010c2f6b46e`，合并镜像 SHA-256
+`ed56dd0eee1b2109d78da13bad1a1c426d0548537d3ec02bf97a50cbb2daa6c5`，ZIP SHA-256
+`2c69b0d0e14c007031a96fdb1d89fd7ad0bd4c5d893c7d4be97d9f75af4f1fed`。COM3 VerifyOnly 后
+保留 NVS 只写 `otadata + ota_0`，未使用 `-Erase`；Recovery → Main → OTA confirmation →
+Home 通过。首次 Voice health 明确记录配置容量 6,144 B、剩余栈 4,736 B。
+
+随后单串口 Camera → Home 窗口实际选择 8,192 B Home reserve 和普通 6,144 B DVP ring，
+69 ms 取得 Camera 首帧并提交软件预览，六个关闭阶段完整。reserve 释放、Home page-1、
+page-2、footer/ready 及 65.062 秒 MQTT/Main/Voice 健康窗口的 internal/DMA largest 最低均为
+8,192 B；Voice supervisor 最低剩余栈为 4,432 B，配置容量仍为 6,144 B。`E:RX`、overflow、
+DQBUF、panic、abort 为 0，heap median drop 为 0。因此当前有界连续块与 supervisor 栈门禁
+均通过。
+
+资源与生产仍为 **NO_GO**：软件首帧不证明物理画质，任意 OOM、异常媒体/SD、音频/TLS/MQTT、
+cache-off/NVS/OTA 并发恢复、生产签名/readback/power-cut 和长期稳定性未完成，因此没有启动
+新的八小时资格长稳。本轮未做主镜像 readback，也未重新取得服务器侧绑定快照。证据位于
+`.codex-temp/voice-supervisor-stack-057/`；串口 SHA-256 为
+`40d6e1a68f0da687d87d1d10e3d624c08d44e1d61260f2e8a55b06594321630b`，新门禁复核
+`stack-gate-review.json` SHA-256 为
+`349a39e38fc9804695825043f8df5559457433cde6c1cfa58bfc3b2678b3407e`，首启日志为
+`build/logs/first-boot-20261009-232019.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录
@@ -3379,7 +3417,8 @@ Camera 导航 completion 早于延迟启动的预览，不能证明已取得首�
 Voice `supervisor_stack_min_free` 也已纳入全局 `stack_min_free` 的最小值，原字段仍保留在
 `resource_minima.voice`，防止健康 MQTT 栈掩盖 Voice 低栈。完整 OTA Python 回归 **37/37**
 通过（签名 5、采集器 32）；无 Camera 首帧以及 Voice 栈 128/511 B 的负控在旧解析器误通过，
-新解析器均为 NO_GO；512/2048 B 的正常边界保持通过。
+新解析器均为 NO_GO；当时 512/2048 B 的共享任务边界保持通过。057 在该共享边界之外新增
+Voice supervisor 专用的 6,144 B 配置容量与 4,096 B 剩余栈门槛，旧历史结果不追溯改写。
 
 06:51:13 封存的中间输入位于 `.codex-temp/camera-soak-parser-20261009-065113/`。
 `serial.log` 快照 637,971 字节，SHA-256

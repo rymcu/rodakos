@@ -15,8 +15,12 @@ and releases it after preview shutdown. Its COM3 Camera → Home window retained
 internal/DMA block through Home ready and the 65-second MQTT/Main/Voice health window, with a normal
 6,144-byte DVP ring, software first frame, all close stages and no Camera/DVP errors. The short-window
 continuous-block gate now passes, while production remains **NO_GO** on the 2,384-byte Voice
-supervisor stack margin, physical image, arbitrary OOM/concurrency and qualification soak. See the
-[051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056).
+supervisor stack margin. Candidate 057 raises the PSRAM supervisor stack to 6,144 bytes and records
+4,432 bytes of remaining stack after the same Camera → Home path while preserving the 8,192-byte
+internal/DMA block. The bounded continuous-memory and supervisor-stack gates now pass; production
+remains **NO_GO** on physical image, arbitrary OOM/concurrency, production signing/power-cut and
+qualification soak. See the [051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056)
+and [057 evidence](docs/ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057).
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
 All three windows contained two recovered gaps. Q suppressed 36 target PC publications and

@@ -42,6 +42,12 @@ VAD confirmation、VAD end、stop、cleanup 和 wake rearm 均完成；这仍不
 声学场景。证据见
 [OTA readiness 的 barge-in 观察](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察)。
 
+057 源码 `7400ed5` 将常驻 `voice_wake` supervisor 的 PSRAM 栈由 4,096 B 提高到 6,144 B，
+健康日志同时输出配置容量与历史最低余量。包 `20261009-231940` 的启动样本为 4,736 B，
+Camera → Home 后为 4,432 B；同一窗口仍保持 8,192 B internal/DMA largest。工具提交
+`49e09f0` 固化 6,144 B 容量和 4,096 B 余量门禁。该结果只关闭有界 supervisor 栈门槛，
+不证明 Assistant I/O、frontend、wake_notify、ISR 或任意声学/并发场景的全部栈安全。
+
 ## 修复的退出边界
 
 原先三个业务函数先清空活动 handle，再调用 `vTaskDeleteWithCaps(nullptr)`。该版本
@@ -53,7 +59,7 @@ IDF 的自删除仍需创建清理任务；低内存时可能因创建失败而 
 | --- | --- | --- |
 | `VoiceAssistantService` | `assistant_io` | 49152 B PSRAM，优先级 4，双核时 core 1 |
 | `VoiceAudioFrontend` | `voice_frontend` | 8192 B PSRAM，优先级 4，双核时 core 0 |
-| `VoiceWakeService` | `voice_wake` | 4096 B PSRAM，优先级 2，双核时 core 0 |
+| `VoiceWakeService` | `voice_wake` | 6144 B PSRAM，优先级 2，双核时 core 0 |
 
 每个服务持有自己的 owner 与最近一代 ticket。创建前保留记录，保存 ticket，再通过共享
 入口创建任务并发布 handle；创建失败取消新记录并恢复上一张 ticket。业务 handle 只表达
