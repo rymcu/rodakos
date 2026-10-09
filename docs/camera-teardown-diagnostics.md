@@ -160,3 +160,22 @@ fd close、device release、preview stop、preview destroy、audio release 六�
 应用样本的最大连续内部块低于 4.5 KiB。Camera 启动前 DMA largest 仍为 16 KiB，因此
 没有实际触发 6144/4096 ring fallback，也没有取得降级吞吐证据。软件首帧和关闭日志不能
 替代物理画质、任意 OOM、完整资源归还或八小时新包长稳。
+
+## 045：主动停流半帧隔离
+
+源码 `85538b0` 将 controller stop 置于 sensor STREAMOFF 之前，并在同一 spinlock 下发布
+`stream_stop_requested` 与 DVP FSM。worker 对已排队或正在处理的停流事件跳过回调、错误日志、
+采集重启和 VSYNC 重开；正常流中的真实半帧仍保留 `E:RX`。源码负控覆盖删除 stop 检查、
+恢复 sensor-first 顺序和非停流半帧错误语义。Camera capture 7/7、teardown 33/33、worker
+17/17 加 7 组负变异均在 Debug 与 ASan/UBSan 下通过；ESP-IDF 6.0.2 构建及最终 ELF/JPEG
+审计通过。
+
+开发签名普通包 `20261009-193618` / `camera-stream-stop-045` 通过签名验包、COM3 VerifyOnly
+及保留 NVS 的 `otadata + ota_0` 刷写。Recovery → Main → OTA confirmation → Home 通过，
+原设备 ID、`bound`、`tokenVersion=4` 和 MQTT 在线状态保持。
+
+三个独立 Camera → Home 窗口均取得软件首帧、六个关闭阶段和 65.000–65.094 秒新鲜
+MQTT/Main/Voice 健康样本，Voice 均为 listening，三份原始串口日志的 `E:RX` 总数为 0。
+该局部故障已关闭，但结果仍为 **NO_GO**：三个应用窗口的最大连续内部块均为 4,096 B，
+健康期 DMA largest 均为 7,680 B，尚未证明 6,144/4,096 ring fallback、资源余量、物理画质、
+任意 OOM 或长期稳定性，因此没有启动新的八小时资格长稳。

@@ -18,25 +18,23 @@ factory symbols are linked. The final `sdkconfig` is byte-identical to the previ
 No hardware was flashed for this migration; retain the existing long-soak candidate's evidence
 identity and complete separate device acceptance. See [dependency maintenance](dependency-maintenance.md).
 
-Camera/DVP follow-up on 2026-10-09 has now reached a fresh device candidate, but remains
-**NO_GO**. The completed eight-hour window
-`20261009-014905` is **NO_GO** with 7/16 Camera requests succeeding and 9 DVP DMA allocation
-failures. Failure samples showed 20–27 KiB total internal DMA free but only 5–7 KiB contiguous,
-while the old 8,192-byte setting generated a 7,680-byte ring. The overlay now keeps the IDF-valid
-8,192-byte setting and retries allocation with 6,144-byte and 4,096-byte frame-aligned rings when
-the contiguous block is too small; that fallback still requires hardware throughput, first-frame
-and long-stability validation. CameraService retains fd/mmap/device ownership after a failed
-STREAMOFF for a later retry. The DVP overlay now performs staged, retryable task/GPIO/capture/HAL/
-GDMA release and rejects start/callback registration once teardown begins; successful phases are
-not repeated and their diagnostics are recorded once. Windows Debug overlay validation is 33/33
-CTest and the source-contract suite is 11/11. Source `a9c68bd` was built with ESP-IDF 6.0.2 as
-development-signed candidate 044 (`20261009-174828`, task `camera-dvp-release-044`). VerifyOnly
-matched the installed bootloader, partition table and immutable Recovery, and the NVS-preserving
-refresh retained device `44:1b:f6:c3:b4:30`, `bound`, token version 4 and MQTT connectivity.
-Three separate Camera starts produced software preview frames and all six close markers, but each
-stop also emitted a raw partial-frame `E:RX`; the strict windows additionally observed application
-largest contiguous internal blocks below 4.5 KiB. Release remains **NO_GO** and a new eight-hour
-soak must wait for this stop-path failure and headroom to be resolved.
+Camera/DVP follow-up on 2026-10-09 remains **NO_GO**, but candidate 045 closes the 044 stop-time
+partial-frame symptom. The completed eight-hour window `20261009-014905` remains historical
+NO_GO with 7/16 Camera requests succeeding and nine DVP DMA allocation failures. Source `85538b0`
+publishes the stop flag and FSM under the controller spinlock, stops the controller before the
+sensor, and prevents queued/in-flight stop events from reporting data errors, invoking callbacks,
+restarting capture or reopening VSYNC. Normal non-stop partial frames still report errors.
+Camera capture 7/7, teardown 33/33, worker 17/17 plus seven source negatives, ESP-IDF 6.0.2 build,
+and final ELF/JPEG audits passed, including ASan/UBSan coverage.
+
+Development candidate 045 (`20261009-193618`, task `camera-stream-stop-045`) passed package
+verification, COM3 VerifyOnly and an NVS-preserving `otadata + ota_0` refresh. The original ID,
+`bound`, token version 4 and MQTT connectivity remain. Three independent Camera → Home windows each
+produced a software first frame, all six close markers and 65.000–65.094 seconds of fresh
+MQTT/Main/Voice health with Voice listening. All three logs contain zero `E:RX`. Qualification soak
+did not start because each application window still fell to a 4,096-byte largest internal block and
+the health windows reported a 7,680-byte DMA largest block. The 6,144/4,096 fallback, physical image,
+arbitrary OOM, complete resource margin and long-duration stability remain unproved.
 
 Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
 comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
@@ -99,19 +97,20 @@ teardown overlay and board-peripheral retry coverage. Debug/ASan host checks cov
 Camera wrapper 4/4 and DVP teardown 13/13; the capture source-contract suite remains 10/10.
 A separate IDF 6.0.2 RCC overlay fixes the DVP deinit acquire/release mismatch and passes
 six Debug and six ASan/UBSan CTests for single, repeated and shared-owner lifecycles. These
-were software/host boundaries. Candidate 044 has now exercised the path on hardware, but the
-repeated windows remain NO_GO because every stop produced raw `E:RX` and low contiguous headroom.
+were software/host boundaries. Candidate 045 has now exercised the revised stop path on hardware:
+three repeated windows contain no raw `E:RX`, while low contiguous headroom keeps the result NO_GO.
 Earlier full-chain review found that the outer `dev_camera_deinit()` swallowed subtype errors
 and that partial SDK teardown could leave a registered video device pointing at a freed sensor;
-`cc32989` addresses those paths in source and host failure contracts. Candidate 044 confirms
-repeatable software first-frame and close completion, but does not establish full physical recovery.
+`cc32989` addresses those paths in source and host failure contracts. Candidate 045 confirms
+repeatable software first-frame and close completion without stop-time `E:RX`, but does not
+establish full physical recovery or adequate resource margin.
 
-Candidate 043 remains the historical network/RCC package. The current Camera/DVP candidate is 044,
-built from `a9c68bd` and packaged at `20261009-174828`; its main SHA-256 is
-`54f96dcc539add0d45e3dda38b99e6156f6e422c72e5c4e5bac7c39887d1b747`.
+Candidate 043 remains the historical network/RCC package. The current Camera/DVP candidate is 045,
+built from `85538b0` and packaged at `20261009-193618`; its main SHA-256 is
+`65a49fad94eb2903b9e6d32a0fb83336a927d5480125c21dd405b4b097f13481`.
 Package authentication, immutable-device verification, the NVS-preserving refresh and first boot
-passed. Its repeated Camera evidence remains NO_GO because of raw `E:RX` partial frames and low
-contiguous application headroom. See [044 device evidence](ota-release-readiness.md#2026-10-09-camera-dvp-修复候选-044-实机窗口).
+passed. Its repeated Camera evidence has zero `E:RX`, but remains NO_GO because of low contiguous
+application and DMA headroom. See [045 device evidence](ota-release-readiness.md#2026-10-09-camera-dvp-停流修复候选-045-实机窗口).
 
 The same ordinary-OFF package also passed one bounded follow-up-silence run: after about 28 seconds
 of silence, a replay entered a second reply, and the next 30-second follow-up window timed out before
@@ -428,7 +427,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 044 contains retryable STREAMOFF/DVP release and 8192→6144→4096 allocation fallback. VerifyOnly, NVS-preserving flash, identity retention and three software first-frame/close observations completed, but every stop emitted raw `E:RX` and application contiguous internal headroom fell below 4.5 KiB. No new soak may be treated as qualified until these failures are resolved. Root cause remains incomplete; resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [044 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-修复候选-044-实机窗口), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
+| Resource recovery | The completed eight-hour `20261009-014905` window is NO_GO with 9/16 Camera DMA allocation failures. Candidate 045 retains retryable STREAMOFF/DVP release and 8192→6144→4096 allocation fallback, and three independent first-frame/close windows now contain zero `E:RX`. Application contiguous internal headroom still falls to 4,096 B and health DMA largest is 7,680 B, so fallback throughput and qualification soak remain open. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [045 evidence](ota-release-readiness.md#2026-10-09-camera-dvp-停流修复候选-045-实机窗口), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns, delayed follow-up/silence timeout, live-mic playback, and one VAD barge-in abort; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, real acoustic AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [barge-in evidence](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |

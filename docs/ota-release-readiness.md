@@ -3163,6 +3163,40 @@ raw partial-frame `E:RX`：`153600-53760`、`153600-126720`、`153600-30720`。�
 `build/logs/first-boot-20261009-175420.log`。这些软件首帧不能证明物理画质；raw `E:RX`、
 低连续块、任意 OOM、完整资源归还及八小时新包长稳仍是阻塞项。
 
+## 2026-10-09 Camera/DVP 停流修复候选 045 实机窗口
+
+045 使用 RodakOS 源码 `85538b0`。controller stop 现在先于 sensor STREAMOFF，并在 DVP
+spinlock 下同步发布 stop flag 与 FSM；worker 对已排队或正在处理的主动停流事件不再回调、
+重启采集、重开 VSYNC 或记录半帧错误。真实非停流半帧仍保留错误语义。Camera capture
+7/7、teardown 33/33、worker 17/17 加 7 组源码负变异在 Debug 与 ASan/UBSan 下通过；
+ESP-IDF 6.0.2 构建、Camera teardown ELF 与 JPEG allocator 审计通过。
+
+开发签名普通包 `build/packages/ota/20261009-193618` 的 task 为 `camera-stream-stop-045`，
+version 为 `0.1.2-dev.1`，复用已验证的 immutable Recovery。
+
+| 制品 | 大小 / SHA-256 |
+| --- | --- |
+| `rodakos.bin` | 7,158,304 B / `65a49fad94eb2903b9e6d32a0fb83336a927d5480125c21dd405b4b097f13481` |
+| manifest | `95107c5fef40ddafec2f8863ed73af39ffbab233377506454efa4f63a711ff12` |
+| 合并首刷镜像 | `fdd1f30d4cef39095a65d6cd42e2b177d78151a7eec3d13c497c06889e9fbb9a` |
+| ZIP | `5d61895761dc4ca45a379d57f4ac2ec56a065382da811da001535b85dda0c7e4` |
+
+签名验包通过。COM3 VerifyOnly 逐项匹配 bootloader、partition table 与 immutable Recovery；
+随后只写入 `0xf000` otadata 和 `0x2a0000` ota_0，未使用 `-Erase`。Recovery → Main →
+OTA confirmation → Home 首启通过。只读 DeviceCloud 快照确认原 ID
+`c78845a8-06c9-4dcd-b7ff-d33e599f23ff`、设备 key `44:1b:f6:c3:b4:30`、`bound`、
+`tokenVersion=4`、MQTT 在线和 voice idle 保持。
+
+三个独立 Camera → Home 窗口均取得软件首帧、六个关闭阶段和 65.000–65.094 秒新鲜
+MQTT/Main/Voice 健康观察；Voice 均恢复 listening。三份串口日志 error count 均为 0，
+`E:RX` 总数为 0，关闭 044 的主动停流半帧问题。
+
+本轮仍为 **NO_GO**。三个应用窗口的最大连续内部块均为 4,096 B，健康窗口的 DMA largest
+均为 7,680 B；没有证明 6,144/4,096 ring fallback、充足资源余量、物理画质、任意 OOM、
+完整资源回收或长期稳定性。因此未启动新的八小时资格长稳。证据位于
+`.codex-temp/camera-stop-045/`，首次启动日志为
+`build/logs/first-boot-20261009-193709.log`。
+
 ## 2026-10-09 采集门禁补齐 Camera 首帧与 Voice 栈
 
 Camera 导航 completion 早于延迟启动的预览，不能证明已取得首帧。采集器现在分别记录
@@ -3230,7 +3264,7 @@ wake、session identity、匹配 focus token、正向播放统计、transport cl
 `6a5f2f4557858676c2d66adb5c90d244908c23932b381de14f5a4e1052e79525`。
 本轮只修改主机工具与测试，没有打开 COM3、重启长稳或修改 043 固件。
 
-## 2026-10-09 Camera 短窗口工具与 044 执行结果
+## 2026-10-09 Camera 短窗口工具与 044/045 执行结果
 
 新增 `tools/run_serial_camera_smoke.py`，调用前置和模板见
 [单串口 Camera 冒烟](../tests/camera_serial_tool/README.md)。工具在原采集退出、设备 immutable
@@ -3246,6 +3280,10 @@ Home 请求、不复位、不抢占其他串口进程。
 
 044 已按该入口执行三次独立单轮实机观察；三次软件路径均闭合，但 raw `E:RX` 和不足资源
 余量使结果保持 NO_GO。原始日志与摘要位于 `.codex-temp/camera-dvp-044/smoke*`。
+
+045 又执行三次独立单轮观察；软件首帧、六阶段关闭和 65 秒健康观察均闭合，三份日志均无
+`E:RX`。应用连续内部块仍为 4,096 B，资源门禁继续 NO_GO。原始日志与摘要位于
+`.codex-temp/camera-stop-045/smoke-*`。
 
 包、刷写记录与 boot log 仅作为外部提供的上下文；结果明确
 `installed_image_verified=false`、`binding_verified=false`。`software-smoke-observed` 不是
