@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -119,12 +120,25 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     capture_guard_ = std::make_shared<CameraCaptureGuard>();
     preview_ready_ = false;
 
-    PhoneUiLock lock(*ui_);
-    if (!lock.locked()) {
+    if (!CreateUi()) {
         if (camera_ != nullptr) {
             camera_->StopPreview();
         }
         ReleaseAudioResources();
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Camera app created; preview startup deferred");
+    return true;
+}
+
+bool CameraApp::CreateUi(int lock_timeout_ms) {
+    if (ui_ == nullptr) {
+        return false;
+    }
+
+    PhoneUiLock lock(*ui_, lock_timeout_ms);
+    if (!lock.locked()) {
         return false;
     }
 
@@ -198,7 +212,6 @@ bool CameraApp::OnCreate(PhoneAppContext& context) {
     }
     lv_timer_set_repeat_count(preview_start_timer_, 1);
 
-    ESP_LOGI(TAG, "Camera app created; preview startup deferred");
     return true;
 }
 
@@ -206,82 +219,26 @@ void CameraApp::OnResume() {
     if (!preview_paused_for_transition_) {
         return;
     }
+    if (!CreateUi(0)) {
+        ESP_LOGE(TAG, "Failed to restore Camera UI after replacement rollback");
+        std::abort();
+    }
     preview_paused_for_transition_ = false;
-
-    if (preview_start_timer_ != nullptr) {
-        if (ui_ != nullptr) {
-            PhoneUiLock lock(*ui_, 0);
-            if (lock.locked()) {
-                lv_timer_resume(preview_start_timer_);
-            }
-        }
-        return;
-    }
-    if (preview_timer_ == nullptr) {
-        return;
-    }
-
-    RequestAudioResources();
-    if (camera_ == nullptr || !camera_->StartPreview()) {
-        const std::string error = camera_ != nullptr
-                                      ? camera_->last_error()
-                                      : "Camera service is not available";
-        if (ui_ != nullptr) {
-            PhoneUiLock lock(*ui_, 0);
-            if (lock.locked()) {
-                UpdateStatus(error.c_str(), true);
-                if (placeholder_label_ != nullptr) {
-                    lv_obj_clear_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
-                    lv_label_set_text(placeholder_label_, "Camera unavailable");
-                }
-            }
-        }
-        ReleaseAudioResources();
-        return;
-    }
-
-    if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_, 0);
-        if (lock.locked()) {
-            UpdateStatus("Waiting for preview...");
-            lv_timer_resume(preview_timer_);
-        }
-    }
 }
 
 void CameraApp::OnPause() {
-    bool preview_active = false;
-    if (ui_ != nullptr) {
-        PhoneUiLock lock(*ui_, 0);
-        if (lock.locked()) {
-            if (preview_start_timer_ != nullptr) {
-                lv_timer_pause(preview_start_timer_);
-                preview_active = true;
-            }
-            if (preview_timer_ != nullptr) {
-                lv_timer_pause(preview_timer_);
-                preview_active = true;
-            }
-            if (preview_active) {
-                preview_ready_ = false;
-                displayed_sequence_ = 0;
-                if (capture_button_ != nullptr) {
-                    lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
-                }
-                if (placeholder_label_ != nullptr) {
-                    lv_obj_clear_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
-                    lv_label_set_text(placeholder_label_, "Waiting for preview...");
-                }
-                UpdateStatus("Pausing camera...");
-            }
-        }
-    }
-    if (camera_ != nullptr && camera_->GetState().preview_running) {
-        preview_active = true;
+    const bool ui_active = root_ != nullptr || capture_result_timer_ != nullptr ||
+                           preview_start_timer_ != nullptr || preview_timer_ != nullptr;
+    ESP_LOGI(TAG, "Pause: UI cleanup begin");
+    DestroyUi();
+    ESP_LOGI(TAG, "Pause: UI cleanup complete");
+    if (camera_ != nullptr) {
         camera_->StopPreview();
     }
-    preview_paused_for_transition_ = preview_active;
+    ESP_LOGI(TAG, "Pause: preview stop complete");
     ReleaseAudioResources();
+    ESP_LOGI(TAG, "Pause: audio release complete");
+    preview_paused_for_transition_ = ui_active;
 }
 
 void CameraApp::OnDestroy() {
@@ -296,6 +253,27 @@ void CameraApp::OnDestroy() {
     ESP_LOGI(TAG, "Destroy: capture guard complete");
 
     ESP_LOGI(TAG, "Destroy: UI cleanup begin");
+    DestroyUi();
+    ESP_LOGI(TAG, "Destroy: UI cleanup complete");
+
+    ESP_LOGI(TAG, "Destroy: preview stop begin");
+    if (camera_ != nullptr) {
+        camera_->StopPreview();
+    }
+    ESP_LOGI(TAG, "Destroy: preview stop complete");
+    ESP_LOGI(TAG, "Destroy: audio release begin");
+    ReleaseAudioResources();
+    ESP_LOGI(TAG, "Destroy: audio release complete");
+
+    preview_paused_for_transition_ = false;
+    capture_guard_.reset();
+    camera_ = nullptr;
+    audio_focus_ = nullptr;
+    context_ = nullptr;
+    ui_ = nullptr;
+}
+
+void CameraApp::DestroyUi() {
     if (ui_ != nullptr) {
         // Timer callbacks own `this` until removed. A teardown timeout cannot abandon them.
         PhoneUiLock lock(*ui_, 0);
@@ -317,32 +295,16 @@ void CameraApp::OnDestroy() {
             }
         }
     }
-    ESP_LOGI(TAG, "Destroy: UI cleanup complete");
-
-    ESP_LOGI(TAG, "Destroy: preview stop begin");
-    if (camera_ != nullptr) {
-        camera_->StopPreview();
-    }
-    ESP_LOGI(TAG, "Destroy: preview stop complete");
-    ESP_LOGI(TAG, "Destroy: audio release begin");
-    ReleaseAudioResources();
-    ESP_LOGI(TAG, "Destroy: audio release complete");
-
     root_ = nullptr;
     preview_box_ = nullptr;
     preview_image_ = nullptr;
     placeholder_label_ = nullptr;
     status_label_ = nullptr;
     capture_button_ = nullptr;
-    preview_pixels_.clear();
+    std::vector<uint8_t>().swap(preview_pixels_);
+    std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
     displayed_sequence_ = 0;
     preview_ready_ = false;
-    preview_paused_for_transition_ = false;
-    capture_guard_.reset();
-    camera_ = nullptr;
-    audio_focus_ = nullptr;
-    context_ = nullptr;
-    ui_ = nullptr;
 }
 
 void CameraApp::PreviewStartTimerCallback(lv_timer_t* timer) {

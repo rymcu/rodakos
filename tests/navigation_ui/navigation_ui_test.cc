@@ -36,7 +36,9 @@ int partial_cleanups = 0;
 int stale_partial_ticks = 0;
 int teardown_pipe = -1;
 rodakos::CameraService* active_camera = nullptr;
+lv_obj_t* active_camera_root = nullptr;
 bool home_created_while_camera_running = false;
+bool home_created_with_previous_ui = false;
 class TeardownFailure : public PhoneApp {
 public:
     explicit TeardownFailure(bool fail_create) : fail_create_(fail_create) {}
@@ -76,6 +78,8 @@ class HomeFixture : public PhoneApp {
 public:
     bool OnCreate(PhoneAppContext&) override {
         home_created_while_camera_running = active_camera != nullptr && active_camera->running;
+        home_created_with_previous_ui =
+            active_camera_root != nullptr && lv_obj_is_valid(active_camera_root);
         return true;
     }
     void OnResume() override {}
@@ -114,6 +118,8 @@ struct Fixture {
     Fixture() {
         home_requests = 0;
         home_created_while_camera_running = false;
+        home_created_with_previous_ui = false;
+        active_camera_root = nullptr;
         active_camera = &camera;
         camera_test::fail_next_ui_lock = false;
         services.SetCamera(&camera);
@@ -133,6 +139,7 @@ struct Fixture {
         lv_obj_clean(lv_screen_active());
         lv_obj_clean(lv_layer_top());
         active_camera = nullptr;
+        active_camera_root = nullptr;
     }
     PhoneNavigation& navigation() { return system->navigation(); }
     bool Enqueue(const char* id, Completion& result) {
@@ -145,11 +152,13 @@ struct Fixture {
         RODAK_CHECK_EQ(result.calls, 1);
         RODAK_CHECK(result.ok);
         RODAK_CHECK(camera.running);
+        active_camera_root = lv_obj_get_child(lv_screen_active(), 0);
     }
     void CheckHome() {
         RODAK_CHECK_EQ(system->GetAppHostState().current_app_id, "home");
         RODAK_CHECK_FALSE(camera.running);
         RODAK_CHECK_FALSE(home_created_while_camera_running);
+        RODAK_CHECK_FALSE(home_created_with_previous_ui);
         RODAK_CHECK_EQ(lv_obj_get_child_count(lv_screen_active()), home_children);
         RODAK_CHECK_EQ(TimerCount(), home_timers);
     }
@@ -178,6 +187,7 @@ RODAK_TEST("failed replacement resumes a Camera preview paused before OnCreate")
     RODAK_CHECK(f.camera.running);
     RODAK_CHECK_EQ(f.camera.starts, 2);
     RODAK_CHECK_EQ(f.camera.stops, 1);
+    RODAK_CHECK(lv_obj_get_child_count(lv_screen_active()) > 0);
 }
 
 void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {

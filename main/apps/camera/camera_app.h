@@ -32,6 +32,8 @@ private:
     static void PreviewTimerCallback(lv_timer_t* timer);
     static void CaptureResultTimerCallback(lv_timer_t* timer);
 
+    bool CreateUi(int lock_timeout_ms = 1000);
+    void DestroyUi();
     void StartPreview();
     void UpdatePreview();
     void ConsumeCaptureResult();
