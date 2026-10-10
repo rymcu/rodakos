@@ -10,6 +10,7 @@ option(RODAKOS_RELEASE_TESTS "Enable serial release diagnostics and one-shot res
 option(RODAKOS_CAMERA_TEST_PATTERN "Enable the GC0308 diagnostic test pattern" OFF)
 option(RODAKOS_CAMERA_SENSOR_DIAGNOSTICS "Enable read-only GC0308 register diagnostics" OFF)
 option(RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS "Enable read-only DVP signal edge diagnostics" OFF)
+option(RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS "Power-cycle BigSmart DVP_EN before Camera init" OFF)
 
 set(SOURCES
     "main.cc"
@@ -216,6 +217,11 @@ endif()
 if(RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS=1)
     message(WARNING "RodakOS Camera DVP signal diagnostics are ENABLED; this is not a production build")
+endif()
+
+if(RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS=1)
+    message(WARNING "RodakOS Camera DVP_EN power-cycle diagnostics are ENABLED; this is not a production build")
 endif()
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)

@@ -600,3 +600,19 @@ The device and workspace were restored to ordinary OFF package `20261010-080938`
 refresh and Recovery → Main → OTA confirmation → Home boot. Remaining work is physical sensor
 power/analog-front-end, lens/obstruction and image-quality inspection, plus arbitrary OOM,
 production signing/readback/power-cut and qualification soak. Status remains **NO_GO**.
+
+### 2026-10-10 DVP_EN power-cycle diagnosis 069 / normal 070
+
+The 069 development candidate briefly drove BigSmart PCA9557 DVP_EN to its inactive level for
+100 ms, restored the active-low enable for 100 ms, then initialized Camera. Serial evidence read
+`initial_level=0 disabled_level=1 enabled_level=0`; first frame arrived in 68 ms and teardown
+completed without `E:RX`. Two remote 320×240 captures became non-uniform (1,108 and 1,464 RGB
+unique values) instead of the historical single RGB `(23,28,24)` dark frame. This is the first
+hardware evidence that the sensor needs a controlled DVP_EN power/reset transition before use.
+
+The device was restored to ordinary OFF package `20261010-083900` (`camera-normal-070`), with
+package verification, COM3 VerifyOnly, NVS-preserving refresh and Recovery → Main → OTA
+confirmation → Home boot complete. The next gate is to decide whether this controlled power cycle
+belongs in the ordinary Camera initialization path after power-rail, color/exposure and optical
+checks; production signing/readback, arbitrary OOM, power-cut and qualification soak remain open.
+Status remains **NO_GO**.

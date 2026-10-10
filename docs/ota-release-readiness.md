@@ -3651,3 +3651,31 @@ SHA-256 `17361430e00e02185e41358792f015cafb3d88e123f8545e0e7844e5eac6c7c0`；普
 marker，已通过验签、COM3 VerifyOnly、保留 NVS 刷写以及 Recovery → Main → OTA confirmation
 → Home 启动。当前证据进一步排除 Camera 启动时 DVP_EN 未使能，但仍不能证明摄像头模拟供电、
 镜头/遮挡、模组内部模拟前端或物理画质正确；发布继续 **NO_GO**，不启动八小时资格长稳。
+
+## 2026-10-10 DVP_EN 受控电源循环 069 与普通恢复 070
+
+067 已确认 DVP_EN 处于有效电平，但普通固件仍产生历史单色暗帧。为验证模组是否需要
+受控上电复位，069 增加默认关闭的 `RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS`：Camera
+打开前只对 PCA9557 bit 2 执行 `1`（低有效 DVP_EN 的无效/断电状态）保持 100 ms，再恢复为
+`0` 并保持 100 ms，随后才初始化 Board Manager Camera。该开关只允许开发故障包，普通构建
+和生产打包均拒绝残留的测试配置。
+
+开发候选 `20261010-082616` / `camera-power-cycle-069` 主镜像 7,162,496 B，SHA-256
+`fc4af0c8619081af11b215af81ad7e77997b0441bbaba6a4c4c86ad85cfc691a`。串口记录
+`initial_level=0 disabled_level=1 enabled_level=0`，首帧 68 ms，STREAMOFF、fd close、
+device release 完整，无 `E:RX`。Rodak 远端 Camera 两次独立采集得到非均匀图像：
+
+- `power-cycle-start-069`：320×240，RGB 唯一值 1,108，通道范围 R 19–128 / G 22–120 / B 19–129，均值约 `(38.20, 39.40, 37.78)`，JPEG SHA-256 `4f932a01673c74b9efcdde1c1023cb46ebd1144d1226e418940af7ca359c0ba3`
+- `power-cycle-start-069b`：320×240，RGB 唯一值 1,464，通道范围 R 21–132 / G 22–121 / B 20–129，均值约 `(40.67, 39.77, 39.74)`，JPEG SHA-256 `cbcb9686a9dc59884a1f20661f79dfe9ad235d6af44fb8b1ffbd56c327148413`
+
+历史普通暗帧 `camera-test-pattern-off-060` 为单一 RGB `(23,28,24)`、唯一值 1；因此受控
+DVP_EN 电源循环使传感器从“有 DVP 时钟但未正确上电/复位”的状态转为可产生实际场景变化的
+状态。该证据尚不能替代光学清晰度、颜色、曝光和电源轨示波器测量，也不证明任意 OOM、
+异常并发或长稳门禁。串口日志 SHA-256 为
+`221672302d8465ae0e6b8d3b85c3d81062a85dd3c5f01e292c49b07a94fdcc09`。
+
+诊断后已恢复普通 OFF 包 `20261010-083900` / `camera-normal-070`，主镜像 7,161,360 B，
+SHA-256 `6d355eabdbb379441582268b28007e6fbc92b2537595f622ea00763e543b326a`；普通二进制无
+诊断 marker，已通过验签、COM3 VerifyOnly、保留 NVS 刷写以及 Recovery → Main → OTA
+confirmation → Home 启动。下一步转为普通 OFF 的受控上电复位实现评估、摄像头电源轨/镜头
+与颜色曝光验收；在这些门禁完成前仍保持 **NO_GO**，不启动八小时资格长稳。
