@@ -3628,3 +3628,26 @@ Home 请求、不复位、不抢占其他串口进程。
 原始串口证据保存在 `D:/workspace/rodakos/.codex-temp/camera-signal-065/serial.log`；此前未加 watch point 的计数低估了 XCLK，已由 065 修正。信号活动证明输入时钟、像素时钟和帧同步均在工作，但不证明 JPEG 画质、镜头/遮挡、模拟供电或颜色输出正确。
 
 诊断完成后已恢复普通 `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS=OFF`，普通包 `20261010-074226` / `camera-normal-066` 主镜像 7,161,360 B，SHA-256 `df135a8584439cf778b0b72f1c2eeec645d1cd67339887b4a67f631b7cd190a3`；通过包验签、COM3 VerifyOnly、保留 NVS 刷写和 Recovery → Main → Home 启动，当前设备回到普通 OFF。物理画质、资源/任意 OOM、生产签名和八小时资格长稳仍未通过，发布状态保持 **NO_GO**。
+
+## 2026-10-10 DVP_EN 只读复核 067 与普通恢复 068
+
+在 065 的 PCNT 诊断基础上，067 只读取得 Board Manager `gpio_expander` 句柄，并通过
+`esp_io_expander_get_level()` 读取 PCA9557 bit 2。诊断不修改 PCA9557 方向或输出，不写
+GPIO，也不改变 DVP 控制器或 GC0308 寄存器。开发候选 `20261010-075734` /
+`camera-signal-diagnostics-067` 主镜像 7,170,144 B，SHA-256
+`8d0eb4a4425abb97a9d3ead4baaf392af2e2c0e02a10d7adb7ad02d800b33a5a`，通过 ESP-IDF 6.0.2
+构建、fault-aware 验签、COM3 VerifyOnly 和保留 NVS 的 `otadata + ota_0` 刷写。
+
+设备 `44:1b:f6:c3:b4:30` 的单串口 Home → Camera → Home 窗口记录
+`dvp_en_level=0 dvp_en_read_ok=1`；BigSmart 定义 DVP_EN 为低有效，因此 Camera 启动时使能线
+处于有效电平。首帧窗口 `interval_us=129921`、XCLK `2600910`（约 20.0 MHz）、PCLK
+`1230455`、VSYNC `3`；settled 窗口 `interval_us=3948617`、XCLK `78972111`（约 20.0 MHz）、
+PCLK `39486088`、VSYNC `78`。Camera 运行 239 帧，STREAMOFF、fd close、device release
+均完成。原始串口日志为 `.codex-temp/camera-signal-067/serial.log`，SHA-256
+`0f50688a5ca4d84c441acc758832e964451211d1c182fe9b66dc7028df5bc204`。
+
+诊断后已恢复普通 OFF 包 `20261010-080938` / `camera-normal-068`，主镜像 7,161,360 B，
+SHA-256 `17361430e00e02185e41358792f015cafb3d88e123f8545e0e7844e5eac6c7c0`；普通二进制无诊断
+marker，已通过验签、COM3 VerifyOnly、保留 NVS 刷写以及 Recovery → Main → OTA confirmation
+→ Home 启动。当前证据进一步排除 Camera 启动时 DVP_EN 未使能，但仍不能证明摄像头模拟供电、
+镜头/遮挡、模组内部模拟前端或物理画质正确；发布继续 **NO_GO**，不启动八小时资格长稳。

@@ -8,6 +8,8 @@
 #include "esp_timer.h"
 
 #ifdef RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS
+#include "esp_board_device.h"
+#include "esp_io_expander.h"
 #include "driver/pulse_cnt.h"
 #endif
 
@@ -17,6 +19,7 @@ namespace {
 constexpr const char* TAG = "CameraService";
 constexpr std::array<int, 3> kSignalGpios = {5, 7, 44};
 constexpr std::array<const char*, 3> kSignalNames = {"xclk", "pclk", "vsync"};
+constexpr uint32_t kDvpEnablePinMask = 1u << 2;
 
 }  // namespace
 
@@ -113,6 +116,19 @@ bool CameraSignalDiagnostics::Start() {
     return true;
 #else
     Stop();
+    esp_io_expander_handle_t* expander = nullptr;
+    uint32_t dvp_enable_level = 0;
+    const esp_err_t expander_ret =
+        esp_board_device_get_handle("gpio_expander", reinterpret_cast<void**>(&expander));
+    const esp_err_t dvp_enable_ret = expander_ret == ESP_OK
+                                         ? esp_io_expander_get_level(*expander, kDvpEnablePinMask,
+                                                                     &dvp_enable_level)
+                                         : expander_ret;
+    ESP_LOGW(TAG,
+             "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_signal_diagnostics=1 "
+             "dvp_en_level=%d dvp_en_read_ok=%d",
+             (dvp_enable_level & kDvpEnablePinMask) != 0 ? 1 : 0,
+             dvp_enable_ret == ESP_OK ? 1 : 0);
     counters_ = new Counter[3]{};
     bool started = true;
     for (size_t i = 0; i < kSignalGpios.size(); ++i) {

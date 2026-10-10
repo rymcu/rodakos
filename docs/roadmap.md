@@ -585,3 +585,18 @@ hand-written board layer remain outside the current scope.
 The default-OFF `RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS` build now counts BigSmart GPIO5 XCLK, GPIO7 PCLK and GPIO44 VSYNC through PCNT input bypass. High/low watch points are required for `accum_count`; without them, the 20 MHz XCLK counter wrapped and under-reported. Candidate `20261010-073131` (`camera-signal-diagnostics-065`) measured approximately 20.0 MHz XCLK in both first-frame and settled windows, non-zero PCLK, and periodic VSYNC, while STREAMOFF/fd close/device release all completed. The diagnostic serial evidence is kept in `.codex-temp/camera-signal-065/serial.log`.
 
 After the window, the workspace and device were restored to ordinary OFF. Package `20261010-074226` (`camera-normal-066`) passed signed package verification, COM3 VerifyOnly, NVS-preserving `otadata + ota_0` refresh, and Recovery → Main → Home boot. These counters establish DVP signal activity only; physical image quality, resource/OOM, production signing, and the eight-hour qualification gate remain **NO_GO**.
+
+### 2026-10-10 DVP_EN readback 067 / normal 068
+
+Candidate `20261010-075734` (`camera-signal-diagnostics-067`) adds a read-only PCA9557 bit-2
+readback through the Board Manager `gpio_expander` handle. It does not change expander direction or
+output. The COM3 window reported `dvp_en_level=0 dvp_en_read_ok=1`; BigSmart defines DVP_EN as
+active-low, so the enable line was asserted while Camera started. PCNT simultaneously measured an
+approximately 20.0 MHz XCLK, active PCLK and periodic VSYNC, and all STREAMOFF/fd/device release
+stages completed. This narrows the physical-image investigation beyond an unasserted DVP_EN line.
+
+The device and workspace were restored to ordinary OFF package `20261010-080938`
+(`camera-normal-068`), which passed package verification, COM3 VerifyOnly, the NVS-preserving
+refresh and Recovery → Main → OTA confirmation → Home boot. Remaining work is physical sensor
+power/analog-front-end, lens/obstruction and image-quality inspection, plus arbitrary OOM,
+production signing/readback/power-cut and qualification soak. Status remains **NO_GO**.
