@@ -275,6 +275,9 @@ try {
         $cameraDmaFaultInjectionCache = Select-String -LiteralPath $cmakeCache `
             -Pattern '^RODAKOS_CAMERA_DMA_FORCE_4096:BOOL=(ON|TRUE|1)$' |
             Select-Object -First 1
+        $cameraDmaFailFirstCache = Select-String -LiteralPath $cmakeCache `
+            -Pattern '^RODAKOS_CAMERA_DMA_FAIL_FIRST_RING:BOOL=(ON|TRUE|1)$' |
+            Select-Object -First 1
         $cameraTestPatternCache = Select-String -LiteralPath $cmakeCache `
             -Pattern '^RODAKOS_CAMERA_TEST_PATTERN:BOOL=(ON|TRUE|1)$' |
             Select-Object -First 1
@@ -285,6 +288,7 @@ try {
             -Pattern '^RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS:BOOL=(ON|TRUE|1)$' |
             Select-Object -First 1
         if (($null -ne $faultInjectionCache -or $null -ne $cameraDmaFaultInjectionCache -or
+             $null -ne $cameraDmaFailFirstCache -or
              $null -ne $cameraTestPatternCache -or $null -ne $cameraSensorDiagnosticsCache -or
              $null -ne $cameraSignalDiagnosticsCache) -and
             -not $AllowReleaseFaultInjection) {

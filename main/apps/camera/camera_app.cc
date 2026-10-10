@@ -46,7 +46,7 @@ constexpr lv_coord_t kPreviewBoxHeight = 184;
 constexpr lv_coord_t kCaptureButtonSize = 54;
 constexpr uint32_t kCaptureTaskStackBytes = 4096;
 constexpr uint32_t kPreviewStartDelayMs = 30;
-constexpr size_t kMinimumCameraDmaHeadroom = 4096;
+constexpr size_t kMinimumCameraDmaHeadroom = 8192;
 constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
 
 struct CameraCapturePayload {

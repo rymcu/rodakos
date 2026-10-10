@@ -179,9 +179,22 @@ def instrument_sensor(source: str) -> str:
 static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align_size,
                                        size_t fb_size_in_bytes, bool jpeg)
 {
+    static bool prefer_recovery_non_jpeg_ring_once = false;
+#if defined(RODAKOS_CAMERA_DMA_FAIL_FIRST_RING) && RODAKOS_CAMERA_DMA_FAIL_FIRST_RING
+    static bool fail_first_non_jpeg_ring = true;
+    if (!jpeg && fail_first_non_jpeg_ring) {
+        fail_first_non_jpeg_ring = false;
+        prefer_recovery_non_jpeg_ring_once = true;
+        ESP_LOGW(TAG,
+                 "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE: forcing first non-JPEG DVP DMA ring allocation failure");
+        return ESP_ERR_NO_MEM;
+    }
+#endif
+    const size_t recovery_ring_size =
+        (!jpeg && prefer_recovery_non_jpeg_ring_once) ? 3840 : 4096;
     const size_t dma_buffer_candidates[] = {
         jpeg ? DVP_CAM_DMA_BUFFER_SIZE : 6144,
-        jpeg ? 6144 : 4096,
+        jpeg ? 6144 : recovery_ring_size,
         4096,
     };
 
@@ -190,6 +203,9 @@ static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align
          ++candidate_index) {
         const size_t candidate_size = dma_buffer_candidates[candidate_index];
         if (candidate_index > 0 && candidate_size == dma_buffer_candidates[candidate_index - 1]) {
+            continue;
+        }
+        if (!jpeg && prefer_recovery_non_jpeg_ring_once && candidate_size == 6144) {
             continue;
         }
 #if defined(RODAKOS_CAMERA_DMA_FORCE_4096) && RODAKOS_CAMERA_DMA_FORCE_4096
@@ -222,6 +238,7 @@ static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align
         ctlr->dma_desc = heap_caps_aligned_alloc(
             buffer_align_size, dma_desc_buffer_size, MALLOC_CAP_DMA);
         if (ctlr->dma_desc != NULL) {
+            prefer_recovery_non_jpeg_ring_once = false;
             ESP_LOGI(TAG,
                      "DVP DMA ring selected: configured=%u selected=%u actual=%u half=%u desc_half=%u",
                      (unsigned)DVP_CAM_DMA_BUFFER_SIZE, (unsigned)candidate_size,
@@ -236,6 +253,9 @@ static esp_err_t dvp_allocate_dma_ring(dvp_cam_ctlr_t *ctlr, size_t buffer_align
     ctlr->dma_buffer_hsize = 0;
     ctlr->dma_buffer_size = 0;
     ctlr->dma_desc_hcnt = 0;
+    if (!jpeg) {
+        prefer_recovery_non_jpeg_ring_once = true;
+    }
     return ESP_ERR_NO_MEM;
 }
 '''

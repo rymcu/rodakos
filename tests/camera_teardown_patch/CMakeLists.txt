@@ -48,6 +48,11 @@ add_executable(rodakos_camera_dma_fault_tests teardown_patch_test.cc
     "${generated_dir}/production_functions.c")
 configure_camera_teardown_target(rodakos_camera_dma_fault_tests)
 target_compile_definitions(rodakos_camera_dma_fault_tests PRIVATE RODAKOS_CAMERA_DMA_FORCE_4096=1)
+add_executable(rodakos_camera_dma_fail_once_tests teardown_patch_test.cc
+    "${generated_dir}/production_functions.c")
+configure_camera_teardown_target(rodakos_camera_dma_fail_once_tests)
+target_compile_definitions(rodakos_camera_dma_fail_once_tests
+    PRIVATE RODAKOS_CAMERA_DMA_FAIL_FIRST_RING=1)
 foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_interface
         common_fail_stop common_fail_disable common_fail_delete del_fail_gpio_disable
         del_fail_capture del_fail_gpio_remove del_fail_disconnect del_fail_dma_delete
@@ -57,13 +62,17 @@ foreach(scenario IN ITEMS complete record_drop common_fail_sensor common_fail_in
         startup_cleanup startup_cleanup_error null_dma blocked_sensor blocked_stop
         blocked_disable blocked_delete blocked_task blocked_gpio_disable blocked_capture
         blocked_gpio_remove blocked_disconnect blocked_dma_delete
-        dma_preferred dma_jpeg_configured dma_ring_fallback dma_desc_fallback dma_exhausted)
+        dma_preferred dma_jpeg_configured dma_ring_fallback dma_desc_fallback dma_exhausted
+        dma_exhausted_retry)
     add_test(NAME "camera_teardown_${scenario}" COMMAND rodakos_camera_teardown_patch_tests "${scenario}")
     set_tests_properties("camera_teardown_${scenario}" PROPERTIES TIMEOUT 10)
 endforeach()
 add_test(NAME camera_teardown_dma_forced_fallback
     COMMAND rodakos_camera_dma_fault_tests dma_forced_fallback)
 set_tests_properties(camera_teardown_dma_forced_fallback PROPERTIES TIMEOUT 10)
+add_test(NAME camera_teardown_dma_fail_once_retry
+    COMMAND rodakos_camera_dma_fail_once_tests dma_fail_once_retry)
+set_tests_properties(camera_teardown_dma_fail_once_retry PROPERTIES TIMEOUT 10)
 add_test(NAME camera_teardown_generator COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_generator.py" --idf-path "${RODAKOS_IDF_PATH}")
 set_tests_properties(camera_teardown_generator PROPERTIES TIMEOUT 60)

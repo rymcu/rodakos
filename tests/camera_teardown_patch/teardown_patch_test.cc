@@ -265,10 +265,50 @@ int main(int argc, char **argv) {
         else if (scenario == "startup_cleanup_error") expect_calls({"disconnect"});
         else check(calls.empty(), "null DMA remains a no-op");
     } else if (scenario == "dma_preferred" || scenario == "dma_forced_fallback" ||
+               scenario == "dma_fail_once_retry" ||
                scenario == "dma_jpeg_configured" ||
                scenario == "dma_ring_fallback" ||
-               scenario == "dma_desc_fallback" || scenario == "dma_exhausted") {
+               scenario == "dma_desc_fallback" || scenario == "dma_exhausted" ||
+               scenario == "dma_exhausted_retry") {
         reset_dma_allocator();
+        if (scenario == "dma_fail_once_retry") {
+            const esp_err_t first = run_dma_allocate(&controller, 4, 320 * 240 * 2, false);
+            check(first == ESP_ERR_NO_MEM, "first DMA allocation fault did not fail");
+            check(dma_alloc_sizes.empty(), "first DMA allocation fault reached the allocator");
+            check(dma_fault_log_count == 1, "first DMA allocation fault marker missing");
+            check(controller.dma_buffer == nullptr && controller.dma_desc == nullptr,
+                  "first DMA allocation fault retained pointers");
+            reset_dma_allocator();
+            const esp_err_t retry = run_dma_allocate(&controller, 4, 320 * 240 * 2, false);
+            check(retry == ESP_OK, "DMA allocation retry did not recover");
+            check(dma_alloc_sizes == std::vector<size_t>({3840, 32}),
+                  "DMA allocation retry did not use the recovery layout");
+            check(controller.dma_buffer_size == 3840 && controller.dma_buffer_hsize == 1920,
+                  "DMA allocation retry layout differs");
+            check(dma_fault_log_count == 0, "DMA allocation retry repeated the one-shot fault");
+            check(dma_log_count == 1 && dma_log_selected == 3840,
+                  "DMA allocation retry success log missing");
+            if (failures == 0) std::printf("PASS %s (%zu marks)\n", argv[1], marks.size());
+            return failures == 0 ? 0 : 1;
+        }
+        if (scenario == "dma_exhausted_retry") {
+            dma_fail_calls = {2, 4};
+            const esp_err_t first = run_dma_allocate(&controller, 4, 320 * 240 * 2, false);
+            check(first == ESP_ERR_NO_MEM, "exhausted DMA allocation did not fail");
+            check(controller.dma_buffer == nullptr && controller.dma_desc == nullptr,
+                  "exhausted DMA allocation retained pointers");
+            reset_dma_allocator();
+            const esp_err_t retry = run_dma_allocate(&controller, 4, 320 * 240 * 2, false);
+            check(retry == ESP_OK, "exhausted DMA retry did not recover");
+            check(dma_alloc_sizes == std::vector<size_t>({3840, 32}),
+                  "exhausted DMA retry did not prefer the recovery ring");
+            check(controller.dma_buffer_size == 3840 && controller.dma_buffer_hsize == 1920,
+                  "exhausted DMA retry layout differs");
+            check(dma_log_count == 1 && dma_log_selected == 3840,
+                  "exhausted DMA retry success log missing");
+            if (failures == 0) std::printf("PASS %s (%zu marks)\n", argv[1], marks.size());
+            return failures == 0 ? 0 : 1;
+        }
         if (scenario == "dma_jpeg_configured") controller.dma_desc_size = 512;
         if (scenario == "dma_ring_fallback") dma_fail_calls = {1};
         if (scenario == "dma_desc_fallback") dma_fail_calls = {2};

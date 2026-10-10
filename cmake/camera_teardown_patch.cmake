@@ -1,6 +1,12 @@
 # Resolve and validate all inputs before replacing either managed translation unit.
 option(RODAKOS_CAMERA_DMA_FORCE_4096
     "Test only: skip the preferred 6144-byte non-JPEG DVP DMA ring" OFF)
+option(RODAKOS_CAMERA_DMA_FAIL_FIRST_RING
+    "Test only: fail the first non-JPEG DVP DMA ring allocation" OFF)
+
+if(RODAKOS_CAMERA_DMA_FORCE_4096 AND RODAKOS_CAMERA_DMA_FAIL_FIRST_RING)
+    message(FATAL_ERROR "Camera DMA fault injections are mutually exclusive")
+endif()
 
 idf_component_get_property(camera_video_dir espressif__esp_video COMPONENT_DIR)
 idf_component_get_property(camera_video_lib espressif__esp_video COMPONENT_LIB)
@@ -70,4 +76,9 @@ rodak_replace_camera_source("${camera_sensor_lib}" "${camera_sensor_dir}"
 if(RODAKOS_CAMERA_DMA_FORCE_4096)
     target_compile_definitions(${camera_sensor_lib} PRIVATE RODAKOS_CAMERA_DMA_FORCE_4096=1)
     message(WARNING "Camera DMA 4096-byte fault injection is active; never ship this build")
+endif()
+if(RODAKOS_CAMERA_DMA_FAIL_FIRST_RING)
+    target_compile_definitions(${camera_sensor_lib}
+        PRIVATE RODAKOS_CAMERA_DMA_FAIL_FIRST_RING=1)
+    message(WARNING "Camera first-ring failure injection is active; never ship this build")
 endif()

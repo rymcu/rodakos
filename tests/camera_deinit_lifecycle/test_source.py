@@ -159,7 +159,7 @@ class CameraDmaHeadroomContractTest(unittest.TestCase):
     def test_camera_start_releases_home_reserve_when_dma_block_is_too_small(self) -> None:
         source = CAMERA_APP_SOURCE.read_text(encoding="utf-8")
         start = function_body(source, "CameraApp::StartPreview")
-        self.assertIn("kMinimumCameraDmaHeadroom", source)
+        self.assertIn("constexpr size_t kMinimumCameraDmaHeadroom = 8192;", source)
         self.assertIn("heap_caps_get_largest_free_block", start)
         self.assertIn("ReleaseHomeReturnMemory()", start)
         self.assertIn("RequestAudioResources()", start)

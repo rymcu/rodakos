@@ -3773,3 +3773,11 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 在线。目视场景仍偏暗、低对比，且没有标准色卡、清晰度靶标或镜头无遮挡确认，因此本窗口
 只关闭 60 秒静态曝光/颜色漂移观察，不关闭颜色准确度、曝光范围、光学清晰度或遮挡验收。
 证据位于 Rodak `.codex-temp/camera-dma-headroom-retry-072/exposure-series/`。
+
+## 2026-10-10 Camera OOM 首次失败后重试 073d 与普通恢复 074
+
+073d 在保持 8,192 B Camera 启动余量的前提下，加入一次性首次非 JPEG DVP ring 分配失败注入；失败后下一次启动跳过 6,144 B，优先使用按帧对齐的 3,840 B recovery ring（半环 1,920 B），常规路径仍优先 6,144 B、再回退 4,096 B。Host teardown Debug 41/41、camera_deinit_lifecycle 13/13、camera_serial_tool 13/13 和生成器回归通过，ESP-IDF 6.0.2 fault 构建/最终 ELF 审计通过。
+
+故障包 `20261010-120147` / `camera-dma-fail-retry-073d` 通过签名验包、COM3 增量刷写（保留 NVS，未使用 `-Erase`）和启动确认。首轮恰好一个 fault marker、一个 `Not enough space`、无首帧并完整释放；重试选择 `configured=8192 selected=3840 actual=3840 half=1920 desc_half=1`，取得首帧（串口 uptime 84,558 ms）、六阶段关闭完整，并完成 65.047 秒 MQTT/Main/Voice 健康观察。健康期 internal/DMA largest 均为 8,192 B，Voice supervisor 最低剩余栈 4,432 B，internal 历史最低 3,395 B，无错误、panic、abort、E:RX 或 Camera OOM。串口 SHA-256：`815eaa1c51a6f3884ec73ca3764fd820e169b454ad1c668c820b3e93ad111493`；证据位于 `.codex-temp/camera-dma-fail-retry-073c/`。
+
+故障验证结束后已恢复普通 OFF 包 `20261010-121519` / `camera-dma-recovery-normal-074`，复用设备当前 immutable Recovery，保留 NVS、绑定和 OTA 状态；Recovery 校验、Recovery → Main、OTA confirmation、Home、WiFi/MQTT 均通过，主镜像 SHA-256：`73964f7763169bc4f9e476a91602e74d272a7afef16a64a8845f135686c9ae43`。普通 Camera 首帧和六阶段关闭通过，但第 1 轮 65 秒健康观察的最大连续 internal/DMA 仅 6,656 B，门禁判定 `NO_GO`，因此未把普通循环写成通过，也未启动长稳。设备当前保持普通 OFF 固件。发布状态继续 **NO_GO**：物理画质、任意 OOM 矩阵、异常并发、生产 readback/power-cut 和八小时资格仍未完成。
