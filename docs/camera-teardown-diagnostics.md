@@ -320,3 +320,37 @@ confirmation → Home、WiFi/MQTT 恢复均通过，未使用 `-Erase`；普通�
 验证后已恢复普通 OFF 包 `20261010-131648` / `camera-dma-auto-retry-normal-076`，主镜像 SHA-256 `f0c39cdc47c7052190abc5b4193bead896bea7c13503e64f32ee6726d4940dd1`。包复用设备匹配的 immutable Recovery，保留 NVS、绑定与 OTA 状态，Recovery → Main → OTA confirmation → Home、WiFi/MQTT 通过。两轮普通 Camera → Home 均选择 6,144 B ring、取得首帧和六阶段关闭，并分别完成 65.078/65.031 秒健康观察；第二轮在 `largest=3968 required=4096` 时释放 reserve。全窗最低健康期 internal/DMA largest 为 8,192 B，internal 历史最低 3,307 B，Voice supervisor 最低剩余栈 4,432 B，无 fault marker、Camera OOM、error、panic、abort 或 `E:RX`。串口 SHA-256 为 `cca7f77ea32090090196488238ffd107d24be2c6cca8ad8c22d38570328c0cc2`。
 
 075/076 关闭“用户必须退出再进 Camera 才能从首次 ring OOM 恢复”和 074 的普通路径余量回归，但不替代任意 OOM 矩阵、物理颜色/清晰度/电源轨、混合媒体/网络/音频并发、生产 readback/power-cut 或八小时资格。发布状态继续 **NO_GO**，当前不启动长稳。
+
+## 2026-10-10 Camera + Photos 内部堆压力窗口
+
+普通 OFF 076 上的 Camera + Photos/SD 严格重叠窗口成功扫描并初始化 41 张照片，Camera 保持
+软件预览可见并完成 161 帧和六阶段关闭，但在 Photos 返回 Home 附近记录 2 次
+`CameraService: Camera OOM`、6 次 `esp-aes: Failed to allocate memory`、6 次
+`PEER_DEF: Write fail -84`，Voice `internal_min=127 B`。因此该窗口不是通过证据；它只说明
+Camera 生命周期最终能关闭，不能推导任意 OOM 或媒体并发健康。原始串口 SHA-256 为
+`48b61e1895103193797068af09f846c52d828829c127f0d90e1222013bddd0d3`，证据在 Rodak
+`.codex-temp/resource-concurrency-029/current076-camera-photos-overlap/`。
+
+Photos 原先为图库全部条目立即创建 LVGL tile，现已改成每页最多 6 个 tile，并在翻页时清理
+旧控件、缩略图和 timer；原始照片索引保留。Host Debug 与 ASan/UBSan Photos 回归均 25/25
+通过。修复后的 Camera + Photos 实机复测、视频期连续堆余量、任意 OOM 矩阵和八小时资格
+门禁仍未完成，发布继续 **NO_GO**。
+
+## 2026-10-10 Camera + Photos 后续 077–079
+
+077 只加入 Photos 6 项分页，实机仍出现 3 次 Camera OOM、6 次 AES 分配失败和 6 次
+`Write fail -84`，说明 LVGL tile 数量不是充分根因。078 进一步收敛 JPEG 峰值：worker 不再为
+sequence 预复制完整帧；编码直接从锁内最新 strided RGB565 转入单个 RGB888 PSRAM 缓冲；输出
+改为 96 KiB heap-caps scratch，再复制为实际 JPEG 长度。Camera capture 46/46 和 8 个附加
+probe、Photos 25/25 均在 Debug 与 ASan/UBSan 通过。
+
+078 同窗口中 Camera OOM 降为 0，Photos 初始化、Camera 持续可见、182 帧及六阶段关闭均完成；
+但仍有 2 次 AES 分配失败、2 次 `Write fail -84`，Voice `internal_min=83 B`，停止后
+internal/DMA largest 仅 6,144 B。串口 SHA-256 为
+`a02c0865cb1d65175445a905bb7ff3d3505cbc414ebd927b85ebaf23eb2fbdfa`。
+
+079 的“Photos 期间暂停 JPEG、Home 后延迟恢复”导致 WebRTC 会话关闭和 Camera 提前停止，且仍
+有 1 次 AES 分配失败，已从源码撤销。设备最终恢复为与当前源码一致的 078 普通 OFF 镜像
+`c2d8acfd1b556b13dd2527bd147a9ba21ad3b5fe99de7082cefd0ca6b3142c9e`，保留 NVS、绑定和
+immutable Recovery。当前只关闭该窗口的 Camera OOM，AES/peer write、8,192 B 恢复和长稳仍
+为 **NO_GO**。

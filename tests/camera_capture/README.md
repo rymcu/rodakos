@@ -54,7 +54,8 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   ctest --test-dir "$HOME/.cache/rodakos-camera-capture-asan" --output-on-failure
 ```
 
-Debug and ASan/UBSan with leak detection passed all 46 tests on 2026-10-09. With the updated tests,
+Debug and ASan/UBSan with leak detection passed all 46 tests after the JPEG scratch changes.
+With the updated tests,
 the pre-fix CameraService fails six cases. A separate mutation retaining vector capacity with
 `clear()` instead of returning the frame allocation also fails six cases, confirming that these
   checks cover allocation lifetime as well as stopped-state flags. The encoder returns deterministic

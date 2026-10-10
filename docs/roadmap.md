@@ -712,3 +712,50 @@ The same ordinary OFF package completed a strictly overlapping Camera plus confi
 Camera remained visible after both receipts; UI stop removed the frame in 344 ms. Serial recorded 179 frames and complete STREAMOFF, fd-close and device-release stages. Internal/DMA largest was 3,712 bytes during video and recovered to 8,192 bytes after stop. Voice supervisor minimum remaining stack was 4,432 bytes, Voice `internal_min` was 1,455 bytes, and MQTT worker minimum stack was 1,660 bytes (above the current generic 512-byte gate, but retained as concurrency-headroom evidence). No Camera OOM, panic, system abort or `E:RX` occurred; one informational `SCTP_ABORT` appeared near remote peer closure. Serial SHA-256 is `12c60aa640e617f16b34fe571aa15275c8cd07538e99509f3f02919a9acdac48`; evidence is in Rodak `.codex-temp/resource-concurrency-029/current076-camera-volume-overlap/`.
 
 This closes the bounded Camera plus confirmed-volume publish, correlated software receipt, reported-state restoration and Camera-stop path. It does not close physical acoustics, simultaneous codec/I2S playback, video-time heap/stack headroom, arbitrary OOM, production power-cut or the eight-hour qualification gate; status remains **NO_GO**.
+
+### 2026-10-10 ordinary 076 Camera plus Photos resource pressure
+
+A strict Camera plus Photos/SD window on ordinary OFF `camera-dma-auto-retry-normal-076` scanned
+8 `/sdcard` entries and initialized 41 photos. Camera produced a software first frame in about
+8.18 seconds, remained visible through Photos and the return to Home, then stopped in 287 ms after
+161 frames with complete STREAMOFF, fd-close and device-release stages. The window is still a
+failure: it recorded two `CameraService: Camera OOM` lines, six
+`esp-aes: Failed to allocate memory` lines, six `PEER_DEF: Write fail -84` lines and Voice
+`internal_min=127 B`. Serial SHA-256 is
+`48b61e1895103193797068af09f846c52d828829c127f0d90e1222013bddd0d3`; evidence is in Rodak
+`.codex-temp/resource-concurrency-029/current076-camera-photos-overlap/`.
+
+Photos previously created one LVGL button/image/label/payload tree for every library entry at
+startup. It now keeps at most six tile trees for the current page, releases the old page and its
+thumbnails before rebuilding, and preserves each tile's original photo index for fullscreen
+navigation. The 41-photo first-to-last-page regression passes with the full Photos host suite in
+Debug and ASan/UBSan/leak modes, 25/25 in each. This is an offline pressure reduction; the exact
+Camera plus Photos hardware window must be rerun before the OOM/AES/write-failure gate can close.
+Release remains **NO_GO**.
+
+### 2026-10-10 Camera plus Photos follow-up 077–079
+
+The 077 paging-only package (`20261010-173046`, main SHA-256
+`2bb80ee98cefc17b92241c18a32b73be6dd995407140f3590ec861a42a909031`) preserved the 41-photo
+initialization and complete Camera stop, but still recorded three Camera OOMs, six AES allocation
+failures and six peer write `-84` failures. This disproved the hypothesis that bounding LVGL tile
+count alone was sufficient.
+
+078 (`20261010-175403`, main SHA-256
+`c2d8acfd1b556b13dd2527bd147a9ba21ad3b5fe99de7082cefd0ca6b3142c9e`) removes the JPEG worker's
+extra full-frame sequence snapshot, converts the latest strided RGB565 frame directly into one
+RGB888 PSRAM input, and replaces the 230,400-byte default-vector output with a 96 KiB heap-caps
+scratch followed by the compact result copy. Camera capture passes 46 production-TU cases plus all
+eight close/retirement/diagnostic probes in Debug and ASan/UBSan; Photos remains 25/25 in both modes.
+The same hardware window reduced Camera OOM from three to zero, while Camera remained visible and
+stopped completely after 182 frames. Two AES allocation failures and two peer write `-84` failures
+remain; Voice `internal_min` reached 83 B and post-stop internal/DMA largest remained 6,144 B.
+Serial SHA-256 is `a02c0865cb1d65175445a905bb7ff3d3505cbc414ebd927b85ebaf23eb2fbdfa`.
+
+079 tested pausing the JPEG producer during Photos and delaying resume for Home reconstruction. It
+was rejected and removed: the WebRTC session closed while output was paused, Camera stopped before
+the requested UI Stop, and one AES allocation failure still occurred. Serial SHA-256 is
+`d49c2cc536f65f4a766bd44b2a04c4ac2bfa4f6c513cec1ff91d5ee47378a474`. The device has been restored
+with the exact 078 binary, preserving NVS, binding and immutable Recovery. Camera OOM is closed for
+this bounded window, but AES/peer-write pressure, 8,192-byte post-stop recovery and qualification
+remain open; release stays **NO_GO**.

@@ -45,6 +45,7 @@ constexpr int64_t kFirstFrameTimeoutUs = 3000000;
 constexpr int kMaxConsecutiveDequeueFailures = 10;
 constexpr suseconds_t kDequeueTimeoutUs = 200000;
 constexpr uint8_t kJpegQuality = 82;
+constexpr size_t kJpegOutputCapacity = 96 * 1024;
 constexpr int64_t kMinValidUnixTime = 1700000000;
 constexpr int kMaxPhotoNameSuffix = 9999;
 constexpr const char* kGpioLogTag = "gpio";
@@ -96,47 +97,35 @@ std::string JoinPath(const char* dir, const char* name) {
     return path;
 }
 
-std::vector<uint8_t> PackRgb565Frame(const CameraFrame& frame) {
+bool CopyRgb565LeToRgb888(const CameraFrame& frame, uint8_t* rgb888, size_t rgb888_size) {
     const int packed_stride = frame.width * 2;
-    const size_t packed_size = static_cast<size_t>(packed_stride) * frame.height;
+    const size_t source_size = static_cast<size_t>(frame.stride) * frame.height;
     if (frame.width <= 0 || frame.height <= 0 || frame.stride < packed_stride ||
-        frame.rgb565.size() < static_cast<size_t>(frame.stride) * frame.height) {
-        return {};
-    }
-    if (frame.stride == packed_stride) {
-        return frame.rgb565;
+        frame.rgb565.size() < source_size || rgb888 == nullptr) {
+        return false;
     }
 
-    std::vector<uint8_t> packed(packed_size);
+    const size_t pixel_count = static_cast<size_t>(frame.width) * frame.height;
+    if (rgb888_size < pixel_count * 3) {
+        return false;
+    }
+
     for (int y = 0; y < frame.height; ++y) {
-        const auto* src = frame.rgb565.data() + static_cast<size_t>(y) * frame.stride;
-        auto* dst = packed.data() + static_cast<size_t>(y) * packed_stride;
-        std::memcpy(dst, src, packed_stride);
-    }
-    return packed;
-}
+        const auto* row = frame.rgb565.data() + static_cast<size_t>(y) * frame.stride;
+        for (int x = 0; x < frame.width; ++x) {
+            const size_t source_offset = static_cast<size_t>(x) * 2;
+            const size_t output_offset =
+                (static_cast<size_t>(y) * frame.width + static_cast<size_t>(x)) * 3;
+            const uint16_t pixel = static_cast<uint16_t>(row[source_offset]) |
+                                   (static_cast<uint16_t>(row[source_offset + 1]) << 8);
+            const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
+            const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
+            const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
 
-bool CopyRgb565LeToRgb888(const std::vector<uint8_t>& rgb565, int width, int height,
-                          uint8_t* rgb888, size_t rgb888_size) {
-    if (width <= 0 || height <= 0 || rgb888 == nullptr) {
-        return false;
-    }
-
-    const size_t pixel_count = static_cast<size_t>(width) * height;
-    if (rgb565.size() < pixel_count * 2 || rgb888_size < pixel_count * 3) {
-        return false;
-    }
-
-    for (size_t i = 0; i < pixel_count; ++i) {
-        const uint16_t pixel = static_cast<uint16_t>(rgb565[i * 2]) |
-                               (static_cast<uint16_t>(rgb565[i * 2 + 1]) << 8);
-        const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
-        const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
-        const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
-
-        rgb888[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
-        rgb888[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
-        rgb888[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+            rgb888[output_offset] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+            rgb888[output_offset + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+            rgb888[output_offset + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+        }
     }
     return true;
 }
@@ -524,34 +513,49 @@ std::string CameraService::last_error() const {
     }
 }
 
-bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
+bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence,
+                                int64_t* timestamp_us) {
     jpeg.clear();
     try {
-        CameraFrame frame;
-        if (!GetLatestFrame(frame)) {
+        if (mutex_ == nullptr) {
+            SetError("Camera service mutex is not available");
             return false;
         }
-
-        auto packed = PackRgb565Frame(frame);
-        if (packed.empty()) {
-            SetError("Camera frame is incomplete");
-            return false;
+        int width = 0;
+        int height = 0;
+        {
+            SemaphoreLock lock(mutex_);
+            if (!has_frame_) {
+                last_error_ = "No camera frame is ready yet";
+                return false;
+            }
+            width = latest_frame_.width;
+            height = latest_frame_.height;
         }
 
-        const size_t rgb888_size = static_cast<size_t>(frame.width) * frame.height * 3;
+        const size_t rgb888_size = static_cast<size_t>(width) * height * 3;
         HeapBuffer aligned_input(AllocAlignedJpegInput(rgb888_size));
         if (!aligned_input) {
             SetError("Not enough memory for JPEG input");
             return false;
         }
-        if (!CopyRgb565LeToRgb888(packed, frame.width, frame.height, aligned_input.get(), rgb888_size)) {
-            SetError("Failed to convert camera frame");
-            return false;
+
+        uint32_t captured_sequence = 0;
+        int64_t captured_timestamp_us = 0;
+        {
+            SemaphoreLock lock(mutex_);
+            if (!has_frame_ || latest_frame_.width != width || latest_frame_.height != height ||
+                !CopyRgb565LeToRgb888(latest_frame_, aligned_input.get(), rgb888_size)) {
+                last_error_ = "Camera frame is incomplete";
+                return false;
+            }
+            captured_sequence = latest_frame_.sequence;
+            captured_timestamp_us = latest_frame_.timestamp_us;
         }
 
         jpeg_enc_config_t jpeg_cfg = DEFAULT_JPEG_ENC_CONFIG();
-        jpeg_cfg.width = frame.width;
-        jpeg_cfg.height = frame.height;
+        jpeg_cfg.width = width;
+        jpeg_cfg.height = height;
         jpeg_cfg.src_type = JPEG_PIXEL_FORMAT_RGB888;
         jpeg_cfg.subsampling = JPEG_SUBSAMPLE_420;
         jpeg_cfg.quality = kJpegQuality;
@@ -565,22 +569,27 @@ bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
             return false;
         }
 
-        const size_t out_capacity = std::max<size_t>(64 * 1024, rgb888_size);
-        std::vector<uint8_t> encoded(out_capacity);
+        HeapBuffer encoded(AllocAlignedJpegInput(kJpegOutputCapacity));
+        if (!encoded) {
+            SetError("Not enough memory for JPEG output");
+            return false;
+        }
         int out_len = 0;
         const jpeg_error_t enc_ret = jpeg_enc_process(encoder, aligned_input.get(),
                                                       static_cast<int>(rgb888_size),
-                                                      encoded.data(),
-                                                      static_cast<int>(encoded.size()),
+                                                      encoded.get(),
+                                                      static_cast<int>(kJpegOutputCapacity),
                                                       &out_len);
         owned_encoder.reset();
         aligned_input.reset();
-        if (enc_ret != JPEG_ERR_OK || out_len <= 0 || static_cast<size_t>(out_len) > encoded.size()) {
+        if (enc_ret != JPEG_ERR_OK || out_len <= 0 ||
+            static_cast<size_t>(out_len) > kJpegOutputCapacity) {
             SetError("JPEG encode failed");
             return false;
         }
-        encoded.resize(static_cast<size_t>(out_len));
-        jpeg = std::move(encoded);
+        jpeg.assign(encoded.get(), encoded.get() + out_len);
+        if (sequence != nullptr) *sequence = captured_sequence;
+        if (timestamp_us != nullptr) *timestamp_us = captured_timestamp_us;
         return true;
     } catch (const std::bad_alloc&) {
         SetError(kAllocationError);
@@ -769,12 +778,18 @@ void CameraService::JpegStreamTask() {
                 break;
             }
 
-            CameraFrame latest;
-            if (GetLatestFrame(latest) && latest.sequence != last_sequence) {
+            uint32_t available_sequence = 0;
+            {
+                SemaphoreLock lock(mutex_);
+                if (has_frame_) available_sequence = latest_frame_.sequence;
+            }
+            if (available_sequence != 0 && available_sequence != last_sequence) {
                 std::vector<uint8_t> jpeg;
-                if (CaptureJpeg(jpeg)) {
-                    last_sequence = latest.sequence;
-                    callback(std::move(jpeg), latest.sequence, latest.timestamp_us);
+                uint32_t sequence = 0;
+                int64_t timestamp_us = 0;
+                if (CaptureJpeg(jpeg, &sequence, &timestamp_us) && sequence != last_sequence) {
+                    last_sequence = sequence;
+                    callback(std::move(jpeg), sequence, timestamp_us);
                 }
             }
         } catch (const std::bad_alloc&) {

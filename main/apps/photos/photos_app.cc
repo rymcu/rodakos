@@ -32,6 +32,7 @@ const char* ScanStatusText(rodakos::ImageLibrary::ImageScanStatus status) {
 
 // 网格布局常量
 constexpr int kGridCols = 3;
+constexpr size_t kPhotosPerPage = 6;
 constexpr lv_coord_t kThumbnailSize = 84;
 constexpr lv_coord_t kThumbnailGap = 8;
 constexpr uint32_t kThumbnailTimerMs = 120;
@@ -173,6 +174,8 @@ void PhotosApp::OnDestroy() {
     grid_container_ = nullptr;
     status_label_ = nullptr;
     refresh_button_ = nullptr;
+    previous_page_button_ = nullptr;
+    next_page_button_ = nullptr;
     fullscreen_body_ = nullptr;
     photo_img_ = nullptr;
     filename_label_ = nullptr;
@@ -294,14 +297,15 @@ void PhotosApp::UpdateVisibleThumbnails() {
         }
 
         auto loaded = rodakos::ImageLibrary::LoadThumbnailDetailed(
-            photos_[i].path, static_cast<int>(kThumbnailSize), static_cast<int>(kThumbnailSize));
+            photos_[item.photo_index].path, static_cast<int>(kThumbnailSize), static_cast<int>(kThumbnailSize));
         auto thumbnail = std::move(loaded.image);
         ++loaded_this_tick;
         if (thumbnail == nullptr) {
             item.thumbnail_unavailable = true;
             if (loaded.status != rodakos::ImageLibrary::ImageLoadStatus::kUnsupported) {
                 item.load_failed = true;
-                lv_label_set_text_fmt(item.label, "%s\nPreview failed", photos_[i].filename.c_str());
+                lv_label_set_text_fmt(item.label, "%s\nPreview failed",
+                                      photos_[item.photo_index].filename.c_str());
             }
             continue;
         }
@@ -313,7 +317,8 @@ void PhotosApp::UpdateVisibleThumbnails() {
             item.thumbnail_unavailable = true;
             item.load_failed = true;
             if (source != nullptr) lv_image_cache_drop(source);
-            lv_label_set_text_fmt(item.label, "%s\nPreview failed", photos_[i].filename.c_str());
+            lv_label_set_text_fmt(item.label, "%s\nPreview failed",
+                                  photos_[item.photo_index].filename.c_str());
             continue;
         }
 
@@ -367,10 +372,12 @@ void PhotosApp::RefreshPhotos() {
     if (grid_body_ != nullptr) lv_obj_delete(grid_body_);
     if (fullscreen_body_ != nullptr) lv_obj_delete(fullscreen_body_);
     grid_body_ = grid_container_ = status_label_ = refresh_button_ = nullptr;
+    previous_page_button_ = next_page_button_ = nullptr;
     fullscreen_body_ = photo_img_ = filename_label_ = preview_retry_button_ = nullptr;
     thumbnail_items_.clear();
     thumbnail_timer_failed_ = false;
     current_photo_index_ = 0;
+    current_page_ = 0;
     current_view_ = ViewMode::kNone;
     // Explicit scans remain synchronous; navigation cannot cancel an in-flight SD call.
     ScanPhotos();
@@ -384,7 +391,97 @@ void PhotosApp::UpdateGridStatus() {
     else if (thumbnail_timer_failed_ || std::any_of(thumbnail_items_.begin(), thumbnail_items_.end(),
                  [](const auto& item) { return item.load_failed; }))
         lv_label_set_text(status_label_, "Preview failed - tap Retry");
-    else lv_label_set_text_fmt(status_label_, "%zu photos", photos_.size());
+    else if (photos_.empty()) lv_label_set_text(status_label_, "No photos");
+    else lv_label_set_text_fmt(status_label_, "%zu photos  %zu/%zu", photos_.size(), current_page_ + 1,
+                               (photos_.size() + kPhotosPerPage - 1) / kPhotosPerPage);
+}
+
+void PhotosApp::BuildGridPage() {
+    if (grid_container_ == nullptr || !lv_obj_is_valid(grid_container_)) return;
+
+    StopThumbnailTimer();
+    ReleaseAllThumbnails();
+    lv_obj_clean(grid_container_);
+    lv_obj_scroll_to_y(grid_container_, 0, LV_ANIM_OFF);
+    thumbnail_items_.clear();
+    thumbnail_timer_failed_ = false;
+
+    const size_t page_count = photos_.empty() ? 0 : (photos_.size() + kPhotosPerPage - 1) / kPhotosPerPage;
+    if (page_count > 0 && current_page_ >= page_count) current_page_ = page_count - 1;
+    const size_t first = current_page_ * kPhotosPerPage;
+    const size_t last = std::min(photos_.size(), first + kPhotosPerPage);
+
+    thumbnail_items_.reserve(last - first);
+    for (size_t i = first; i < last; ++i) {
+        const auto& photo = photos_[i];
+        auto* btn = lv_btn_create(grid_container_);
+        lv_obj_set_size(btn, kThumbnailSize, kThumbnailSize);
+        lv_obj_set_style_bg_color(btn, rodakos_theme_bg_secondary(), 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_border_color(btn, rodakos_theme_bg_secondary(), 0);
+        lv_obj_set_style_border_color(btn, rodakos_theme_primary(), LV_STATE_PRESSED);
+        lv_obj_set_style_translate_y(btn, 1, LV_STATE_PRESSED);
+        lv_obj_set_style_clip_corner(btn, true, 0);
+
+        auto* img = lv_image_create(btn);
+        lv_obj_set_size(img, kThumbnailSize, kThumbnailSize);
+        lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+        lv_obj_center(img);
+
+        auto* name_label = lv_label_create(btn);
+        lv_label_set_text(name_label, photo.filename.c_str());
+        lv_obj_set_width(name_label, kThumbnailSize - 8);
+        lv_label_set_long_mode(name_label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_height(name_label, 52);
+        lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(name_label, rodakos_theme_text_primary(), 0);
+        lv_obj_set_style_text_font(name_label, &phone_font_12, 0);
+        lv_obj_center(name_label);
+
+        auto* payload = new PhotoButtonPayload{.app = this, .index = i};
+        lv_obj_add_event_cb(btn, OnPhotoClicked, LV_EVENT_CLICKED, payload);
+        lv_obj_add_event_cb(btn, OnPhotoButtonDelete, LV_EVENT_DELETE, payload);
+
+        ThumbnailItem item;
+        item.photo_index = i;
+        item.button = btn;
+        item.image = img;
+        item.label = name_label;
+        thumbnail_items_.push_back(std::move(item));
+    }
+
+    if (photos_.empty()) {
+        auto* empty_label = lv_label_create(grid_container_);
+        lv_label_set_text(empty_label, ScanStatusText(scan_status_));
+        lv_obj_set_width(empty_label, 276);
+        lv_label_set_long_mode(empty_label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(empty_label, rodakos_theme_text_secondary(), 0);
+        lv_obj_set_style_text_font(empty_label, &phone_font_14, 0);
+        lv_obj_center(empty_label);
+    }
+
+    if (previous_page_button_ != nullptr) {
+        if (current_page_ == 0) lv_obj_add_state(previous_page_button_, LV_STATE_DISABLED);
+        else lv_obj_clear_state(previous_page_button_, LV_STATE_DISABLED);
+    }
+    if (next_page_button_ != nullptr) {
+        if (page_count == 0 || current_page_ + 1 >= page_count) lv_obj_add_state(next_page_button_, LV_STATE_DISABLED);
+        else lv_obj_clear_state(next_page_button_, LV_STATE_DISABLED);
+    }
+    UpdateGridStatus();
+    if (!thumbnail_items_.empty()) {
+        thumbnail_timer_ = lv_timer_create(ThumbnailTimerCallback, kThumbnailTimerMs, this);
+        if (thumbnail_timer_ != nullptr) {
+            lv_timer_pause(thumbnail_timer_);
+            ScheduleThumbnailUpdate();
+        } else {
+            thumbnail_timer_failed_ = true;
+            UpdateGridStatus();
+        }
+    }
 }
 
 void PhotosApp::ShowFullScreen(size_t index) {
@@ -522,19 +619,48 @@ void PhotosApp::CreateGridView() {
     lv_obj_set_size(toolbar, 292, 32);
     lv_obj_align(toolbar, LV_ALIGN_TOP_MID, 0, 44);
     status_label_ = lv_label_create(toolbar);
-    lv_obj_set_width(status_label_, 212);
+    lv_obj_set_width(status_label_, 118);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(status_label_, rodakos_theme_text_secondary(), 0);
     lv_obj_set_style_text_font(status_label_, &phone_font_12, 0);
     lv_obj_align(status_label_, LV_ALIGN_LEFT_MID, 0, 0);
     refresh_button_ = lv_btn_create(toolbar);
-    lv_obj_set_size(refresh_button_, 72, 28);
+    lv_obj_set_size(refresh_button_, 48, 28);
     lv_obj_align(refresh_button_, LV_ALIGN_RIGHT_MID, 0, 0);
     auto* retry_label = lv_label_create(refresh_button_);
     lv_label_set_text(retry_label, "Retry");
     lv_obj_center(retry_label);
     lv_obj_add_event_cb(refresh_button_, [](lv_event_t* event) {
         static_cast<PhotosApp*>(lv_event_get_user_data(event))->RefreshPhotos();
+    }, LV_EVENT_CLICKED, this);
+
+    previous_page_button_ = lv_btn_create(toolbar);
+    lv_obj_set_size(previous_page_button_, 24, 28);
+    lv_obj_align(previous_page_button_, LV_ALIGN_RIGHT_MID, -78, 0);
+    auto* previous_label = lv_label_create(previous_page_button_);
+    lv_label_set_text(previous_label, "<");
+    lv_obj_center(previous_label);
+    lv_obj_add_event_cb(previous_page_button_, [](lv_event_t* event) {
+        auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(event));
+        if (self->current_page_ > 0) {
+            --self->current_page_;
+            self->BuildGridPage();
+        }
+    }, LV_EVENT_CLICKED, this);
+
+    next_page_button_ = lv_btn_create(toolbar);
+    lv_obj_set_size(next_page_button_, 24, 28);
+    lv_obj_align(next_page_button_, LV_ALIGN_RIGHT_MID, -52, 0);
+    auto* next_label = lv_label_create(next_page_button_);
+    lv_label_set_text(next_label, ">");
+    lv_obj_center(next_label);
+    lv_obj_add_event_cb(next_page_button_, [](lv_event_t* event) {
+        auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(event));
+        const size_t page_count = (self->photos_.size() + kPhotosPerPage - 1) / kPhotosPerPage;
+        if (self->current_page_ + 1 < page_count) {
+            ++self->current_page_;
+            self->BuildGridPage();
+        }
     }, LV_EVENT_CLICKED, this);
     UpdateGridStatus();
 
@@ -557,71 +683,7 @@ void PhotosApp::CreateGridView() {
         }
     }, LV_EVENT_SCROLL, this);
 
-    // 创建缩略图网格
-    thumbnail_items_.clear();
-    thumbnail_items_.reserve(photos_.size());
-    for (size_t i = 0; i < photos_.size(); ++i) {
-        const auto& photo = photos_[i];
-
-        auto* btn = lv_btn_create(grid_container_);
-        lv_obj_set_size(btn, kThumbnailSize, kThumbnailSize);
-        lv_obj_set_style_bg_color(btn, rodakos_theme_bg_secondary(), 0);
-        lv_obj_set_style_radius(btn, 8, 0);
-        lv_obj_set_style_pad_all(btn, 0, 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
-        lv_obj_set_style_border_color(btn, rodakos_theme_bg_secondary(), 0);
-        lv_obj_set_style_border_color(btn, rodakos_theme_primary(), LV_STATE_PRESSED);
-        lv_obj_set_style_translate_y(btn, 1, LV_STATE_PRESSED);
-        lv_obj_set_style_clip_corner(btn, true, 0);
-
-        auto* img = lv_image_create(btn);
-        lv_obj_set_size(img, kThumbnailSize, kThumbnailSize);
-        lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
-        lv_obj_center(img);
-
-        auto* name_label = lv_label_create(btn);
-        lv_label_set_text(name_label, photo.filename.c_str());
-        lv_obj_set_width(name_label, kThumbnailSize - 8);
-        lv_label_set_long_mode(name_label, LV_LABEL_LONG_WRAP);
-        lv_obj_set_height(name_label, 52);
-        lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(name_label, rodakos_theme_text_primary(), 0);
-        lv_obj_set_style_text_font(name_label, &phone_font_12, 0);
-        lv_obj_center(name_label);
-
-        auto* payload = new PhotoButtonPayload{.app = this, .index = i};
-        lv_obj_add_event_cb(btn, OnPhotoClicked, LV_EVENT_CLICKED, payload);
-        lv_obj_add_event_cb(btn, OnPhotoButtonDelete, LV_EVENT_DELETE, payload);
-
-        ThumbnailItem item;
-        item.button = btn;
-        item.image = img;
-        item.label = name_label;
-        thumbnail_items_.push_back(std::move(item));
-    }
-
-    // 如果没有照片，显示提示
-    if (photos_.empty()) {
-        auto* empty_label = lv_label_create(grid_container_);
-        lv_label_set_text(empty_label, ScanStatusText(scan_status_));
-        lv_obj_set_width(empty_label, 276);
-        lv_label_set_long_mode(empty_label, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(empty_label, rodakos_theme_text_secondary(), 0);
-        lv_obj_set_style_text_font(empty_label, &phone_font_14, 0);
-        lv_obj_center(empty_label);
-    }
-
-    if (!photos_.empty()) {
-        thumbnail_timer_ = lv_timer_create(ThumbnailTimerCallback, kThumbnailTimerMs, this);
-        if (thumbnail_timer_ != nullptr) {
-            lv_timer_pause(thumbnail_timer_);
-            ScheduleThumbnailUpdate();
-        } else {
-            thumbnail_timer_failed_ = true;
-            UpdateGridStatus();
-        }
-    }
+    BuildGridPage();
 }
 
 void PhotosApp::CreateFullScreenView() {

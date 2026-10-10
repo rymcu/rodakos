@@ -3823,3 +3823,38 @@ Display 回到未播放后，普通 OFF `camera-dma-auto-retry-normal-076` 通�
 两次回执后 Camera 仍可见，UI Stop 344 ms 移除画面；串口记录 179 帧及 STREAMOFF、fd close、device release 完整。视频期 internal/DMA largest 为 3,712 B，停止后恢复 8,192 B；Voice supervisor 最低余量 4,432 B、Voice `internal_min=1,455 B`，MQTT worker 最低栈余量 1,660 B（高于当前通用 512 B 门槛，但作为并发余量证据保留）。无 Camera OOM、panic、系统 abort 或 `E:RX`，另有 1 条远端 peer 关闭附近的信息级 `SCTP_ABORT`。串口 SHA-256：`12c60aa640e617f16b34fe571aa15275c8cd07538e99509f3f02919a9acdac48`；证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-camera-volume-overlap/`。
 
 该窗口关闭 Camera 运行期间确认型音量 effect 的发布、关联软件回执、reported 恢复和 Camera 关闭的有限边界；不关闭实体声学、codec/I2S 同时播放、视频期堆/栈余量、任意 OOM、生产 power-cut 或八小时资格，发布继续 **NO_GO**。
+
+## 2026-10-10 076 Camera + Photos 资源失败与分页修复
+
+普通 OFF 076 的严格 Camera + Photos/SD 重叠窗口成功初始化 41 张照片，Camera 约 8.18 s 取得
+软件首帧并最终完成 161 帧、STREAMOFF、fd close 和 device release；但窗口出现 2 次
+`CameraService: Camera OOM`、6 次 `esp-aes: Failed to allocate memory`、6 次
+`PEER_DEF: Write fail -84`，Voice `internal_min` 降至 127 B。串口 SHA-256 为
+`48b61e1895103193797068af09f846c52d828829c127f0d90e1222013bddd0d3`，证据位于 Rodak
+`.codex-temp/resource-concurrency-029/current076-camera-photos-overlap/`。该窗口明确为 **NO_GO**，
+不能因 Photos 扫描成功、Camera 仍可见或最终关闭完整而判为通过。
+
+为降低确定性的 LVGL 内部堆压力，Photos 网格由“为整个图库创建 tile”改为固定 6 项分页，
+翻页前释放旧 tile、缩略图和 timer，并保留原始照片索引。Photos host Debug 和
+ASan/UBSan/leak 回归均 25/25 通过，覆盖 41 项图库到末页和全屏索引。尚未完成新固件构建、
+刷写及同窗口复测，Camera + Photos、AES 和 peer write 失败门禁保持打开，发布继续 **NO_GO**。
+
+## 2026-10-10 Camera + Photos 077–079 后续结果
+
+077 分页包完成构建、验签、COM3 VerifyOnly 和保留 NVS 刷写，但同一 41-photo 窗口仍出现
+3 次 Camera OOM、6 次 AES 分配失败和 6 次 `Write fail -84`。078 将 Camera JPEG 路径的
+三份整帧/大输出临时所有权收敛为一个直接 RGB888 输入和 96 KiB heap-caps 输出 scratch；
+Photos 25/25、Camera capture 46/46 及 8 个附加 probe 均通过 Debug 与 ASan/UBSan，ESP-IDF
+6.0.2 构建、JPEG allocator 与 Camera teardown 最终 ELF 审计通过。
+
+078 主镜像 SHA-256 为 `c2d8acfd1b556b13dd2527bd147a9ba21ad3b5fe99de7082cefd0ca6b3142c9e`。
+实机同窗 Camera OOM 为 0，Photos 初始化成功，Camera 保持可见并完成 182 帧和六阶段关闭；
+但仍有 2 次 AES 分配失败、2 次 peer write `-84`，Voice `internal_min=83 B`，停止后最大连续
+internal/DMA 为 6,144 B。串口 SHA-256：
+`a02c0865cb1d65175445a905bb7ff3d3505cbc414ebd927b85ebaf23eb2fbdfa`。
+
+079 的 JPEG 暂停协调会让 WebRTC 会话关闭，Camera 在 UI Stop 前退出，且仍出现 1 次 AES
+分配失败；该方案已撤销，不进入提交。设备最终重新刷入与当前源码完全同哈希的 078 包，
+Recovery → Main → OTA confirmation → Home、WiFi/MQTT 通过，NVS/绑定/Recovery 保持。当前
+Camera OOM 局部门禁关闭，AES/peer write、8,192 B 资源恢复、生产与八小时门禁继续
+**NO_GO**。

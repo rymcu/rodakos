@@ -171,7 +171,7 @@ jpeg_error_t jpeg_enc_open(const jpeg_enc_config_t* config, jpeg_enc_handle_t* e
 jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t, const uint8_t*, int input_bytes,
                              uint8_t* output, int capacity, int* output_bytes) {
     if (camera_host::fail_encoder_process || input_bytes != 12) return -1;
-    const auto bytes = camera_host::EncodedBytes();
+    constexpr std::array<uint8_t, 8> bytes = {0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9};
     if (capacity < static_cast<int>(bytes.size())) return -1;
     std::copy(bytes.begin(), bytes.end(), output);
     *output_bytes = camera_host::empty_encoded ? 0 : static_cast<int>(bytes.size());

@@ -532,22 +532,31 @@ RODAK_TEST("snapshot allocation failure releases the lock and preserves caller o
     f.camera->StopPreview();
 }
 
-RODAK_TEST("camera JPEG allocation failures release encoder input and preserve preview") {
+RODAK_TEST("camera JPEG keeps one compact STL result and heap-caps scratch buffers") {
     Fixture f; f.Preview();
-    for (const auto& [bytes, nth] : {std::pair<size_t, size_t>{8, 1}, {8, 2}, {65536, 1}}) {
-        Bytes jpeg{1, 2, 3};
-        camera_host::FailNew(bytes, nth, 1, AllocationThread::kCaller);
-        const bool encoded = f.camera->CaptureJpeg(jpeg);
-        camera_host::ClearNewFailures();
-        RODAK_CHECK_FALSE(encoded);
-        RODAK_CHECK(jpeg.empty());
-        RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
-        RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
-        RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
-        RODAK_CHECK(f.camera->GetState().preview_running);
-        RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
-    }
-    RODAK_CHECK_EQ(camera_host::new_failures.load(), 3u);
+    Bytes jpeg{1, 2, 3};
+    camera_host::FailNew(8, 1, 1, AllocationThread::kCaller);
+    RODAK_CHECK_FALSE(f.camera->CaptureJpeg(jpeg));
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(jpeg.empty());
+    RODAK_CHECK_EQ(f.camera->last_error(), "Camera OOM");
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+    RODAK_CHECK(f.camera->GetState().preview_running);
+
+    camera_host::FailNew(8, 2, 1, AllocationThread::kCaller);
+    RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(jpeg, camera_host::EncodedBytes());
+
+    camera_host::FailNew(96 * 1024, 1, 1, AllocationThread::kCaller);
+    RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
+    camera_host::ClearNewFailures();
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
 }
 
 RODAK_TEST("camera state and error snapshots keep locks usable during repeated allocation failure") {

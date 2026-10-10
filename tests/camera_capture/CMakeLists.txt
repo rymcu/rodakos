@@ -15,6 +15,7 @@ set(CAMERA_SERVICE_INCLUDE_ROOT "${RODAKOS_ROOT}/main" CACHE PATH
 set(CAMERA_HOST_SOURCES
     host_runtime.cc
     ${CAMERA_SERVICE_SOURCE}
+    ../../main/phone_os/camera_signal_diagnostics.cc
     ../../main/phone_os/camera-teardown-diagnostics.cc
     ../../main/rodakos_adapters/file_service.cc
     ../../main/rodakos_adapters/file_directory.cc

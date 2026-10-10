@@ -7,9 +7,10 @@ Images are temporary host files read by the production C stdio path. Only the ES
 and allocator platform APIs are fakes: the small JPEG SOF fixture verifies loader/ownership
 behavior, not actual JPEG compression quality or the device decoder.
 
-The 24 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
+The 25 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
 strict recursive failure propagation, optional-album fallback, recursion limits and sorted format
 selection; visible error/retry and repaired thumbnail state; timer/Home scheduling failure;
+bounded six-item paging for large libraries while preserving original photo indexes;
 preview/back/rescan/destruction ownership; and actual PNG/BMP decode paths. BMP cases include
 24/32-bit direct pixels, RGB565 bitfields, invalid magic/offsets/dimensions, truncated pixel ranges,
 unsupported palette/compression, pixel-read failure, and same-path replacement with header caching

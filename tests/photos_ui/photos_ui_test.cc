@@ -10,6 +10,7 @@
 #include "phone_ui/phone_ui.h"
 #include "settings.h"
 #include <src/others/test/lv_test.h>
+#include <cstdio>
 
 namespace {
 void Pump(uint32_t ms=250) { lv_test_wait(ms); lv_obj_update_layout(lv_screen_active()); }
@@ -98,6 +99,41 @@ RODAK_TEST("Photos failed rescan clears stale tiles and nested I/O errors never 
     f.fs.failures.clear(); f.fs.directories["/failed"]={};
     Click(f.app.refresh_button_);
     RODAK_CHECK_EQ(f.app.photos_.size(),1U);
+}
+
+RODAK_TEST("Photos large libraries keep a bounded tile page and retain original photo indexes") {
+    Fixture f;
+    f.fs.Album(f.files.root.string());
+    for (size_t i = 0; i < 41; ++i) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "photo-%02zu.jpg", i);
+        f.fs.Image(f.files.root.string(), f.files.Jpeg(name));
+    }
+    f.Start();
+
+    RODAK_CHECK_EQ(f.app.photos_.size(), 41U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 6U);
+    RODAK_CHECK(Label(lv_screen_active(), "41 photos  1/7") != nullptr);
+    RODAK_CHECK(lv_obj_has_state(f.app.previous_page_button_, LV_STATE_DISABLED));
+    RODAK_CHECK(!lv_obj_has_state(f.app.next_page_button_, LV_STATE_DISABLED));
+
+    Click(f.app.next_page_button_);
+    RODAK_CHECK_EQ(f.app.current_page_, 1U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 6U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 6U);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.thumbnail_items_[0].label)), "photo-06.jpg");
+    RODAK_CHECK(Label(lv_screen_active(), "41 photos  2/7") != nullptr);
+
+    for (size_t page = 2; page < 7; ++page) Click(f.app.next_page_button_);
+    RODAK_CHECK_EQ(f.app.current_page_, 6U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 5U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 36U);
+    RODAK_CHECK(lv_obj_has_state(f.app.next_page_button_, LV_STATE_DISABLED));
+    RODAK_CHECK(Label(lv_screen_active(), "41 photos  7/7") != nullptr);
+
+    Click(f.app.thumbnail_items_[0].button);
+    RODAK_CHECK_EQ(f.app.current_photo_index_, 36U);
+    RODAK_CHECK(Label(lv_screen_active(), "photo-36.jpg") != nullptr);
 }
 
 RODAK_TEST("Photos thumbnail failures stay visible and explicit retry clears them after recovery") {

@@ -62,7 +62,8 @@ public:
     bool GetLatestFrame(CameraFrame& frame);
     // Encodes the newest RGB565 preview frame as a standalone JPEG buffer.
     // The caller owns the returned bytes and may forward them to a transport.
-    bool CaptureJpeg(std::vector<uint8_t>& jpeg);
+    bool CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence = nullptr,
+                     int64_t* timestamp_us = nullptr);
     // Starts a bounded-rate JPEG producer over the already running preview.
     // The callback is invoked outside the service mutex and owns the moved bytes.
     bool StartJpegStream(uint8_t fps, JpegFrameCallback callback);

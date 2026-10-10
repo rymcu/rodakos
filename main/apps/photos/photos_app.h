@@ -45,6 +45,7 @@ private:
     };
 
     struct ThumbnailItem {
+        size_t photo_index = 0;
         lv_obj_t* button = nullptr;
         lv_obj_t* image = nullptr;
         lv_obj_t* label = nullptr;
@@ -56,6 +57,7 @@ private:
     // 页面管理
     void ShowGridView();
     void CreateGridView();
+    void BuildGridPage();
     void CreateFullScreenView();
 
     // 图片扫描
@@ -91,6 +93,8 @@ private:
     lv_obj_t* grid_container_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* refresh_button_ = nullptr;
+    lv_obj_t* previous_page_button_ = nullptr;
+    lv_obj_t* next_page_button_ = nullptr;
     lv_timer_t* thumbnail_timer_ = nullptr;
     std::vector<ThumbnailItem> thumbnail_items_;
 
@@ -103,6 +107,7 @@ private:
 
     std::vector<PhotoEntry> photos_;
     size_t current_photo_index_ = 0;
+    size_t current_page_ = 0;
     rodakos::ImageLibrary::ImageScanStatus scan_status_ = rodakos::ImageLibrary::ImageScanStatus::kReady;
     bool thumbnail_timer_failed_ = false;
 };
