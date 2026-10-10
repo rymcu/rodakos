@@ -656,3 +656,10 @@ windows without Camera OOM, `E:RX`, error, panic or abort. This closes the bound
 ring restart gate. Physical color/exposure/optics, power rails, arbitrary OOM and concurrency,
 production signing/readback/power-cut and the eight-hour qualification soak remain open, so release
 status remains **NO_GO**.
+
+A follow-up five-cycle serial run on the same 072 package triggered the 3,840-byte headroom branch
+on every cycle, recovered an 8,192-byte block each time and delivered driver first frames in
+60/71/94/74/64 ms. Every cycle completed all teardown markers and a 65.02–65.09 second health
+window. The five persistent I2C references remained constant rather than accumulating, the heap
+median drop was zero, and no Camera OOM, `E:RX`, error, panic or abort was observed. This strengthens
+the bounded restart evidence to five cycles without changing the remaining release gates.

@@ -3752,3 +3752,15 @@ Recovery `20261009-202156`，通过验签、COM3 VerifyOnly、保留 NVS 的 `ot
 072 关闭当前普通双轮短窗的 DVP ring 重启失败，不等价于物理图像、任意 OOM、异常媒体/SD/
 音频/TLS/MQTT/cache-off/NVS/OTA 并发、生产签名/readback/power-cut 或八小时资格验收。
 `eight_hour_gate_passed` 仍为 false，发布状态保持 **NO_GO**，暂不启动新的八小时长稳。
+
+随后对同一 072 包执行单串口五轮重复性观察。五轮均在 Camera 启动前记录
+`Releasing Home return reserve for Camera DMA headroom: largest=3840 required=4096`，释放后
+`Starting camera stream` 的 `internal_dma_largest` 均为 8,192 B。驱动首帧分别为
+60/71/94/74/64 ms；每轮六个关闭阶段完整，各自完成 65.02–65.09 秒 MQTT/Main/Voice 健康
+观察。五次关闭后的 `i2c_master` 引用数均固定为 5，没有随循环增长。全窗最低健康期
+internal/DMA largest 为 8,192 B、Voice supervisor 最低剩余栈 4,432 B，heap median drop 为
+0；Camera OOM、`E:RX`、error、panic、abort 均为 0。汇总状态仍为
+`software-smoke-observed`，串口 SHA-256
+`81234948389c6a51de5bbe187240cd4150e9a2d40a2db21ebd0080be0d97b767`，证据位于
+`.codex-temp/camera-dma-headroom-retry-072/smoke-5cycles/`。该结果将当前资源重启门禁从双轮
+扩大到五轮，不改变物理、异常并发、生产和八小时资格边界。
