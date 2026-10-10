@@ -147,6 +147,14 @@ esp_err_t dev_camera_init(void *cfg, int cfg_size, void **device_handle);
  */
 esp_err_t dev_camera_deinit(void *device_handle);
 
+/**
+ * @brief Optional board-specific preparation before a DVP camera is initialized.
+ *
+ * Boards may provide a strong implementation to reset or power-cycle a camera module.
+ * The default weak implementation performs no work.
+ */
+esp_err_t camera_dvp_board_prepare_entry_t(void);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

@@ -16,6 +16,7 @@
 #include "esp_board_device.h"
 #include "esp_board_periph.h"
 #include "dev_gpio_expander.h"
+#include "dev_camera.h"
 #include "esp_io_expander_pca9557.h"
 
 static const char *TAG = "RYMCU_BIGSMART_SETUP";
@@ -32,6 +33,53 @@ esp_err_t io_expander_factory_entry_t(i2c_master_bus_handle_t i2c_handle, const 
         ESP_LOGE(TAG, "Failed to create IO expander handle\n");
         return ret;
     }
+    return ESP_OK;
+}
+
+esp_err_t camera_dvp_board_prepare_entry_t(void)
+{
+    esp_io_expander_handle_t *io_expander = NULL;
+    esp_err_t ret = esp_board_device_get_handle("gpio_expander", (void **)&io_expander);
+    if (ret != ESP_OK || io_expander == NULL) {
+        ESP_LOGE(TAG, "Failed to get DVP power-control handle: %s", esp_err_to_name(ret));
+        return ret != ESP_OK ? ret : ESP_ERR_NOT_FOUND;
+    }
+
+    uint32_t initial_level = 0;
+    uint32_t disabled_level = 0;
+    uint32_t enabled_level = 0;
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_get_level(*io_expander, DVP_EN_GPIO, &initial_level),
+        TAG, "Read initial DVP_EN level failed");
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_set_level(*io_expander, DVP_EN_GPIO, 1),
+        TAG, "Disable DVP camera power failed");
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ret = esp_io_expander_get_level(*io_expander, DVP_EN_GPIO, &disabled_level);
+    if (ret != ESP_OK || (disabled_level & DVP_EN_GPIO) == 0) {
+        (void)esp_io_expander_set_level(*io_expander, DVP_EN_GPIO, 0);
+        ESP_LOGE(TAG, "DVP camera did not enter disabled state: %s", esp_err_to_name(ret));
+        return ret != ESP_OK ? ret : ESP_ERR_INVALID_STATE;
+    }
+
+    ret = esp_io_expander_set_level(*io_expander, DVP_EN_GPIO, 0);
+    if (ret != ESP_OK) {
+        (void)esp_io_expander_set_level(*io_expander, DVP_EN_GPIO, 0);
+        ESP_LOGE(TAG, "Enable DVP camera power failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_RETURN_ON_ERROR(
+        esp_io_expander_get_level(*io_expander, DVP_EN_GPIO, &enabled_level),
+        TAG, "Read enabled DVP_EN level failed");
+    if ((enabled_level & DVP_EN_GPIO) != 0) {
+        ESP_LOGE(TAG, "DVP camera did not enter enabled state");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "DVP camera power cycle complete: initial=%d disabled=1 enabled=0",
+             (initial_level & DVP_EN_GPIO) != 0 ? 1 : 0);
     return ESP_OK;
 }
 

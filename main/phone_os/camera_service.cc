@@ -24,11 +24,6 @@
 #include <esp_log_level.h>
 #include <esp_timer.h>
 
-#ifdef RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS
-#include <esp_board_device.h>
-#include <esp_io_expander.h>
-#endif
-
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
 #include <esp_video_ioctl.h>
 #include <fcntl.h>
@@ -55,57 +50,6 @@ constexpr int kMaxPhotoNameSuffix = 9999;
 constexpr const char* kGpioLogTag = "gpio";
 // Keep this fallback inside libstdc++'s small-string storage.
 constexpr const char* kAllocationError = "Camera OOM";
-
-#ifdef RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS
-constexpr uint32_t kDvpEnablePinMask = 1u << 2;
-
-esp_err_t PowerCycleCameraModule() {
-    esp_io_expander_handle_t* expander = nullptr;
-    esp_err_t ret =
-        esp_board_device_get_handle("gpio_expander", reinterpret_cast<void**>(&expander));
-    if (ret != ESP_OK || expander == nullptr) {
-        return ret != ESP_OK ? ret : ESP_ERR_NOT_FOUND;
-    }
-
-    uint32_t initial_level = 0;
-    uint32_t disabled_level = 0;
-    uint32_t enabled_level = 0;
-    ret = esp_io_expander_get_level(*expander, kDvpEnablePinMask, &initial_level);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    ret = esp_io_expander_set_level(*expander, kDvpEnablePinMask, 1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));
-    ret = esp_io_expander_get_level(*expander, kDvpEnablePinMask, &disabled_level);
-    if (ret != ESP_OK) {
-        (void)esp_io_expander_set_level(*expander, kDvpEnablePinMask, 0);
-        return ret;
-    }
-
-    ret = esp_io_expander_set_level(*expander, kDvpEnablePinMask, 0);
-    if (ret != ESP_OK) {
-        (void)esp_io_expander_set_level(*expander, kDvpEnablePinMask, 0);
-        return ret;
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));
-    ret = esp_io_expander_get_level(*expander, kDvpEnablePinMask, &enabled_level);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    ESP_LOGW(TAG,
-             "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_power_cycle=1 "
-             "initial_level=%d disabled_level=%d enabled_level=%d",
-             (initial_level & kDvpEnablePinMask) != 0 ? 1 : 0,
-             (disabled_level & kDvpEnablePinMask) != 0 ? 1 : 0,
-             (enabled_level & kDvpEnablePinMask) != 0 ? 1 : 0);
-    return ESP_OK;
-}
-#endif
 
 class SemaphoreLock {
 public:
@@ -970,15 +914,6 @@ void CameraService::PreviewTask() {
 
 bool CameraService::OpenStream(int width, int height) {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-#ifdef RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS
-    const esp_err_t power_cycle_ret = PowerCycleCameraModule();
-    if (power_cycle_ret != ESP_OK) {
-        SetError(std::string("Camera DVP_EN power cycle failed: ") +
-                 esp_err_to_name(power_cycle_ret));
-        return false;
-    }
-#endif
-
     esp_err_t ret = camera_device_.Acquire();
     if (ret != ESP_OK) {
         SetError(std::string("Camera init failed: ") + esp_err_to_name(ret));

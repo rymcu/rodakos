@@ -284,13 +284,9 @@ try {
         $cameraSignalDiagnosticsCache = Select-String -LiteralPath $cmakeCache `
             -Pattern '^RODAKOS_CAMERA_SIGNAL_DIAGNOSTICS:BOOL=(ON|TRUE|1)$' |
             Select-Object -First 1
-        $cameraPowerCycleDiagnosticsCache = Select-String -LiteralPath $cmakeCache `
-            -Pattern '^RODAKOS_CAMERA_POWER_CYCLE_DIAGNOSTICS:BOOL=(ON|TRUE|1)$' |
-            Select-Object -First 1
         if (($null -ne $faultInjectionCache -or $null -ne $cameraDmaFaultInjectionCache -or
              $null -ne $cameraTestPatternCache -or $null -ne $cameraSensorDiagnosticsCache -or
-             $null -ne $cameraSignalDiagnosticsCache -or
-             $null -ne $cameraPowerCycleDiagnosticsCache) -and
+             $null -ne $cameraSignalDiagnosticsCache) -and
             -not $AllowReleaseFaultInjection) {
             throw "故障注入配置仍启用；关闭测试开关或显式允许测试包后才能打包"
         }

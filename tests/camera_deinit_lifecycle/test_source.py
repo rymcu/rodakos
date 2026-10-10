@@ -50,6 +50,13 @@ class DvpDeinitContractTest(unittest.TestCase):
         self.assertIn("return -1", guard.group("body"))
         self.assertLess(self.body.index("device_handle == NULL"), self.body.index("esp_video_deinit"))
 
+    def test_board_prepare_runs_before_video_initialization(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        init = function_body(source, "dev_camera_sub_dvp_init")
+        self.assertIn("camera_dvp_board_prepare_entry_t", init)
+        self.assertLess(init.index("camera_dvp_board_prepare_entry_t"), init.index("esp_video_init"))
+        self.assertIn("goto cleanup", init[init.index("camera_dvp_board_prepare_entry_t"):])
+
     def test_video_failure_preserves_handle_and_peripheral_reference(self) -> None:
         failure = re.search(r"if\s*\(\s*ret\s*!=\s*ESP_OK\s*\)\s*\{(?P<body>.*?)\}", self.body, re.S)
         self.assertIsNotNone(failure)

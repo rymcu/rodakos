@@ -16,6 +16,11 @@
 
 static const char *TAG = "DEV_CAMERA_SUB_DVP";
 
+__attribute__((weak)) esp_err_t camera_dvp_board_prepare_entry_t(void)
+{
+    return ESP_OK;
+}
+
 int dev_camera_sub_dvp_init(void *cfg, int cfg_size, void **device_handle)
 {
     // No need to check parameters here, it will be checked in dev_camera_init
@@ -29,6 +34,12 @@ int dev_camera_sub_dvp_init(void *cfg, int cfg_size, void **device_handle)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get I2C handle for DVP camera");
         return -1;
+    }
+
+    ret = camera_dvp_board_prepare_entry_t();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Board DVP camera preparation failed: %s", esp_err_to_name(ret));
+        goto cleanup;
     }
 
     esp_video_init_dvp_config_t s_dvp_config = {

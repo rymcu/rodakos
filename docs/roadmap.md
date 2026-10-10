@@ -616,3 +616,14 @@ confirmation → Home boot complete. The next gate is to decide whether this con
 belongs in the ordinary Camera initialization path after power-rail, color/exposure and optical
 checks; production signing/readback, arbitrary OOM, power-cut and qualification soak remain open.
 Status remains **NO_GO**.
+
+### 2026-10-10 ordinary BigSmart Camera power reset 071
+
+Candidate `20261010-085245` (`camera-dvp-power-reset-071`) moves the proven DVP_EN transition
+into the BigSmart board hook called before `esp_video_init`; the generic Board Manager hook is a
+no-op for other boards. Ordinary COM3 evidence reported `initial=0 disabled=1 enabled=0`, a 79 ms
+software first frame and complete teardown. The remote 320×240 frame had 1,517 RGB unique values,
+so the ordinary path no longer produces the historical one-pixel dark frame. This closes the
+diagnostic-to-production implementation gap, while physical color/exposure/optics, power rails,
+arbitrary OOM, production trust, power-cut and qualification soak remain open. Status remains
+**NO_GO**.

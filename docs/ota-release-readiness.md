@@ -3679,3 +3679,24 @@ SHA-256 `6d355eabdbb379441582268b28007e6fbc92b2537595f622ea00763e543b326a`；普
 诊断 marker，已通过验签、COM3 VerifyOnly、保留 NVS 刷写以及 Recovery → Main → OTA
 confirmation → Home 启动。下一步转为普通 OFF 的受控上电复位实现评估、摄像头电源轨/镜头
 与颜色曝光验收；在这些门禁完成前仍保持 **NO_GO**，不启动八小时资格长稳。
+
+## 2026-10-10 BigSmart 普通 Camera 上电复位 071
+
+069 的电源循环结果已移入 BigSmart 板级 Camera DVP 初始化钩子。Board Manager 在
+`esp_video_init()` 前调用板级 `camera_dvp_board_prepare_entry_t()`；通用实现默认空操作，
+BigSmart 实现对 PCA9557 DVP_EN 执行低有效电源循环并读取 `disabled=1 / enabled=0`。
+
+普通候选 `20261010-085245` / `camera-dvp-power-reset-071` 主镜像 7,162,928 B，SHA-256
+`2d1c6fe6c3ea46996e081b7d973d67652dc6bd75130215ea19ed382c73066802`。通过验签、COM3
+VerifyOnly、保留 NVS 刷写和 Recovery → Main → OTA confirmation → Home 后，串口直接记录
+`DVP camera power cycle complete: initial=0 disabled=1 enabled=0`，79 ms 取得首帧，
+STREAMOFF、fd close、device release 均完成，无 `E:RX`。
+
+同一普通包的 Rodak 远端 320×240 图像为非均匀帧：RGB 唯一值 1,517，通道范围
+R 19–137 / G 23–133 / B 20–141，均值约 `(40.55, 41.41, 40.47)`，JPEG SHA-256
+`23b838fa23a2d29b0b41e20bc0e054338deb21c8b1c9b005089ceb608b6bbccb`。串口日志 SHA-256 为
+`6a165448d74e45a09fb66f288d2da6cd9352defa31132a451e04698e4ea0cd4d`。
+
+这证明受控上电复位已从诊断分支收敛到普通板级初始化，且没有破坏绑定、联网或 Camera
+资源释放。颜色准确度、曝光稳定性、镜头清晰度、电源轨波形、重复冷启动、任意 OOM、生产
+签名/readback/power-cut 和八小时资格长稳仍未完成，发布状态保持 **NO_GO**。
