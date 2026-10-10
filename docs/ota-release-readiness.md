@@ -3807,3 +3807,11 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 Display 回到未播放后，普通 OFF `camera-dma-auto-retry-normal-076` 通过 Rodak 设备 Camera 入口重新取得 320×240 首帧，运行约 9.53 s、146 帧；停止后 UI 画面约 1.57 s 移除，串口记录 STREAMOFF、fd close 和 device release。停止前 internal/DMA largest 为 3,712 B，停止后约 20 s 的 MQTT/Main 样本恢复到 8,192 B；Voice supervisor 最低余量 4,432 B，但 Voice `internal_min` 达到 1,455 B，视频运行期内部堆余量仍是任意 OOM 与资格长稳门禁的一部分。串口 SHA-256 为 `1432c36cb5c78b374bfe92b74a50b7a4d1948f009ed676399901f1c41c4a6d7a`，证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-display-camera-recovery/`。
 
 窗口中 1 条 `SCTP: ... SCTP_ABORT` 出现在远端 peer 关闭附近；历史视频停止窗口也存在同类信息，本轮不将其写成 panic、Camera OOM 或 `E:RX`。该结果只关闭 Display 结束后 Camera 重启、完整关闭和短时连续块恢复边界，不关闭物理画质、视频期堆余量、任意 OOM、生产 power-cut 或八小时资格；发布继续 **NO_GO**。
+
+## 2026-10-10 076 Camera + 灯光 shadow 并发
+
+在严格重叠的单串口窗口内，普通 OFF `camera-dma-auto-retry-normal-076` 通过 Rodak Camera 入口取得 320×240 首帧（约 8.01 s）。Camera 保持可见期间，Rodak 将同一设备灯光 shadow 写为 `enabled=true`，再恢复为 `enabled=false`；两次均收到设备 `application=driver-applied` 回报，`configurationRevision` 由 3→4→5，最终 reported/desired 均为关闭。随后 UI Stop 在 321 ms 内移除画面。
+
+串口记录 Camera 共 162 帧，STREAMOFF、fd close、device release 完整。视频期 internal/DMA largest 为 3,712 B，停止后恢复至 8,192 B；Voice supervisor 最低余量 4,432 B，Voice `internal_min` 为 1,455 B，无 Camera OOM、panic、系统 abort 或 `E:RX`。另有 1 条远端 peer 关闭附近的既有信息级 `SCTP_ABORT`。串口 SHA-256：`be658be0f83c990e48ad39ceb62deb9c58b348aaa5030295dc21c61f66a51abb`；UI/shadow 与串口证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-camera-light-overlap/`。
+
+该窗口关闭当前 Camera 运行期间灯光 shadow 写入、设备回报和恢复的有限边界；不关闭视频期连续堆余量、任意 OOM、物理画质、生产 power-cut 或八小时资格，发布继续 **NO_GO**。
