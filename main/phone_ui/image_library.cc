@@ -1,4 +1,5 @@
 #include "phone_os/resource_failure_injection.h"
+#include "phone_os/screen_jpeg_allocation.h"
 #include "image_library.h"
 #include "rodakos_adapters/file_service.h"
 
@@ -280,7 +281,8 @@ private:
     lv_image_dsc_t descriptor_{};
 };
 
-ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t height) {
+// Out of line so the final-ELF audit attributes the allocation scope to this function.
+[[gnu::noinline]] ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t height) {
     FILE* file = fopen(path.c_str(), "rb");
     if (file == nullptr) return {ImageLoadStatus::kReadFailed, {}};
     if (fseek(file, 0, SEEK_END) != 0) {
@@ -318,8 +320,14 @@ ImageLoadResult LoadMemoryImage(const std::string& path, size_t width, size_t he
     if (IsJpeg(path)) {
         uint8_t* decoded = nullptr;
         size_t length = 0, decoded_width = 0, decoded_height = 0, stride = 0;
-        const esp_err_t result = jpeg_to_image_scaled(static_cast<const uint8_t*>(data), size,
-            &decoded, &length, &decoded_width, &decoded_height, &stride, width, height);
+        esp_err_t result = ESP_FAIL;
+        {
+            // Thumbnail bursts open the decoder twice per image (~10 KiB state each). Keep that
+            // state and the output in PSRAM so concurrent TLS/DTLS AES-DMA keeps internal heap.
+            ScreenJpegAllocationScope allocation_scope;
+            result = jpeg_to_image_scaled(static_cast<const uint8_t*>(data), size,
+                &decoded, &length, &decoded_width, &decoded_height, &stride, width, height);
+        }
         heap_caps_free(data);
         if (result != ESP_OK || decoded == nullptr || length == 0 || decoded_width == 0 ||
             decoded_height == 0 || stride == 0) {

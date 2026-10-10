@@ -1,6 +1,7 @@
 #include "phone_os/resource_failure_injection.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/camera-teardown-diagnostics.h"
+#include "phone_os/screen_jpeg_allocation.h"
 
 #include "rodakos_adapters/file_service.h"
 
@@ -513,8 +514,9 @@ std::string CameraService::last_error() const {
     }
 }
 
-bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence,
-                                int64_t* timestamp_us) {
+// Out of line so the final-ELF audit attributes the allocation scope to this function.
+[[gnu::noinline]] bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence,
+                                                  int64_t* timestamp_us) {
     jpeg.clear();
     try {
         if (mutex_ == nullptr) {
@@ -553,6 +555,9 @@ bool CameraService::CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence,
             captured_timestamp_us = latest_frame_.timestamp_us;
         }
 
+        // The encoder's ~10 KiB state would otherwise prefer internal RAM on every frame and
+        // starve concurrent TLS/DTLS AES-DMA bounce buffers. Declared before the encoder owner.
+        ScreenJpegAllocationScope allocation_scope;
         jpeg_enc_config_t jpeg_cfg = DEFAULT_JPEG_ENC_CONFIG();
         jpeg_cfg.width = width;
         jpeg_cfg.height = height;

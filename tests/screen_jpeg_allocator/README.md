@@ -14,11 +14,12 @@ cmake -S tests/screen_jpeg_allocator -B "$HOME/.cache/rodakos-jpeg-allocator" \
 cmake --build "$HOME/.cache/rodakos-jpeg-allocator" -j 2
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   ctest --test-dir "$HOME/.cache/rodakos-jpeg-allocator" --output-on-failure
-python3 tests/screen_jpeg_allocator/run_negative.py --output "$HOME/.cache/rodakos-jpeg-negative"
+python3 tests/screen_jpeg_allocator/run_negative.py --output "$HOME/.cache/rodakos-jpeg-negative"   --idf-path /path/to/esp-idf-6.0.2
 ```
 
 负对照把生产文件复制到指定目录后变异，不修改源码。全局 bool、scope bypass、INTERNAL fallback、
-删除真实 `EncodeJpeg` scope 四种变异必须以显式测试失败被检出；崩溃不是通过条件。
+删除真实 `EncodeJpeg` scope、删除 `CameraService::CaptureJpeg` scope 五种变异必须以显式测试失败
+被检出；崩溃不是通过条件。Camera 变异需要 `--idf-path`（camera_capture 编译受 pin 的 IDF 源）。
 `tools/run_release_host_checks.sh` 包含正向 CTest 与 Python 检查器，GitHub host CI 还执行负对照。
 
 `cmake/screen_jpeg_allocator.cmake` 在配置时核验 ESP32-S3 / IDF 6.0.2 / `esp_new_jpeg 0.6.1`
@@ -27,8 +28,11 @@ archive、公共头、manifest、lock 和 DWARF 四个签名。编译和 preflig
 构建后的强制门禁读取最终 ELF 与同次 map，生成 `build/screen-jpeg-linked.json`；
 preflight 单独成功不代表最终链接检查通过。
 
-`ScreenJpegAllocationScope` 仅在屏幕 `EncodeJpeg` 期间改变当前任务策略，先于 Encoder RAII
-构造并在其关闭后恢复。`task_enable=false` 保持不变；Camera/decoder 不建立 scope，走原策略。
+`ScreenJpegAllocationScope` 只允许在三个审阅过的函数中改变当前任务策略：屏幕
+`DisplayService::EncodeJpeg`、Camera `CameraService::CaptureJpeg`（082 起）和 ImageLibrary
+`LoadMemoryImage` 的 JPEG 解码段（082 起）。scope 先于 Encoder/decoder 构造并在其关闭后恢复，
+`task_enable=false` 保持不变；三者均为 `noinline`，最终 ELF 门禁要求每个调用者都有进入与退出，
+其他调用者一律拒绝。
 四个 wrapper 均需链接：两个 public allocator 也存在 INTERNAL fallback，只包装 inner 不充分。
 
 可选 CMake `RODAKOS_JPEG_BASELINE_ELF` 保存上一制品路径，最终报告记录 native TLS 每任务对齐

@@ -7,6 +7,9 @@ Images are temporary host files read by the production C stdio path. Only the ES
 and allocator platform APIs are fakes: the small JPEG SOF fixture verifies loader/ownership
 behavior, not actual JPEG compression quality or the device decoder.
 
+The JPEG display/thumbnail case also requires both decodes to run inside
+`ScreenJpegAllocationScope` (a thread-local host recorder); it fails against the pre-082 loader.
+
 The 25 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
 strict recursive failure propagation, optional-album fallback, recursion limits and sorted format
 selection; visible error/retry and repaired thumbnail state; timer/Home scheduling failure;

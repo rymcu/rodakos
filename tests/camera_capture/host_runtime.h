@@ -14,6 +14,8 @@ extern std::atomic<bool> collide_on_create;
 extern std::atomic<bool> fail_dequeue;
 extern std::atomic<bool> pause_frames, frames_paused;
 extern std::atomic<unsigned> encoder_handles, frame_mappings;
+// Encoder open/close calls made while the current thread was outside ScreenJpegAllocationScope.
+extern std::atomic<unsigned> unscoped_encoder_calls;
 extern std::atomic<size_t> preview_frame_bytes;
 extern std::atomic<unsigned> new_failures, aligned_buffers, dequeued_buffers, requeued_buffers;
 enum class AllocationThread { kCaller, kPreview, kJpeg };

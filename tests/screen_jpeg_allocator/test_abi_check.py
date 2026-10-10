@@ -271,8 +271,12 @@ RELOCATION RECORDS FOR [.text.jpeg_enc_open]:
             symbols["_thread_local_" + name] = {"address": value}
         elf = SimpleNamespace(symbols=symbols, sections=[{}, {
             "flags": 0x403, "type": 8, "address": 0x3c000000, "size": 1}])
-        edges = [{"caller": "_ZN14DisplayService10EncodeJpegEv", "address": 0x7000, "target": 0x6000},
-                 {"caller": "_ZN14DisplayService10EncodeJpegEv", "address": 0x7050, "target": 0x6100}]
+        edges = []
+        for index, caller in enumerate(("_ZN7rodakos14DisplayService10EncodeJpegEv",
+                                        "_ZN7rodakos13CameraService11CaptureJpegEv",
+                                        "_ZN7rodakos12ImageLibrary12_GLOBAL__N_115LoadMemoryImageEv")):
+            edges.append({"caller": caller, "address": 0x7000 + index * 0x100, "target": 0x6000})
+            edges.append({"caller": caller, "address": 0x7050 + index * 0x100, "target": 0x6100})
         return elf, edges
 
     def test_native_tls_scope_records_real_calls_and_alignment(self):
@@ -302,11 +306,16 @@ RELOCATION RECORDS FOR [.text.jpeg_enc_open]:
             check.verify_native_tls(elf, disassembly, [])
 
     def test_scope_rejects_wrong_caller_missing_lifetime_and_global_flag(self):
-        for mutation in ("wrong-caller", "missing-exit", "global-flag", "dynamic-tls", "bad-bounds", "outside-tls", "not-tls-section"):
+        for mutation in ("wrong-caller", "partial-name", "extra-caller", "missing-exit", "missing-caller",
+                         "global-flag", "dynamic-tls", "bad-bounds", "outside-tls", "not-tls-section"):
             with self.subTest(mutation=mutation):
                 elf, edges = self.scope_fixture()
                 if mutation == "wrong-caller": edges[0]["caller"] = "CameraService"
+                elif mutation == "partial-name": edges[2]["caller"] = "_ZN7rodakos13CameraService12StartPreviewEv"
+                elif mutation == "extra-caller":
+                    edges.append({"caller": "_ZN7rodakos9PhotosApp6UpdateEv", "address": 0x7400, "target": 0x6000})
                 elif mutation == "missing-exit": edges.pop()
+                elif mutation == "missing-caller": edges = edges[:4]
                 elif mutation == "global-flag": elf.symbols["g_screen_jpeg_scope_active"]["type"] = 1
                 elif mutation == "dynamic-tls":
                     elf.symbols["__emutls_get_address"] = {"address": 0x8000}

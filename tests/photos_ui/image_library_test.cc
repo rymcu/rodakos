@@ -101,6 +101,8 @@ RODAK_TEST("JPEG display and thumbnail use the production loader and release nat
         RODAK_CHECK_EQ(photo_test::decoded_buffers,2);
     }
     RODAK_CHECK_EQ(photo_test::decoded_buffers,0);
+    RODAK_CHECK_EQ(photo_test::scoped_decodes,2);
+    RODAK_CHECK_EQ(photo_test::unscoped_decodes,0);
 }
 
 RODAK_TEST("Image reads report actual open seek short-read and close failures without retaining buffers") {

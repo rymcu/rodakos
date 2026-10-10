@@ -18,6 +18,9 @@ inline bool fail_async = false;
 inline int short_read_after = -1;
 inline int decode_result = ESP_OK;
 inline bool decode_partial_failure = false;
+// JPEG decodes performed while the current thread was outside ScreenJpegAllocationScope.
+inline int unscoped_decodes = 0;
+inline int scoped_decodes = 0;
 void ResetFailures();
 
 struct TestFiles {

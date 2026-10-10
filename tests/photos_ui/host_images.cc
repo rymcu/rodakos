@@ -2,15 +2,32 @@
 #include "esp_heap_caps.h"
 #include "esp_jpeg_common.h"
 #include "phone_os/resource_failure_injection.h"
+#include "phone_os/screen_jpeg_allocation.h"
 #include "phone_ui/jpg/jpeg_to_image.h"
 #include <lvgl.h>
 #include <cstring>
 #include <unistd.h>
 
 namespace photo_test {
+thread_local bool jpeg_scope_active = false;
+}
+
+// Production scope semantics are covered by tests/screen_jpeg_allocator; this host only
+// records whether ImageLibrary decodes JPEG inside the scope.
+namespace rodakos {
+ScreenJpegAllocationScope::ScreenJpegAllocationScope() noexcept : previous_(photo_test::jpeg_scope_active) {
+    photo_test::jpeg_scope_active = true;
+}
+ScreenJpegAllocationScope::~ScreenJpegAllocationScope() noexcept {
+    photo_test::jpeg_scope_active = previous_;
+}
+}  // namespace rodakos
+
+namespace photo_test {
 void ResetFailures() {
     fail_timer = short_read = fail_close = fail_seek = fail_async = decode_partial_failure = false;
     decode_result = ESP_OK; fail_allocations = 0;
+    unscoped_decodes = scoped_decodes = 0;
     short_read_after = -1;
     rodakos::ArmResourceFailure("clear");
 }
@@ -81,6 +98,7 @@ int __wrap_fseek(FILE* file, long offset, int origin) {
 }
 esp_err_t jpeg_to_image_scaled(const uint8_t*, size_t, uint8_t** out, size_t* length,
     size_t* width, size_t* height, size_t* stride, size_t, size_t) {
+    ++(photo_test::jpeg_scope_active ? photo_test::scoped_decodes : photo_test::unscoped_decodes);
     if (photo_test::decode_result == ESP_OK || photo_test::decode_partial_failure) {
         *out=static_cast<uint8_t*>(std::calloc(12,1));
         ++photo_test::decoded_buffers;

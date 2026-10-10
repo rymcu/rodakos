@@ -354,3 +354,46 @@ internal/DMA largest 仅 6,144 B。串口 SHA-256 为
 `c2d8acfd1b556b13dd2527bd147a9ba21ad3b5fe99de7082cefd0ca6b3142c9e`，保留 NVS、绑定和
 immutable Recovery。当前只关闭该窗口的 Camera OOM，AES/peer write、8,192 B 恢复和长稳仍
 为 **NO_GO**。
+
+## 2026-10-10 Camera + Photos AES 分配失败根因 080–082
+
+080（`20261010-191429` / `camera-photos-jpeg-chunk-080`，main SHA-256
+`f86e0ad84b4116d8ab76b0b347d94f80a9a7c95fcb70df7b2703c6c77f99b5d8`）把 Camera DataChannel
+分片从 10,000 B 降到 2,048 B；同一 41-photo 窗口反而出现 18 次 `esp-aes: Failed to allocate memory`、
+17 次 `Write fail -84`，随后 MQTT TLS read `-0x0084` 断线并提前关闭 WebRTC/Camera。081
+（`20261010-204623` / `camera-photos-jpeg-chunk-081`，main SHA-256
+`640509db7105ba040aa81035fba29a595c3fcc8f1ec471e2207657187bafbf7c`）降到 1,024 B，仍有 6 次 AES
+失败、5 次 `-84` 和 MQTT 断线；peer 停止时 sampled internal/DMA largest 最低只有 248 B。两次
+Camera 均完整 STREAMOFF/fd close/device release。串口 SHA-256 分别为
+`7e1af400ebc2dd30001e456b5b144e2650aff8c011f6dce172d19fe6a4ee3446` 与
+`5246d2cea7f863ee5aa88a07958f72e9f6d0a0afc39ec4b55e1dbb3387b39d42`。分片大小因此不是根因，
+080/081 的分片修改未提交。
+
+ESP-IDF 6.0.2 `esp_aes_dma_core.c` 在输入或输出不具备 DMA 能力时，为每次 AES-DMA 申请最多
+1,600 B 的 internal DMA bounce buffer 和描述符；内部堆碎片化时 DTLS 与 MQTT TLS 同时失败。
+内部堆的确定性消耗者是 `esp_new_jpeg` 0.6.1：其 `jpeg_calloc_inner` / `jpeg_calloc_align_inner`
+优先 INTERNAL，编码器与解码器各约 10 KiB 状态。Camera JPEG worker 每帧 open/close 编码器，
+Photos 缩略图每张图 open 解码器两次（每 tick 两张），两者在同一窗口内反复争抢内部堆。
+
+082 把已审阅的 `ScreenJpegAllocationScope` 扩展到 `CameraService::CaptureJpeg` 和
+`ImageLibrary::LoadMemoryImage` 的 JPEG 解码段：codec 状态和输出改走 PSRAM，PSRAM 不足时
+返回失败、不回退 INTERNAL。两个函数标为 `noinline`，`tools/check_screen_jpeg_allocator.py`
+的最终 ELF 门禁只接受 DisplayService/Camera/ImageLibrary 三个调用者，并要求每个都有进入与退出；
+新增 partial-name、extra-caller、missing-caller 负例（检查器 26 项）。Camera capture 47/47、
+Photos 25/25、DisplayService、Home、allocator 均在 Debug 与 ASan/UBSan 通过；Camera 与 Photos
+新用例在修复前源码上失败，`run_negative.py` 新增 `missing-camera-scope` 变异并被检出（5/5）。
+ESP-IDF 6.0.2 构建、最终 ELF 分配门禁（Camera 5、DisplayService 3、ImageLibrary 3 个 scope
+调用点，native TLS 仍 32 B/任务）与 Camera teardown 审计通过。
+
+开发签名包 `20261010-230340` / `camera-photos-jpeg-psram-082`，main 7,165,360 B，SHA-256
+`7cb2eb4c69bd452166876653eb9dbce7d288187d63f6c9a93b3c25f25832c796`，manifest SHA-256
+`92d08354846a03993fd0588ae3c2269d2a6c7ddf1ed5b53bd5d1ae172e56f70a`，ZIP SHA-256
+`c269e438428350b8a64584dca2e78cc42190d2fc4551fc1e9974ac0d763da053`。COM3 VerifyOnly 通过，
+保留 NVS 仅写 `otadata + ota_0`，未使用 `-Erase`；Recovery → Main → OTA confirmation → Home
+通过。仅串口的 Photos → Home 冒烟（无 Camera）初始化 41 张照片，AES/`-84`/panic/abort 为 0，
+健康期 internal/DMA largest 8,192 B、Voice `internal_min` 4,107 B；串口 SHA-256
+`cd1cf8cba89837797f6e1d2fc92ccccbd27ff7b8039e50dd264ebc8cde57e198`。
+
+Camera + Photos 严格重叠窗口尚未在 082 上复测：该窗口由 Rodak 桌面端通过 CDP 4021 驱动，
+当前运行的 Rodak dev 实例未开启远程调试端口。因此 AES/peer write 门禁仍未关闭，发布保持
+**NO_GO**。

@@ -1,6 +1,7 @@
 #include "host_runtime.h"
 #include "../task_retirement/task_retirement_host.h"
 #include "phone_os/task-retirement.h"
+#include "phone_os/screen_jpeg_allocation.h"
 #include "dev_fs_fat.h"
 #include "esp_board_manager.h"
 #include "esp_jpeg_enc.h"
@@ -74,6 +75,8 @@ std::atomic<bool> collide_on_create{false};
 std::atomic<bool> fail_dequeue{false};
 std::atomic<bool> pause_frames{false}, frames_paused{false};
 std::atomic<unsigned> encoder_handles{0}, frame_mappings{0};
+std::atomic<unsigned> unscoped_encoder_calls{0};
+thread_local bool jpeg_scope_active = false;
 std::atomic<size_t> preview_frame_bytes{0};
 std::atomic<unsigned> new_failures{0}, aligned_buffers{0}, dequeued_buffers{0}, requeued_buffers{0};
 std::function<void()> write_hook;
@@ -110,6 +113,7 @@ void Reset(const std::string& path) {
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
     fail_encoder_open = fail_encoder_process = fail_allocation = empty_encoded = false;
+    unscoped_encoder_calls = 0;
     collide_on_create = false;
     fail_dequeue = false;
     pause_frames = frames_paused = false;
@@ -162,7 +166,19 @@ int64_t esp_timer_get_time() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// Production scope semantics are covered by tests/screen_jpeg_allocator; this host only
+// records whether CameraService opens and closes its encoder inside the scope.
+namespace rodakos {
+ScreenJpegAllocationScope::ScreenJpegAllocationScope() noexcept : previous_(camera_host::jpeg_scope_active) {
+    camera_host::jpeg_scope_active = true;
+}
+ScreenJpegAllocationScope::~ScreenJpegAllocationScope() noexcept {
+    camera_host::jpeg_scope_active = previous_;
+}
+}  // namespace rodakos
+
 jpeg_error_t jpeg_enc_open(const jpeg_enc_config_t* config, jpeg_enc_handle_t* encoder) {
+    if (!camera_host::jpeg_scope_active) ++camera_host::unscoped_encoder_calls;
     if (camera_host::fail_encoder_open || config->width != 2 || config->height != 2) return -1;
     *encoder = new int(1);
     ++camera_host::encoder_handles;
@@ -177,7 +193,11 @@ jpeg_error_t jpeg_enc_process(jpeg_enc_handle_t, const uint8_t*, int input_bytes
     *output_bytes = camera_host::empty_encoded ? 0 : static_cast<int>(bytes.size());
     return JPEG_ERR_OK;
 }
-void jpeg_enc_close(jpeg_enc_handle_t encoder) { delete static_cast<int*>(encoder); --camera_host::encoder_handles; }
+void jpeg_enc_close(jpeg_enc_handle_t encoder) {
+    if (!camera_host::jpeg_scope_active) ++camera_host::unscoped_encoder_calls;
+    delete static_cast<int*>(encoder);
+    --camera_host::encoder_handles;
+}
 
 extern "C" {
 void* __real__Znwm(size_t);

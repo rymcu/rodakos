@@ -162,7 +162,8 @@ immutable 制品保持，普通 production flavor，Home 测试人口及 fault i
 
 `ScreenJpegAllocationScope` 仅在 `DisplayService::EncodeJpeg` 当前任务中把四个 JPEG
 allocator 路由至 PSRAM；不足时返回失败，不回退 INTERNAL。scope 外保留原策略，Camera/
-decoder 不建立该 scope，`task_enable=false` 不变。DisplayService **30**、Home **43**、
+decoder 不建立该 scope（082 起 Camera 编码和 ImageLibrary JPEG 解码也进入该 scope，见
+[ota-release-readiness](ota-release-readiness.md)），`task_enable=false` 不变。DisplayService **30**、Home **43**、
 allocator **10** 项分别通过 Debug/ASan/UBSan/leak；检查器 **26** 项、真实最终 ELF/map
 正向与 allocator bypass 负对照通过独立审查。native TLS 对齐总量仍为 **32 B/任务**，
 相对冻结 020 ELF 增量 **0 B**。这些不构成全量软件或硬件并发通过。

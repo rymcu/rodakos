@@ -30,6 +30,13 @@ PINS = {
     "idf_component.yml": "7bb885d359b0e225493159853f42faa24ca0f492e8d5b15797d8dcf012307b3d",
 }
 COMPONENT_HASH = "e6af208a875abd0ecfc0213d3751a11b504b463ebde6930f24096047925fa5c1"
+# Mangled-name fragments of the only functions allowed to enter the scope: screen
+# and Camera encoders, and the ImageLibrary JPEG decoder. Each must stay out of line.
+SCOPE_CALLERS = (
+    ("DisplayService", "EncodeJpeg"),
+    ("CameraService", "CaptureJpeg"),
+    ("ImageLibrary", "LoadMemoryImage"),
+)
 # Instructions present in the pinned allocator-calling codec functions, plus
 # direct calls produced by linker relaxation. Unreviewed opcodes fail closed.
 CODEC_OPCODES = frozenset("""
@@ -459,8 +466,14 @@ def verify_scope(elf, edges):
     leaves = [edge for edge in edges if edge["target"] in destructors]
     require(enters and leaves, "no screen codec scope lifetime calls")
     for edge in enters + leaves:
-        require("DisplayService" in edge["caller"] and "EncodeJpeg" in edge["caller"],
-                f"scope used outside screen codec: {edge['caller']}")
+        require(any(owner in edge["caller"] and function in edge["caller"]
+                    for owner, function in SCOPE_CALLERS),
+                f"scope used outside reviewed JPEG codec callers: {edge['caller']}")
+    # Exception-path exits may live in a separate .cold symbol, so match by name only.
+    for owner, function in SCOPE_CALLERS:
+        matches = lambda edge: owner in edge["caller"] and function in edge["caller"]
+        require(any(map(matches, enters)) and any(map(matches, leaves)),
+                f"reviewed JPEG scope lifetime missing/inlined: {owner}::{function}")
     forbidden = ("emutls", "pthread_setspecific", "__cxa_thread_atexit", "_ZTH")
     # A single address can have constructor aliases; never hide a forbidden
     # target just because another symbol happens to share its address.

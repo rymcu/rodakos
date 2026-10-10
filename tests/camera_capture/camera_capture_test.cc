@@ -559,6 +559,21 @@ RODAK_TEST("camera JPEG keeps one compact STL result and heap-caps scratch buffe
     RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
 }
 
+RODAK_TEST("camera JPEG encoder state is opened and closed only inside the PSRAM allocation scope") {
+    Fixture f; f.Preview();
+    Bytes jpeg;
+    RODAK_CHECK(f.camera->CaptureJpeg(jpeg));
+    camera_host::fail_encoder_process = true;
+    RODAK_CHECK_FALSE(f.camera->CaptureJpeg(jpeg));
+    camera_host::fail_encoder_process = false;
+    std::atomic<unsigned> delivered{0};
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) { ++delivered; }));
+    RODAK_CHECK(WaitFor([&] { return delivered > 0; }));
+    f.camera->StopJpegStream();
+    RODAK_CHECK_EQ(camera_host::unscoped_encoder_calls.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+}
+
 RODAK_TEST("camera state and error snapshots keep locks usable during repeated allocation failure") {
     Fixture f; f.Preview(); f.Save();
     camera_host::FailNew(SIZE_MAX, 1, SIZE_MAX, AllocationThread::kCaller);

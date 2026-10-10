@@ -759,3 +759,45 @@ the requested UI Stop, and one AES allocation failure still occurred. Serial SHA
 with the exact 078 binary, preserving NVS, binding and immutable Recovery. Camera OOM is closed for
 this bounded window, but AES/peer-write pressure, 8,192-byte post-stop recovery and qualification
 remain open; release stays **NO_GO**.
+
+### 2026-10-10 Camera plus Photos AES allocation root cause 080–082
+
+080 (`20261010-191429`, main SHA-256
+`f86e0ad84b4116d8ab76b0b347d94f80a9a7c95fcb70df7b2703c6c77f99b5d8`) reduced Camera DataChannel
+chunks from 10,000 to 2,048 bytes. The same 41-photo window got worse: 18
+`esp-aes: Failed to allocate memory`, 17 `Write fail -84`, then an MQTT TLS read `-0x0084`
+disconnect that closed WebRTC/Camera early. 081 (`20261010-204623`, main SHA-256
+`640509db7105ba040aa81035fba29a595c3fcc8f1ec471e2207657187bafbf7c`) used 1,024 bytes and still
+recorded six AES failures, five `-84` and the MQTT disconnect; the peer's sampled internal/DMA
+largest reached 248 bytes. Camera stop was complete in both. Serial SHA-256 values are
+`7e1af400ebc2dd30001e456b5b144e2650aff8c011f6dce172d19fe6a4ee3446` and
+`5246d2cea7f863ee5aa88a07958f72e9f6d0a0afc39ec4b55e1dbb3387b39d42`. Chunk size is not the root
+cause; the 080/081 chunk changes are not committed.
+
+ESP-IDF 6.0.2 `esp_aes_dma_core.c` allocates internal DMA bounce buffers (up to 1,600 bytes) and
+descriptors per AES-DMA call whenever input or output is not DMA-capable, so fragmented internal
+heap fails DTLS and MQTT TLS together. The deterministic internal consumer is `esp_new_jpeg` 0.6.1:
+`jpeg_calloc_inner`/`jpeg_calloc_align_inner` prefer INTERNAL, about 10 KiB of encoder or decoder
+state each. The Camera worker opens/closes the encoder per frame and Photos opens the decoder twice
+per thumbnail, two thumbnails per tick.
+
+082 extends the reviewed `ScreenJpegAllocationScope` to `CameraService::CaptureJpeg` and the JPEG
+decode in `ImageLibrary::LoadMemoryImage`: codec state and output use PSRAM and fail instead of
+falling back to INTERNAL. Both functions are `noinline`; the final-ELF gate accepts only the
+DisplayService/Camera/ImageLibrary callers and requires entry and exit for each, with new
+partial-name, extra-caller and missing-caller negatives (26 checker tests). Camera capture 47/47,
+Photos 25/25, DisplayService, Home and allocator pass in Debug and ASan/UBSan; the new Camera and
+Photos cases fail on pre-fix sources, and the new `missing-camera-scope` mutation is detected
+(5/5). The ESP-IDF 6.0.2 build, final-ELF allocator gate (Camera 5, DisplayService 3,
+ImageLibrary 3 scope call sites; native TLS still 32 bytes per task) and Camera teardown audit pass.
+
+Development-signed package `20261010-230340` / `camera-photos-jpeg-psram-082` (main 7,165,360
+bytes, SHA-256 `7cb2eb4c69bd452166876653eb9dbce7d288187d63f6c9a93b3c25f25832c796`) passed COM3
+VerifyOnly, NVS-preserving `otadata + ota_0` flashing without `-Erase`, and Recovery → Main → OTA
+confirmation → Home. A serial-only Photos → Home smoke (no Camera) initialized 41 photos with zero
+AES/`-84`/panic/abort, 8,192-byte internal/DMA largest and Voice `internal_min` 4,107 bytes; serial
+SHA-256 `cd1cf8cba89837797f6e1d2fc92ccccbd27ff7b8039e50dd264ebc8cde57e198`.
+
+The strict Camera plus Photos window has not been rerun on 082: it is driven by the Rodak desktop
+app over CDP port 4021, and the currently running Rodak dev instance has no remote-debugging port.
+The AES/peer-write gate stays open and release remains **NO_GO**.

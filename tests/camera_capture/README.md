@@ -6,10 +6,13 @@ the real frame snapshot/conversion/capture path calls a fake JPEG encoder. Board
 unique temporary host directory, and photo selection, exclusive creation, writing, flushing,
 closing and cleanup use real host filesystem operations.
 
-The 46 tests cover:
+The 47 tests cover:
 
 - Publishing `saved_path` and `last_saved_path` only after a successful save, including a blocked
   write where the candidate path must remain unpublished.
+- The JPEG encoder is opened and closed only inside `ScreenJpegAllocationScope` for a capture,
+  a failed encode and the JPEG stream worker. The host scope is a thread-local recorder; production
+  allocator routing is covered by `tests/screen_jpeg_allocator` and the final-ELF audit.
 - Missing frame/service/storage/directory, encoder open/process/empty output and input allocation
   failures, with an empty per-call result and a retry after recovery.
 - `FileServiceImpl::ListDirectory` clears stale entries and reports `ENODEV` when
@@ -54,7 +57,8 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   ctest --test-dir "$HOME/.cache/rodakos-camera-capture-asan" --output-on-failure
 ```
 
-Debug and ASan/UBSan with leak detection passed all 46 tests after the JPEG scratch changes.
+Debug and ASan/UBSan with leak detection passed all 47 tests after the JPEG PSRAM scope change;
+the scope case fails against the pre-082 CameraService (`unscoped_encoder_calls` is non-zero).
 With the updated tests,
 the pre-fix CameraService fails six cases. A separate mutation retaining vector capacity with
 `clear()` instead of returning the frame allocation also fails six cases, confirming that these
