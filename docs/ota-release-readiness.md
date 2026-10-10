@@ -3714,3 +3714,41 @@ STREAMOFF、fd close、device release 完整，无 `E:RX`、panic 或 abort。�
 这证明受控上电复位已从诊断分支收敛到普通板级初始化，且没有破坏绑定、联网或 Camera
 资源释放。颜色准确度、曝光稳定性、镜头清晰度、电源轨波形、重复冷启动、任意 OOM、生产
 签名/readback/power-cut 和八小时资格长稳仍未完成，发布状态保持 **NO_GO**。
+
+## 2026-10-10 Camera 第二轮 DMA headroom 修复 072
+
+071 的普通两轮串口短窗在第二轮复现 `no mem for CAM DVP DMA ring`：第一轮启动前
+`internal_dma_largest=4352`，第二轮仅剩 3,968 B，低于非 JPEG DVP ring 的 4,096 B fallback。
+失败发生在 Camera 驱动启动阶段，第一轮的 STREAMOFF、fd close、device release 和 Camera UI/
+audio 清理均已完成。每轮 `i2c_master` 仍有 5 个引用来自其他常驻设备，当前没有 Camera 引用
+随轮次增加的证据。
+
+072 在 `CameraApp::StartPreview()` 保留 Home return reserve 后读取最大连续
+`MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA` 块；当 reserve 存在且连续块小于 4,096 B 时，在
+`RequestAudioResources()` 和 Camera 启动前释放 reserve。`camera_deinit_lifecycle` 13/13、
+`camera_serial_tool` 13/13 通过。普通 OFF 的 ESP-IDF 6.0.2 构建完成，候选
+`20261010-093755` / `camera-dma-headroom-retry-072` 主镜像 7,163,152 B，SHA-256
+`fab6766b118515c0ab808cd8f0121e39a849dce1f106393965052628f36e2d4f`，manifest SHA-256
+`a626e6b886222cf11cbbb32b5c339fdc5129e6731f2f4c09585ef974add4bca4`。包复用 immutable
+Recovery `20261009-202156`，通过验签、COM3 VerifyOnly、保留 NVS 的 `otadata + ota_0`
+增量刷写及 Recovery → Main → OTA confirmation → Home。
+
+同一串口会话的两轮 Camera → Home 均通过：
+
+- 第一轮以 `internal_dma_largest=7680` 启动，92 ms 取得首帧，六个关闭阶段完整，随后观察
+  65.078 秒；
+- 第二轮先记录 `largest=3840 required=4096` 并释放 Home reserve，Camera 启动前连续块恢复为
+  8,192 B，117 ms 取得首帧，六个关闭阶段完整，随后观察 65.047 秒；
+- 两轮 MQTT/Main/Voice 新鲜健康样本齐全，最低健康期 internal/DMA largest 均为 8,192 B，
+  Voice supervisor 最低剩余栈 4,432 B，整体 heap median drop 为 0；
+- `no mem for CAM DVP DMA ring`、`Not enough space`、`E:RX`、error、panic、abort 均为 0。
+
+汇总状态为 `software-smoke-observed`，串口 SHA-256
+`4ad693301c3d5a6ca6ec647ec0fc9da4a030ba7fc8ef18d46648db1f3ea2131b`，首次启动日志 SHA-256
+`2b41dac5aaf06f762d77072181f082cf385f12adc710599ca58f19739c7ab8cb`，刷写记录 SHA-256
+`fbad73cd17dd293093eae02b99119f6f04f6dd9de38b942d101f74130d85bb65`。证据位于
+`.codex-temp/camera-dma-headroom-retry-072/`。
+
+072 关闭当前普通双轮短窗的 DVP ring 重启失败，不等价于物理图像、任意 OOM、异常媒体/SD/
+音频/TLS/MQTT/cache-off/NVS/OTA 并发、生产签名/readback/power-cut 或八小时资格验收。
+`eight_hour_gate_passed` 仍为 false，发布状态保持 **NO_GO**，暂不启动新的八小时长稳。

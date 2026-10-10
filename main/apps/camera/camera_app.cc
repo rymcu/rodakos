@@ -46,6 +46,7 @@ constexpr lv_coord_t kPreviewBoxHeight = 184;
 constexpr lv_coord_t kCaptureButtonSize = 54;
 constexpr uint32_t kCaptureTaskStackBytes = 4096;
 constexpr uint32_t kPreviewStartDelayMs = 30;
+constexpr size_t kMinimumCameraDmaHeadroom = 4096;
 constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
 
 struct CameraCapturePayload {
@@ -337,6 +338,15 @@ void CameraApp::PreviewStartTimerCallback(lv_timer_t* timer) {
 
 void CameraApp::StartPreview() {
     ReserveHomeReturnMemory();
+    const size_t internal_dma_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (home_return_reserve_ != nullptr && internal_dma_largest < kMinimumCameraDmaHeadroom) {
+        ESP_LOGW(TAG,
+                 "Releasing Home return reserve for Camera DMA headroom: largest=%u required=%u",
+                 static_cast<unsigned>(internal_dma_largest),
+                 static_cast<unsigned>(kMinimumCameraDmaHeadroom));
+        ReleaseHomeReturnMemory();
+    }
     RequestAudioResources();
     if (camera_ == nullptr || !camera_->StartPreview()) {
         const std::string error = camera_ != nullptr

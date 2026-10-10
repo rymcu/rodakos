@@ -638,3 +638,21 @@ WiFi and MQTT generation 1, then completed Home → Camera → Home with 76 ms a
 Both cycles repeated the board power-reset marker and full teardown without `E:RX`, panic or abort.
 This closes the bounded cold-restart observation for the candidate; power-cut, production and soak
 gates remain open.
+
+### 2026-10-10 Camera second-cycle DMA headroom 072
+
+The ordinary 071 two-cycle smoke exposed a repeatable second-start failure: the largest contiguous
+internal DMA block fell from 4,352 bytes to 3,968 bytes, below the 4,096-byte DVP fallback ring.
+Candidate `20261010-093755` (`camera-dma-headroom-retry-072`) now checks DMA headroom after reserving
+memory for the Home return path and releases that reserve before audio and Camera startup when the
+largest block is below 4,096 bytes.
+
+The package passed ESP-IDF 6.0.2 build, verification, COM3 VerifyOnly, the NVS-preserving refresh and
+Recovery → Main → OTA confirmation → Home boot. In one serial session, cycle one started with a
+7,680-byte block and delivered its first frame in 92 ms. Cycle two detected a 3,840-byte block,
+released the Home reserve, recovered an 8,192-byte block and delivered its first frame in 117 ms.
+Both cycles completed all six teardown markers and separate 65-second MQTT/Main/Voice health
+windows without Camera OOM, `E:RX`, error, panic or abort. This closes the bounded second-cycle DVP
+ring restart gate. Physical color/exposure/optics, power rails, arbitrary OOM and concurrency,
+production signing/readback/power-cut and the eight-hour qualification soak remain open, so release
+status remains **NO_GO**.

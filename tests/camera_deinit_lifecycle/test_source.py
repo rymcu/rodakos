@@ -18,6 +18,7 @@ CAMERA_DEVICE_HEADER = ROOT / "main/rodakos_adapters/camera_device.h"
 CAMERA_DEVICE_SOURCE = ROOT / "main/rodakos_adapters/camera_device.cc"
 CAMERA_CAPTURE_FAKE_HEADER = ROOT / "tests/camera_capture/fakes/rodakos_adapters/camera_device.h"
 CAMERA_SERVICE_SOURCE = ROOT / "main/phone_os/camera_service.cc"
+CAMERA_APP_SOURCE = ROOT / "main/apps/camera/camera_app.cc"
 
 
 def function_body(source: str, name: str) -> str:
@@ -152,6 +153,17 @@ class CameraServiceReleaseLogContractTest(unittest.TestCase):
         self.assertNotIn("munmap", failure_body)
         self.assertNotIn("close(fd_)", failure_body)
         self.assertNotIn("camera_device_.Release()", failure_body)
+
+
+class CameraDmaHeadroomContractTest(unittest.TestCase):
+    def test_camera_start_releases_home_reserve_when_dma_block_is_too_small(self) -> None:
+        source = CAMERA_APP_SOURCE.read_text(encoding="utf-8")
+        start = function_body(source, "CameraApp::StartPreview")
+        self.assertIn("kMinimumCameraDmaHeadroom", source)
+        self.assertIn("heap_caps_get_largest_free_block", start)
+        self.assertIn("ReleaseHomeReturnMemory()", start)
+        self.assertIn("RequestAudioResources()", start)
+        self.assertLess(start.index("ReleaseHomeReturnMemory()"), start.index("RequestAudioResources()"))
 
 
 if __name__ == "__main__":
