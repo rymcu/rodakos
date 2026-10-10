@@ -678,3 +678,7 @@ accuracy, exposure range and optical clarity remain open.
 ### 2026-10-10 075/076 Camera 自动 OOM 重试
 
 075 在同一次 Camera 请求中完成首次 ring OOM 后释放 reserve 和 3,840 B recovery ring 自动重试；076 恢复普通 4,096 B 阈值，两轮普通 Camera 健康期 internal/DMA largest 均保持 8,192 B。设备当前为普通 OFF。任意 OOM、物理画质、电源轨、混合并发、生产 power-cut/readback 和八小时长稳继续 NO_GO。
+
+### 2026-10-10 ordinary 076 five-cycle follow-up
+
+The ordinary OFF 076 package then completed five single-serial Camera → Home cycles. Every cycle produced a software first frame, all six teardown markers and a 65-second MQTT/Main/Voice health window. Each cycle released the Home return reserve at `largest=3968 required=4096`, then retained an 8,192-byte internal/DMA largest block. Voice supervisor minimum remaining stack was 4,432 bytes, historical internal minimum was 3,307 bytes and heap median drop was 18 bytes; no Camera OOM, error, panic, abort or `E:RX` occurred. The run is recorded as `software-smoke-observed` in `.codex-temp/camera-dma-auto-retry-normal-076/smoke-5cycles/`, with serial SHA-256 `c0638c94b53fa708ff27e0fadbf5334d01c4f957ccc022028262c19b059268c5`. This expands bounded ordinary-path repeatability from two to five cycles; physical image, power rails, arbitrary OOM, mixed concurrency, production readback/power-cut and the eight-hour qualification gate remain open, so status stays **NO_GO**.
