@@ -3801,3 +3801,9 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 该窗口仅关闭当前 Display/Camera 协议互斥、停止回执与停止后短时资源恢复边界，不代表 Camera + Display 同时运行、实体屏幕可读性、任意 OOM、生产 power-cut 或八小时资格通过；发布继续 **NO_GO**。
 
 补充的对称 IPC 复核在 Camera 会话处于 `starting` 时尝试启动 Display，立即收到 `设备已有摄像头视频会话`；随后 Camera Stop 返回 `rodak.videoStop.v1`、`streamKind=camera`、`outcome=stopped`。该检查只关闭会话准入互斥与停止回执边界；未建立本地渲染 peer，因此不构成软件首帧或物理画质证据。
+
+## 2026-10-10 076 Display 结束后的 Camera 恢复
+
+Display 回到未播放后，普通 OFF `camera-dma-auto-retry-normal-076` 通过 Rodak 设备 Camera 入口重新取得 320×240 首帧，运行约 9.53 s、146 帧；停止后 UI 画面约 1.57 s 移除，串口记录 STREAMOFF、fd close 和 device release。停止前 internal/DMA largest 为 3,712 B，停止后约 20 s 的 MQTT/Main 样本恢复到 8,192 B；Voice supervisor 最低余量 4,432 B，但 Voice `internal_min` 达到 1,455 B，视频运行期内部堆余量仍是任意 OOM 与资格长稳门禁的一部分。串口 SHA-256 为 `1432c36cb5c78b374bfe92b74a50b7a4d1948f009ed676399901f1c41c4a6d7a`，证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-display-camera-recovery/`。
+
+窗口中 1 条 `SCTP: ... SCTP_ABORT` 出现在远端 peer 关闭附近；历史视频停止窗口也存在同类信息，本轮不将其写成 panic、Camera OOM 或 `E:RX`。该结果只关闭 Display 结束后 Camera 重启、完整关闭和短时连续块恢复边界，不关闭物理画质、视频期堆余量、任意 OOM、生产 power-cut 或八小时资格；发布继续 **NO_GO**。
