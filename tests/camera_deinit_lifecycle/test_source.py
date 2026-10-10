@@ -159,10 +159,21 @@ class CameraDmaHeadroomContractTest(unittest.TestCase):
     def test_camera_start_releases_home_reserve_when_dma_block_is_too_small(self) -> None:
         source = CAMERA_APP_SOURCE.read_text(encoding="utf-8")
         start = function_body(source, "CameraApp::StartPreview")
-        self.assertIn("constexpr size_t kMinimumCameraDmaHeadroom = 8192;", source)
+        self.assertIn("constexpr size_t kMinimumCameraDmaHeadroom = 4096;", source)
         self.assertIn("heap_caps_get_largest_free_block", start)
         self.assertIn("ReleaseHomeReturnMemory()", start)
         self.assertIn("RequestAudioResources()", start)
+
+    def test_camera_memory_failure_releases_reserve_and_retries_once(self) -> None:
+        source = CAMERA_APP_SOURCE.read_text(encoding="utf-8")
+        start = function_body(source, "CameraApp::StartPreview")
+        self.assertIn("IsCameraMemoryFailure(error)", start)
+        self.assertIn("Retrying Camera after releasing Home return reserve", start)
+        self.assertEqual(start.count("preview_started = camera_->StartPreview();"), 1)
+        self.assertIn("bool preview_started = camera_ != nullptr && camera_->StartPreview();", start)
+        release = start.index("ReleaseHomeReturnMemory();", start.index("IsCameraMemoryFailure"))
+        retry = start.index("preview_started = camera_->StartPreview();", release)
+        self.assertLess(release, retry)
         self.assertLess(start.index("ReleaseHomeReturnMemory()"), start.index("RequestAudioResources()"))
 
 

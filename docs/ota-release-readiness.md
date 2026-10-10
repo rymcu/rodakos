@@ -3781,3 +3781,13 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 故障包 `20261010-120147` / `camera-dma-fail-retry-073d` 通过签名验包、COM3 增量刷写（保留 NVS，未使用 `-Erase`）和启动确认。首轮恰好一个 fault marker、一个 `Not enough space`、无首帧并完整释放；重试选择 `configured=8192 selected=3840 actual=3840 half=1920 desc_half=1`，取得首帧（串口 uptime 84,558 ms）、六阶段关闭完整，并完成 65.047 秒 MQTT/Main/Voice 健康观察。健康期 internal/DMA largest 均为 8,192 B，Voice supervisor 最低剩余栈 4,432 B，internal 历史最低 3,395 B，无错误、panic、abort、E:RX 或 Camera OOM。串口 SHA-256：`815eaa1c51a6f3884ec73ca3764fd820e169b454ad1c668c820b3e93ad111493`；证据位于 `.codex-temp/camera-dma-fail-retry-073c/`。
 
 故障验证结束后已恢复普通 OFF 包 `20261010-121519` / `camera-dma-recovery-normal-074`，复用设备当前 immutable Recovery，保留 NVS、绑定和 OTA 状态；Recovery 校验、Recovery → Main、OTA confirmation、Home、WiFi/MQTT 均通过，主镜像 SHA-256：`73964f7763169bc4f9e476a91602e74d272a7afef16a64a8845f135686c9ae43`。普通 Camera 首帧和六阶段关闭通过，但第 1 轮 65 秒健康观察的最大连续 internal/DMA 仅 6,656 B，门禁判定 `NO_GO`，因此未把普通循环写成通过，也未启动长稳。设备当前保持普通 OFF 固件。发布状态继续 **NO_GO**：物理画质、任意 OOM 矩阵、异常并发、生产 readback/power-cut 和八小时资格仍未完成。
+
+## 2026-10-10 Camera 同请求自动 OOM 重试 075 与普通恢复 076
+
+074 的普通回归表明，将启动前 reserve 释放阈值全局提高到 8,192 B 会使首轮过早释放 Home return reserve，关闭后失去 reserve 释放带来的连续块合并，健康期 internal/DMA largest 降到 6,656 B。076 将普通启动阈值恢复为 4,096 B；若 Camera 启动实际返回 `Camera OOM` 或 `Not enough space` 且 reserve 仍存在，则在同一次 Camera 请求中释放 reserve 并自动重试一次。
+
+故障包 `20261010-130731` / `camera-dma-auto-retry-075` 在同一次 Camera 请求内记录恰好一个首次 ring fault、一个 `Not enough space` 和一个自动重试 marker；重试选择 `selected=3840 actual=3840 half=1920 desc_half=1`，取得首帧、六阶段关闭并完成 65.094 秒健康观察。健康期 internal/DMA largest 为 8,192 B，internal 历史最低 3,283 B，Voice supervisor 最低剩余栈 4,432 B，无 error、panic、abort 或 `E:RX`。串口 SHA-256 为 `f0feb6818e9c2620cfb90089cb9e2bd1c036c82cf4b2ab1bd230941d598c068c`。
+
+验证后已恢复普通 OFF 包 `20261010-131648` / `camera-dma-auto-retry-normal-076`，主镜像 SHA-256 `f0c39cdc47c7052190abc5b4193bead896bea7c13503e64f32ee6726d4940dd1`。包复用设备匹配的 immutable Recovery，保留 NVS、绑定与 OTA 状态，Recovery → Main → OTA confirmation → Home、WiFi/MQTT 通过。两轮普通 Camera → Home 均选择 6,144 B ring、取得首帧和六阶段关闭，并分别完成 65.078/65.031 秒健康观察；第二轮在 `largest=3968 required=4096` 时释放 reserve。全窗最低健康期 internal/DMA largest 为 8,192 B，internal 历史最低 3,307 B，Voice supervisor 最低剩余栈 4,432 B，无 fault marker、Camera OOM、error、panic、abort 或 `E:RX`。串口 SHA-256 为 `cca7f77ea32090090196488238ffd107d24be2c6cca8ad8c22d38570328c0cc2`。
+
+075/076 关闭“用户必须退出再进 Camera 才能从首次 ring OOM 恢复”和 074 的普通路径余量回归，但不替代任意 OOM 矩阵、物理颜色/清晰度/电源轨、混合媒体/网络/音频并发、生产 readback/power-cut 或八小时资格。发布状态继续 **NO_GO**，当前不启动长稳。

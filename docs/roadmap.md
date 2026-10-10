@@ -674,3 +674,7 @@ accuracy, exposure range and optical clarity remain open.
 ### 2026-10-10 073d/074 资源门禁更新
 
 073d 已实机覆盖“首次 Camera ring 分配失败 → 完整失败清理 → 下一次按帧对齐 recovery ring 重试”：3,840 B recovery ring 取得首帧、六阶段关闭完整，65 秒健康期 internal/DMA largest 恢复 8,192 B，测试包结束后已恢复普通 OFF。普通 074 首轮 Camera 首帧与关闭通过，但健康期最大连续块为 6,656 B，资源门禁仍为 NO_GO。继续保留物理画质、任意 OOM、混合并发、生产 power-cut/readback 和八小时长稳为未完成项。
+
+### 2026-10-10 075/076 Camera 自动 OOM 重试
+
+075 在同一次 Camera 请求中完成首次 ring OOM 后释放 reserve 和 3,840 B recovery ring 自动重试；076 恢复普通 4,096 B 阈值，两轮普通 Camera 健康期 internal/DMA largest 均保持 8,192 B。设备当前为普通 OFF。任意 OOM、物理画质、电源轨、混合并发、生产 power-cut/readback 和八小时长稳继续 NO_GO。

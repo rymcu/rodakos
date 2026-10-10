@@ -46,7 +46,7 @@ constexpr lv_coord_t kPreviewBoxHeight = 184;
 constexpr lv_coord_t kCaptureButtonSize = 54;
 constexpr uint32_t kCaptureTaskStackBytes = 4096;
 constexpr uint32_t kPreviewStartDelayMs = 30;
-constexpr size_t kMinimumCameraDmaHeadroom = 8192;
+constexpr size_t kMinimumCameraDmaHeadroom = 4096;
 constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
 
 struct CameraCapturePayload {
@@ -110,6 +110,10 @@ void LogCaptureTaskCreateFailure() {
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+}
+
+bool IsCameraMemoryFailure(const std::string& error) {
+    return error == "Camera OOM" || error.find("Not enough space") != std::string::npos;
 }
 
 }  // namespace
@@ -348,10 +352,20 @@ void CameraApp::StartPreview() {
         ReleaseHomeReturnMemory();
     }
     RequestAudioResources();
-    if (camera_ == nullptr || !camera_->StartPreview()) {
-        const std::string error = camera_ != nullptr
-                                      ? camera_->last_error()
-                                      : "Camera service is not available";
+    bool preview_started = camera_ != nullptr && camera_->StartPreview();
+    std::string error = camera_ != nullptr
+                            ? camera_->last_error()
+                            : "Camera service is not available";
+    if (!preview_started && camera_ != nullptr && home_return_reserve_ != nullptr &&
+        IsCameraMemoryFailure(error)) {
+        ESP_LOGW(TAG,
+                 "Retrying Camera after releasing Home return reserve: error=%s",
+                 error.c_str());
+        ReleaseHomeReturnMemory();
+        preview_started = camera_->StartPreview();
+        error = camera_->last_error();
+    }
+    if (!preview_started) {
         UpdateStatus(error.c_str(), true);
         if (placeholder_label_ != nullptr) {
             lv_label_set_text(placeholder_label_, "Camera unavailable");
