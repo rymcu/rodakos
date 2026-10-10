@@ -3901,3 +3901,26 @@ ESP-IDF 6.0.2 构建、最终 ELF 分配门禁（Camera 5、DisplayService 3、I
 Camera + Photos 严格重叠窗口尚未在 082 上复测：该窗口由 Rodak 桌面端通过 CDP 4021 驱动，
 当前运行的 Rodak dev 实例未开启远程调试端口。因此 AES/peer write 门禁仍未关闭，发布保持
 **NO_GO**。
+
+## 2026-10-11 082 Camera + Photos 同窗复测
+
+在 082 普通开发签名固件上，用 Rodak（CDP 4021）复跑与 076–081 相同的 Camera + Photos 严格重叠窗口：
+
+- **长时间运行设备（uptime 约 8.2 小时，未复位）**：窗口在 Photos 前就失败。peer `connected` 时
+  internal/DMA largest 为 3,328/400 B（新启动时为 3,840/3,840 B），DTLS 握手后立即出现 13 次
+  `esp-aes: Failed to allocate memory`、12 次 `Write fail -84` 和 1 次 MQTT transport error，
+  Camera 在 7.3 秒/113 帧后由断线收尾（完整 STREAMOFF/fd close/device release），Rodak UI 未取得首帧。
+  串口 SHA-256 `47a2391f03a5a42c0f184f5e507ca0c6cbcf9b3c84cac397ef6798b5df5b2034`。
+- **RTS 复位后（未擦除 Flash，uptime 约 8 分钟）**：同一窗口通过。7.0 秒首帧，41 张照片初始化，
+  Camera 在 Photos 期间与返回 Home 后均可见，UI Stop 49 ms 移除画面；143 帧、六阶段关闭完整。
+  **Camera OOM、AES 分配失败、`Write fail -84`、MQTT 断线、panic/abort 均为 0**。peer 采样最低
+  internal/DMA largest 3,840 B（081 为 248 B），Voice `internal_min` 799 B（081 为 127 B），
+  supervisor 最低余量 4,432 B。串口 SHA-256
+  `e412e05014adce646d62075e713641e65fc289073a99edbbe26e9f8d6bdd07ce`。
+
+结论：082 消除了 Photos 缩略图解码与 Camera 编码造成的 AES 失败（同窗 076–081 均失败，082 首次
+全零），但未消除长时运行后的内部堆碎片：8 小时 uptime 设备在 Camera 启动前 internal/DMA largest
+已从 8,192 B 降到 7,936 B，peer 建立后只剩 400 B DMA largest，DTLS 首批写入即失败。停止后健康期
+largest 为 6,656 B（新启动后同窗为 6,144 B），均未恢复 8,192 B。因此 Camera + Photos 局部门禁
+仅在启动后短窗口内关闭；长时运行后的 WebRTC/TLS 内部堆余量、8,192 B 停止后恢复与八小时资格
+继续 **NO_GO**。

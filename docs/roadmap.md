@@ -801,3 +801,26 @@ SHA-256 `cd1cf8cba89837797f6e1d2fc92ccccbd27ff7b8039e50dd264ebc8cde57e198`.
 The strict Camera plus Photos window has not been rerun on 082: it is driven by the Rodak desktop
 app over CDP port 4021, and the currently running Rodak dev instance has no remote-debugging port.
 The AES/peer-write gate stays open and release remains **NO_GO**.
+
+### 2026-10-11 082 Camera plus Photos rerun
+
+The same strict Camera plus Photos window was rerun on 082 through Rodak (CDP 4021):
+
+- **Long-running device (about 8.2 h uptime, no reset)**: the window failed before Photos. At peer
+  `connected` internal/DMA largest was 3,328/400 bytes (3,840/3,840 after a fresh boot). Right after
+  the DTLS handshake it recorded 13 AES allocation failures, 12 `Write fail -84` and one MQTT
+  transport error; Camera closed completely after 7.3 s/113 frames and the UI never got a frame.
+  Serial SHA-256 `47a2391f03a5a42c0f184f5e507ca0c6cbcf9b3c84cac397ef6798b5df5b2034`.
+- **After an RTS reset (no flash erase, about 8 min uptime)**: the window passed. First frame in
+  7.0 s, 41 photos initialized, Camera visible during Photos and after Home, UI stop in 49 ms, 143
+  frames with complete teardown. **Camera OOM, AES allocation failures, `Write fail -84`, MQTT
+  disconnects and panic/abort were all zero.** Peer sampled minimum internal/DMA largest was 3,840
+  bytes (248 on 081), Voice `internal_min` 799 bytes (127 on 081). Serial SHA-256
+  `e412e05014adce646d62075e713641e65fc289073a99edbbe26e9f8d6bdd07ce`.
+
+082 removes the AES failures caused by thumbnail decoding and Camera encoding (076–081 all failed
+this window; 082 is the first all-zero run), but not long-uptime internal heap fragmentation: the
+8-hour device already had 7,936-byte internal/DMA largest before Camera start and only 400 bytes of
+DMA largest after peer setup. Post-stop largest was 6,656 bytes (6,144 after the fresh run), not
+8,192. The Camera plus Photos gate is therefore closed only for a short post-boot window; long-uptime
+WebRTC/TLS internal headroom, 8,192-byte post-stop recovery and qualification remain **NO_GO**.
