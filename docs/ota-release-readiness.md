@@ -3793,3 +3793,9 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 075/076 关闭“用户必须退出再进 Camera 才能从首次 ring OOM 恢复”和 074 的普通路径余量回归，但不替代任意 OOM 矩阵、物理颜色/清晰度/电源轨、混合媒体/网络/音频并发、生产 readback/power-cut 或八小时资格。发布状态继续 **NO_GO**，当前不启动长稳。
 
 随后在 076 普通 OFF 固件上完成五轮单串口 Camera → Home 重复观察。五轮均取得软件首帧、六阶段关闭和 65 秒 MQTT/Main/Voice 健康窗口；每轮均记录 `largest=3968 required=4096` 并释放 Home reserve，随后保持 8,192 B internal/DMA largest。Voice supervisor 最低剩余栈为 4,432 B，internal 历史最低为 3,307 B，heap median drop 为 18 B；无 Camera OOM、error、panic、abort 或 `E:RX`。汇总为 `software-smoke-observed`，串口日志 SHA-256 为 `c0638c94b53fa708ff27e0fadbf5334d01c4f957ccc022028262c19b059268c5`，证据位于 `.codex-temp/camera-dma-auto-retry-normal-076/smoke-5cycles/`。该窗口加强了普通 076 的有限重复性证据，但不关闭物理画质、电源轨、任意 OOM、混合并发、生产 readback/power-cut 或八小时资格门禁；发布继续 **NO_GO**。
+
+## 2026-10-10 ordinary 076 Display 并发边界
+
+在普通 OFF `camera-dma-auto-retry-normal-076` 固件上，通过设备屏幕入口完成一轮有限并发验证。Display 取得 320×240 首帧并保持 active；尝试启动 Camera 时收到精确错误 `设备已有屏幕视频会话`，原 Display 会话和帧哈希在 5 秒观察内保持不变。停止 Display 后，UI 画面 29 ms 消失，1.373 s 收到 `rodak.videoStop.v1` 的 `outcome=stopped` 回执。随后 70 s 单串口观察取得 MQTT/Main/Voice 健康样本，`internal_largest=8192`、`dma_largest=8192`、Voice supervisor 最低余量 4432 B，无 panic、abort、`E:RX` 或错误。证据位于 Rodak `.codex-temp/resource-concurrency-029/matrix-evidence/current076-display-reject-camera/`、`current076-display-stop.json` 和 `current076-display-poststop/`。
+
+该窗口仅关闭当前 Display/Camera 协议互斥、停止回执与停止后短时资源恢复边界，不代表 Camera + Display 同时运行、实体屏幕可读性、任意 OOM、生产 power-cut 或八小时资格通过；发布继续 **NO_GO**。
