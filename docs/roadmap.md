@@ -632,3 +632,9 @@ Two additional ordinary Camera → Home cycles produced 1,445 and 1,378 RGB uniq
 completed frame removal in roughly 0.34–0.39 seconds, supporting repeatability of the board-level
 power reset. This is still bounded software/image evidence rather than physical color, exposure,
 power-rail or long-duration acceptance.
+
+Two real hard-reset cycles on the same ordinary 071 package preserved NVS/binding, reconnected
+WiFi and MQTT generation 1, then completed Home → Camera → Home with 76 ms and 53 ms first frames.
+Both cycles repeated the board power-reset marker and full teardown without `E:RX`, panic or abort.
+This closes the bounded cold-restart observation for the candidate; power-cut, production and soak
+gates remain open.

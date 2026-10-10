@@ -3703,6 +3703,14 @@ JPEG SHA-256 分别为 `8f27a013d882a4e2ea5879baa3f9afe631688713ac32d23cd038b1a5
 `1afc5e6176978d83ac89413a5301de5b1beac65c40fa1e4b9bf9a3e917b40d39`。三次循环的停止按钮
 均在约 0.34–0.39 秒内移除远端帧，未观察到新的 Camera 错误。
 
+随后对同一普通 071 包做了两次真实硬复位（未擦除 Flash、未改 NVS），每次均保持原绑定，
+WiFi 自动连接、MQTT generation 1 建立并完成 Home → Camera → Home。两次首帧分别为 76 ms
+和 53 ms；均记录 `DVP camera power cycle complete: initial=0 disabled=1 enabled=0`，
+STREAMOFF、fd close、device release 完整，无 `E:RX`、panic 或 abort。串口日志 SHA-256
+分别为 `313d1f866a0883f2311bfaf8baba121e0d8bb6f084a4f0872a7a663646cdb1b` 和
+`e3ddf8eef3771abfe47cdd78cd03e8d862a035b06a08389a5e40481e4330a135`。这关闭了当前普通包的
+有限冷启动/绑定恢复观察，但不等价于断电、长稳或生产 power-cut 验收。
+
 这证明受控上电复位已从诊断分支收敛到普通板级初始化，且没有破坏绑定、联网或 Camera
 资源释放。颜色准确度、曝光稳定性、镜头清晰度、电源轨波形、重复冷启动、任意 OOM、生产
 签名/readback/power-cut 和八小时资格长稳仍未完成，发布状态保持 **NO_GO**。
