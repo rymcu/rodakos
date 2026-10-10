@@ -3799,3 +3799,5 @@ G 47.412–47.733、B 47.174–47.238，60 秒内最大均值漂移为 0.238/0.3
 在普通 OFF `camera-dma-auto-retry-normal-076` 固件上，通过设备屏幕入口完成一轮有限并发验证。Display 取得 320×240 首帧并保持 active；尝试启动 Camera 时收到精确错误 `设备已有屏幕视频会话`，原 Display 会话和帧哈希在 5 秒观察内保持不变。停止 Display 后，UI 画面 29 ms 消失，1.373 s 收到 `rodak.videoStop.v1` 的 `outcome=stopped` 回执。随后 70 s 单串口观察取得 MQTT/Main/Voice 健康样本，`internal_largest=8192`、`dma_largest=8192`、Voice supervisor 最低余量 4432 B，无 panic、abort、`E:RX` 或错误。证据位于 Rodak `.codex-temp/resource-concurrency-029/matrix-evidence/current076-display-reject-camera/`、`current076-display-stop.json` 和 `current076-display-poststop/`。
 
 该窗口仅关闭当前 Display/Camera 协议互斥、停止回执与停止后短时资源恢复边界，不代表 Camera + Display 同时运行、实体屏幕可读性、任意 OOM、生产 power-cut 或八小时资格通过；发布继续 **NO_GO**。
+
+补充的对称 IPC 复核在 Camera 会话处于 `starting` 时尝试启动 Display，立即收到 `设备已有摄像头视频会话`；随后 Camera Stop 返回 `rodak.videoStop.v1`、`streamKind=camera`、`outcome=stopped`。该检查只关闭会话准入互斥与停止回执边界；未建立本地渲染 peer，因此不构成软件首帧或物理画质证据。
