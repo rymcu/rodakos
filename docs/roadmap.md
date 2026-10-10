@@ -663,3 +663,10 @@ on every cycle, recovered an 8,192-byte block each time and delivered driver fir
 window. The five persistent I2C references remained constant rather than accumulating, the heap
 median drop was zero, and no Camera OOM, `E:RX`, error, panic or abort was observed. This strengthens
 the bounded restart evidence to five cycles without changing the remaining release gates.
+
+A separate Rodak remote-stream series captured 320×240 frames at 3/10/20/35/60 seconds. All frames
+were non-uniform with 1,646–1,779 unique RGB values. Channel means varied by at most
+0.238/0.321/0.063 over the minute, and stopping removed the image from the UI in 41 ms. This supports
+short-term exposure/color stability for the current static dark scene. The scene remains dark and
+low-contrast and had no color chart, sharpness target or verified unobstructed lens, so color
+accuracy, exposure range and optical clarity remain open.
