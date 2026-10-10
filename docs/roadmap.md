@@ -627,3 +627,8 @@ so the ordinary path no longer produces the historical one-pixel dark frame. Thi
 diagnostic-to-production implementation gap, while physical color/exposure/optics, power rails,
 arbitrary OOM, production trust, power-cut and qualification soak remain open. Status remains
 **NO_GO**.
+
+Two additional ordinary Camera → Home cycles produced 1,445 and 1,378 RGB unique values and
+completed frame removal in roughly 0.34–0.39 seconds, supporting repeatability of the board-level
+power reset. This is still bounded software/image evidence rather than physical color, exposure,
+power-rail or long-duration acceptance.
