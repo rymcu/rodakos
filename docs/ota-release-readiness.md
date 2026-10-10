@@ -3815,3 +3815,11 @@ Display 回到未播放后，普通 OFF `camera-dma-auto-retry-normal-076` 通�
 串口记录 Camera 共 162 帧，STREAMOFF、fd close、device release 完整。视频期 internal/DMA largest 为 3,712 B，停止后恢复至 8,192 B；Voice supervisor 最低余量 4,432 B，Voice `internal_min` 为 1,455 B，无 Camera OOM、panic、系统 abort 或 `E:RX`。另有 1 条远端 peer 关闭附近的既有信息级 `SCTP_ABORT`。串口 SHA-256：`be658be0f83c990e48ad39ceb62deb9c58b348aaa5030295dc21c61f66a51abb`；UI/shadow 与串口证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-camera-light-overlap/`。
 
 该窗口关闭当前 Camera 运行期间灯光 shadow 写入、设备回报和恢复的有限边界；不关闭视频期连续堆余量、任意 OOM、物理画质、生产 power-cut 或八小时资格，发布继续 **NO_GO**。
+
+## 2026-10-10 076 Camera + 确认型音量 effect 并发
+
+同一普通 OFF 固件完成严格重叠的 Camera + 音量 effect 窗口。Camera 约 8.59 s 取得 320×240 首帧，预览保持可见期间依次执行 `volume.set 60→61` 和 `61→60`。两次均经过 `pending-confirmation` 和显式确认，并取得 effectId/parametersHash 匹配的 `rodakos.volume-receipt.v1`，`mqttOutcome=acknowledged`；设备 reported 音量先变 61，最终恢复 60。回执明确 `application=deferred`、`persistence=volatile`、`physicalVerified=false`，只证明设备软件配置接受，不证明实际扬声器响度。
+
+两次回执后 Camera 仍可见，UI Stop 344 ms 移除画面；串口记录 179 帧及 STREAMOFF、fd close、device release 完整。视频期 internal/DMA largest 为 3,712 B，停止后恢复 8,192 B；Voice supervisor 最低余量 4,432 B、Voice `internal_min=1,455 B`，MQTT worker 最低栈余量 1,660 B（高于当前通用 512 B 门槛，但作为并发余量证据保留）。无 Camera OOM、panic、系统 abort 或 `E:RX`，另有 1 条远端 peer 关闭附近的信息级 `SCTP_ABORT`。串口 SHA-256：`12c60aa640e617f16b34fe571aa15275c8cd07538e99509f3f02919a9acdac48`；证据位于 Rodak `.codex-temp/resource-concurrency-029/current076-camera-volume-overlap/`。
+
+该窗口关闭 Camera 运行期间确认型音量 effect 的发布、关联软件回执、reported 恢复和 Camera 关闭的有限边界；不关闭实体声学、codec/I2S 同时播放、视频期堆/栈余量、任意 OOM、生产 power-cut 或八小时资格，发布继续 **NO_GO**。
