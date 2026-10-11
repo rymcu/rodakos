@@ -25,7 +25,7 @@ inline void Reset() { live_peers = 0; maximum_live_peers = 0; }
 namespace rodakos {
 class WebRtcCameraService {
 public:
-    struct Config { int width = 320; int height = 240; uint8_t fps = 5; uint16_t chunk_size = 10000; };
+    struct Config { int width = 320; int height = 240; uint8_t fps = 5; uint16_t chunk_size = 10000; uint32_t connect_timeout_ms = 20000; };
     using SignalingCallback = std::function<void(esp_peer_msg_type_t, std::vector<uint8_t>&&)>;
     using StateCallback = std::function<void(esp_peer_state_t)>;
     struct Callbacks { SignalingCallback signal; StateCallback state; };

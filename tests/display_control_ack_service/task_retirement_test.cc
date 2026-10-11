@@ -173,6 +173,77 @@ RODAK_TEST("retirement autonomous peer failure is reclaimed by permanent pump wi
     }
 }
 
+RODAK_TEST("camera peer without an open channel closes at the connect deadline and allows retry") {
+    // Reproduces the device case where DTLS returned ALLOC_FAILED and then retried with
+    // unexpected-message errors: esp_peer kept main_loop healthy and never reported a
+    // terminal state, so the session held the peer and camera indefinitely.
+    Fixture fixture;
+    retirement_host::RejectCleanupTask(true);
+    std::atomic<size_t> failed{0};
+    std::atomic<size_t> terminal{0};
+    rodakos::WebRtcCameraService::Config config;
+    // The host clock is real time plus an offset, so leave seconds of margin for test runtime.
+    config.connect_timeout_ms = 10000;
+    RODAK_CHECK(fixture.camera_peer.Start(config, [](auto, auto&&) {}, [&](auto state) {
+        ++terminal;
+        if (state == ESP_PEER_STATE_CONNECT_FAILED) ++failed;
+    }));
+    const auto peer = host::LatestPeer();
+    host::RunPeerTasks();
+    RODAK_CHECK(host::WaitForMainLoops(3));
+    RODAK_CHECK(fixture.camera_peer.IsRunning());
+    RODAK_CHECK_EQ(terminal.load(), 0u);
+    host::AdvanceTimeUs(7000000);
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 3));
+    RODAK_CHECK(fixture.camera_peer.IsRunning());
+    RODAK_CHECK_EQ(terminal.load(), 0u);
+    host::AdvanceTimeUs(4000000);
+    const bool reclaimed = Wait([&] {
+        rodakos::PumpTaskRetirements();
+        return retirement_host::Snapshot().task_deletes == 1;
+    });
+    RODAK_CHECK(reclaimed);
+    RODAK_CHECK_EQ(failed.load(), 1u);
+    RODAK_CHECK_EQ(terminal.load(), 1u);
+    RODAK_CHECK(host::IsClosed(peer));
+    RODAK_CHECK_FALSE(fixture.camera_peer.IsRunning());
+    RODAK_CHECK_FALSE(fixture.camera.preview_running);
+    RODAK_CHECK_FALSE(fixture.camera.jpeg_running);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
+
+    RODAK_CHECK(fixture.camera_peer.Start(config, [](auto, auto&&) {}, {}));
+    RODAK_CHECK(host::LatestPeer() != peer);
+    fixture.camera_peer.Stop();
+}
+
+RODAK_TEST("camera peer with an open JPEG channel is not closed by the connect deadline") {
+    Fixture fixture;
+    std::atomic<size_t> terminal{0};
+    rodakos::WebRtcCameraService::Config config;
+    config.connect_timeout_ms = 10000;
+    RODAK_CHECK(fixture.camera_peer.Start(config, [](auto, auto&&) {}, [&](auto) { ++terminal; }));
+    const auto peer = host::LatestPeer();
+    host::OpenCameraChannel(peer, 1);
+    RODAK_CHECK(fixture.camera_peer.IsChannelOpen());
+    host::RunPeerTasks();
+    host::AdvanceTimeUs(60000000);
+    RODAK_CHECK(host::WaitForMainLoops(host::MainLoopCount() + 5));
+    RODAK_CHECK(fixture.camera_peer.IsRunning());
+    RODAK_CHECK_FALSE(host::IsClosed(peer));
+    RODAK_CHECK_EQ(terminal.load(), 0u);
+    fixture.camera_peer.Stop();
+    RODAK_CHECK_EQ(terminal.load(), 1u);
+}
+
+RODAK_TEST("camera peer rejects a zero connect deadline before touching media") {
+    Fixture fixture;
+    rodakos::WebRtcCameraService::Config config;
+    config.connect_timeout_ms = 0;
+    RODAK_CHECK_FALSE(fixture.camera_peer.Start(config, [](auto, auto&&) {}, {}));
+    RODAK_CHECK_FALSE(fixture.camera.preview_running);
+    RODAK_CHECK(host::LatestPeer() == nullptr);
+}
+
 RODAK_TEST("retirement peer concurrent Stop and pump delete one original task") {
     for (bool camera_kind : {false, true}) {
         Fixture fixture;

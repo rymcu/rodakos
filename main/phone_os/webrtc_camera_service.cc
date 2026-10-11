@@ -42,7 +42,8 @@ WebRtcCameraService::~WebRtcCameraService() {
 bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signaling,
                                 StateCallback on_state) {
     if (camera_service_ == nullptr || !on_signaling || config.width <= 0 || config.height <= 0 ||
-        config.fps == 0 || config.fps > 30 || config.chunk_size == 0) {
+        config.fps == 0 || config.fps > 30 || config.chunk_size == 0 ||
+        config.connect_timeout_ms == 0) {
         return false;
     }
 
@@ -115,6 +116,8 @@ bool WebRtcCameraService::Start(const Config& config, SignalingCallback on_signa
     }
 
     running_ = true;
+    connect_deadline_us_ = esp_timer_get_time() +
+        static_cast<int64_t>(normalized.connect_timeout_ms) * 1000;
     const int connection_ret = esp_peer_new_connection(peer_);
     if (connection_ret != ESP_PEER_ERR_NONE) {
         ESP_LOGE(TAG, "esp_peer_new_connection failed: %d", connection_ret);
@@ -345,6 +348,7 @@ int WebRtcCameraService::OnChannelOpen(esp_peer_data_channel_info_t* channel, vo
         std::lock_guard<std::recursive_mutex> lock(service->mutex_);
         service->channel_open_ = !service->stop_requested_ && channel->label != nullptr &&
                                  std::strcmp(channel->label, kChannelLabel) == 0;
+        if (service->channel_open_) service->connect_deadline_us_ = 0;
     }
     return ESP_PEER_ERR_NONE;
 }
@@ -382,12 +386,23 @@ void WebRtcCameraService::PeerTask() {
 
     while (true) {
         esp_peer_handle_t peer = nullptr;
+        bool connect_expired = false;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
             if (stop_requested_ || peer_ == nullptr) {
                 break;
             }
             peer = peer_;
+            // esp_peer does not report every handshake failure (for example a DTLS
+            // ALLOC_FAILED followed by unexpected-message retries), so bound setup here.
+            connect_expired = connect_deadline_us_ != 0 && esp_timer_get_time() >= connect_deadline_us_;
+            if (connect_expired) peer_resources_.Log(TAG, "connect-timeout", ESP_PEER_ERR_FAIL);
+        }
+        if (connect_expired) {
+            ESP_LOGW(TAG, "Camera channel did not open within %u ms; closing session",
+                     static_cast<unsigned>(config_.connect_timeout_ms));
+            RequestStop(ESP_PEER_STATE_CONNECT_FAILED);
+            break;
         }
         int ret = ESP_PEER_ERR_NONE;
         {

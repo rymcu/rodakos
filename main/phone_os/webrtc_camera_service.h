@@ -34,6 +34,9 @@ public:
         uint8_t fps = 5;
         uint16_t chunk_size = 10000;
         esp_peer_role_t role = ESP_PEER_ROLE_CONTROLLING;
+        // ICE + DTLS + SCTP must open the JPEG channel within this window, or the
+        // session ends as CONNECT_FAILED and releases the peer and camera.
+        uint32_t connect_timeout_ms = 20000;
     };
 
     explicit WebRtcCameraService(CameraService* camera_service);
@@ -93,6 +96,8 @@ private:
     bool closing_ = false;
     bool stop_requested_ = false;
     esp_peer_state_t terminal_state_ = ESP_PEER_STATE_CLOSED;
+    // esp_timer time at which an unopened channel ends the session; 0 once open.
+    int64_t connect_deadline_us_ = 0;
     bool running_ = false;
     bool channel_open_ = false;
     bool channel_requested_ = false;

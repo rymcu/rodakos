@@ -41,6 +41,7 @@ void JoinTasks();
 esp_peer_handle_t LatestPeer();
 void OpenControlChannel(esp_peer_handle_t peer, uint16_t stream_id);
 void OpenVideoChannel(esp_peer_handle_t peer, uint16_t stream_id);
+void OpenCameraChannel(esp_peer_handle_t peer, uint16_t stream_id);
 void Receive(esp_peer_handle_t peer, uint16_t stream_id, const std::string& payload);
 void EmitState(esp_peer_handle_t peer, esp_peer_state_t state);
 void CloseControlChannel(esp_peer_handle_t peer, uint16_t stream_id);

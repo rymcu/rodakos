@@ -37,6 +37,13 @@ callback 与重启、SDP 内候选及 34 次含重复 trickle 调用保持字节
 证明任务存储已归还。
 旧 SDK 在 close 返回后的任意虚构回调不属于本测试保证；原异步 ACK/lease 隔离由既有用例覆盖。
 
+084 为 Camera peer 增加连接截止时间回归（task_retirement_test.cc，共 64 项）：未打开 JPEG
+通道的会话在 `connect_timeout_ms` 到期前保持运行，到期后以 `CONNECT_FAILED` 结束、关闭 peer、
+停止预览与 JPEG、无 cleanup 任务地回收 peer task，并允许重新 Start；已打开通道的会话在
+60 秒后仍不受截止时间影响；`connect_timeout_ms=0` 在触碰媒体前被拒绝。宿主时钟为真实时间加
+偏移，测试使用 10 秒截止时间与秒级推进以留出运行余量。移除截止判断的源码负对照使到期用例
+在回收断言处失败。
+
 除原 5 个显示源码负变体外，`run_peer_config_negative.py` 为两个真实 TU 分别移除显式容量、
 移除信令采样，共 4 个负变体；每个必须完整编译并在指定断言失败。构建失败、超时、崩溃及
 sanitizer 报错均不算检出。每种构建的 3 CTest 分开记录 55 个正向、5 个既有负控、4 个新负控。

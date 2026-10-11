@@ -455,3 +455,34 @@ Camera 启动前。peer 采样最低 internal/DMA largest 3,200 B，Voice `inter
 仍未关闭：停止后健康期 internal/DMA largest 为 6,144 B，未恢复 8,192 B；Camera peer 没有连接/握手
 截止时间，DTLS 握手失败但 esp_peer 未报告 CONNECT_FAILED 时会话保持打开并占用内部堆（082 复现）；
 长时运行除 mDNS 外的其他累积来源需要更长 soak 验证；发布继续 **NO_GO**。
+
+## 2026-10-11 Camera WebRTC 连接截止时间 084
+
+082 复现中 DTLS server handshake 返回 `-0x008d`（`MBEDTLS_ERR_SSL_ALLOC_FAILED`）后以 `-0x7700` 重试，
+esp_peer 的 `main_loop` 保持正常且未报告终止状态，Camera 会话因此一直占用 peer、预览与 JPEG
+资源（停止后 internal free 6,735 B、DMA largest 480 B）。`WebRtcCameraService` 原先只在 esp_peer
+回调终止状态或 `main_loop` 返回错误时停止，没有连接/握手截止时间。
+
+084 在 `WebRtcCameraService::Config` 增加 `connect_timeout_ms`（默认 20,000 ms，0 被拒绝）。Start
+在 `esp_peer_new_connection` 前设置截止时间，JPEG 通道打开时清零；peer task 每轮检查，到期后
+记录 `connect-timeout`、按 `CONNECT_FAILED` 走与 SDK 失败相同的 RequestStop/FinishStop 路径：
+关闭 peer、停止 JPEG 与远端预览、发布终止状态（MQTT 撤销 stream lease 并回报 failed），任务由
+既有退役机制回收。20 秒大于 Rodak 渲染端 15 秒首帧超时，避免设备先于 UI 中止仍在协商的会话。
+
+Host：display_control_ack_service 64/64 在 Debug 与 ASan/UBSan 通过，新增 3 项截止时间用例；
+移除截止判断的负对照使到期用例在回收断言处失败；mqtt_volume_service 8/8（同步 fake Config）。
+ESP-IDF 6.0.2 构建、最终 ELF JPEG 分配门禁与 Camera teardown 审计通过。
+
+开发签名包 `20261011-100244` / `camera-connect-deadline-084`，main 7,165,520 B，SHA-256
+`6270df4608e8624f57e9a4f42b288e5762af89ca3ab6b20f9b82097aeaee1ef0`，manifest SHA-256
+`c8065656056accd361d6663ea1609e535df211e9b953967b772194c7072fb994`；COM3 VerifyOnly、保留 NVS 仅写
+`otadata + ota_0`、Recovery → Main → OTA confirmation → Home 通过（包含 083 的 mDNS PSRAM 配置）。
+
+实机无应答验证：Rodak 启动 Camera 会话但不应答设备 SDP，使 ICE/DTLS 无法完成。设备在预览启动后
+20.8 秒记录 `Camera channel did not open within 20000 ms; closing session`，随后 STREAMOFF、fd close、
+device release 完整，`phase=stopped`；Rodak 在 21.6 秒收到 `failed`（“设备视频连接失败”）。停止后
+internal free 25,487 B、largest 6,144 B，AES/panic/abort 为 0。串口 SHA-256
+`b7fd72e9a744da61a9511ae72bc79e310c18a712fffc90a0d443abb899762c2f`。
+
+该截止时间同时覆盖 DTLS ALLOC_FAILED 后 SDK 不报告失败的场景，但未在实机重新制造该内存失败；
+截止前 20 秒内会话仍占用资源。停止后 8,192 B 恢复、任意 OOM 与八小时资格继续 **NO_GO**。

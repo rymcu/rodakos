@@ -859,3 +859,34 @@ before Camera start. Peer sampled minimum internal/DMA largest was 3,200 bytes. 
 Still open: post-stop internal/DMA largest is 6,144 bytes, not 8,192; the Camera peer has no
 connect/handshake deadline and stays open when DTLS fails without esp_peer reporting CONNECT_FAILED
 (reproduced on 082); other long-uptime sources beyond mDNS need a longer soak. Release remains **NO_GO**.
+
+### 2026-10-11 Camera WebRTC connect deadline 084
+
+On the 082 reproduction, DTLS server handshake returned `-0x008d` (`MBEDTLS_ERR_SSL_ALLOC_FAILED`) and
+retried with `-0x7700` while esp_peer's `main_loop` stayed healthy and reported no terminal state, so
+the Camera session held the peer, preview and JPEG stream indefinitely. `WebRtcCameraService` only
+stopped on an esp_peer terminal callback or a `main_loop` error and had no connect/handshake deadline.
+
+084 adds `connect_timeout_ms` to `WebRtcCameraService::Config` (default 20,000 ms; 0 is rejected).
+Start arms the deadline before `esp_peer_new_connection` and the JPEG channel open clears it. The peer
+task checks it each loop; on expiry it logs `connect-timeout` and takes the same RequestStop/FinishStop
+path as an SDK failure with `CONNECT_FAILED`: close the peer, stop JPEG and the remote preview, publish
+the terminal state (MQTT revokes the stream lease and reports failed), and retire the task. 20 s exceeds
+Rodak's 15 s first-frame timeout so the device never aborts a session the UI is still negotiating.
+
+Host: display_control_ack_service 64/64 in Debug and ASan/UBSan with three new deadline cases; a
+negative control without the deadline check fails the expiry case at the reclaim assertion;
+mqtt_volume_service 8/8 with the fake Config kept in sync. The ESP-IDF 6.0.2 build and final-ELF audits
+pass. Package `20261011-100244` / `camera-connect-deadline-084` (main SHA-256
+`6270df4608e8624f57e9a4f42b288e5762af89ca3ab6b20f9b82097aeaee1ef0`, includes 083's mDNS PSRAM config)
+passed VerifyOnly, NVS-preserving `otadata + ota_0` flashing and boot confirmation.
+
+On-device no-answer test: Rodak started a Camera session but never answered the device SDP. 20.8 s
+after preview start the device logged `Camera channel did not open within 20000 ms; closing session`,
+then completed STREAMOFF, fd close and device release; Rodak received `failed` at 21.6 s. Post-stop
+internal free was 25,487 bytes with 6,144-byte largest; AES/panic/abort were zero. Serial SHA-256
+`b7fd72e9a744da61a9511ae72bc79e310c18a712fffc90a0d443abb899762c2f`.
+
+The deadline also bounds the DTLS ALLOC_FAILED case where the SDK reports nothing, but that memory
+failure was not re-created on hardware, and resources stay held for up to 20 s. Post-stop 8,192-byte
+recovery, arbitrary OOM and qualification remain **NO_GO**.

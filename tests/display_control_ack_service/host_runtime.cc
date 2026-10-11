@@ -113,6 +113,13 @@ void OpenVideoChannel(esp_peer_handle_t peer, uint16_t stream_id) {
     channel.stream_id = stream_id;
     value->config.on_channel_open(&channel, value->config.ctx);
 }
+void OpenCameraChannel(esp_peer_handle_t peer, uint16_t stream_id) {
+    auto* value = static_cast<Peer*>(peer);
+    esp_peer_data_channel_info_t channel{};
+    channel.label = const_cast<char*>("camera-jpeg");
+    channel.stream_id = stream_id;
+    value->config.on_channel_open(&channel, value->config.ctx);
+}
 void Receive(esp_peer_handle_t peer, uint16_t stream_id, const std::string& payload) {
     auto* value = static_cast<Peer*>(peer);
     esp_peer_data_frame_t frame{};
