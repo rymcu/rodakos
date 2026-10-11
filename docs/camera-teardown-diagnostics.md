@@ -420,3 +420,38 @@ Camera + Photos 严格重叠窗口尚未在 082 上复测：该窗口由 Rodak �
 largest 为 6,656 B（新启动后同窗为 6,144 B），均未恢复 8,192 B。因此 Camera + Photos 局部门禁
 仅在启动后短窗口内关闭；长时运行后的 WebRTC/TLS 内部堆余量、8,192 B 停止后恢复与八小时资格
 继续 **NO_GO**。
+
+## 2026-10-11 长时内部堆碎片根因：mDNS 任务栈 083
+
+broker 中断实验（082，单次中断后重连）表明 MQTT/TLS 重连本身不消耗内部堆：中断前 internal
+free 24,347 B，TLS 重连失败的前 25 秒仍为 24,547 B；第三次 TCP 失败触发 bootstrap 刷新、刷新失败后
+`DiscoverServerTrustRoutes` 首次 `mdns_init()`，串口记录 `mDNS task will be created from internal RAM`，
+internal free 立即降到 19,583 B，恢复连接后 18 分钟保持约 19.8 KB 不回升。mDNS 组件默认从内部 RAM
+分配 4 KiB 任务栈和记录内存，`mdns_init()` 只调用一次且不释放，因此任一次服务器不可达即永久占用约
+5 KB 内部堆，与 8 小时设备空闲 internal free 约 19.7–22 KB 一致。串口 SHA-256
+`53be9b1df60ba308abd444563be0d5120c305b9bafadd4dba3dcad470c312a0b`。
+
+**082 复现**：复位后 MQTT 连接（internal free 27,119 B），中断 Rodak 触发 mDNS（22,203 B），恢复后
+21,783 B，随后 Camera + Photos 同窗失败：peer `open-before` internal/DMA largest 4,608/3,328 B，DTLS
+server handshake 首次返回 `-0x008d`（`MBEDTLS_ERR_SSL_ALLOC_FAILED`），随后 `-0x7700`、AES 分配失败与
+MQTT 断线，UI 未取得首帧；Camera 会话在握手失败后未关闭，停止后 internal free 仅 6,735 B、DMA largest
+480 B。同一序列在复位后不中断时通过，唯一差异是一次触发 mDNS 的中断。串口 SHA-256
+`2ae8761dab4eb74ec507139a4157b6494393e71ac9f2dec9db7e836f463c68db`。
+
+**083 修复**：`sdkconfig` / `sdkconfig.defaults` 设置 `CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y` 与
+`CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y`（`CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y`、`SPIRAM_USE_MALLOC=y`
+已启用）。ESP-IDF 6.0.2 构建、最终 ELF JPEG 分配门禁与 Camera teardown 审计通过。开发签名包
+`20261011-085035` / `camera-mdns-psram-083`，main 7,165,344 B，SHA-256
+`f699e0ea557233c8f7303d6a1f5657f7b513fc9cc51ab89eab97319f587182db`；COM3 VerifyOnly、保留 NVS 仅写
+`otadata + ota_0`、Recovery → Main → OTA confirmation → Home 通过。
+
+**083 同序列 A/B**：复位后 MQTT 连接 27,095 B；中断后串口记录 `mDNS task will be created from SPIRAM`，
+恢复连接 26,459 B（082 为 21,783 B），同窗前 26,343 B。Camera + Photos 同窗通过：7.0 s 首帧、41 张照片、
+Photos 与返回 Home 期间均可见、Stop 49 ms，144 帧、六阶段关闭完整；**AES 分配失败、`Write fail -84`、
+DTLS 握手错误、Camera OOM、panic/abort 均为 0**，6 次 MQTT transport error 全部位于有意中断期间、
+Camera 启动前。peer 采样最低 internal/DMA largest 3,200 B，Voice `internal_min` 623 B，supervisor 最低
+余量 4,432 B。串口 SHA-256 `e9de2f003e3a69247eb947c7ef12dbf92edc3db8b4f4f2ef5ffa27c6a22c335e`。
+
+仍未关闭：停止后健康期 internal/DMA largest 为 6,144 B，未恢复 8,192 B；Camera peer 没有连接/握手
+截止时间，DTLS 握手失败但 esp_peer 未报告 CONNECT_FAILED 时会话保持打开并占用内部堆（082 复现）；
+长时运行除 mDNS 外的其他累积来源需要更长 soak 验证；发布继续 **NO_GO**。

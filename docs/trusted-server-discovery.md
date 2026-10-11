@@ -92,6 +92,10 @@ retaining the trusted server, allowing a new owner-confirmed pairing there.
 Before a route has been authenticated, connections use the lwIP `.local` resolver
 with the stable hostname. If the stored HTTPS endpoint or route fails, bound devices
 query `_rodak._tcp` through the pinned `espressif/mdns` 1.14.0 component.
+The mDNS service is initialized lazily on the first such fallback and kept for the rest of
+uptime; its task stack and records are allocated from PSRAM
+(`CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM`, `CONFIG_MDNS_MEMORY_ALLOC_SPIRAM`) so that one
+server outage does not permanently remove about 5 KB of internal RAM needed by WebRTC/TLS.
 The query has a 1500 ms timeout and at most
 eight results. Only records with the expected hostname, exactly one `v=1`, and exactly
 one matching full `id` contribute address/port candidates. Up to eight addresses

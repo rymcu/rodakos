@@ -824,3 +824,38 @@ this window; 082 is the first all-zero run), but not long-uptime internal heap f
 DMA largest after peer setup. Post-stop largest was 6,656 bytes (6,144 after the fresh run), not
 8,192. The Camera plus Photos gate is therefore closed only for a short post-boot window; long-uptime
 WebRTC/TLS internal headroom, 8,192-byte post-stop recovery and qualification remain **NO_GO**.
+
+### 2026-10-11 Long-uptime internal heap loss: mDNS task stack 083
+
+A single broker-outage run on 082 showed that MQTT/TLS reconnects do not consume internal heap
+(24,347 bytes free before, 24,547 during the first 25 s of failed reconnects). After the third TCP
+failure the bootstrap refresh failed and `DiscoverServerTrustRoutes` ran `mdns_init()` for the first
+time; the log shows `mDNS task will be created from internal RAM` and internal free dropped to 19,583
+bytes, staying near 19.8 KB for 18 minutes after reconnect. The mDNS component allocates its 4 KiB task
+stack and records from internal RAM by default and is never deinitialized, so any server outage
+permanently costs about 5 KB, matching the 8-hour device's 19.7–22 KB idle internal free. Serial
+SHA-256 `53be9b1df60ba308abd444563be0d5120c305b9bafadd4dba3dcad470c312a0b`.
+
+**082 reproduction**: fresh boot (27,119 bytes free), one Rodak outage that started mDNS (22,203),
+reconnect (21,783), then the Camera plus Photos window failed. DTLS server handshake returned
+`-0x008d` (`MBEDTLS_ERR_SSL_ALLOC_FAILED`), then `-0x7700`, an AES allocation failure and an MQTT
+disconnect; the UI got no frame. The Camera session stayed open after the failed handshake (6,735 bytes
+free, 480-byte DMA largest). Serial SHA-256 `2ae8761dab4eb74ec507139a4157b6494393e71ac9f2dec9db7e836f463c68db`.
+
+**083 fix**: `CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y` and `CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y` in
+`sdkconfig` and `sdkconfig.defaults`. The ESP-IDF 6.0.2 build and final-ELF audits pass. Package
+`20261011-085035` / `camera-mdns-psram-083` (main SHA-256
+`f699e0ea557233c8f7303d6a1f5657f7b513fc9cc51ab89eab97319f587182db`) passed VerifyOnly, NVS-preserving
+`otadata + ota_0` flashing and Recovery → Main → OTA confirmation → Home.
+
+**083 A/B with the same sequence**: the log shows `mDNS task will be created from SPIRAM`; internal
+free after reconnect was 26,459 bytes (21,783 on 082). The Camera plus Photos window passed: first
+frame in 7.0 s, 41 photos, visible through Photos and Home, stop in 49 ms, 144 frames with complete
+teardown. **AES allocation failures, `Write fail -84`, DTLS handshake errors, Camera OOM and
+panic/abort were all zero**; the six MQTT transport errors all fall inside the deliberate outage,
+before Camera start. Peer sampled minimum internal/DMA largest was 3,200 bytes. Serial SHA-256
+`e9de2f003e3a69247eb947c7ef12dbf92edc3db8b4f4f2ef5ffa27c6a22c335e`.
+
+Still open: post-stop internal/DMA largest is 6,144 bytes, not 8,192; the Camera peer has no
+connect/handshake deadline and stays open when DTLS fails without esp_peer reporting CONNECT_FAILED
+(reproduced on 082); other long-uptime sources beyond mDNS need a longer soak. Release remains **NO_GO**.
