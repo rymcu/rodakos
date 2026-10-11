@@ -3,6 +3,7 @@
 #ifdef RODAKOS_RELEASE_TESTS
 #include "phone_os/voice_lifecycle_diagnostic.h"
 #include "phone_os/voice_prepare_priority_diagnostic.h"
+#include <esp_heap_trace.h>
 #endif
 
 #include "phone_os/device_cloud_config.h"
@@ -414,6 +415,42 @@ void PrintInternalHeapMap() {
     std::fflush(stdout);
     heap_caps_free(capture);
 }
+
+#if CONFIG_HEAP_TRACING_STANDALONE
+// Release-test leak trace: records only allocations still alive between start and
+// dump, in a PSRAM buffer so tracing does not consume the internal heap it measures.
+constexpr size_t kHeapTraceRecords = 600;
+heap_trace_record_t* g_heap_trace_records = nullptr;
+
+void StartHeapLeakTrace() {
+    if (g_heap_trace_records == nullptr) {
+        g_heap_trace_records = static_cast<heap_trace_record_t*>(heap_caps_calloc(
+            kHeapTraceRecords, sizeof(heap_trace_record_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    }
+    esp_err_t result = g_heap_trace_records == nullptr ? ESP_ERR_NO_MEM : ESP_OK;
+    if (result == ESP_OK) {
+        heap_trace_stop();
+        result = heap_trace_init_standalone(g_heap_trace_records, kHeapTraceRecords);
+    }
+    if (result == ESP_OK) result = heap_trace_start(HEAP_TRACE_LEAKS);
+    std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"heap_trace_start\":%d}\n", static_cast<int>(result));
+    std::fflush(stdout);
+}
+
+void DumpHeapLeakTrace() {
+    heap_trace_stop();
+    heap_trace_summary_t summary{};
+    heap_trace_summary(&summary);
+    std::fprintf(stdout, "RODAK_HEAP_TRACE begin count=%u overflowed=%d total_allocations=%u total_frees=%u\n",
+                 static_cast<unsigned>(summary.count), summary.has_overflowed ? 1 : 0,
+                 static_cast<unsigned>(summary.total_allocations), static_cast<unsigned>(summary.total_frees));
+    std::fflush(stdout);
+    // Only internal-RAM survivors are relevant to the fragmented internal heap.
+    heap_trace_dump_caps(MALLOC_CAP_INTERNAL);
+    std::fprintf(stdout, "RODAK_HEAP_TRACE end\n");
+    std::fflush(stdout);
+}
+#endif
 }  // namespace
 #endif
 
@@ -427,6 +464,16 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
             return false;
         }
     }
+#if CONFIG_HEAP_TRACING_STANDALONE
+    if (line == "RODAK_RELEASE_TEST_V1 heap_trace_start") {
+        StartHeapLeakTrace();
+        return true;
+    }
+    if (line == "RODAK_RELEASE_TEST_V1 heap_trace_dump") {
+        DumpHeapLeakTrace();
+        return true;
+    }
+#endif
     if (line == "RODAK_RELEASE_TEST_V1 heap_map") {
         PrintInternalHeapMap();
         return true;
