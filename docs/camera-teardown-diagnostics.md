@@ -584,3 +584,27 @@ ASan/UBSan 下通过；ESP-IDF 6.0.2 构建、最终 ELF JPEG 分配门禁与 Ca
 
 结论：远端 Camera 停止后 8,192 B 恢复门禁转为 **GO**（本地 Camera → Home 已于 085 验证）。任意 OOM、
 混合失败矩阵与八小时资格窗口继续 **NO_GO**。设备停留在普通 094 包。
+
+## 2026-10-12 release-test 单点资源失败矩阵 095
+
+在 094 源码的 release-test 构建上（包 `20261012-005343` / `fault-matrix-095`，main SHA-256
+`f4e603a50d0164eace89c2f68f666c8114f0474aae3e8379f513ad95798bfaed`，与 `fix-094rt` 同一镜像）依次武装
+`RODAK_RELEASE_TEST_V1 fail_alloc` 的全部 5 个目标，每个目标只触发一次，随后立即重复同一路径验证恢复：
+
+| 目标 | 触发路径 | 失败处理 | 恢复 |
+|---|---|---|---|
+| `camera_task` | 串口启动 Camera，STREAMON 后 `camera_preview` 任务创建失败 | 记录 `Failed to start camera preview task`，STREAMOFF、fd close、device release 完整 | 再次进入 Camera：DMA largest 8,192 B，64 ms 首帧 |
+| `image` | Photos 首页缩略图读缓冲分配失败（41 张） | 单个 tile 标记 Preview failed，应用继续 | 再次进入 Photos 正常初始化 |
+| `home_page` | Clock → Home 时首页网格创建失败 | `HomeApp OnCreate failed; keeping current app`，停留在 Clock，`RODAK_APP_LAUNCH_COMPLETE ok=false` | 下一次 Home 请求完整渲染 2/2 页，largest 8,192 B |
+| `voice_task` | `RODAK_VOICE_TEST_V1 wake`，`assistant_io` 任务创建失败 | 交互以错误结束，内存回到 internal largest 8,192 B | 下一次 wake：I/O 任务就绪、首帧音频发出、stop 后回到 8,192 B |
+| `mqtt_config` | 停止 Rodak（broker）触发凭据刷新/重连，快照分配失败 | 记录 `Cannot allocate MQTT credential refresh snapshot` 并结束本次刷新；传输错误由 ESP-MQTT 重连 | 重启 Rodak 后 `Unified MQTT connected: generation=1` |
+
+6 次 heap_map（基线与每个目标之后）internal largest 均为 8,192 B，free 23.0–24.1 KB；五个故障
+marker 各恰好 1 次；panic、abort、Backtrace、assert、Write fail、AES 分配失败均为 0。串口 SHA-256
+`3830be1acc71b083db28c8133e3cf8ec59d4a6a8de72e79e3f7b1bd99ff2b304`；脚本与证据位于 Rodak
+`.codex-temp/resource-concurrency-029/fault-matrix-095.sh`、`current095-fault-matrix/`。验证后设备已恢复普通
+094 包 `20261011-235020`（main SHA-256 `daae64bf…`），VerifyOnly 与保留 NVS 刷写、启动确认通过。
+
+该矩阵关闭“已命名的单点分配/任务创建失败可恢复”这一局部门禁，但只覆盖 5 个预设边界：任意
+LVGL/CLIB 内部分配、DMA/IRQ/cache-off、异常 SD/媒体、TLS/OTA/NVS 并发失败与多点同时失败仍未
+覆盖，发布继续 **NO_GO**。

@@ -964,3 +964,16 @@ stays there for 90 s (internal free 19,951 bytes), with no errors. Serial SHA-25
 The remote Camera post-stop 8,192-byte gate is now **GO** (local Camera → Home passed in 085).
 Arbitrary OOM, mixed failure matrices and the eight-hour qualification window stay **NO_GO**. The
 device stays on ordinary 094.
+
+### 2026-10-12 Release-test single-point resource failure matrix (095)
+
+On the 094 release-test image (`20261012-005343` / `fault-matrix-095`, same main as `fix-094rt`), each of
+the five `fail_alloc` targets fired exactly once and its path was then repeated: `camera_task` closed the
+stream completely and the retry got a 64 ms first frame; `image` marked one Photos tile failed and the next
+open worked; `home_page` kept the current app (`OnCreate failed; keeping current app`) and the next Home
+request rendered both pages; `voice_task` ended the interaction and the next wake streamed audio; and
+`mqtt_config` (forced by a broker outage) ended the credential refresh and MQTT reconnected after Rodak
+came back. All six heap maps kept 8,192-byte internal largest, with no panic, abort, Write fail or AES
+failure. Serial SHA-256 `3830be1acc71b083db28c8133e3cf8ec59d4a6a8de72e79e3f7b1bd99ff2b304`. The device is
+back on ordinary 094. Arbitrary LVGL/CLIB allocations, DMA/IRQ/cache-off, abnormal SD/media and
+concurrent TLS/OTA/NVS failures stay open; release stays **NO_GO**.
