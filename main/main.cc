@@ -49,6 +49,7 @@
 #include "settings.h"
 #include "usb_msc_mode.h"
 
+#include <driver/gpio.h>
 #include <esp_board_manager.h>
 #include <dev_display_lcd.h>
 #include <dev_lcd_touch.h>
@@ -56,11 +57,15 @@
 #include <esp_err.h>
 #include <esp_lcd_touch.h>
 #include <esp_log.h>
+#include <esp_log_level.h>
 #include <esp_heap_caps.h>
+#include <esp_intr_alloc.h>
+#include <esp_ipc.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <inttypes.h>
 #include <nvs_flash.h>
+#include <soc/interrupts.h>
 #include <cJSON.h>
 #include <lvgl.h>
 #include <algorithm>
@@ -383,6 +388,62 @@ lv_indev_t* InitTouchInput(lv_display_t* disp) {
     ESP_LOGI(TAG, "Touch input registered with cached polling");
     return indev;
 }
+
+// ESP-IDF creates a 16-byte vector descriptor the first time it uses a CPU interrupt line, and
+// it never frees that descriptor. On the first STREAMON, the DVP camera allocates its non-shared
+// GDMA RX interrupt on the CPU of the caller. If that line has no descriptor yet, the descriptor
+// goes into the largest free internal block and stays there after the camera stops.
+// At boot, allocate every free low/medium-priority line on each CPU one time, then free them
+// all. The descriptors stay, and later drivers use them instead of new allocations.
+// No BigSmart driver uses these sources: Bluetooth is off, and the firmware does not use the
+// SDIO slave, UHCI, MCPWM, TWAI or the eFuse interrupt.
+constexpr int kUnusedInterruptSources[] = {
+    ETS_BT_MAC_INTR_SOURCE, ETS_BT_BB_INTR_SOURCE,  ETS_BT_BB_NMI_SOURCE,  ETS_RWBT_INTR_SOURCE,
+    ETS_RWBLE_INTR_SOURCE,  ETS_RWBT_NMI_SOURCE,    ETS_RWBLE_NMI_SOURCE,  ETS_SLC0_INTR_SOURCE,
+    ETS_SLC1_INTR_SOURCE,   ETS_UHCI0_INTR_SOURCE,  ETS_UHCI1_INTR_SOURCE, ETS_PWM0_INTR_SOURCE,
+    ETS_PWM1_INTR_SOURCE,   ETS_TWAI_INTR_SOURCE,   ETS_EFUSE_INTR_SOURCE,
+};
+constexpr size_t kUnusedInterruptSourceCount =
+    sizeof(kUnusedInterruptSources) / sizeof(kUnusedInterruptSources[0]);
+// esp_ipc_call_blocking runs one CPU at a time, so the two calls can share this storage.
+intr_handle_t g_interrupt_warmup_handles[kUnusedInterruptSourceCount];
+
+void WarmInterruptLinesOnThisCpu(void* lines) {
+    size_t count = 0;
+    while (count < kUnusedInterruptSourceCount &&
+           esp_intr_alloc(kUnusedInterruptSources[count],
+                          ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_INTRDISABLED, nullptr, nullptr,
+                          &g_interrupt_warmup_handles[count]) == ESP_OK) {
+        ++count;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        esp_intr_free(g_interrupt_warmup_handles[index]);
+        g_interrupt_warmup_handles[index] = nullptr;
+    }
+    *static_cast<size_t*>(lines) = count;
+}
+
+void WarmInterruptLines() {
+    // The last allocation fails when no free line is left. That error is expected here.
+    constexpr const char* kIntrAllocLogTag = "intr_alloc";
+    const esp_log_level_t previous_level = esp_log_level_get(kIntrAllocLogTag);
+    esp_log_level_set(kIntrAllocLogTag, ESP_LOG_NONE);
+    size_t lines[portNUM_PROCESSORS] = {};
+    esp_err_t ipc_ret[portNUM_PROCESSORS] = {};
+    for (uint32_t cpu = 0; cpu < portNUM_PROCESSORS; ++cpu) {
+        ipc_ret[cpu] = esp_ipc_call_blocking(cpu, WarmInterruptLinesOnThisCpu, &lines[cpu]);
+    }
+    esp_log_level_set(kIntrAllocLogTag, previous_level);
+    for (uint32_t cpu = 0; cpu < portNUM_PROCESSORS; ++cpu) {
+        if (ipc_ret[cpu] != ESP_OK) {
+            ESP_LOGW(TAG, "Interrupt line warm-up on CPU %" PRIu32 " failed: %s", cpu,
+                     esp_err_to_name(ipc_ret[cpu]));
+        } else {
+            ESP_LOGI(TAG, "Interrupt lines prepared on CPU %" PRIu32 ": %u", cpu,
+                     static_cast<unsigned>(lines[cpu]));
+        }
+    }
+}
 }
 
 extern "C" void app_main(void) {
@@ -402,6 +463,19 @@ extern "C" void app_main(void) {
     }
 
     ESP_LOGI(TAG, "Starting RodakOS with Board Manager HAL");
+
+    WarmInterruptLines();
+
+    // Install the shared GPIO ISR service while internal RAM is still contiguous. Its
+    // 392-byte handler table (GPIO_NUM_MAX entries) stays allocated for the whole uptime.
+    // Otherwise the DVP camera installs it on the first STREAMON, in the middle of the
+    // largest free block, and later Camera sessions can never get 8 KiB contiguous again.
+    // Use the same flags as the DVP driver, so its own install call returns
+    // ESP_ERR_INVALID_STATE and keeps this service.
+    const esp_err_t gpio_isr_ret = gpio_install_isr_service(ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM);
+    if (gpio_isr_ret != ESP_OK && gpio_isr_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "GPIO ISR service install failed: %s", esp_err_to_name(gpio_isr_ret));
+    }
 
     // Initialize Board Manager (replaces BigSmartBoard::Initialize)
     ESP_ERROR_CHECK(esp_board_manager_init());
