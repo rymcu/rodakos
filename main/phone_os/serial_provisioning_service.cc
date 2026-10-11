@@ -343,6 +343,80 @@ void SerialProvisioningService::Run() {
     }
 }
 
+#ifdef RODAKOS_RELEASE_TESTS
+namespace {
+// Release-test heap map: prints each internal heap's free spans (>= 512 B) with the
+// sizes of the used blocks on both sides, so post-Camera fragmentation can be
+// attributed. The walker runs under the heap lock, so the callback only records
+// free spans into fixed storage and patches the following used-block size.
+struct HeapMapEntry {
+    uintptr_t address;
+    uint32_t size;
+    uint32_t used_before;
+    uint32_t used_after;
+    uintptr_t next_address;
+};
+struct HeapMapCapture {
+    static constexpr size_t kCapacity = 160;
+    HeapMapEntry entries[kCapacity];
+    size_t count = 0;
+    size_t dropped = 0;
+    size_t blocks = 0;
+    uint32_t previous_used = 0;
+    bool pending_after = false;
+};
+
+bool CaptureHeapBlock(walker_heap_into_t, walker_block_info_t block, void* user_data) {
+    auto* capture = static_cast<HeapMapCapture*>(user_data);
+    ++capture->blocks;
+    const auto size = static_cast<uint32_t>(block.size);
+    if (capture->pending_after) {
+        auto& last = capture->entries[capture->count - 1];
+        last.next_address = reinterpret_cast<uintptr_t>(block.ptr);
+        last.used_after = block.used ? size : 0;
+        capture->pending_after = false;
+    }
+    if (!block.used && size >= 512) {
+        if (capture->count < HeapMapCapture::kCapacity) {
+            capture->entries[capture->count++] = {reinterpret_cast<uintptr_t>(block.ptr), size,
+                                                  capture->previous_used, 0, 0};
+            capture->pending_after = true;
+        } else {
+            ++capture->dropped;
+        }
+    }
+    capture->previous_used = block.used ? size : 0;
+    return true;
+}
+
+void PrintInternalHeapMap() {
+    auto* capture = static_cast<HeapMapCapture*>(
+        heap_caps_malloc(sizeof(HeapMapCapture), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (capture == nullptr) {
+        std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"heap_map\":false}\n");
+        std::fflush(stdout);
+        return;
+    }
+    *capture = HeapMapCapture{};
+    heap_caps_walk(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, CaptureHeapBlock, capture);
+    std::fprintf(stdout, "RODAK_HEAP_MAP begin blocks=%u dropped=%u free=%u largest=%u\n",
+                 static_cast<unsigned>(capture->blocks), static_cast<unsigned>(capture->dropped),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    for (size_t index = 0; index < capture->count; ++index) {
+        const auto& entry = capture->entries[index];
+        std::fprintf(stdout, "RODAK_HEAP_MAP free addr=0x%08x size=%u before=0x%08x/%u after=0x%08x/%u\n",
+                     static_cast<unsigned>(entry.address), static_cast<unsigned>(entry.size), 0u,
+                     static_cast<unsigned>(entry.used_before), static_cast<unsigned>(entry.next_address),
+                     static_cast<unsigned>(entry.used_after));
+    }
+    std::fprintf(stdout, "RODAK_HEAP_MAP end\n");
+    std::fflush(stdout);
+    heap_caps_free(capture);
+}
+}  // namespace
+#endif
+
 bool SerialProvisioningService::HandleLine(const std::string& line) {
 #ifdef RODAKOS_RELEASE_TESTS
     if (voice_lifecycle_diagnostic_ != nullptr) {
@@ -352,6 +426,10 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
             std::fflush(stdout);
             return false;
         }
+    }
+    if (line == "RODAK_RELEASE_TEST_V1 heap_map") {
+        PrintInternalHeapMap();
+        return true;
     }
     if (line == "RODAK_RELEASE_TEST_V1 voice_prepare_take") {
         PrintVoicePreparePrioritySnapshot();

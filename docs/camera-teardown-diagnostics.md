@@ -486,3 +486,33 @@ internal free 25,487 B、largest 6,144 B，AES/panic/abort 为 0。串口 SHA-25
 
 该截止时间同时覆盖 DTLS ALLOC_FAILED 后 SDK 不报告失败的场景，但未在实机重新制造该内存失败；
 截止前 20 秒内会话仍占用资源。停止后 8,192 B 恢复、任意 OOM 与八小时资格继续 **NO_GO**。
+
+## 2026-10-11 DTLS 失败复现与停止后连续块归因（084diag / 085）
+
+**DTLS 内存失败复现（084diag，未提交）**：在 084 上临时将 mDNS 改回内部 RAM，复位后单次中断触发
+mDNS，再跑 Camera + Photos。peer 打开前 internal/DMA largest 5,120/3,968 B，候选阶段 DMA largest 降至
+80 B；本次 DTLS 握手成功，随后首个 `mbedtls_ssl_read` 返回 `-141`（`PSA_ERROR_INSUFFICIENT_MEMORY`），
+伴随 AES 分配失败与 MQTT 断线。esp_peer 自行检测到 DTLS 关闭（`-30848`）并报告 `Peer disconnected`，
+Camera 由既有终止路径在 0.5 秒内完整关闭。内存失败可复现，但本次 SDK 报告了失败，082 的“不报告、
+会话不关闭”路径未再出现，因此 084 的 20 秒截止时间没有在真实内存失败中触发；截止时间仍由宿主
+测试与实机无应答会话覆盖。复现结束后已恢复 mDNS PSRAM 的 `sdkconfig`。串口 SHA-256
+`b88ef8f15d3a9557ca224bc5b6d5f03266f005d7cc895e38b7bbdd00db40f5ba`。
+
+**停止后连续块归因（085 release-test 诊断）**：新增仅在 `RODAKOS_RELEASE_TESTS` 构建中编译的串口命令
+`RODAK_RELEASE_TEST_V1 heap_map`，用 `heap_caps_walk` 列出内部堆所有 ≥512 B 空闲段及两侧已用块大小
+（捕获结构放在 PSRAM，回调在堆锁内只写固定存储）。
+
+- 本地 Camera → Home 两轮：Camera 前 8,296 B 空闲段（0x3fcc780c）在停止后为 8,192 B，健康期 largest
+  恢复 8,192 B；本地预览与 Home return reserve 路径不残留碎片。串口 SHA-256
+  `1940926234d2dd09e5d5b91da3768ace9bc6d4e61ad4435748c0463f73994099`。
+- Rodak 远端（WebRTC）Camera 六轮：第一轮后同一 8 KiB 段被一块 84 B 常驻分配切成 6,804 B + 1,296 B，
+  另有两段约 6.1 KiB 空闲段被小块常驻分配占满；之后五轮停止后 largest 始终为 6,656 B、internal free
+  在 13.6–14.4 KB 之间波动，不再逐轮下降。因此停止后 6,144–6,656 B 来自**首个远端会话**一次性留下的
+  小块常驻内部分配（推测为 WebRTC/DTLS/lwIP 首次使用时初始化且不释放的对象），不是每次会话的泄漏，
+  也不是本地 Camera 或 Home 重建造成。串口 SHA-256
+  `a773b9e57e101cb99ea25c4fd47802df3e4fb04517791bfd54db31ec4db41ad2`、
+  `f2aa9059189da57f6ea44b10141c482b19e85ad42cff3391594ecd99019929f3`。
+
+下一步需定位这块 84 B 及其他首次远端会话常驻块的分配者（heap tracing standalone + 调用栈，或在首个
+远端会话前预热/预留），以决定把它们移到 PSRAM 还是在启动阶段预先分配；在此之前停止后 8,192 B
+门禁继续 **NO_GO**。设备已恢复已发布的普通 084 包 `20261011-100244`（main SHA-256 `6270df46…`）。

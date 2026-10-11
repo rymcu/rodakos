@@ -890,3 +890,37 @@ internal free was 25,487 bytes with 6,144-byte largest; AES/panic/abort were zer
 The deadline also bounds the DTLS ALLOC_FAILED case where the SDK reports nothing, but that memory
 failure was not re-created on hardware, and resources stay held for up to 20 s. Post-stop 8,192-byte
 recovery, arbitrary OOM and qualification remain **NO_GO**.
+
+### 2026-10-11 DTLS failure reproduction and post-stop largest attribution (084diag / 085)
+
+**DTLS memory failure (084diag, not committed)**: 084 with mDNS temporarily back in internal RAM,
+fresh boot, one outage to start mDNS, then Camera plus Photos. DMA largest fell to 80 bytes during
+candidate exchange; DTLS handshake succeeded, then the first `mbedtls_ssl_read` returned `-141`
+(`PSA_ERROR_INSUFFICIENT_MEMORY`) with an AES allocation failure and an MQTT disconnect. esp_peer
+itself detected the DTLS close (`-30848`) and reported `Peer disconnected`; the existing path closed the
+Camera completely within 0.5 s. The memory failure reproduces, but the SDK reported it, so 084's 20 s
+deadline was not exercised by a real memory failure; it remains covered by host tests and the
+on-device no-answer session. `sdkconfig` was restored afterwards. Serial SHA-256
+`b88ef8f15d3a9557ca224bc5b6d5f03266f005d7cc895e38b7bbdd00db40f5ba`.
+
+**Post-stop largest (085 release-test diagnostic)**: a serial command `RODAK_RELEASE_TEST_V1 heap_map`,
+compiled only into `RODAKOS_RELEASE_TESTS` builds, lists every internal free span of at least 512 bytes
+with the sizes of the used blocks on both sides (capture stored in PSRAM; the walker callback only
+writes fixed storage under the heap lock).
+
+- Two local Camera → Home cycles: the 8,296-byte span at 0x3fcc780c is 8,192 bytes after stop and the
+  health largest returns to 8,192 bytes; the local preview and Home return reserve leave no fragments.
+  Serial SHA-256 `1940926234d2dd09e5d5b91da3768ace9bc6d4e61ad4435748c0463f73994099`.
+- Six Rodak remote (WebRTC) Camera cycles: after the first, an 84-byte resident allocation splits that
+  span into 6,804 + 1,296 bytes and two ~6.1 KiB spans are filled by small resident blocks. The next
+  five cycles all settle at 6,656-byte largest with internal free between 13.6 and 14.4 KB, with no
+  per-cycle decline. The post-stop 6,144–6,656 bytes therefore come from small resident internal
+  allocations left once by the **first remote session** (likely objects WebRTC/DTLS/lwIP initialize on
+  first use and keep), not a per-session leak and not local Camera or Home. Serial SHA-256
+  `a773b9e57e101cb99ea25c4fd47802df3e4fb04517791bfd54db31ec4db41ad2`,
+  `f2aa9059189da57f6ea44b10141c482b19e85ad42cff3391594ecd99019929f3`.
+
+Next: identify the allocator of that 84-byte block and the other first-session residents (standalone
+heap tracing with call stacks, or warm-up/reservation before the first remote session) to decide
+between moving them to PSRAM or pre-allocating at boot. Until then the post-stop 8,192-byte gate stays
+**NO_GO**. The device is back on the published ordinary 084 package `20261011-100244` (main SHA-256 `6270df46…`).
