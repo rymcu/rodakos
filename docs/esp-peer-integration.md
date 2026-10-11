@@ -1,38 +1,46 @@
-# BigSmart WebRTC 组件集成记录
+# BigSmart WebRTC peer integration
 
-RodakOS 将 Espressif `esp_peer` 组件作为 BigSmart 视频流的底层 PeerConnection 实现。组件来源：
+RodakOS uses the Espressif `esp_peer` component as the PeerConnection for BigSmart video streams.
+This document gives the component source, the local changes, the required configuration, and the
+known defects. Release evidence for each firmware package is in
+[OTA release readiness](ota-release-readiness.md).
 
-- 仓库：https://github.com/espressif/esp-webrtc-solution
-- 路径：`components/esp_peer`
-- 版本：`1.5.6`
-- 目标：ESP32-S3
-- 许可证：组件随源代码附带的 Espressif Modified MIT，仅允许配合 Espressif 产品使用；
-  BigSmart 使用 ESP32-S3，符合该限制。`esp_libsrtp` 使用其组件许可证。
-- 完整保留上游 `include/`、`src/`、各芯片的预编译 `libs/` 和 `LICENSE`；构建按
-  `IDF_TARGET` 选择库，BigSmart 使用 `libs/esp32s3/libpeer_default.a`。
+## Component source
 
-本地适配包括 IDF 6 / Mbed TLS 4 的 DTLS 源码选择及私有标识符声明、PSA ECDSA
-算法与 TLS 证书选择保持一致，以及 `media_lib_weak.c` 使用 PSRAM 分配。升级组件时必须
-保留这些改动及许可证，并同时检查预编译库与源码版本。
+| Item | Value |
+|---|---|
+| Repository | https://github.com/espressif/esp-webrtc-solution |
+| Path | `components/esp_peer` |
+| Version | `1.5.6` |
+| Target | ESP32-S3 |
+| Prebuilt library | `libs/esp32s3/libpeer_default.a` |
+| Library SHA-256 | `6b2f3856b9a1639b0480c011688c070c132b6399e9863a74d20d20a271dc7da3` |
+| License | Espressif Modified MIT, in `components/esp_peer/LICENSE` |
 
-当前已接入以下代码路径：
+The license permits use only with Espressif products. BigSmart uses an ESP32-S3, so it meets this
+condition. The `esp_libsrtp` dependency uses its own component license.
 
-- RodakOS 信令客户端和 `esp_peer` 主循环；
-- WebRTC DataChannel JPEG 分片发送；
-- `camera.stream.start/stop` 命令；
-- Rodak 端 SDP/ICE 会话和 JPEG 重组播放。
-- 320×240 LVGL partial flush 区域拼接、独立 JPEG worker 和仅保留最新帧的屏幕流；
-- 默认只读的 `screen-jpeg` 与显式授权的 `screen-control` 双 DataChannel；
-- 本地触摸优先、保持释放坐标，以及当前可见焦点 textarea 的 UTF-8 文本注入；
-- Home / Back、文本确认与键盘收起、停止和断线时释放远程控制。
+The repository keeps the upstream `include/`, `src/`, `LICENSE`, and the prebuilt `libs/` for all
+chips. The build selects the library from `IDF_TARGET`.
 
-实机内存注意事项：BigSmart 同时运行语音唤醒和 DVP DMA 时，内部堆的最大连续块不足以容纳
-mbedTLS 的 DTLS 输入缓冲。固件使用 `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`，把 DTLS
-记录、握手状态和密钥材料放到 PSRAM；`esp_peer` 的媒体分配、摄像头任务和 JPEG 任务也使用
-PSRAM。否则 `esp_peer_open`
-会把 DTLS 初始化失败折叠为 `ESP_PEER_ERR_NO_MEM (-2)`。
+## Local changes
 
-ESP-IDF 6.0.2 需要以下配置才能编译 `esp_peer` 的 DTLS-SRTP 实现：
+The files in `components/esp_peer/src/` are not identical to upstream. Keep these changes when you
+upgrade the component:
+
+1. The build selects `src/dtls_srtp_v6.c` for ESP-IDF 6.0 and later, and `src/dtls_srtp.c` for
+   earlier versions. `dtls_srtp_v6.c` declares the Mbed TLS 4 private identifiers that it uses.
+2. The PSA ECDSA algorithm matches the certificate that the TLS stack selects.
+3. `src/media_lib_weak.c` allocates media memory from PSRAM.
+4. `src/dtls_srtp_v6.c` frees the CTR_DRBG context before the self-signed certificate path seeds
+   it again. See [DTLS CTR_DRBG mutex leak](#dtls-ctr_drbg-mutex-leak).
+
+After an upgrade, compare the prebuilt library version with the source version. The source and
+the library must come from the same release.
+
+## Required configuration
+
+ESP-IDF 6.0.2 compiles the `esp_peer` DTLS-SRTP code only with these options:
 
 ```ini
 CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
@@ -40,149 +48,208 @@ CONFIG_MBEDTLS_SSL_DTLS_SRTP=y
 CONFIG_MBEDTLS_X509_CREATE_C=y
 ```
 
-当前 `CameraService` 已提供 `CaptureJpeg` 和有界速率 `StartJpegStream`，由 `WebRtcCameraService` 发送器消费。
+The firmware also sets `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`. This option puts DTLS records,
+handshake state, and key material in PSRAM. Without it, the largest free internal block is too
+small for the DTLS input buffer when voice wake and the DVP camera DMA run at the same time.
+`esp_peer_open` then reports the DTLS failure as `ESP_PEER_ERR_NO_MEM (-2)`.
 
-信令编码注意：Mbed TLS Base64 编码目标容量必须为 `4 * ceil(n / 3) + 1`，最后一字节供终止符使用；容量只分配编码长度会使所有非空 SDP/ICE 返回 `BUFFER_TOO_SMALL`。MQTT 解码后的 SDP 送入 `esp_peer_send_msg` 前也必须补终止符，`message.size` 保持文本长度。
+The `esp_peer` media allocations, the camera task, and the JPEG task also use PSRAM.
 
-## 027 显式 candidate 容量与资源采样
+## Peer configuration
 
-Camera/Display 统一使用 `webrtc-peer-config.h`，通过 SDK 公开 `extra_cfg` 显式传入
-`max_candidates=32`。原 50 ms agent timeout、400 KiB 双 DataChannel cache、可靠有序通道、
-Stop 锁与任务清理不变，也不启用 IPv6/TCP 或改写、丢弃候选。零值在当前 ESP32-S3 库中
-实际表示 10，与头文件所写默认 16 不同；此结论来自固定库反汇编与 DWARF，未改 vendor
-二进制。库 SHA-256 为 `6b2f3856b9a1639b0480c011688c070c132b6399e9863a74d20d20a271dc7da3`。
+`main/phone_os/webrtc-peer-config.h` gives the shared settings for the Camera peer and the Display
+peer:
 
-目标 ABI 的 SDK 配置大小仍为 68 B、max_candidates 偏移 55。容量 10→32 使每 peer 的两张
-candidate 表、pair 表与排序表合计增加 5,984 B；pair 上限仍 64。排序表增加的 176 B 优先
-占 internal，其余大表优先 PSRAM 但可能 fallback，不代表 internal/DMA 余量不变。
+| Setting | Value |
+|---|---|
+| `max_candidates` | 32, set through `extra_cfg` |
+| Agent receive timeout | 50 ms |
+| Data channel send cache | 400 KiB |
+| Data channel receive cache | 400 KiB |
+| Data channels | reliable, ordered |
+| IPv6 | off |
+| TCP candidates | off |
 
-`peer_resources` 在 open 前/后/失败、启动失败清理后、SDP/candidate SDK 调用返回、连接及
-native Stop 清理后采样 internal/DMA/PSRAM 的 free/largest。每次信令更新该次 Start 的
-`sampled_min_*`；SDP 及第 1/10/18/32/33 次 candidate 调用打印检查点，最终 Stop 保留累计
-调用数与采样最低值。`generation` 仅为该 service 的诊断代次，`candidate_calls` 包含重复与
-失败调用，均不替代 MQTT 实例身份或 SDK admission；没有新增基于调用次数的拒绝或成功判断。
-采样点最低值不是连续峰值或启动以来的最低内存。日志在原 service 锁保护下执行，有观察
-成本；Stop 样本在 peer task 自删除前，后续静默窗口仍须独立采集。
+A zero `max_candidates` value means 10 in the ESP32-S3 library. The header says 16. This result
+comes from the disassembly and DWARF data of the fixed library. The repository does not change the
+library binary.
 
-固定观察器无新 heap 容器；Xtensa 实测为 32 B，Camera 对象 80→112 B，Display 对象
-1,144→1,176 B，两静态 service payload 合计 +64 B，不能等同于完整链接 BSS/堆净差。
-软件证据由[完整双 TU host 目标](../tests/display_control_ack_service/README.md)提供；fake
-只验证配置传递、失败清理、候选原文转发和诊断边界，不证明真实 SDK 容量、DMA 归还或物理
-结果。026 的低内存、candidate overlimit、Camera STREAMOFF 与发布 NO_GO 不因配置修改
-自动关闭；027 具名包与独立实机验收另行记录。
+The SDK configuration structure is 68 bytes. `max_candidates` is at offset 55. The change from 10
+to 32 candidates adds 5,984 bytes per peer to the candidate tables, the pair table, and the sort
+table. The pair limit stays at 64. The sort table adds 176 bytes, and it prefers internal RAM. The
+larger tables prefer PSRAM, but they can fall back to internal RAM.
 
-## 2026-10-06 软件生命周期补充
+## Implemented features
 
-流实例绑定 MQTT generation/epoch 和不复用 nonce；Start/Stop/远程信令串行化，断线先撤销，
-再在 worker 中停止旧 peer。旧同名 session 回调不能清除替换实例；已经进入 SDK 的单次操作
-允许完成，随后收尾，不代表物理撤回。
+- The RodakOS signaling client and the `esp_peer` main loop.
+- JPEG frames in chunks on a WebRTC data channel.
+- The `camera.stream.start` and `camera.stream.stop` commands.
+- The Rodak SDP and ICE session, and JPEG reassembly for playback.
+- The screen stream: 320 × 240 LVGL partial-flush regions, a dedicated JPEG worker, and only the
+  latest frame in the queue.
+- Two Display data channels: `screen-jpeg` (read-only by default) and `screen-control` (needs
+  explicit permission).
+- Remote input: local touch has priority, the release position stays, and UTF-8 text goes to the
+  visible focused text area.
+- Home and Back, text confirmation, keyboard close, and release of remote control on stop or
+  disconnect.
 
-026 的精确 Stop 使用原 Start 命令号 `startCommandNo`，与 `sessionId` 一起指向实例。
-成功结果以 `stopOutcome: stopped / already_stopped` 区分本次完成停止和此前已完成清理；
-后者要求当前 generation/epoch/authority 内最新已完成实例的证明，未知或不匹配身份仍失败。
-证明只在成功 Start 对应的原生 Stop 返回后建立，不把 terminal 回调、撤销或 UI 已关闭当成
-清理完成。精确 Stop 缓存成功还核验原实例和连接作用域；原记录不改写。未传启动身份的
-旧客户端仅保留活跃 session 的 Stop，无法对同名重用提供强实例隔离。字段、错误、去重
-窗口与软件/物理边界统一见 [Exact stream Stop 合同](rodak-aiot-contract-v1.md#exact-stream-stop-026)。
+## Signaling encoding
 
-屏幕输入由生产 `RemoteInputController` 管理，文本/按键/指针/延迟导航在最终 LVGL 入口
-复查 stream lease 和独立 enable grant；旧 cleanup 不释放新 owner 的指针，析构使遗留回调
-失效。`DisplayControlAckTracker` 用实际 peer 实例标识隔离旧 reply、旧已取出批次和新实例
-复用的序号，最终 sender 还在 peer API 锁内复查。显式控制授权、只读默认和限速保持。
+The Mbed TLS Base64 output buffer must hold `4 * ceil(n / 3) + 1` bytes. The last byte holds the
+terminator. If the buffer holds only the encoded length, every non-empty SDP or ICE message returns
+`BUFFER_TOO_SMALL`.
 
-`tests/remote_input` 的 15 项真实 LVGL/生产 helper 测试，以及完整编译生产显示服务的
-`tests/display_control_ack_service` 的 13 项 ACK 编码/发送测试均通过 Debug 和 sanitizer。
-后者仅用 peer API fake 捕获真实参数和字节，不证明 SCTP/WebRTC 出线。结合真实 MQTT 服务
-的生命周期测试，软件可验证实例隔离；下方旧 COM3 证据不自动覆盖本轮改动。
+MQTT decoding does not add a terminator to the SDP. Add one before you send the SDP to
+`esp_peer_send_msg`. Keep `message.size` equal to the text length, without the terminator.
 
-## 2026-10-07 / 018 ACK 重试、取消与设备边界
+## Camera session deadline
 
-018 源码 `d251791` 中的 `c48d55a` 在原 peer instance 内保留 ACK 队首，仅对
-`WOULD_BLOCK/NO_MEM` 做后续轮次重试；SDK 接受后出队，后续 ACK 不越过 FIFO，设备动作
-不重放。上限是从首次发送尝试起一秒或 50 次，不是从浏览器点击计时；桌面三秒 timeout
-未修改。等待时继续 `esp_peer_main_loop` 并让 JPEG 发送让路，分片之间发现待发 ACK 时
-放弃剩余 latest-only 帧。
+`WebRtcCameraService::Config::connect_timeout_ms` sets a connection deadline. The default value is
+20,000 ms. `Start` rejects the value 0.
 
-JSON 的所有字段和输出缓冲都成功后才发送；不发送 `{}` 或残缺 ACK。reason 复制 OOM
-保留队首身份与预算，入队 OOM/32 项溢出、不可恢复错误或重试耗尽终止原实例。Stop/Start
-仍撤销旧 ACK；旧序号或同名 session 不能将回执迁到新 peer。
+1. `Start` sets the deadline before it calls `esp_peer_new_connection`.
+2. The deadline stops when the `camera-jpeg` channel opens.
+3. If the deadline expires first, the peer task stops the session with `CONNECT_FAILED`. It uses the
+   same stop path as an SDK failure. The peer closes, the JPEG stream and the remote preview stop,
+   and MQTT reports `failed` to Rodak.
 
-RemoteInputController 在 page transition/local touch/disable 时，使用固定容量集合移出
-待取消回调并在锁外回复 `page_transition/local_touch_active/control_disabled`；已经执行的
-导航保留其实际结果，尚未执行的导航取消后不重复回复。pointer 的 `accepted=true` 只证明
-最终输入入口接受样本，不能视为其后 LVGL 点击及业务操作成功。
+The deadline is necessary because `esp_peer` does not report every handshake failure. In one device
+test, the DTLS server handshake returned `MBEDTLS_ERR_SSL_ALLOC_FAILED` and then retried with
+`MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE`. The `esp_peer` main loop continued, and no terminal state
+came. Without the deadline, the session held the peer and the camera with no limit.
 
-完整生产 ACK 与取消入口 **21 项**、生产 helper 与真实 host LVGL **20 项**分别通过
-Debug/ASan/UBSan/leak。旧 `c755358` 生产源码同套件分别有 **8 / 4 项失败**；覆盖临时压力、
-FIFO、实例替换、部分 JSON、reason/队列分配失败、满队列无分配取消、真实取消回调末端
-OOM、限时终止与 JPEG 让路。这些 host tests 不模拟无线调度或证明端到端时延。
+The deadline is longer than the 15-second first-frame timeout in the Rodak renderer. Thus the
+device does not stop a session that the user interface still waits for.
 
-018 包 `20261007-120809` 已通过保 NVS 刷写与启动确认，但首个 Camera 退出窗口在
-`Closing app: camera` 后串口静默，直到受控 RTS reset，不能算通过。复位后的独立窗口
-Camera 正常退出后，A3 三次解码成功；第三次 down83 的 accepted 回执耗时 **7.745 秒**，
-up84 在 **7.741 秒**后被拒绝 `control_disabled`，自动 disable85 的 accepted 回执耗时
-**4.741 秒**。不能把这些结果写成“动作均成功，只是 ACK 丢失”；取消释放是否触发后续
-LVGL 点击及迟到发生在哪个阶段，需独立软件/实机验证。
+## Known defects
 
-JPEG 分阶段采样记录约 **8,084 B** 编码器内部瞬时占用；MbedTLS 和任务栈使用 PSRAM
-不代表 JPEG codec 全部工作区也在 PSRAM。018 没有 allocator 迁移。完整包身份、两段
-日志和开放门禁见 [媒体验收](media-browsing.md#018-camera-分配保护ack-与阶段诊断) 与
-[发布检查](ota-release-readiness.md#2026-10-07-resource-and-ack-diagnostics-018)，发布保持 NO_GO。
+### DTLS CTR_DRBG mutex leak
 
-## 019 取消手势与 LVGL 状态
+**Status:** fixed locally in `src/dtls_srtp_v6.c`. Not reported upstream yet.
 
-源码 `42b12ccd183577a331433a69218c8fcc6191a0ee` 修正已在真实 host LVGL 复现的取消边界：
-远程 down 已读取时，仅清除待处理 up 并回复拒绝仍可能让下一次普通 RELEASED 触发 CLICKED。
-现在取消无条件推进代次，controller 先交付取消释放，bridge 在 LVGL 线程重置旧远程手势，
-再读取新的按下。物理 pressed 先发布、OnLocalTouch 后执行的交接也会重置；正常 up、
-物理自身点击及已最终准入操作保留原语义。此修正不解释所有远控迟到，也不改变 ACK 的
-原实例 FIFO 或一秒/50 次发送重试预算。
+**Symptom:** after the first remote Camera session, the largest free internal block decreases from
+8,192 bytes to 6,144–6,656 bytes. It does not recover after the session stops. Later sessions do not
+decrease it more.
 
-RemoteInput **30 项 Debug/ASan/UBSan/leak**、ACK **21 项 ASan**、Home **43 项 ASan**通过。
-真实 LVGL 新场景包括 disable/revoke/page transition/local takeover、快速 reenable/new-down、
-up 出队后取消，以及两种物理接管先后顺序；条件代次/缺少 reset 的负变异分别失败 **2 / 8 项**。
-记录位于 WSL `~/.cache/rodakos-cancel-019-evidence/`，不借 018 全量结果证明 019。
+**Cause:** `dtls_srtp_try_gen_cert` seeds `dtls_srtp->ctr_drbg` with `mbedtls_ctr_drbg_seed`. When
+no cached certificate exists, it then calls `dtls_srtp_selfsign_cert`. That function seeds the same
+context again. `mbedtls_ctr_drbg_seed` always initializes the context mutex. The second call
+replaces the first mutex and does not free it.
 
-包 `20261007-122610` / `media-control-cancel-019` 的 main **7,119,152 B**，SHA-256
-`665fffea5212885d839290bebaec20500d7690367b80cfb89436281cd454e278`；保 NVS 刷写及
-Recovery/main/Home/OTA 确认通过，原 bound/tokenVersion=4、MQTT 连接保持。
-随包 Camera 阶段日志 `13b8d3f` 仅帮助定位退出停顿；JPEG allocator 未改变。
-019 screen-first Camera 仍在 DMA largest=6,656 B 时失败；停止 screen 后恢复，实际运行
-56.779 秒 / 792 帧并完成全部退出阶段，不能因此关闭 018 停顿的原因调查。
+With `MBEDTLS_THREADING_C`, each mutex is a FreeRTOS queue of 84 bytes in internal RAM. Only the
+first connection makes a certificate. Later connections use the cached certificate and seed the
+context one time. Thus the leak occurs one time per boot.
 
-定向取消窗口中，held-down93 accepted 后停用远控，up94 rejected/control_disabled（20 ms）、
-disable95 accepted（22 ms），没有额外 PNG 加载；重新授权后正常 retry97/98 accepted，
-A3 190 ms 解码成功。后续压力 retry99/100 仍在 3.870/3.869 秒后拒绝，disable101 accepted
-耗时 868 ms，三个输入在 controller 解析入口同一设备日志时间出现，没有第三次 PNG 加载。
-日志未记录 ACK retry，入口之前的 SDK/网络/调度迟到仍需拆分验证；取消误点击的定向通过
-不等于端到端响应通过。串口入口日志到达主机分别在发送后 3,861/3,860/857 ms，ACK 在其后
-9–11 ms 到达；该主机时间包含 USB/日志缓冲，不能作为精确网络时延。
+The Mbed TLS contract prohibits this sequence. The `ctx` documentation of `mbedtls_ctr_drbg_seed`
+says: "After a successful call to mbedtls_ctr_drbg_seed(), you may not call mbedtls_ctr_drbg_seed()
+again on the same context unless you call mbedtls_ctr_drbg_free() and mbedtls_ctr_drbg_init() again
+first."
 
-已记录 JPEG 周期合计148/148/0，无捕获到的 panic/abort/reboot；Home、screen/remote stop
-收尾没有重启，COM3 已释放。最终 MQTT/wake 连接与监听正常，但 internal largest 7,680 B
-仍小于 8 KiB soak 门槛。证据为 Rodak `.codex-temp/resource-window-019/serial.log`、
-`serial-timing.jsonl`、`control-final.json` 与 `result.json`，发布 NO_GO 保持；制品完整身份见
-[019 媒体记录](media-browsing.md#019-取消远程手势的修正与制品)。
+**Fix:** call `mbedtls_ctr_drbg_free` and then `mbedtls_ctr_drbg_init` before
+`dtls_srtp_selfsign_cert`.
 
-## 2026-10-01 验证
+**Evidence:** a heap trace with 12-frame call stacks found the 84-byte block in the old 8 KiB free
+span. The allocation chain was `xQueueCreateMutex` ← `pthread_mutex_init` ← `mbedtls_mutex_init` ←
+`mbedtls_ctr_drbg_seed` ← `dtls_srtp_try_gen_cert` ← `peer_open` ← `esp_peer_open` ←
+`WebRtcCameraService::Start`. In the heap map, this block split the 8,296-byte span into 6,232 and
+1,972 bytes.
 
-- ESP-IDF 6.0.2 构建通过；`tests/home_ui` 使用真实 LVGL，34 tests / 0 failures。
-- COM3 非擦除刷新包 `20261001-062518`，Recovery → main → Home → 本地 OTA
-  确认全部通过。主镜像 SHA-256：
-  `f9a173df857d7d2af6944798fc03209a25f72f787ce8a2e6ffdca410dc9a8bb5`。
-- Rodak 文本 E2E 通过视觉复验，Folder 字段实际显示 `远程控制中ABC`；无焦点拒绝保留
-  控制租约，Cancel 和重复 Home 恢复原桌面，退出后两个通道及 PeerConnection 关闭。
-- 五分钟屏幕流验证包含 4 轮、3 次重建、57 个采样及 283 张 JPEG；6 个总会话均为
-  320×240，双通道、只读默认值、camera/display 互斥以及停止/导航清理通过。相机启停
-  3/3 通过，流运行期间没有设备复位。
+**Upstream:** the same code is in the `main` branch of `espressif/esp-webrtc-solution`, file
+`components/esp_peer/src/dtls_srtp_v6.c`. Report it in that repository. Do not report it to Mbed TLS
+or ESP-IDF. Their behavior matches their documentation.
 
-实测首帧为 5.228–11.861 秒，静态 Home 约 1 FPS；请求上限 5 FPS 不代表实测持续帧率。
-服务关闭和恢复后，既有 MQTT outbox 隔离策略触发过一次主动复位，不能归为屏幕流崩溃。
+The leak fix alone does not restore 8,192 bytes. See
+[GPIO ISR table in the largest free block](#gpio-isr-table-in-the-largest-free-block) and
+[Interrupt vector descriptor in the largest free block](#interrupt-vector-descriptor-in-the-largest-free-block).
 
-以下证据为本机生成物，不提交到 Git：
+### GPIO ISR table in the largest free block
 
-- `build/host-home-ui/Testing/Temporary/LastTest.log`
-- `build/logs/display-text-final-soak/serial.log`
-- `build/logs/display-text-final-soak-tail/serial.log`
-- 邻接 Rodak 仓库的 `build/logs/e2e-display-text-result.json`
-- 邻接 Rodak 仓库的 `build/logs/display-text-final-soak/e2e-display-result.json`
+**Status:** fixed locally in `main/main.cc`. This is not an `esp_peer` defect.
+
+**Symptom:** with the DTLS fix, the largest free internal block is 6,144 bytes after the first Camera
+session. A used block of 400 bytes is at the end of the 6,144-byte free span.
+
+**Cause:** at boot, no driver installs the GPIO ISR service. The buttons use polling, and the touch
+panel interrupt pin is not connected. The DVP camera driver calls `gpio_install_isr_service` in
+`esp_cam_new_dvp_ctlr_ext` on the first `VIDIOC_STREAMON`. ESP-IDF then allocates the handler table
+(`GPIO_NUM_MAX` entries of 8 bytes, 392 bytes) from internal RAM. ESP-IDF does not free the table.
+The table goes into the largest free block that exists at that time.
+
+**Fix:** `app_main` calls `gpio_install_isr_service(ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM)`
+before `esp_board_manager_init`. The DVP driver uses the same flags. Its own call returns
+`ESP_ERR_INVALID_STATE`, and the driver ignores that result. The button driver uses the GPIO ISR
+service only in power-save mode. The BigSmart board does not enable power-save mode.
+
+**Evidence:** a release-test allocation probe recorded each internal allocation of 388 to 400 bytes.
+Only one record was in the old 8 KiB span: 392 bytes from `gpio_install_isr_service` ←
+`esp_cam_new_dvp_ctlr_ext` ← `dvp_video_start` ← `esp_video_ioctl_streamon`. Full heap tracing did
+not find it, because the tracing wrappers changed the heap layout.
+
+### Interrupt vector descriptor in the largest free block
+
+**Status:** fixed locally in `main/main.cc`. This is not an `esp_peer` defect.
+
+**Symptom:** with the DTLS fix and the GPIO ISR fix, the largest free internal block is still
+6,144 bytes after the first Camera session. A used block of 16 bytes is at the end of the
+6,144-byte free span.
+
+**Cause:** ESP-IDF `intr_alloc` creates a `vector_desc_t` (16 bytes) the first time it uses a CPU
+interrupt line. `esp_intr_free` does not free the descriptor. On the first `VIDIOC_STREAMON`, the
+DVP camera driver allocates the GDMA RX interrupt on the CPU of the caller. On that CPU, the selected
+line had no descriptor yet. Thus the new descriptor went into the largest free block, and it stayed
+there after the camera stopped.
+
+**Fix:** before `esp_board_manager_init`, `app_main` runs a warm-up on each CPU through
+`esp_ipc_call_blocking`. The warm-up allocates disabled low/medium-priority interrupts from sources
+that the firmware does not use, until it uses all free lines. Then it frees all of them. The
+descriptors stay in low memory, and later drivers use them again. The boot log gives the number of
+lines for each CPU: 10 on CPU 0 and 15 on CPU 1.
+
+The first attempt allocated one disabled shared interrupt per CPU. It did not work: the GDMA RX
+interrupt on the ESP32-S3 is not shared, so it did not use the shared line.
+
+**Evidence:** a JTAG read of the `vector_desc_head` list found the 16-byte block at the end of the
+free span. It was the descriptor of interrupt 11 on CPU 1, with source `ETS_INTERNAL_UNUSED_INTR_SOURCE`
+after the camera stopped. After the warm-up, all descriptors are in the 0x3fce9xxx region. The
+8,296-byte span stays complete after each remote Camera session.
+
+## Release-test diagnostics
+
+These serial commands exist only in builds with `RODAKOS_RELEASE_TESTS=ON`. The normal firmware
+does not contain them.
+
+| Command | Result |
+|---|---|
+| `RODAK_RELEASE_TEST_V1 heap_map` | Lists each internal free span of 512 bytes or more, with the size of the used block on each side. |
+| `RODAK_RELEASE_TEST_V1 heap_trace_start` | Starts a leak trace. Needs `CONFIG_HEAP_TRACING_STANDALONE=y`. |
+| `RODAK_RELEASE_TEST_V1 heap_trace_dump` | Stops the trace and prints the internal allocations that are still alive. |
+
+The heap map and the trace buffer use PSRAM, so they do not change the internal heap that they
+measure. Do not commit `CONFIG_HEAP_TRACING_STANDALONE=y` to `sdkconfig`.
+
+## Test coverage
+
+`tests/display_control_ack_service` compiles the production `webrtc_camera_service.cc` and
+`webrtc_display_service.cc`. Fakes replace the SDK calls. The tests check configuration transfer,
+cleanup after failure, candidate forwarding, the connection deadline, and task retirement. They do
+not prove SDK capacity, DMA recovery, or physical results.
+
+`tests/remote_input` checks the remote input controller with real host LVGL.
+
+## History
+
+Each release record gives the package identity, the device evidence, and the open gates. The
+earlier version of this document kept that evidence here. Git history keeps that version.
+
+| Change | Record |
+|---|---|
+| 2026-10-01: first integration, screen stream, remote text input | Git history of this file |
+| 2026-10-06: stream instance isolation and exact stop | [Exact stream Stop contract](rodak-aiot-contract-v1.md#exact-stream-stop-026) |
+| 027: explicit candidate capacity and resource sampling | [OTA release readiness](ota-release-readiness.md) |
+| 018: ACK retry, cancel, and device limits | [Media browsing](media-browsing.md#018-camera-分配保护ack-与阶段诊断) |
+| 019: remote gesture cancel | [Media browsing](media-browsing.md#019-取消远程手势的修正与制品) |
+| 084: Camera connection deadline | [OTA release readiness](ota-release-readiness.md) |
+| 087: DTLS CTR_DRBG mutex leak | [OTA release readiness](ota-release-readiness.md) |
+| 091: GPIO ISR table installed at boot | [OTA release readiness](ota-release-readiness.md) |
+| 094: interrupt vector descriptors made at boot | [OTA release readiness](ota-release-readiness.md) |

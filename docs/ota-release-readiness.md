@@ -4020,3 +4020,71 @@ Camera 由既有终止路径在 0.5 秒内完整关闭。内存失败可复现�
 下一步需定位这块 84 B 及其他首次远端会话常驻块的分配者（heap tracing standalone + 调用栈，或在首个
 远端会话前预热/预留），以决定把它们移到 PSRAM 还是在启动阶段预先分配；在此之前停止后 8,192 B
 门禁继续 **NO_GO**。设备已恢复已发布的普通 084 包 `20261011-100244`（main SHA-256 `6270df46…`）。
+
+## 2026-10-11 远端 Camera 停止后 8,192 B 恢复 087–094
+
+085 的结论（首个远端会话留下常驻小块，导致停止后 largest 6,144–6,656 B）已逐块定位，共三个
+分配者，均为“首次使用时分配、之后不释放”，且恰好落在当时唯一的 8,296 B 空闲段内：
+
+1. **84 B：DTLS CTR_DRBG 互斥量泄漏（087，esp_peer 缺陷）**。12 帧 heap trace 调用栈为
+   `xQueueCreateMutex` ← `pthread_mutex_init` ← `mbedtls_mutex_init` ← `mbedtls_ctr_drbg_seed` ←
+   `dtls_srtp_try_gen_cert` ← `peer_open` ← `esp_peer_open` ← `WebRtcCameraService::Start`。
+   `dtls_srtp_try_gen_cert` 先 seed 一次 `ctr_drbg`，首次连接无缓存证书时 `dtls_srtp_selfsign_cert`
+   又对同一上下文 seed；`mbedtls_ctr_drbg_seed` 无条件初始化互斥量，第一个 84 B 队列被覆盖而泄漏
+   （每次开机一次，后续连接复用缓存证书）。Mbed TLS 文档明确禁止未 free+init 就再次 seed。修复：
+   `components/esp_peer/src/dtls_srtp_v6.c` 在自签名路径前 `mbedtls_ctr_drbg_free` +
+   `mbedtls_ctr_drbg_init`。上游同一代码位于 `espressif/esp-webrtc-solution` 的
+   `components/esp_peer/src/dtls_srtp_v6.c`，应在该仓库报告（尚未报告）。
+2. **392 B：GPIO ISR 服务表（091）**。开机时无驱动安装 GPIO ISR 服务（按键轮询、触摸中断脚未接），
+   DVP 驱动在首次 `VIDIOC_STREAMON` 的 `esp_cam_new_dvp_ctlr_ext` 中调用
+   `gpio_install_isr_service`，`GPIO_NUM_MAX × 8 = 392 B` 表从内部 RAM 分配且永不释放。完整 heap
+   tracing 因包装分配器改变了布局而看不到它；改用不改变布局的 `CONFIG_HEAP_USE_HOOKS` 分配钩子按
+   388–400 B 范围采样，唯一落在旧 8 KiB 段内的记录即此表。修复：`app_main` 在
+   `esp_board_manager_init` 前以与 DVP 相同的 `ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM` 预先安装，
+   DVP 自身调用返回 `ESP_ERR_INVALID_STATE` 并沿用该服务（BigSmart 未启用按键 power-save，不冲突）。
+3. **16 B：中断向量描述符（094）**。ESP-IDF `intr_alloc` 首次使用某 CPU 中断线时创建 16 B
+   `vector_desc_t`，`esp_intr_free` 只清标志不释放。DVP 在首次 STREAMON 时于调用者 CPU 分配 GDMA RX
+   中断，该线尚无描述符，于是描述符落入最大空闲段。通过 USB-JTAG 遍历 `vector_desc_head` 确认：
+   阻塞块 `0x3fcc91d8` 为 CPU1 中断 11 的描述符（停止后 source 为 `ETS_INTERNAL_UNUSED_INTR_SOURCE`）。
+   093 先尝试每 CPU 预分配一个禁用的共享中断作为锚点，无效：ESP32-S3 GDMA 中断不共享，不会复用共享线
+   （停止后仍 6,144 B）。094 修复：`app_main` 在
+   board manager 初始化前经 `esp_ipc_call_blocking` 在每个 CPU 上用固件不使用的中断源（蓝牙已关闭、
+   SDIO slave、UHCI、MCPWM、TWAI、eFuse）分配禁用的低/中优先级中断直到无空闲线，再全部释放；描述符
+   留在低地址，之后的驱动直接复用。启动日志：CPU0 10 条、CPU1 15 条；JTAG 复核所有描述符均位于
+   0x3fce9xxx。
+
+调试命令：release-test 构建保留 `heap_trace_start` / `heap_trace_dump`（仅在
+`CONFIG_HEAP_TRACING_STANDALONE=y` 时编译）；提交的 `sdkconfig` 保持 `CONFIG_HEAP_TRACING_OFF=y`、
+`CONFIG_HEAP_USE_HOOKS` 关闭。尺寸探针与 heap_peek 仅用于本次定位，未提交。
+
+**release-test 验证（Rodak UI 远端会话 ×3，每轮运行中、停止后 15 s、停止后 60 s 各一次 heap_map）**：
+
+| 候选 | 修复 | 三轮停止后 largest | 串口 SHA-256 |
+|---|---|---|---|
+| 087 | DTLS | 6,144 / 6,144 / 6,144 | `c108c543a5bce6b056658dfb39697437ef1f74f45f083818623777ef8b504261` |
+| 090 | DTLS | 6,144 / 6,144 / 6,144 | `760257ba8cfaa130bda69ef60a9587206ce7253a05e358c1c290c875a3080a3d` |
+| 092 | DTLS + GPIO ISR | 6,144 / 6,144 / 6,144 | `8f071ebfa59e7a95434832ca52caa6dc0a276cf6069d4d5055cd948f09e05844` |
+| 093 | + 共享中断锚点（无效） | 6,144 / 6,144 / 6,144 | `643b5ebd40b2ab1181ae4ca003b3269306aba124ded38c1785df98a31e5690eb` |
+| 094 | DTLS + GPIO ISR + 中断线预热 | **8,192 / 8,192 / 8,192** | `cf1915c92b56edf030440d5909e874ffe1cf9aee593d7994efe842dabfda68a8` |
+
+094 release-test 包 `20261011-231805` / `fix-094rt`（main SHA-256
+`f4e603a50d0164eace89c2f68f666c8114f0474aae3e8379f513ad95798bfaed`）：开机前 8,296 B 空闲段
+（0x3fcc7a3c）在三轮停止后均保持完整；三轮首帧 7.1–8.2 s（UI 侧）、设备首帧 63–94 ms，三次
+`CloseStream: device release complete`；Write fail、transport error、AES 分配失败、panic、abort 均为 0。
+停止后 internal free 在 12.9–18.6 KB 之间，不逐轮下降。
+
+普通包 `20261011-235020` / `camera-heap-fixes-094`（`RODAKOS_RELEASE_TESTS=OFF`，main 7,166,176 B，
+SHA-256 `daae64bf69f02a685a8c8bbf6efbe6850d7ceae3c419cf213fa345a7cdbdf093`，manifest SHA-256
+`b3525458622e40c047c2e314f7f91a600ffe0762862da3dce12bbf9c38b1f9a1`）：COM3 VerifyOnly、保留 NVS 仅写
+`otadata + ota_0`、Recovery → Main → OTA confirmation → Home 通过，启动日志记录 CPU0/CPU1 预热 10/15
+条中断线。Rodak 远端 Camera 一轮：会话前 Main health internal/DMA largest 8,192/8,192 B；设备首帧
+70 ms，停止后 `device release complete`、`phase=stopped`；停止后 0.2 s 起 Main health 即为
+internal/DMA largest 8,192/8,192 B，随后 90 秒保持（internal free 19,951 B）。Write fail、transport
+error、AES 分配失败、panic、abort 为 0。串口 SHA-256
+`18e5a54e7e4d9bd9c180d9854493660a8d5eef3e7613532554b700ab5e4a74ce`。
+
+Host：display_control_ack_service 4/4、mqtt_volume_service 8/8、camera_capture 9/9 在 Debug 与
+ASan/UBSan 下通过；ESP-IDF 6.0.2 构建、最终 ELF JPEG 分配门禁与 Camera teardown 审计通过。
+
+结论：远端 Camera 停止后 8,192 B 恢复门禁转为 **GO**（本地 Camera → Home 已于 085 验证）。任意 OOM、
+混合失败矩阵与八小时资格窗口继续 **NO_GO**。设备停留在普通 094 包。

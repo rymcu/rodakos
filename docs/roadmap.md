@@ -537,7 +537,7 @@ firmware build does not change an existing hardware gate.
 | --- | --- | --- |
 | Trusted server recovery | New-server-address/single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, non-scoped IPv6 and wider WSS Host compatibility; scoped IPv6 is unsupported. 009 passed bounded USB/port recovery, a 45-second known-hotspot outage and same-port unreachable→genuine address selection with numeric MQTTS/WSS after restart. Wrong-certificate/replay/expiry candidate variants, broader storage failures, damaged/missing-trust recovery and physical power cuts remain open. Preserve the stored authority version and Appearance publisher/origin confirmation | [Trusted server discovery](trusted-server-discovery.md), [RodakOS #33](https://github.com/rymcu/rodakos/issues/33) |
 | Signed firmware release | Production trust root and Rodak signed manifest, wired immutable-Recovery migration, actual power cuts, eight-hour identified-build soak | [OTA release readiness](ota-release-readiness.md) |
-| Resource recovery | Historical soak `20261009-014905` is NO_GO. Candidates 045–047 close stop-time `E:RX` and cover real 6,144/4,096 B DVP paths; 048–056 release Camera resources, reduce Home allocation and retain an 8,192 B internal/DMA block through Camera → Home; 057 raises wake-supervisor stack headroom to 4,432 B and enforces a 4,096 B minimum. Continue with physical image, arbitrary OOM, mixed media/network/audio failure matrices, production power-cut and qualification soak. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [051–056 evidence](ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056), [057 evidence](ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
+| Resource recovery | Historical soak `20261009-014905` is NO_GO. Candidates 045–047 close stop-time `E:RX` and cover real 6,144/4,096 B DVP paths; 048–056 release Camera resources, reduce Home allocation and retain an 8,192 B internal/DMA block through Camera → Home; 057 raises wake-supervisor stack headroom to 4,432 B and enforces a 4,096 B minimum; 087–094 restore the 8,192 B internal/DMA block after remote (WebRTC) Camera sessions. Continue with physical image, arbitrary OOM, mixed media/network/audio failure matrices, production power-cut and qualification soak. Resource/production NO_GO | [RodakOS #28](https://github.com/rymcu/rodakos/issues/28), [051–056 evidence](ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056), [057 evidence](ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057), [087–094 evidence](ota-release-readiness.md#2026-10-11-远端-camera-停止后-8192-b-恢复-087094), [Camera diagnostics](camera-teardown-diagnostics.md), [voice contract](voice-task-retirement.md) |
 | Home and Shell | Physical bidirectional swipes, Arrange, page restoration, touch/readability, Shell settings/buttons, three-page turnover using the isolated 25-app flavor | [Home validation](home-layout-design.md#validation-boundary), [hardware flavor workflow](firmware-download.md#three-page-home-hardware-gate) |
 | Voice | 040 provides one synthetic USB-wake endpoint snapshot. Ordinary OFF now has bounded synthetic evidence for six same-session turns, delayed follow-up/silence timeout, live-mic playback, and one VAD barge-in abort; server VAD segmentation remains an explicit boundary. Music resume, Recorder preemption, repeated wake suppression, TTS tail, real acoustic AEC/barge-in, false accept/reject, idle CPU, heap/PSRAM and long-duration measurements remain open | [Voice verification](voice-assistant.md#verification-gates), [six-turn evidence](ota-release-readiness.md#2026-10-09-六轮同-session-合成语音观察), [follow-up evidence](ota-release-readiness.md#2026-10-09-follow-up-silence-与超时观察), [barge-in evidence](ota-release-readiness.md#2026-10-09-合成-barge-in-与播放中断观察), [AEC integration](voice-aec-integration.md) |
 | Voice transport | Remaining terminal-error, stale-audio, and stop/deinitialization cancellation fault injection after recorded bounded reconnect/retry exhaustion | [Voice assistant](voice-assistant.md) |
@@ -924,3 +924,43 @@ Next: identify the allocator of that 84-byte block and the other first-session r
 heap tracing with call stacks, or warm-up/reservation before the first remote session) to decide
 between moving them to PSRAM or pre-allocating at boot. Until then the post-stop 8,192-byte gate stays
 **NO_GO**. The device is back on the published ordinary 084 package `20261011-100244` (main SHA-256 `6270df46…`).
+
+### 2026-10-11 Remote Camera post-stop 8,192-byte recovery (087–094)
+
+085's first-session residents are now attributed and fixed. Three allocations happen on first use,
+are never freed, and land in the only 8,296-byte internal span:
+
+1. **84 bytes, DTLS CTR_DRBG mutex leak (087, esp_peer defect)**: `dtls_srtp_try_gen_cert` seeds
+   `ctr_drbg`, then `dtls_srtp_selfsign_cert` seeds it again without `free` + `init`, which orphans
+   the first mutex (one 84-byte FreeRTOS queue per boot). `components/esp_peer/src/dtls_srtp_v6.c`
+   now frees and re-initializes the context first. The same code is upstream in
+   `espressif/esp-webrtc-solution`; not reported yet.
+2. **392 bytes, GPIO ISR service table (091)**: the DVP driver installed the service on the first
+   `VIDIOC_STREAMON`. `app_main` now installs it before `esp_board_manager_init` with the same flags.
+   Found with a layout-neutral `CONFIG_HEAP_USE_HOOKS` size probe; full heap tracing hid it.
+3. **16 bytes, interrupt vector descriptor (094)**: `intr_alloc` creates a `vector_desc_t` the first
+   time a CPU line is used and never frees it; the camera's GDMA RX interrupt took a new line on
+   CPU 1. A USB-JTAG walk of `vector_desc_head` named the block (CPU 1, interrupt 11). `app_main` now
+   allocates and frees every free low/medium line on both CPUs at boot with sources the firmware
+   never uses (10 lines on CPU 0, 15 on CPU 1). 093's single shared-interrupt anchor did not work
+   because the S3 GDMA interrupt is not shared.
+
+Release-test 094 (`20261011-231805` / `fix-094rt`, main SHA-256
+`f4e603a50d0164eace89c2f68f666c8114f0474aae3e8379f513ad95798bfaed`): three Rodak remote sessions
+each returned to 8,192 bytes largest after stop (087/090/092/093: 6,144 bytes); the boot-time
+8,296-byte span stayed whole; no Write fail, transport error, AES allocation failure, panic or abort.
+Serial SHA-256 `cf1915c92b56edf030440d5909e874ffe1cf9aee593d7994efe842dabfda68a8`. Host
+`display_control_ack_service` 4/4, `mqtt_volume_service` 8/8 and `camera_capture` 9/9 pass in
+Debug and ASan/UBSan.
+
+Ordinary package `20261011-235020` / `camera-heap-fixes-094` (`RODAKOS_RELEASE_TESTS=OFF`, main
+7,166,176 bytes, SHA-256 `daae64bf69f02a685a8c8bbf6efbe6850d7ceae3c419cf213fa345a7cdbdf093`, manifest
+SHA-256 `b3525458622e40c047c2e314f7f91a600ffe0762862da3dce12bbf9c38b1f9a1`) passed VerifyOnly,
+NVS-preserving `otadata + ota_0` flashing and Recovery → Main → OTA confirmation → Home. One remote
+Camera session: Main health internal/DMA largest is 8,192/8,192 bytes from 0.2 s after stop and
+stays there for 90 s (internal free 19,951 bytes), with no errors. Serial SHA-256
+`18e5a54e7e4d9bd9c180d9854493660a8d5eef3e7613532554b700ab5e4a74ce`.
+
+The remote Camera post-stop 8,192-byte gate is now **GO** (local Camera → Home passed in 085).
+Arbitrary OOM, mixed failure matrices and the eight-hour qualification window stay **NO_GO**. The
+device stays on ordinary 094.
