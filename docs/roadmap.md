@@ -977,3 +977,16 @@ came back. All six heap maps kept 8,192-byte internal largest, with no panic, ab
 failure. Serial SHA-256 `3830be1acc71b083db28c8133e3cf8ec59d4a6a8de72e79e3f7b1bd99ff2b304`. The device is
 back on ordinary 094. Arbitrary LVGL/CLIB allocations, DMA/IRQ/cache-off, abnormal SD/media and
 concurrent TLS/OTA/NVS failures stay open; release stays **NO_GO**.
+
+### 2026-10-12 Real STREAMON memory failure and retry (096)
+
+A new release-test command `hold_dma <limit>` / `release_dma` holds internal DMA-capable RAM until the
+largest block is below the limit, without arming any injected fault. Package `20261012-011908` /
+`streamon-oom-096` (source `14dccd6`) ran two rounds from Clock: with internal DMA largest at 992/736 bytes,
+STREAMON failed with the real `no mem for CAM DVP DMA ring` → `Not enough space`, fd close and device
+release completed without STREAMOFF, and the Camera app released its UI, preview and audio. After
+`release_dma` the largest block was 8,192 bytes and the retry used the 3,840-byte recovery ring with
+86/89 ms first frames. Health windows kept 8,192-byte internal/DMA largest and MQTT connected, with no
+panic or `E:RX`. Serial SHA-256 `a3aa419ef9eb0616af30cc6b0aa80ed2ea0017f71911a5822d98d9ba188aca8c`. The
+device is back on ordinary 094. This closes the real failed-STREAMON retry gate; physical image quality,
+arbitrary allocation failures, production signing/power-cut and qualification stay **NO_GO**.

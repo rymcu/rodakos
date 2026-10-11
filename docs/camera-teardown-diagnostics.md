@@ -608,3 +608,29 @@ marker 各恰好 1 次；panic、abort、Backtrace、assert、Write fail、AES �
 该矩阵关闭“已命名的单点分配/任务创建失败可恢复”这一局部门禁，但只覆盖 5 个预设边界：任意
 LVGL/CLIB 内部分配、DMA/IRQ/cache-off、异常 SD/媒体、TLS/OTA/NVS 并发失败与多点同时失败仍未
 覆盖，发布继续 **NO_GO**。
+
+## 2026-10-12 真实 STREAMON 内存失败与重试 096
+
+#28 剩余门禁要求“在硬件上实际触发失败 STREAMON，确认 fd/mmap/device 完整释放，并在压力解除后第二次
+Camera 成功”。之前的 073d/075 依赖 `RODAKOS_CAMERA_DMA_FAIL_FIRST_RING` 注入。096 在 release-test 构建
+新增 `RODAK_RELEASE_TEST_V1 hold_dma <limit>` / `release_dma`：逐块持有内部 DMA 可用内存（每块 ≤4 KiB，
+句柄表在 PSRAM）直到最大连续块低于 limit，**不武装任何 fail_alloc 或 ring 故障**，让驱动的真实分配失败。
+
+包 `20261012-011908` / `streamon-oom-096`（main SHA-256
+`9c9d71fe9bdfd17c7dec944616111c2507446f8143b7404684b58a121a73fda8`，源码 `14dccd6`），两轮，每轮在 Clock
+中持有内存（Home 退出会释放约 7 KiB LVGL 内存，第一次尝试因此 Camera 仍以 6,144 B ring 成功，
+记录为 attempt1）：
+
+| 轮次 | 持有后 internal DMA largest | 打开 Camera | 释放后 | 重试 |
+|---|---|---|---|---|
+| 1 | 992 B（STREAMON 前 1,536 B） | `no mem for CAM DVP DMA ring` → `Not enough space`；fd close、device release 完整，未进入 STREAMOFF；Camera 应用 Pause 释放 UI/预览/音频 | 8,192 B | 选择 3,840 B recovery ring，86 ms 首帧 |
+| 2 | 736 B | 同上 | 8,192 B | 3,840 B recovery ring，89 ms 首帧 |
+
+每轮之后 70 s 健康窗口：MQTT/Main health internal/DMA largest 8,192 B，MQTT connected；5 次 heap_map
+largest 均为 8,192 B；fail_alloc marker 0、panic/abort/Backtrace/assert/STREAMOFF failed/`E:RX` 均为 0。
+串口 SHA-256 `a3aa419ef9eb0616af30cc6b0aa80ed2ea0017f71911a5822d98d9ba188aca8c`；脚本与证据位于 Rodak
+`.codex-temp/resource-concurrency-029/streamon-oom-096.sh`、`current096-streamon-oom/`（另存 attempt1 与
+两份脚本并发写入的 attempt2-mixed，不计入结论）。验证后设备已恢复普通 094 包 `20261011-235020`。
+
+该结果关闭“真实 STREAMON 内存失败后完整释放并在压力解除后重试成功”门禁；内存压力在 release-test
+构建内制造，普通构建不含 hold_dma。物理画质、任意分配矩阵、生产签名/power-cut 与八小时资格继续 **NO_GO**。

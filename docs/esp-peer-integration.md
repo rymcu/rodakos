@@ -224,6 +224,8 @@ does not contain them.
 | `RODAK_RELEASE_TEST_V1 heap_map` | Lists each internal free span of 512 bytes or more, with the size of the used block on each side. |
 | `RODAK_RELEASE_TEST_V1 heap_trace_start` | Starts a leak trace. Needs `CONFIG_HEAP_TRACING_STANDALONE=y`. |
 | `RODAK_RELEASE_TEST_V1 heap_trace_dump` | Stops the trace and prints the internal allocations that are still alive. |
+| `RODAK_RELEASE_TEST_V1 hold_dma <limit>` | Holds internal DMA-capable blocks until the largest free block is less than `limit` bytes. |
+| `RODAK_RELEASE_TEST_V1 release_dma` | Frees all the blocks that `hold_dma` holds. |
 
 The heap map and the trace buffer use PSRAM, so they do not change the internal heap that they
 measure. Do not commit `CONFIG_HEAP_TRACING_STANDALONE=y` to `sdkconfig`.
