@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <new>
 #include <utility>
@@ -416,6 +417,54 @@ void PrintInternalHeapMap() {
     heap_caps_free(capture);
 }
 
+// Release-test memory pressure: holds internal DMA-capable blocks until release, so a real
+// driver allocation (for example the DVP ring on STREAMON) fails without an injected fault.
+// Each block is the largest free block, capped at 4 KiB, until the internal DMA largest is
+// below the requested limit. The handle table is in PSRAM, so it does not use the RAM it holds.
+constexpr size_t kPressureSlots = 32;
+constexpr size_t kPressureMaxBlock = 4096;
+constexpr size_t kPressureMinBlock = 64;
+void** g_pressure_blocks = nullptr;
+size_t g_pressure_count = 0;
+
+size_t InternalDmaLargest() {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+}
+
+void PrintPressureResult(const char* action) {
+    std::fprintf(stdout,
+                 "RODAK_RELEASE_TEST_RESULT {\"%s\":%u,\"internal_free\":%u,\"internal_dma_largest\":%u}\n",
+                 action, static_cast<unsigned>(g_pressure_count),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(InternalDmaLargest()));
+    std::fflush(stdout);
+}
+
+void HoldDmaPressure(const std::string& arguments) {
+    const size_t limit = std::strtoul(arguments.c_str(), nullptr, 10);
+    if (g_pressure_blocks == nullptr) {
+        g_pressure_blocks = static_cast<void**>(
+            heap_caps_calloc(kPressureSlots, sizeof(void*), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    }
+    while (g_pressure_blocks != nullptr && g_pressure_count < kPressureSlots) {
+        const size_t largest = InternalDmaLargest();
+        if (largest < limit || largest < kPressureMinBlock) break;
+        const size_t size = std::min(largest, kPressureMaxBlock);
+        void* block = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (block == nullptr) break;
+        g_pressure_blocks[g_pressure_count++] = block;
+    }
+    PrintPressureResult("hold_dma");
+}
+
+void ReleaseDmaPressure() {
+    while (g_pressure_blocks != nullptr && g_pressure_count > 0) {
+        heap_caps_free(g_pressure_blocks[--g_pressure_count]);
+        g_pressure_blocks[g_pressure_count] = nullptr;
+    }
+    PrintPressureResult("release_dma");
+}
+
 #if CONFIG_HEAP_TRACING_STANDALONE
 // Release-test leak trace: records only allocations still alive between start and
 // dump, in a PSRAM buffer so tracing does not consume the internal heap it measures.
@@ -474,6 +523,15 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         return true;
     }
 #endif
+    constexpr char kHoldDmaPrefix[] = "RODAK_RELEASE_TEST_V1 hold_dma ";
+    if (line.rfind(kHoldDmaPrefix, 0) == 0) {
+        HoldDmaPressure(line.substr(sizeof(kHoldDmaPrefix) - 1));
+        return true;
+    }
+    if (line == "RODAK_RELEASE_TEST_V1 release_dma") {
+        ReleaseDmaPressure();
+        return true;
+    }
     if (line == "RODAK_RELEASE_TEST_V1 heap_map") {
         PrintInternalHeapMap();
         return true;
