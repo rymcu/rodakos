@@ -174,6 +174,12 @@ static int dtls_srtp_try_gen_cert(dtls_srtp_t *dtls_srtp)
         mbedtls_pk_init(&dtls_srtp->pkey);
     }
 #endif
+    /* dtls_srtp_selfsign_cert seeds ctr_drbg again. mbedtls_ctr_drbg_seed initializes the
+     * context mutex unconditionally, so seeding twice orphans the first mutex: an 84 B
+     * FreeRTOS queue left in internal RAM by the first connection. Release the seed taken
+     * above before the self-signed path re-seeds the same context. */
+    mbedtls_ctr_drbg_free(&dtls_srtp->ctr_drbg);
+    mbedtls_ctr_drbg_init(&dtls_srtp->ctr_drbg);
     ret = dtls_srtp_selfsign_cert(dtls_srtp, true);
     if (ret != 0) {
         return ret;
