@@ -843,18 +843,21 @@ leave the phase empty and `RODAKOS_RELEASE_TESTS=OFF`.
 
 | Project  | Injection point                                                                              | Expected next boot                                                                 | Hardware evidence |
 | -------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------- |
-| Main     | `after_download_fsync`                                                                       | Incomplete staging does not select Recovery                                        | Pending           |
-| Main     | `after_pending_sidecar`                                                                      | Unjournaled files do not start installation                                        | Pending           |
-| Main     | `after_pending_journal`                                                                      | Resume staged acknowledgement then Recovery handoff                                | Pending           |
+| Main     | `after_download_fsync`                                                                       | Incomplete staging does not select Recovery                                        | 100 (reset)       |
+| Main     | `after_pending_sidecar`                                                                      | Unjournaled files do not start installation                                        | 100 (reset)       |
+| Main     | `after_pending_journal`                                                                      | Resume staged acknowledgement then Recovery handoff                                | 100 (reset)       |
 | Both     | `before_journal_set`, `after_journal_set`, `after_journal_commit`                            | Select newest valid A/B generation; never erase default NVS                        | Pending           |
 | Recovery | `after_applying_state`, `before_image_erase`, `after_image_erase`, `during_image_write`      | Revalidate candidate and restart write or restore backup                           | Pending           |
 | Recovery | `after_image_write`, `after_ready_to_boot`                                                   | Repeat safe write or resume boot handoff                                           | Pending           |
 | Recovery | `after_restore_state`, `before_restore_erase`, `after_restore_erase`, `during_restore_write` | Repeat validated backup restoration                                                | Pending           |
 | Recovery | `after_restore_write`, `after_rollback_ready`                                                | Repeat restore or resume restored boot                                             | Pending           |
-| Main     | `after_boot_confirmation`                                                                    | Preserve local confirmation while offline                                          | Pending           |
-| Main     | `after_result_http_ack`, `after_report_acknowledged`                                         | Server deduplicates a lost acknowledgement; persisted acknowledgement skips resend | Pending           |
+| Main     | `after_boot_confirmation`                                                                    | Preserve local confirmation while offline                                          | 100 (reset)       |
+| Main     | `after_result_http_ack`, `after_report_acknowledged`                                         | Server deduplicates a lost acknowledgement; persisted acknowledgement skips resend | 100 (reset)       |
 
 Record trial, firmware hashes, trigger log, journal phase, resets, resulting image, and HTTP result.
+"100 (reset)" means a software reset at that boundary passed on hardware in 100. It is not a power-cut
+result. The Both and Recovery rows need a Recovery fault build, which changes the immutable Recovery
+partition, so they stay Pending.
 The software hooks bracket erase/write and journal operations; only a controlled power fixture can
 interrupt the flash/NVS operation itself. Also cut power during download and FAT flush/rename.
 Do not call a software reset an actual power-cut result.
@@ -4237,3 +4240,36 @@ Rodak 关闭 098 遗留的两处服务端缺口（[rymcu/rodak `d7c41b3e`](https
 也已把 098 遗留的错误记录 dev.2 改回 dev.1。
 
 仍开放：OTA 断电矩阵、TLS/NVS 并发失败、生产签名与八小时资格，发布继续 **NO_GO**。
+
+## 2026-10-13 主程序侧 OTA 中断矩阵 100
+
+中断矩阵中主程序侧的 6 个复位边界全部在实机通过，每项一次经 Rodak 下发的真实 OTA（dev.1 → dev.2，
+按任务签名，未写数据库）。每项都是一次性软件复位（`esp_restart`），不是断电。所有任务最终
+`succeeded` 于 dev.2，串口均无 panic。
+
+| 试验 | 边界 | 结果 |
+| ---- | ---- | ---- |
+| m100a | `after_download_fsync` | 不进 Recovery，dev.1 重启；修复 Rodak 后，重发的任务重新下载并升级成功 |
+| m100b | `after_pending_sidecar` | 不进 Recovery，dev.1 重启；journal 无记录，设备重新接收重发的任务 |
+| m100c | `after_pending_journal` | dev.1 重启后续做暂存确认，再由 Recovery 写入 dev.2 |
+| m100e | `after_boot_confirmation` | dev.2 首启在 journal 记下 `confirmed` 后复位；下次启动保留确认并上报 |
+| m100f | `after_result_http_ack` | Rodak 已记录结果；下次启动清理记录，Rodak 不重复计数 |
+| m100g | `after_report_acknowledged` | 下次启动清理已确认记录及签名旁路文件 |
+
+m100a 暴露一处服务端缺陷：设备在 journal 记录任务前复位后会忘记该任务，而 Rodak 只重发
+`pending`/`notified` 任务，任务永远停在 `in_progress`。Rodak 现在在设备重新订阅时重发进行中的任务
+（[rymcu/rodak `bfdbe0c2`](https://github.com/rymcu/rodak/commit/bfdbe0c2)）；设备 journal 仍拒绝已暂存、
+正在安装或待上报的同一任务。
+
+m100d 作废：设备重启进 Recovery 时 USB 重新枚举，串口采集退出，没有证据。采集脚本已改为掉线重连，
+m100e 重做同一边界。串口 SHA-256：m100a `218ee072d255d021c0b14b0e64ef17199a9b2ec85c8cab59576d875daf9ca2aa`、
+m100a 恢复 `c3d50adf366c95941b37fad80706d45a8dbaa0df88d37c10eb18b5f261979255`、
+m100b `eab4d51c188a03eaee4864bdfd7c98156c5caa7f0ea947ccfffba5b3a4af758b`、
+m100c `e89d0c01300e0527362f102cfab9bef83bdfcf46cef277e98fc461c0bce55a32`、
+m100e `2148e62e8c10df3eb920b793e2157fadad0edb8cdd3558d497b94ef6c46f7960`、
+m100f `ff4ac133681da2e5c27e6ddcd9091c991320e2e191541e30b8d2bd3be1993ccb`、
+m100g `61bf3a778df71b1046bb10ee9939deaca3a08b8a09415d3c2980ca1aafba6d6b`。设备已恢复普通 dev.1 包
+`20261012-192434`。
+
+仍开放：Both 与 Recovery 行需要 Recovery 故障构建，而烧录脚本拒绝与 immutable 基线不一致的 Recovery；
+下载、FAT flush/rename 与 Flash 擦写期间的真实断电需要受控电源夹具。发布继续 **NO_GO**。

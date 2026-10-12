@@ -1039,3 +1039,33 @@ dev.2 from telemetry, and the serial log has no panic (serial SHA-256 `a0b09508�
 telemetry after the Rodak restart also corrected the stale dev.2 record left by 098 back to dev.1. OTA power-cut,
 concurrent TLS/NVS failures, production signing and the eight-hour qualification stay open. Release stays
 **NO_GO**.
+
+### 2026-10-13 Main-side OTA interruption matrix (100)
+
+All six Main-side reset boundaries of the interruption matrix passed on hardware, one Rodak OTA each
+(dev.1 → dev.2, signed per task, no database write). Each trial is a one-shot software reset
+(`esp_restart`), not a power cut. Every task ended `succeeded` on dev.2, and no serial log has a panic.
+
+| Trial | Boundary | Result |
+| ----- | -------- | ------ |
+| m100a | `after_download_fsync` | Reboot on dev.1 without Recovery. After the Rodak fix below, the resent task downloads again and updates. |
+| m100b | `after_pending_sidecar` | Reboot on dev.1 without Recovery. The device has no journal entry and takes the resent task again. |
+| m100c | `after_pending_journal` | Reboot on dev.1, resume the staged acknowledgement, then Recovery writes dev.2. |
+| m100e | `after_boot_confirmation` | First dev.2 boot resets after the journal records `confirmed`. The next boot keeps it and reports. |
+| m100f | `after_result_http_ack` | Rodak recorded the result. The next boot clears the record, and Rodak does not count the task twice. |
+| m100g | `after_report_acknowledged` | The next boot clears the acknowledged record and its signature sidecar. |
+
+m100a found one server defect. When the device resets before its journal records a task, it forgets the
+task, and Rodak resent only `pending` or `notified` tasks, so the task stayed `in_progress` forever.
+Rodak now resends an in-progress task when the device subscribes again
+([rymcu/rodak `bfdbe0c2`](https://github.com/rymcu/rodak/commit/bfdbe0c2)). The device journal still
+rejects a duplicate of a task that it has staged, installs or must report.
+
+m100d is void: the serial capture closed when USB re-enumerated at the Recovery restart, so it has no
+evidence. The capture now reopens the port, and m100e repeats the boundary. Serial SHA-256 values:
+m100a `218ee072…`, m100a resume `c3d50adf…`, m100b `eab4d51c…`, m100c `e89d0c01…`, m100e `2148e62e…`,
+m100f `ff4ac133…`, m100g `61bf3a77…`. The device is back on the normal dev.1 package `20261012-192434`.
+
+The Both and Recovery rows stay open. They need a Recovery fault build, and the flash script refuses a
+Recovery that differs from the immutable baseline. Real power cuts during download, FAT flush or rename
+and flash erase/write need a controlled power fixture. Release stays **NO_GO**.
