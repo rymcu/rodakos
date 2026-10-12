@@ -1,5 +1,6 @@
 #pragma once
 
+#include "phone_os/task-retirement.h"
 #include "rodak_ota_state.h"
 
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <string>
 
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <freertos/timers.h>
 
 namespace rodakos {
@@ -28,6 +30,11 @@ public:
     bool ConfirmRunningImage();
     void OnNetworkReady();
     bool IsBusy() const { return busy_.load(); }
+    // Call only from a permanent task whose stack is in internal RAM (app_main). It runs the
+    // flash and NVS steps that the PSRAM-stack download task hands over. Register the task
+    // first, so a hand-over wakes it at once instead of at its next scheduled pass.
+    void SetInternalWorkTask(TaskHandle_t task) { internal_work_task_ = task; }
+    void PumpInternalStackWork();
 
 private:
     enum class ConfirmationResult {
@@ -62,6 +69,18 @@ private:
     };
 
     static void DownloadTask(void* arg);
+    // Flash and NVS access disables the cache, so the stack of the caller must be in internal
+    // RAM. Runs `work` at once on an internal stack, else waits for PumpInternalStackWork.
+    void RunWithInternalStack(const std::function<void()>& work);
+    OtaUpdateLoadResult LoadRecord(OtaUpdateRecord& record);
+    bool SaveRecord(const OtaUpdateRecord& record);
+    void FaultPoint(const char* phase);
+    bool SelectRecoveryPartition();
+    void RefreshCloudConfig();
+    // OTA HTTP sends the AIoT access token as its bearer. Rodak issues it for a short time
+    // (10 minutes by default), and a backup plus download can take longer, so each request
+    // first renews a token that is close to expiry.
+    bool PrepareHttpCredentials(DeviceCloudConfig& cloud);
     static void StagedHandoffTask(void* arg);
     static void ReportTask(void* arg);
     static void RetryTask(void* arg);
@@ -99,6 +118,13 @@ private:
     ProgressPublisher progress_publisher_;
     std::mutex progress_publisher_mutex_;
     std::atomic<bool> busy_{false};
+    TaskRetirementOwner download_retirement_owner_;
+    TaskRetirementTicket download_retirement_;
+    std::string download_payload_;
+    std::mutex internal_work_mutex_;
+    const std::function<void()>* internal_work_ = nullptr;
+    TaskHandle_t internal_work_waiter_ = nullptr;
+    TaskHandle_t internal_work_task_ = nullptr;
     std::atomic<bool> staged_handoff_running_{false};
     std::atomic<bool> reporting_{false};
     std::atomic<bool> local_health_confirmed_{false};

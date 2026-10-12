@@ -9,10 +9,13 @@
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
+#include <esp_cpu.h>
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_image_format.h>
 #include <esp_log.h>
+#include <esp_memory_utils.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
@@ -43,10 +46,6 @@ constexpr int kReportTaskCreationRetryMs = 5 * 1000;
 
 
 
-struct DownloadTaskContext {
-    OtaUpdateService* service = nullptr;
-    std::string payload;
-};
 
 
 std::string JsonString(cJSON* object, const char* key) {
@@ -224,33 +223,125 @@ bool OtaUpdateService::HandleNotification(const std::string& payload) {
         return false;
     }
 
-    auto* context = new DownloadTaskContext{this, payload};
-    const BaseType_t created =
-        xTaskCreate(DownloadTask, "ota_download", 10 * 1024, context, 4, nullptr);
+    // Join waits for the previous body to return and its PSRAM stack to be reclaimed, so its
+    // ticket and payload can be replaced. busy_ admits only one download at a time.
+    download_retirement_.Join();
+    download_payload_ = payload;
+    download_retirement_ = ReserveTaskRetirement(download_retirement_owner_, DownloadTask, this);
+    TaskHandle_t created_task = nullptr;
+    // Internal RAM is often fragmented below the 10 KiB that this task needs, and a failed
+    // internal allocation lost the notification. The stack is in PSRAM, so each flash or NVS
+    // step goes through RunWithInternalStack.
+    const BaseType_t created = !download_retirement_ ? pdFAIL
+        : xTaskCreateWithCaps(TaskRetirementEntry, "ota_download", 10 * 1024,
+                              TaskRetirementContext(download_retirement_), 4, &created_task,
+                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (created != pdPASS) {
-        delete context;
+        if (download_retirement_) CancelTaskRetirement(download_retirement_);
+        download_retirement_.Reset();
+        ESP_LOGE(TAG, "Cannot start the OTA download task: psram_largest=%u",
+                 static_cast<unsigned>(
+                     heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
         busy_.store(false);
         return false;
     }
+    PublishTaskRetirement(download_retirement_, created_task);
     return true;
 }
 
 void OtaUpdateService::DownloadTask(void* arg) {
-    std::unique_ptr<DownloadTaskContext> context(static_cast<DownloadTaskContext*>(arg));
-    if (context && context->service != nullptr) {
-        if (context->service->file_service_ != nullptr) {
-            context->service->file_service_->WithIoLock([&context]() {
-                context->service->RunDownload(context->payload);
-                return true;
-            });
-        } else {
-            context->service->RunDownload(context->payload);
-        }
-        context->service->busy_.store(false);
+    auto* service = static_cast<OtaUpdateService*>(arg);
+    if (service->file_service_ != nullptr) {
+        service->file_service_->WithIoLock([service]() {
+            service->RunDownload(service->download_payload_);
+            return true;
+        });
+    } else {
+        service->RunDownload(service->download_payload_);
     }
-    // FreeRTOS task deletion does not unwind C++ locals.
-    context.reset();
-    vTaskDelete(nullptr);
+    // TaskRetirementEntry ends the task and reclaims its PSRAM stack after this returns.
+    service->busy_.store(false);
+}
+
+void OtaUpdateService::RunWithInternalStack(const std::function<void()>& work) {
+    if (esp_ptr_internal(esp_cpu_get_sp())) {
+        work();
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(internal_work_mutex_);
+        // Only the single download task hands work over, so the slot is always free here.
+        internal_work_ = &work;
+        internal_work_waiter_ = xTaskGetCurrentTaskHandle();
+    }
+    if (internal_work_task_ != nullptr) xTaskNotifyGive(internal_work_task_);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+
+void OtaUpdateService::PumpInternalStackWork() {
+    const std::function<void()>* work = nullptr;
+    TaskHandle_t waiter = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(internal_work_mutex_);
+        work = internal_work_;
+        waiter = internal_work_waiter_;
+        internal_work_ = nullptr;
+        internal_work_waiter_ = nullptr;
+    }
+    if (work == nullptr) return;
+    (*work)();
+    xTaskNotifyGive(waiter);
+}
+
+OtaUpdateLoadResult OtaUpdateService::LoadRecord(OtaUpdateRecord& record) {
+    OtaUpdateLoadResult result = OtaUpdateLoadResult::kError;
+    RunWithInternalStack([&]() { result = LoadOtaUpdateRecordStatus(record); });
+    return result;
+}
+
+bool OtaUpdateService::SaveRecord(const OtaUpdateRecord& record) {
+    bool saved = false;
+    RunWithInternalStack([&]() { saved = SaveOtaUpdateRecord(record); });
+    return saved;
+}
+
+void OtaUpdateService::FaultPoint(const char* phase) {
+    RunWithInternalStack([phase]() { rodakos::OtaFaultPoint(phase); });
+}
+
+bool OtaUpdateService::PrepareHttpCredentials(DeviceCloudConfig& cloud) {
+    // PrepareVoiceConfig renews the token only near expiry. A same-authority renewal keeps the
+    // config generation, so the caller's snapshot stays current. Reload to get the new bearer.
+    bool prepared = false;
+    RunWithInternalStack([&]() {
+        DeviceCloudConfig refreshed;
+        prepared = config_service_.PrepareVoiceConfig(refreshed);
+        if (prepared) config_service_.Load(cloud);
+    });
+    return prepared;
+}
+
+void OtaUpdateService::RefreshCloudConfig() {
+    // A refresh runs a TLS bootstrap and persists new credentials to NVS. The deep TLS stack
+    // overflowed the 6 KiB ota_report task, and NVS needs an internal stack, so it runs here.
+    RunWithInternalStack([this]() {
+        DeviceCloudConfig current;
+        config_service_.Load(current);
+        // A 401 means Rodak rejected this token, so the next preparation must not trust it.
+        config_service_.InvalidateAccessTokenFreshness(current.aiot_access_token);
+        DeviceCloudConfig refreshed;
+        config_service_.Refresh(refreshed);
+    });
+}
+
+bool OtaUpdateService::SelectRecoveryPartition() {
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    RunWithInternalStack([&]() {
+        const esp_partition_t* recovery = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
+        if (recovery != nullptr) err = esp_ota_set_boot_partition(recovery);
+    });
+    return err == ESP_OK;
 }
 
 void OtaUpdateService::RunDownload(const std::string& notification_payload) {
@@ -270,7 +361,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
     }
 
     OtaUpdateRecord existing;
-    const OtaUpdateLoadResult existing_state = LoadOtaUpdateRecordStatus(existing);
+    const OtaUpdateLoadResult existing_state = LoadRecord(existing);
     if (existing_state == OtaUpdateLoadResult::kCorrupt ||
         existing_state == OtaUpdateLoadResult::kError) {
         ESP_LOGE(TAG, "Refusing OTA because the recovery journal is unavailable");
@@ -303,9 +394,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
             (existing.phase == OtaUpdatePhase::kPending ||
              existing.phase == OtaUpdatePhase::kApplying ||
              existing.phase == OtaUpdatePhase::kRestoring)) {
-            const esp_partition_t* recovery = esp_partition_find_first(
-                ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
-            if (recovery != nullptr && esp_ota_set_boot_partition(recovery) == ESP_OK) {
+            if (SelectRecoveryPartition()) {
                 ESP_LOGI(TAG, "Resuming staged OTA task %s in Recovery", task_no.c_str());
                 vTaskDelay(pdMS_TO_TICKS(200));
                 esp_restart();
@@ -317,7 +406,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
     }
 
     DeviceCloudConfig config;
-    config_service_.Load(config);
+    RunWithInternalStack([&]() { config_service_.Load(config); });
     if (!config.has_mqtt_config || config.mqtt_http_base_url.empty() ||
         config.mqtt_password.empty()) {
         FailStaging(task_no, "CONFIG_MISSING", "缺少 Rodak OTA HTTP 配置");
@@ -330,7 +419,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
              task_no.c_str());
 
     UpgradeCheck check;
-    if (!RequestUpgradeCheck(config, check)) {
+    if (!PrepareHttpCredentials(config) || !RequestUpgradeCheck(config, check)) {
         ESP_LOGE(TAG, "OTA check request failed for task %s", task_no.c_str());
         FailStaging(task_no, "CHECK_FAILED", "无法完成 OTA 升级检查");
         return;
@@ -367,14 +456,15 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
     PublishProgress(task_no, 0, "prepare", "正在申请下载凭证");
     std::string ticket_id;
-    if (!RequestTicket(config, task_no, ticket_id)) {
+    if (!PrepareHttpCredentials(config) || !RequestTicket(config, task_no, ticket_id)) {
         FailStaging(task_no, "TICKET_FAILED", "无法获取 OTA 下载凭证");
         return;
     }
     ESP_LOGI(TAG, "OTA download ticket accepted: task=%s", task_no.c_str());
 
     Manifest manifest;
-    if (!RequestManifest(config, task_no, ticket_id, manifest)) {
+    if (!PrepareHttpCredentials(config) ||
+        !RequestManifest(config, task_no, ticket_id, manifest)) {
         FailStaging(task_no, "MANIFEST_FAILED", "无法获取 OTA manifest");
         return;
     }
@@ -429,7 +519,8 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
         FailStaging(task_no, "BACKUP_FAILED", "无法备份当前固件到 SD 卡");
         return;
     }
-    if (!DownloadToSd(manifest, config)) {
+    // The backup above copies the whole running image to SD, which can outlast the token.
+    if (!PrepareHttpCredentials(config) || !DownloadToSd(manifest, config)) {
         FailStaging(task_no, "DOWNLOAD_FAILED", "固件下载、SHA-256 或签名暂存失败");
         return;
     }
@@ -439,11 +530,11 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
     record.pending_sha256 = manifest.checksum_value;
     record.detail = "固件已暂存到 SD 卡，等待 Recovery 应用";
     record.error_code.clear();
-    if (!SaveOtaUpdateRecord(record)) {
+    if (!SaveRecord(record)) {
         FailStaging(task_no, "STATE_SAVE_FAILED", "无法保存 OTA 恢复状态");
         return;
     }
-    rodakos::OtaFaultPoint("after_pending_journal");
+    FaultPoint("after_pending_journal");
     if (!CompleteStagedHandoff()) {
         ScheduleStateRetry("staged progress acknowledgement failure");
     }
@@ -451,7 +542,7 @@ void OtaUpdateService::RunDownload(const std::string& notification_payload) {
 
 bool OtaUpdateService::CompleteStagedHandoff() {
     OtaUpdateRecord record;
-    const OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(record);
+    const OtaUpdateLoadResult load_result = LoadRecord(record);
     if (load_result != OtaUpdateLoadResult::kValid) {
         ESP_LOGE(TAG, "Cannot complete staged handoff because the OTA journal is unavailable");
         return false;
@@ -481,7 +572,7 @@ bool OtaUpdateService::CompleteStagedHandoff() {
     }
 
     OtaUpdateRecord current;
-    if (LoadOtaUpdateRecordStatus(current) != OtaUpdateLoadResult::kValid) {
+    if (LoadRecord(current) != OtaUpdateLoadResult::kValid) {
         ESP_LOGE(TAG, "Cannot persist staged acknowledgement because the OTA journal changed");
         return false;
     }
@@ -490,18 +581,14 @@ bool OtaUpdateService::CompleteStagedHandoff() {
         return true;
     }
     current.phase = OtaUpdatePhase::kPending;
-    if (!SaveOtaUpdateRecord(current)) {
+    if (!SaveRecord(current)) {
         ESP_LOGE(TAG, "Failed to persist acknowledged staged state: task=%s",
                  current.task_no.c_str());
         return false;
     }
     ESP_LOGI(TAG, "OTA staged progress acknowledged: task=%s", current.task_no.c_str());
 
-    const esp_partition_t* recovery = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
-    const esp_err_t err = recovery != nullptr ? esp_ota_set_boot_partition(recovery)
-                                               : ESP_ERR_NOT_FOUND;
-    if (err != ESP_OK) {
+    if (!SelectRecoveryPartition()) {
         FailStaging(current.task_no, "RECOVERY_SELECT_FAILED", "无法切换到 Recovery 分区");
         return true;
     }
@@ -696,7 +783,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
     std::fclose(output);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    rodakos::OtaFaultPoint("after_download_fsync");
+    FaultPoint("after_download_fsync");
 
     ok = ok && Sha256ToHex(digest) == manifest.checksum_value;
     if (!ok) {
@@ -714,7 +801,7 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
         file_service_->DeleteFile(kOtaPendingSignaturePath);
         return false;
     }
-    rodakos::OtaFaultPoint("after_pending_sidecar");
+    FaultPoint("after_pending_sidecar");
     return true;
 }
 
@@ -756,7 +843,9 @@ bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
         .size = running->size,
     };
     esp_image_metadata_t metadata = {};
-    if (esp_image_get_metadata(&position, &metadata) != ESP_OK || metadata.image_len == 0) {
+    esp_err_t metadata_err = ESP_FAIL;
+    RunWithInternalStack([&]() { metadata_err = esp_image_get_metadata(&position, &metadata); });
+    if (metadata_err != ESP_OK || metadata.image_len == 0) {
         return false;
     }
 
@@ -781,7 +870,11 @@ bool OtaUpdateService::BackupRunningImage(OtaUpdateRecord& record) {
     while (ok && offset < metadata.image_len) {
         const size_t length = static_cast<size_t>(
             std::min<uint64_t>(kIoBufferSize, metadata.image_len - offset));
-        ok = esp_partition_read(running, offset, buffer.get(), length) == ESP_OK &&
+        esp_err_t read_err = ESP_FAIL;
+        RunWithInternalStack([&]() {
+            read_err = esp_partition_read(running, offset, buffer.get(), length);
+        });
+        ok = read_err == ESP_OK &&
              std::fwrite(buffer.get(), 1, length, output) == length &&
              sha.Update(buffer.get(), length);
         offset += length;
@@ -882,7 +975,7 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
     }
 
     OtaUpdateRecord record;
-    const OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(record);
+    const OtaUpdateLoadResult load_result = LoadRecord(record);
     if (load_result == OtaUpdateLoadResult::kCorrupt) {
         ESP_LOGE(TAG, "Cannot confirm image because the OTA journal is corrupt");
         return ConfirmationResult::kTerminalFailure;
@@ -894,9 +987,7 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
     if (record.phase == OtaUpdatePhase::kPending ||
         record.phase == OtaUpdatePhase::kApplying ||
         record.phase == OtaUpdatePhase::kRestoring) {
-        const esp_partition_t* recovery = esp_partition_find_first(
-            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
-        if (recovery != nullptr && esp_ota_set_boot_partition(recovery) == ESP_OK) {
+        if (SelectRecoveryPartition()) {
             ESP_LOGW(TAG, "Resuming interrupted OTA apply in Recovery");
             vTaskDelay(pdMS_TO_TICKS(200));
             esp_restart();
@@ -909,7 +1000,8 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
     const bool rollback_handoff_transition =
         record.phase == OtaUpdatePhase::kRollbackReadyToBoot ||
         record.phase == OtaUpdatePhase::kRollbackBooting;
-    const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    esp_err_t err = ESP_FAIL;
+    RunWithInternalStack([&]() { err = esp_ota_mark_app_valid_cancel_rollback(); });
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to confirm running image: %s", esp_err_to_name(err));
         return ConfirmationResult::kRetryableFailure;
@@ -928,11 +1020,11 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
             record.error_code = "BOOT_ROLLBACK";
         }
     }
-    if (!SaveOtaUpdateRecord(record)) {
+    if (!SaveRecord(record)) {
         ESP_LOGE(TAG, "Failed to persist OTA boot confirmation state");
         return ConfirmationResult::kRetryableFailure;
     }
-    rodakos::OtaFaultPoint("after_boot_confirmation");
+    FaultPoint("after_boot_confirmation");
     return ConfirmationResult::kSuccess;
 }
 
@@ -943,7 +1035,7 @@ void OtaUpdateService::OnNetworkReady() {
     }
 
     OtaUpdateRecord record;
-    OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(record);
+    OtaUpdateLoadResult load_result = LoadRecord(record);
     if (load_result != OtaUpdateLoadResult::kValid) {
         if (load_result == OtaUpdateLoadResult::kError) {
             ScheduleStateRetry("OTA journal load failure");
@@ -1057,7 +1149,7 @@ void OtaUpdateService::ReportTask(void* arg) {
 
 bool OtaUpdateService::ReportPendingResult() {
     OtaUpdateRecord record;
-    const OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(record);
+    const OtaUpdateLoadResult load_result = LoadRecord(record);
     if (load_result == OtaUpdateLoadResult::kEmpty) {
         return true;
     }
@@ -1070,7 +1162,7 @@ bool OtaUpdateService::ReportPendingResult() {
     }
 
     if (record.phase == OtaUpdatePhase::kReportAcknowledged) {
-        rodakos::OtaFaultPoint("after_report_acknowledged");
+        FaultPoint("after_report_acknowledged");
     return ClearCompletedRecord(record);
     }
 
@@ -1084,7 +1176,7 @@ bool OtaUpdateService::ReportPendingResult() {
             record.detail = "新固件已确认，但 SD 回滚备份更新失败";
             ESP_LOGW(TAG, "New image confirmed but SD backup promotion failed");
         }
-        if (!SaveOtaUpdateRecord(record)) {
+        if (!SaveRecord(record)) {
             ESP_LOGW(TAG, "Failed to persist updated SD backup metadata");
         }
     }
@@ -1114,13 +1206,13 @@ bool OtaUpdateService::ReportPendingResult() {
         }
     }
 
-    rodakos::OtaFaultPoint("after_result_http_ack");
+    FaultPoint("after_result_http_ack");
     record.phase = OtaUpdatePhase::kReportAcknowledged;
-    if (!SaveOtaUpdateRecord(record)) {
+    if (!SaveRecord(record)) {
         ESP_LOGE(TAG, "Failed to persist OTA result acknowledgement");
         return false;
     }
-    rodakos::OtaFaultPoint("after_report_acknowledged");
+    FaultPoint("after_report_acknowledged");
     return ClearCompletedRecord(record);
 }
 
@@ -1132,7 +1224,7 @@ bool OtaUpdateService::ClearCompletedRecord(OtaUpdateRecord& record) {
     record.pending_sha256.clear();
     record.detail.clear();
     record.error_code.clear();
-    if (!SaveOtaUpdateRecord(record)) {
+    if (!SaveRecord(record)) {
         ESP_LOGE(TAG, "Failed to clear acknowledged OTA result");
         return false;
     }
@@ -1150,11 +1242,13 @@ bool OtaUpdateService::ClearCompletedRecord(OtaUpdateRecord& record) {
 OtaUpdateService::ReportResultOutcome OtaUpdateService::ReportResultHttp(
     const OtaUpdateRecord& record, bool success) {
     DeviceCloudConfig config;
-    config_service_.Load(config);
+    RunWithInternalStack([&]() { config_service_.Load(config); });
     if (!config.has_mqtt_config || config.mqtt_http_base_url.empty() ||
         config.mqtt_password.empty()) {
-        DeviceCloudConfig refreshed;
-        config_service_.Refresh(refreshed);
+        RefreshCloudConfig();
+        return ReportResultOutcome::kRetryableFailure;
+    }
+    if (!PrepareHttpCredentials(config)) {
         return ReportResultOutcome::kRetryableFailure;
     }
 
@@ -1176,8 +1270,7 @@ OtaUpdateService::ReportResultOutcome OtaUpdateService::ReportResultHttp(
         !PerformJsonRequest(config, url, HTTP_METHOD_POST, body_text, response,
                             &response_status)) {
         if (response_status == 401 || response_status == 403) {
-            DeviceCloudConfig refreshed;
-            config_service_.Refresh(refreshed);
+            RefreshCloudConfig();
         }
         return IsTerminalResultCode(response_status)
                    ? ReportResultOutcome::kTerminalFailure
@@ -1191,8 +1284,7 @@ OtaUpdateService::ReportResultOutcome OtaUpdateService::ReportResultHttp(
         return ReportResultOutcome::kSuccess;
     }
     if (result_code == 401 || result_code == 403) {
-        DeviceCloudConfig refreshed;
-        config_service_.Refresh(refreshed);
+        RefreshCloudConfig();
     }
     return IsTerminalResultCode(result_code)
                ? ReportResultOutcome::kTerminalFailure
@@ -1239,7 +1331,7 @@ void OtaUpdateService::FailStaging(const std::string& task_no,
     ESP_LOGE(TAG, "OTA staging failed: %s (%s)", detail.c_str(), error_code.c_str());
     PublishProgress(task_no, 0, "failed", detail);
     OtaUpdateRecord failed;
-    const OtaUpdateLoadResult load_result = LoadOtaUpdateRecordStatus(failed);
+    const OtaUpdateLoadResult load_result = LoadRecord(failed);
     const bool can_persist = load_result == OtaUpdateLoadResult::kEmpty ||
                              load_result == OtaUpdateLoadResult::kValid;
     failed.phase = OtaUpdatePhase::kFailed;
@@ -1248,11 +1340,13 @@ void OtaUpdateService::FailStaging(const std::string& task_no,
     failed.pending_sha256.clear();
     failed.detail = detail;
     failed.error_code = error_code;
-    const bool saved = can_persist && SaveOtaUpdateRecord(failed);
+    const bool saved = can_persist && SaveRecord(failed);
     if (can_persist && !saved) {
         ESP_LOGE(TAG, "Failed to persist OTA failure result");
     }
     if (saved) {
+        // Keep this on the calling task: the download task holds the SD I/O lock, and
+        // OnNetworkReady can clear SD files. Its flash and NVS steps use their own wrappers.
         OnNetworkReady();
     } else {
         ReportResultUntilSuccess(failed, false);

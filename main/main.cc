@@ -887,12 +887,15 @@ extern "C" void app_main(void) {
 
     uint32_t appearance_retry_ticks = 0;
     uint32_t main_health_ticks = 0;
+    // OTA hands its flash and NVS steps to this internal-RAM stack and wakes it at once.
+    ota_update_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
     while (true) {
 #ifdef RODAKOS_RELEASE_TESTS
         // Outside all service/UI/serial locks, on the permanent internal-stack task.
         voice_lifecycle_diagnostic.Pump();
 #endif
         rodakos::PumpTaskRetirements();
+        ota_update_service.PumpInternalStackWork();
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
             appearance_service.ReleaseBootAssets();
@@ -915,6 +918,15 @@ extern "C" void app_main(void) {
                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                      static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Keep the 1 s tick for the work above. An OTA hand-over notification ends each wait
+        // early, so its flash and NVS steps run at once rather than at the next tick.
+        const TickType_t tick_start = xTaskGetTickCount();
+        const TickType_t tick_period = pdMS_TO_TICKS(1000);
+        while (xTaskGetTickCount() - tick_start < tick_period) {
+            const TickType_t elapsed = xTaskGetTickCount() - tick_start;
+            if (ulTaskNotifyTake(pdTRUE, tick_period - elapsed) != 0) {
+                ota_update_service.PumpInternalStackWork();
+            }
+        }
     }
 }
