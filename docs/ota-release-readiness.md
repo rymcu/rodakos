@@ -4175,3 +4175,41 @@ Host remote_input、home_ui、serial_provisioning、camera_ui 在 Debug 与 ASan
 
 SD 异常：当前所有 SD 调用方先 `IsMounted()`/`Init()`，缺卡时各自进入错误路径；**挂载状态下物理拔卡与慢卡需要
 现场操作**，软件无法模拟，仍开放。DMA/IRQ/cache-off、TLS/OTA/NVS 并发失败尚未覆盖，发布继续 **NO_GO**。
+
+## 2026-10-12 Rodak 下发 OTA 端到端 098
+
+**缺陷 1：OTA 通知被静默丢弃。** Rodak broker 跟踪确认 `ota/notify` 已转发到设备连接；设备侧跟踪确认
+`HandleMessage` 收到并匹配 OTA topic，但 `xTaskCreate(ota_download, 10 KiB)` 返回失败（`create=-1`，
+internal largest 8,192 B），而 MQTT 调用方忽略 `HandleNotification` 的返回值，通知无日志消失，任务停在
+`notified`。曾试过静态保留 10 KiB 内部栈：OTA 可跑通，但常驻占用使 internal largest 降到 5,120 B，远端
+Camera STREAMON 失败（串口 SHA-256 `367a9ba8…`），因此撤回。
+
+修复（方案一）：`ota_download` 改为 PSRAM 栈（`xTaskCreateWithCaps` + task retirement）；其中所有会关
+cache 的 flash/NVS 操作（OTA journal 读写、release fault 点、running image 元数据与读取、Recovery 引导
+切换、boot 确认、云配置读取/刷新）经 `RunWithInternalStack` 交给 `app_main` 的内部 RAM 栈执行，并以任务通知
+即时唤醒 `app_main`（保留其 1 s 节拍）。创建失败时记录 `Cannot start the OTA download task`。
+
+**缺陷 2：OTA HTTP 令牌过期。** OTA 以 MQTT 密码（即 AIoT access token，Rodak 默认 `tokenTtlSeconds=600`）
+作为 Bearer，但 OTA 路径从不刷新，设备运行超过 10 分钟后 check/ticket/download/result 均 401。现在每次 OTA HTTP
+请求前在内部栈上调用 `PrepareVoiceConfig` 续期临近过期的令牌；401/403 时先作废该令牌再刷新。
+
+**缺陷 3：`ota_report` 栈溢出。** 401 后在 6 KiB `ota_report` 任务上做凭据刷新（TLS 引导）导致
+`stack overflow in task ota_report` 重启。刷新改在内部栈执行后消失。
+
+另：交接改为即时唤醒后，7 MB 运行镜像备份到 SD 从约 225 s 降到 14 s。
+
+**设备证据（普通 OFF 构建）：** 设备运行 dev.1 包 `20261012-192434` / `ota-fixes-098`（main SHA-256
+`6750ed82a06e54aaa1ab260fd0859d2ede308c166b7dbb58cc8ca9741df7f5e3`，manifest SHA-256
+`1e79c9f10914bfee49c0ffaa0bdac7626a1c6bbd9de09e2a667a1412955345eb`），烧录后约 20 分钟、令牌已过期时由 Rodak
+发布任务 `ota_1791805614237_05c4885e` 升级到同源 dev.2 包 `20261012-194546`：设备先自动刷新凭据，随后 check、
+ticket、manifest、签名、SD 备份与下载、staged 确认、Recovery 写入、启动本地确认与 MQTT 联网确认全部通过，
+Rodak 任务 `succeeded`（"新固件已通过启动与联网确认"），401、栈溢出、panic 为 0。串口 SHA-256
+`d7d2cdfb1b1baa575d79757f995239d572e9659e1c90602865657fe3ec874ab5`。升级后首次健康样本 internal largest 6,400 B，
+普通重启后恢复 8,192 B（属 OTA 启动路径的一次性残留，非常驻回退）。验证后设备已回到 dev.1 修复包；远端 Camera
+一轮 85 ms 首帧，停止前后 Main health internal/DMA largest 均为 8,192 B（串口 SHA-256 `8ecff8c0…`）。
+
+失败过程证据：Rodak/设备双端跟踪 `735b3e27…`、`809071fb…`，令牌过期 `777f1dbd…`、`f4ef9c2b…`。
+
+仍开放：Rodak 在设备重新注册前不会更新已记录的 `firmwareVersion`（静态栈试验后需手工改回 dev.1 才能再次
+升级）；Rodak 下发前签名需匹配服务端生成的 taskNo，当前测试脚本直接写 SQLite 更新 release 快照，需在 Rodak
+提供正式接口。OTA 断电矩阵、TLS/NVS 并发失败与八小时资格继续 **NO_GO**。

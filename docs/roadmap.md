@@ -1003,3 +1003,18 @@ reboot is the accepted fallback, not graceful recovery. Ordinary package `202610
 `lvgl-oom-fixes-097` (main SHA-256 `b8b7545b9c3a91d5a16fa98187ecc859c940be29701c0102604c4b9e01838966`) passed
 flashing, boot and a remote Camera session with 8,192-byte post-stop largest. Physical SD removal and slow cards
 need on-site handling; DMA/IRQ/cache-off and concurrent TLS/OTA/NVS failures stay open. Release stays **NO_GO**.
+
+### 2026-10-12 End-to-end Rodak OTA (098)
+
+Three defects blocked a real Rodak OTA, and all are fixed. (1) The device received `ota/notify`, but the
+10 KiB internal-RAM `ota_download` stack could not be allocated (largest block 8,192 bytes) and the caller ignored
+the failure, so the notification vanished. The task stack is now in PSRAM, and every flash or NVS step goes to the
+`app_main` internal stack, which a task notification wakes at once. A static 10 KiB stack was rejected because it
+broke the remote Camera 8 KiB gate. (2) OTA HTTP used the 10-minute AIoT access token and never renewed it, so
+requests got 401 after the device had run for ten minutes. Each request now renews a token near expiry, and a 401
+invalidates it first. (3) The 6 KiB `ota_report` task overflowed while it refreshed credentials after a 401; the
+refresh now runs on the internal stack. The running-image backup to SD dropped from about 225 s to 14 s.
+Ordinary package `20261012-192434` (main SHA-256 `6750ed82…`) updated to dev.2 through Rodak about 20 minutes
+after boot with an expired token; the task `succeeded` with no 401, overflow or panic (serial SHA-256 `d7d2cdfb…`).
+Remote Camera still keeps 8,192-byte internal/DMA largest. Rodak's stale `firmwareVersion` after an OTA and its
+missing per-task signing API stay open. Release stays **NO_GO**.
