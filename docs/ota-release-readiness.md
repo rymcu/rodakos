@@ -820,9 +820,11 @@ is disposable. `-DevelopmentPackage` and `-AllowDevelopmentPackage` explicitly i
 A manifest version alone cannot prove that an installed immutable Recovery enforces authentication.
 The Rodak server must deliver the signed `manifestVersion: 2` fields (`signatureType:
 "rsa2048-sha256"` and `signatureValue`) for the same task, version, size, product, slot, and image
-digest. Rodak's OTA service resolves and forwards the release manifest; it does not generate the
-firmware signature. Appearance resource signatures use a separate trust chain and do not satisfy the
-firmware OTA requirement.
+digest. Rodak's OTA service resolves and forwards the release manifest; it does not hold the private
+key and does not generate the firmware signature. Sign the manifest for the `taskNo` that Rodak
+assigned, then attach it with `server:attachOtaTaskSignature`. Rodak checks it against the release,
+verifies it when the public key is given, and does not notify an unsigned v2 task. Appearance resource
+signatures use a separate trust chain and do not satisfy the firmware OTA requirement.
 
 The package verifier checks the actual app descriptor version, signature, hashes, key fingerprints
 in both binaries, journal ABI, and absence of fault-injection markers. Production packages cannot
@@ -4210,6 +4212,28 @@ Rodak 任务 `succeeded`（"新固件已通过启动与联网确认"），401、
 
 失败过程证据：Rodak/设备双端跟踪 `735b3e27…`、`809071fb…`，令牌过期 `777f1dbd…`、`f4ef9c2b…`。
 
-仍开放：Rodak 在设备重新注册前不会更新已记录的 `firmwareVersion`（静态栈试验后需手工改回 dev.1 才能再次
-升级）；Rodak 下发前签名需匹配服务端生成的 taskNo，当前测试脚本直接写 SQLite 更新 release 快照，需在 Rodak
-提供正式接口。OTA 断电矩阵、TLS/NVS 并发失败与八小时资格继续 **NO_GO**。
+098 时仍开放：Rodak 在设备重新注册前不会更新已记录的 `firmwareVersion`（静态栈试验后需手工改回 dev.1 才能再次
+升级）；Rodak 下发前签名需匹配服务端生成的 taskNo，当时测试脚本直接写 SQLite 更新 release 快照。两项已在 099
+关闭。OTA 断电矩阵、TLS/NVS 并发失败与八小时资格继续 **NO_GO**。
+
+## 2026-10-12 Rodak 按任务签名与固件版本同步 099
+
+Rodak 关闭 098 遗留的两处服务端缺口（[rymcu/rodak `d7c41b3e`](https://github.com/rymcu/rodak/commit/d7c41b3e)、
+[`dd8bad4c`](https://github.com/rymcu/rodak/commit/dd8bad4c)）。
+
+**固件版本。** Rodak 原先只在注册时写入设备 `firmwareVersion`。现在读取 telemetry 与 reported shadow 已有的
+`firmware` 字段，OTA、Recovery 回滚或线刷后无需重新注册即可更新记录；`unknown`、空值、控制字符和超长值不写入。
+
+**按任务签名。** 签名覆盖 `taskNo`，而 Rodak 在建任务时才分配 `taskNo`。新增 Rodak IPC
+`server:attachOtaTaskSignature`，接收 `tools/ota_security.py sign` 为该 `taskNo` 写出的清单：Rodak 核对 taskNo、
+版本、大小、SHA-256 与 Release 快照一致，提供公钥时先验签，再把签名存到任务上并合并进 manifest 响应；Release
+快照不变，私钥只留在离线签名工具。`manifestVersion: 2` 的任务未附加签名时保持 `pending`，不推送
+`ota/notify`，manifest 请求返回 `409`。
+
+**实机证据（未写数据库）：** 包 `20261012-194546` 建批次后，Rodak 先以"尚未附加按任务签名的清单"保持任务
+`ota_1791813228456_b1864b48` 为 pending；附加并验签后再次启动批次，设备从 0.1.2-dev.1 升级到 dev.2，任务
+`succeeded`，Rodak 由 telemetry 记录 `firmwareVersion` 为 dev.2，串口无 panic（SHA-256
+`a0b0950832553c5dd50b5fa1b0389d4142441164050f568f88ccc3493f1296be`）。OTA 前 Rodak 重启后的首次 telemetry
+也已把 098 遗留的错误记录 dev.2 改回 dev.1。
+
+仍开放：OTA 断电矩阵、TLS/NVS 并发失败、生产签名与八小时资格，发布继续 **NO_GO**。

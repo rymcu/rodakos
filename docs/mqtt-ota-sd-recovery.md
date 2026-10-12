@@ -149,7 +149,8 @@ actual image bytes, signs the metadata, and verifies the result. Packaging requi
 fingerprints in the main image and Recovery, matching compiled/application versions, a valid
 signature, and no embedded fault-injection marker. The Rodak manifest endpoint must deliver the
 same `taskNo`, `version`, size, checksum, and signature; changing a task requires signing again.
-The server integration has not been exercised by the host tests.
+Rodak attaches that signature per task through `server:attachOtaTaskSignature` and does not notify an
+unsigned v2 task. A real Rodak OTA with this interface passed in 099.
 
 Installing this verifier requires a wired Recovery migration even though the journal ABI is still
 v1. Existing unsigned Recovery cannot gain authentication through a main-only OTA. Key rotation also
@@ -248,4 +249,25 @@ refresh now runs on the internal stack. The running-image backup to SD dropped f
 Ordinary package `20261012-192434` (main SHA-256 `6750ed82…`) updated to dev.2 through Rodak about 20 minutes
 after boot with an expired token; the task `succeeded` with no 401, overflow or panic (serial SHA-256 `d7d2cdfb…`).
 Remote Camera still keeps 8,192-byte internal/DMA largest. Rodak's stale `firmwareVersion` after an OTA and its
-missing per-task signing API stay open. Release stays **NO_GO**.
+missing per-task signing API stayed open after 098; 099 below closes both. Release stays **NO_GO**.
+
+### 2026-10-12 Rodak per-task signing and firmware version (099)
+
+Rodak closes both server gaps from 098 ([rymcu/rodak `d7c41b3e`](https://github.com/rymcu/rodak/commit/d7c41b3e),
+[`dd8bad4c`](https://github.com/rymcu/rodak/commit/dd8bad4c)). (1) Rodak used to set a device's `firmwareVersion` only
+at registration. It now reads the `firmware` field that telemetry and the reported shadow already carry, so an OTA,
+a Recovery rollback or a wired flash updates the record without a new registration. (2) The signature covers
+`taskNo`, and Rodak assigns `taskNo` only when it creates the task. The new Rodak IPC
+`server:attachOtaTaskSignature` accepts the manifest that `tools/ota_security.py sign` wrote for that `taskNo`.
+Rodak checks the task, version, size and SHA-256 against the release snapshot. With the public key it also
+verifies the signature. Then it stores the signature on the task and merges it into the manifest response.
+The private key stays with the offline signing tool. A `manifestVersion: 2` task without an attached signature
+stays `pending`: Rodak does not publish `ota/notify` for it, and its manifest request returns `409`.
+
+Real OTA with no database write: on package `20261012-194546`, Rodak first held task
+`ota_1791813228456_b1864b48` as unsigned. After Rodak attached and verified the signature, the campaign
+started again and the device updated from 0.1.2-dev.1 to dev.2. The task `succeeded`, Rodak recorded `firmwareVersion`
+dev.2 from telemetry, and the serial log has no panic (serial SHA-256 `a0b09508…`). Before the OTA, the first
+telemetry after the Rodak restart also corrected the stale dev.2 record left by 098 back to dev.1. OTA power-cut,
+concurrent TLS/NVS failures, production signing and the eight-hour qualification stay open. Release stays
+**NO_GO**.
