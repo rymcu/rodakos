@@ -3,6 +3,7 @@
 #ifdef RODAKOS_RELEASE_TESTS
 #include "phone_os/voice_lifecycle_diagnostic.h"
 #include "phone_os/voice_prepare_priority_diagnostic.h"
+#include "phone_os/lvgl_alloc_failure.h"
 #include <esp_heap_trace.h>
 #endif
 
@@ -523,6 +524,15 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         return true;
     }
 #endif
+    constexpr char kLvglAllocFailPrefix[] = "RODAK_RELEASE_TEST_V1 lvgl_alloc_fail ";
+    if (line.rfind(kLvglAllocFailPrefix, 0) == 0) {
+        char* end = nullptr;
+        const char* arguments = line.c_str() + sizeof(kLvglAllocFailPrefix) - 1;
+        const unsigned long skip = std::strtoul(arguments, &end, 10);
+        const unsigned long count = end != nullptr && *end == ' ' ? std::strtoul(end + 1, nullptr, 10) : 1;
+        ArmLvglAllocationFailure(static_cast<uint32_t>(skip), static_cast<uint32_t>(count));
+        return true;
+    }
     constexpr char kHoldDmaPrefix[] = "RODAK_RELEASE_TEST_V1 hold_dma ";
     if (line.rfind(kHoldDmaPrefix, 0) == 0) {
         HoldDmaPressure(line.substr(sizeof(kHoldDmaPrefix) - 1));

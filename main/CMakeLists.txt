@@ -142,7 +142,7 @@ set(VOICE_OBSERVER_LDFRAGMENTS)
 if(RODAKOS_RELEASE_TESTS)
     list(APPEND SOURCES "phone_os/voice_lifecycle_diagnostic.cc" "phone_os/voice_tick_observer.cc"
         "phone_os/voice_feed_progress_observer.cc" "phone_os/voice_prepare_priority_observer.cc"
-        "phone_os/voice_prepare_priority_diagnostic.cc")
+        "phone_os/voice_prepare_priority_diagnostic.cc" "phone_os/lvgl_alloc_failure.cc")
     list(APPEND VOICE_OBSERVER_LDFRAGMENTS "voice_feed_progress.lf")
 endif()
 
@@ -200,6 +200,10 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 
 if(RODAKOS_RELEASE_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE RODAKOS_RELEASE_TESTS=1)
+    # lvgl_alloc_failure.cc fails selected LVGL-task allocations for release tests.
+    target_link_options(${COMPONENT_LIB} INTERFACE
+        "-Wl,--wrap=heap_caps_malloc_default"
+        "-Wl,--wrap=heap_caps_realloc_default")
     message(WARNING "RodakOS serial release diagnostics are ENABLED; this is not a production build")
 endif()
 
