@@ -195,9 +195,23 @@ void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
     lv_obj_t* focused = rodakos::CurrentRemoteTextareaTarget();
     const bool focused_textarea = focused != nullptr && lv_obj_check_type(focused, &lv_textarea_class);
     bool cancelled_remote_gesture = false;
+    // This runs on every LVGL input read. A lambda that captures several references does
+    // not fit in std::function's local buffer, so each read would allocate on the heap, and
+    // a failed allocation throws std::bad_alloc in the LVGL task and aborts. One pointer
+    // fits in the local buffer, so the callback holds only a pointer to this frame.
+    struct ReadFrame {
+        TouchInputBridge* touch;
+        lv_indev_t* indev;
+        lv_indev_data_t* data;
+        bool focused_textarea;
+        bool* cancelled_remote_gesture;
+    } frame{touch, indev, data, focused_textarea, &cancelled_remote_gesture};
     // The production controller performs the final lease/grant admission around
     // this LVGL input delivery; a cached global enable flag is never authority.
-    g_remote_inputs.ReadPointer([&](const rodakos::RemotePointerSample& remote) {
+    g_remote_inputs.ReadPointer([frame = &frame](const rodakos::RemotePointerSample& remote) {
+        TouchInputBridge* touch = frame->touch;
+        lv_indev_data_t* data = frame->data;
+        const bool focused_textarea = frame->focused_textarea;
         portENTER_CRITICAL(&touch->lock);
         const bool pressed = touch->pressed;
         const lv_point_t point = touch->point;
@@ -214,8 +228,8 @@ void TouchReadCallback(lv_indev_t* indev, lv_indev_data_t* data) {
         const lv_point_t remote_point{static_cast<lv_coord_t>(remote.x), static_cast<lv_coord_t>(remote.y)};
         if (touch->pointer_state.Read(pressed, point, remote.pressed, remote_point, *data,
                                       remote.cancel_generation)) {
-            lv_indev_reset(indev, nullptr);
-            cancelled_remote_gesture = true;
+            lv_indev_reset(frame->indev, nullptr);
+            *frame->cancelled_remote_gesture = true;
         }
     });
     // A cancellation releases prev_state before an already queued replacement
