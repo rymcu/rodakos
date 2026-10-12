@@ -4992,8 +4992,7 @@ CONFIG_LV_USE_DRAW_SW_ASM=0
 #
 # default:
 CONFIG_LV_USE_ASSERT_NULL=y
-# default:
-CONFIG_LV_USE_ASSERT_MALLOC=y
+# CONFIG_LV_USE_ASSERT_MALLOC is not set
 # default:
 # CONFIG_LV_USE_ASSERT_STYLE is not set
 # default:

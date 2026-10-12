@@ -19,3 +19,7 @@ idf_component_get_property(rodak_lvgl_dir lvgl__lvgl COMPONENT_DIR)
 idf_component_get_property(rodak_lvgl_target lvgl__lvgl COMPONENT_LIB)
 idf_build_get_property(rodak_patch_python PYTHON)
 rodak_apply_lodepng_patch(${rodak_lvgl_target} "${rodak_lvgl_dir}" "${PROJECT_DIR}" "${rodak_patch_python}")
+# LVGL's default assert handler is `while(1);`, which freezes the UI task forever. The header
+# makes a remaining LVGL assert trap, so it ends in a panic and a reboot with a backtrace.
+target_compile_definitions(${rodak_lvgl_target} PRIVATE
+    "LV_ASSERT_HANDLER_INCLUDE=\"${PROJECT_DIR}/cmake/lvgl_assert/rodak_lvgl_assert.h\"")
