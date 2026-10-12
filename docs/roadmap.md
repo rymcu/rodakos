@@ -990,3 +990,16 @@ release completed without STREAMOFF, and the Camera app released its UI, preview
 panic or `E:RX`. Serial SHA-256 `a3aa419ef9eb0616af30cc6b0aa80ed2ea0017f71911a5822d98d9ba188aca8c`. The
 device is back on ordinary 094. This closes the real failed-STREAMON retry gate; physical image quality,
 arbitrary allocation failures, production signing/power-cut and qualification stay **NO_GO**.
+
+### 2026-10-12 Arbitrary LVGL allocation failure (097)
+
+A release-test command `lvgl_alloc_fail <skip> <count>` (`e41878e`) fails selected `taskLVGL` heap allocations.
+It found two defects, now fixed: the touch read callback heap-allocated a `std::function` on every input read,
+so one failure threw `std::bad_alloc` and aborted (`f0ed644`); and `LV_USE_ASSERT_MALLOC` with LVGL's default
+`while(1);` handler froze the UI task forever on a single label allocation failure (`7dd12f6`: malloc assert off,
+other LVGL asserts trap). After the fixes, failures at LVGL 9.3.0 core sites without NULL checks
+(`lv_draw_add_task`, image decode buffer, child array realloc) panic and reboot to Home in about 2 s; this panic
+reboot is the accepted fallback, not graceful recovery. Ordinary package `20261012-095037` /
+`lvgl-oom-fixes-097` (main SHA-256 `b8b7545b9c3a91d5a16fa98187ecc859c940be29701c0102604c4b9e01838966`) passed
+flashing, boot and a remote Camera session with 8,192-byte post-stop largest. Physical SD removal and slow cards
+need on-site handling; DMA/IRQ/cache-off and concurrent TLS/OTA/NVS failures stay open. Release stays **NO_GO**.

@@ -4138,3 +4138,40 @@ largest 均为 8,192 B；fail_alloc marker 0、panic/abort/Backtrace/assert/STRE
 
 该结果关闭“真实 STREAMON 内存失败后完整释放并在压力解除后重试成功”门禁；内存压力在 release-test
 构建内制造，普通构建不含 hold_dma。物理画质、任意分配矩阵、生产签名/power-cut 与八小时资格继续 **NO_GO**。
+
+## 2026-10-12 LVGL 任意分配失败 097
+
+新增 release-test 命令 `RODAK_RELEASE_TEST_V1 lvgl_alloc_fail <skip> <count>`（`e41878e`）：链接期包装
+`heap_caps_malloc_default` / `heap_caps_realloc_default`，仅对 `taskLVGL` 生效，先放行 skip 次再失败 count 次。
+扫描脚本对 Home→Clock/Settings/Photos、Clock→Home 在 skip 0/3/10/30/80 各注入一次，随后无故障重复同一切换。
+
+**发现并修复两个缺陷：**
+
+1. **触摸读取回调每帧堆分配（`f0ed644`）**：`TouchReadCallback` 把捕获多个引用的 lambda 交给
+   `std::function`，超出本地缓冲，每次 LVGL 输入读取都在 LVGL 任务内 `operator new`。第一次注入（size=20）即
+   抛出 `std::bad_alloc` → `std::terminate` → abort 重启。回调改为只捕获一个指向栈帧结构的指针，不再分配。
+   串口 SHA-256 `a1fcd2b903c04e2ea00f1eb9300ccb5a7fb0f5c304e1f291edaeb46b25bd522c`。
+2. **LVGL 断言默认 `while(1);` 冻结界面（`7dd12f6`）**：`LV_USE_ASSERT_MALLOC=y` 且未配置处理器，Home 时钟
+   `lv_label_set_text` 单次分配失败（size=6）后 `taskLVGL` 永久空转，任务看门狗每 5 s 告警，设备不重启、屏幕
+   不再刷新。关闭 `CONFIG_LV_USE_ASSERT_MALLOC`，并经 `LV_ASSERT_HANDLER_INCLUDE` 让其余 LVGL 断言
+   `__builtin_trap()`。串口 SHA-256 `5dde9df2130a316c158fd88951872ca868e23e6d29711a374e41f9c425447158`。
+
+**修复后扫描（包 `20261012-091002` / `lvgl-oom-097c`，main SHA-256
+`2ec866c5a7cfe5120c6a340942759da0eb4ce8f185ad62804a7641e879f22969`）**：skip 0 的 Clock 切换注入后完成并重试成功；
+skip 3/10/30 分别在 LVGL 9.3.0 核心缺 NULL 检查的分配点 StoreProhibited panic：`lv_draw_add_task`（size 204）、
+图像解码 `lv_draw_buf_from_image`（size 68）、`lv_obj_class_create_obj` 子对象数组 `lv_realloc`（size 4）。三次均
+重启后约 2 s 回到 Home、MQTT 重连，Recovery 未介入。串口 SHA-256
+`6a1d6ee3acbd09749abda2ca4d0605c55dbe870726ae5dd9f31f5646a80b2ce4`。
+
+**决定**：LVGL 核心内部 OOM 采用 panic 重启兜底（不向 LVGL 打补丁），作为已定义恢复方式记录；它不是
+优雅恢复，用户会看到一次重启。界面冻结与应用代码自身的 `bad_alloc` 中止已消除。
+
+**普通包** `20261012-095037` / `lvgl-oom-fixes-097`（main 7,164,288 B，SHA-256
+`b8b7545b9c3a91d5a16fa98187ecc859c940be29701c0102604c4b9e01838966`，manifest SHA-256
+`f2c265f53e8343d6a844d1e1dbcb99c4eb543cbda42ea58f6512211487bd925f`；不含注入包装）：VerifyOnly、保留 NVS 刷写、
+Recovery → Main → OTA confirmation → Home 通过；远端 Camera 一轮 49 ms 首帧，停止后 Main health internal/DMA
+largest 8,192 B 并保持 90 s，无错误。串口 SHA-256 `ea504836ef4526e20b9dbe774101da77e68e45ad70801fb3d75a4e9bc461d1bf`。
+Host remote_input、home_ui、serial_provisioning、camera_ui 在 Debug 与 ASan/UBSan 通过。设备停留在普通 097 包。
+
+SD 异常：当前所有 SD 调用方先 `IsMounted()`/`Init()`，缺卡时各自进入错误路径；**挂载状态下物理拔卡与慢卡需要
+现场操作**，软件无法模拟，仍开放。DMA/IRQ/cache-off、TLS/OTA/NVS 并发失败尚未覆盖，发布继续 **NO_GO**。
