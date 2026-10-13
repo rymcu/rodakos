@@ -89,6 +89,7 @@ private:
     bool ScheduleStateRetry(const char* reason);
     void RunDownload(const std::string& notification_payload);
     bool CompleteStagedHandoff();
+    bool SelectRecoveryAndRestart(const std::string& task_no);
     bool ReportPendingResult();
     bool ClearCompletedRecord(OtaUpdateRecord& record);
     bool RequestUpgradeCheck(const DeviceCloudConfig& cloud, UpgradeCheck& check);

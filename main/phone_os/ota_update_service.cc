@@ -1,6 +1,7 @@
 #include "phone_os/ota_update_service.h"
 
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/server_trust_transport.h"
 #include "rodak_sha256.h"
 #include "rodak_ota_signature.h"
@@ -42,6 +43,9 @@ constexpr size_t kMaxJsonResponseBytes = 16 * 1024;
 constexpr int kHttpTimeoutMs = 20 * 1000;
 constexpr int kReportRetryInitialMs = 2 * 1000;
 constexpr int kReportRetryMaxMs = 30 * 1000;
+// The non-persisted report loop holds the SD I/O lock; keep it short and let the server's
+// task state and the next notification recover a lost result.
+constexpr int kNonPersistedReportBudgetMs = 2 * 60 * 1000;
 constexpr int kReportTaskCreationRetryMs = 5 * 1000;
 
 
@@ -302,6 +306,12 @@ OtaUpdateLoadResult OtaUpdateService::LoadRecord(OtaUpdateRecord& record) {
 bool OtaUpdateService::SaveRecord(const OtaUpdateRecord& record) {
     bool saved = false;
     RunWithInternalStack([&]() { saved = SaveOtaUpdateRecord(record); });
+    if (saved && record.phase != OtaUpdatePhase::kIdle &&
+        FailResource(ResourceFailure::kOtaJournalSave)) {
+        ESP_LOGW(TAG, "Release test: journal phase %d written but reported as failed",
+                 static_cast<int>(record.phase));
+        return false;
+    }
     return saved;
 }
 
@@ -547,6 +557,13 @@ bool OtaUpdateService::CompleteStagedHandoff() {
         ESP_LOGE(TAG, "Cannot complete staged handoff because the OTA journal is unavailable");
         return false;
     }
+    if (record.phase == OtaUpdatePhase::kPending && !record.task_no.empty()) {
+        // The kPending save can report failure after NVS already wrote it. The retry must
+        // finish the handoff instead of waiting for the next reboot.
+        ESP_LOGW(TAG, "Resuming Recovery handoff for persisted staged task: task=%s",
+                 record.task_no.c_str());
+        return SelectRecoveryAndRestart(record.task_no);
+    }
     if (record.phase != OtaUpdatePhase::kAwaitingStagedAck) {
         return true;
     }
@@ -587,9 +604,12 @@ bool OtaUpdateService::CompleteStagedHandoff() {
         return false;
     }
     ESP_LOGI(TAG, "OTA staged progress acknowledged: task=%s", current.task_no.c_str());
+    return SelectRecoveryAndRestart(current.task_no);
+}
 
+bool OtaUpdateService::SelectRecoveryAndRestart(const std::string& task_no) {
     if (!SelectRecoveryPartition()) {
-        FailStaging(current.task_no, "RECOVERY_SELECT_FAILED", "无法切换到 Recovery 分区");
+        FailStaging(task_no, "RECOVERY_SELECT_FAILED", "无法切换到 Recovery 分区");
         return true;
     }
     if (report_retry_timer_ != nullptr) {
@@ -753,9 +773,10 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
     int last_progress = -1;
     while (ok && total < manifest.file_size) {
         if (!config_service_.IsVoiceConfigCurrent(cloud)) { ok = false; break; }
-        const int read = esp_http_client_read(client, reinterpret_cast<char*>(buffer.get()),
-                                              static_cast<int>(std::min<uint64_t>(
-                                                  kIoBufferSize, manifest.file_size - total)));
+        const int read = FailResource(ResourceFailure::kOtaDownloadRead) && total > 0 ? -1 :
+            esp_http_client_read(client, reinterpret_cast<char*>(buffer.get()),
+                                 static_cast<int>(std::min<uint64_t>(
+                                     kIoBufferSize, manifest.file_size - total)));
         if (read <= 0) {
             ok = false;
             break;
@@ -1048,7 +1069,8 @@ void OtaUpdateService::OnNetworkReady() {
         }
         return;
     }
-    if (record.phase == OtaUpdatePhase::kAwaitingStagedAck) {
+    if (record.phase == OtaUpdatePhase::kAwaitingStagedAck ||
+        record.phase == OtaUpdatePhase::kPending) {
         if (record.task_no.empty() || busy_.load()) {
             return;
         }
@@ -1293,6 +1315,7 @@ OtaUpdateService::ReportResultOutcome OtaUpdateService::ReportResultHttp(
 
 void OtaUpdateService::ReportResultUntilSuccess(const OtaUpdateRecord& record, bool success) {
     int retry_delay_ms = kReportRetryInitialMs;
+    const TickType_t started = xTaskGetTickCount();
     while (true) {
         const ReportResultOutcome outcome = ReportResultHttp(record, success);
         if (outcome == ReportResultOutcome::kSuccess) {
@@ -1301,6 +1324,12 @@ void OtaUpdateService::ReportResultUntilSuccess(const OtaUpdateRecord& record, b
         if (outcome == ReportResultOutcome::kTerminalFailure) {
             ESP_LOGE(TAG, "Rodak rejected non-persisted OTA result for task %s",
                      record.task_no.c_str());
+            return;
+        }
+        if (xTaskGetTickCount() - started >= pdMS_TO_TICKS(kNonPersistedReportBudgetMs)) {
+            ESP_LOGE(TAG, "Giving up non-persisted OTA result for task %s after %d s; "
+                     "releasing the SD lock and OTA admission",
+                     record.task_no.c_str(), kNonPersistedReportBudgetMs / 1000);
             return;
         }
         vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));

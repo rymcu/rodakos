@@ -1,5 +1,6 @@
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/device_pairing_policy.h"
+#include "phone_os/resource_failure_injection.h"
 #include "phone_os/device_pairing_protocol.h"
 #include "phone_os/realtime_voice_contract.h"
 #include "phone_os/serial_provisioning_protocol.h"
@@ -314,7 +315,13 @@ bool PerformHttpRequest(const DeviceCloudConfig& cloud, const std::string& url,
         esp_http_client_set_header(client, "Authorization", authorization.c_str());
     }
 
+#ifdef RODAKOS_RELEASE_TESTS
+    // Release test: one TLS connect failure on the next bootstrap/token/pairing request.
+    const esp_err_t open_result = FailResource(ResourceFailure::kCloudTls)
+        ? ESP_ERR_HTTP_CONNECT : esp_http_client_open(client, body.size());
+#else
     const esp_err_t open_result = esp_http_client_open(client, body.size());
+#endif
     if (open_result != ESP_OK) {
         error = std::string("AIoT HTTP open failed: ") + esp_err_to_name(open_result);
         esp_http_client_cleanup(client);
@@ -602,6 +609,11 @@ bool PersistMqttConfig(const DeviceCloudConfig& config) {
     written = written && settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands);
     written = written && settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
     written = written && settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
+    // Release test: the MQTT keys are already on flash, but the save reports failure, so the
+    // caller must restore its whole snapshot (ESP-IDF 6 NVS writes on nvs_set_*).
+    if (written && FailResource(ResourceFailure::kCloudPersist)) {
+        written = false;
+    }
     if (!written || !settings.Commit()) {
         (void)settings.Commit();
         return false;

@@ -2,17 +2,24 @@
 
 #include <atomic>
 #include <cstring>
+#include <iterator>
 #include <esp_log.h>
 
 namespace rodakos {
 
-enum class ResourceFailure { kNone, kHomePage, kImage, kCameraTask, kVoiceTask, kMqttConfig };
+// Values after kMqttConfig are TLS/NVS failures, not allocations; they reuse the same one-shot slot.
+enum class ResourceFailure {
+    kNone, kHomePage, kImage, kCameraTask, kVoiceTask, kMqttConfig,
+    kOtaDownloadRead, kCloudTls, kOtaJournalSave, kCloudPersist,
+};
 
 #ifdef RODAKOS_RELEASE_TESTS
 inline std::atomic<ResourceFailure> g_resource_failure{ResourceFailure::kNone};
 inline bool ArmResourceFailure(const char* name) {
-    constexpr const char* names[] = {"clear", "home_page", "image", "camera_task", "voice_task", "mqtt_config"};
-    for (int index = 0; index < 6; ++index) {
+    constexpr const char* names[] = {"clear", "home_page", "image", "camera_task", "voice_task",
+                                     "mqtt_config", "ota_download_read", "cloud_tls",
+                                     "ota_journal_save", "cloud_persist"};
+    for (int index = 0; index < static_cast<int>(std::size(names)); ++index) {
         if (std::strcmp(name, names[index]) == 0) {
             g_resource_failure.store(static_cast<ResourceFailure>(index));
             return true;
