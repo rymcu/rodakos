@@ -84,6 +84,8 @@ private:
     static void StagedHandoffTask(void* arg);
     static void ReportTask(void* arg);
     static void RetryTask(void* arg);
+    // on_worker_task: the caller is the state-retry worker, so staged work runs on its stack.
+    void OnNetworkReady(bool on_worker_task);
     static void ReportRetryTimerCallback(TimerHandle_t timer);
     ConfirmationResult ConfirmRunningImageImpl();
     bool ScheduleStateRetry(const char* reason);

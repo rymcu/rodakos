@@ -306,7 +306,8 @@ OtaUpdateLoadResult OtaUpdateService::LoadRecord(OtaUpdateRecord& record) {
 bool OtaUpdateService::SaveRecord(const OtaUpdateRecord& record) {
     bool saved = false;
     RunWithInternalStack([&]() { saved = SaveOtaUpdateRecord(record); });
-    if (saved && record.phase != OtaUpdatePhase::kIdle &&
+    // Targets the kPending save in CompleteStagedHandoff; other phases leave the slot armed.
+    if (saved && record.phase == OtaUpdatePhase::kPending &&
         FailResource(ResourceFailure::kOtaJournalSave)) {
         ESP_LOGW(TAG, "Release test: journal phase %d written but reported as failed",
                  static_cast<int>(record.phase));
@@ -773,7 +774,8 @@ bool OtaUpdateService::DownloadToSd(const Manifest& manifest, const DeviceCloudC
     int last_progress = -1;
     while (ok && total < manifest.file_size) {
         if (!config_service_.IsVoiceConfigCurrent(cloud)) { ok = false; break; }
-        const int read = FailResource(ResourceFailure::kOtaDownloadRead) && total > 0 ? -1 :
+        // total > 0 first: FailResource consumes the one-shot slot, so test it only mid-image.
+        const int read = total > 0 && FailResource(ResourceFailure::kOtaDownloadRead) ? -1 :
             esp_http_client_read(client, reinterpret_cast<char*>(buffer.get()),
                                  static_cast<int>(std::min<uint64_t>(
                                      kIoBufferSize, manifest.file_size - total)));
@@ -1050,6 +1052,10 @@ OtaUpdateService::ConfirmationResult OtaUpdateService::ConfirmRunningImageImpl()
 }
 
 void OtaUpdateService::OnNetworkReady() {
+    OnNetworkReady(false);
+}
+
+void OtaUpdateService::OnNetworkReady(bool on_worker_task) {
     if (local_health_confirmed_.load() && !local_boot_confirmed_.load() &&
         !ConfirmRunningImage()) {
         return;
@@ -1076,6 +1082,19 @@ void OtaUpdateService::OnNetworkReady() {
         }
         bool expected = false;
         if (!staged_handoff_running_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        if (on_worker_task) {
+            // The retry worker already owns a 6 KiB internal stack. Creating a second one
+            // failed whenever internal RAM was fragmented, so the handoff never resumed.
+            if (report_retry_timer_ != nullptr) {
+                xTimerStop(report_retry_timer_, 0);
+            }
+            const bool completed = CompleteStagedHandoff();
+            staged_handoff_running_.store(false);
+            if (!completed) {
+                ScheduleStateRetry("staged progress acknowledgement failure");
+            }
             return;
         }
         if (xTaskCreate(StagedHandoffTask, "ota_staged_ack", 6144, this, 3, nullptr) !=
@@ -1150,7 +1169,7 @@ void OtaUpdateService::ReportRetryTimerCallback(TimerHandle_t timer) {
 void OtaUpdateService::RetryTask(void* arg) {
     auto* service = static_cast<OtaUpdateService*>(arg);
     if (service != nullptr) {
-        service->OnNetworkReady();
+        service->OnNetworkReady(true);
         service->retry_worker_running_.store(false);
     }
     vTaskDelete(nullptr);
