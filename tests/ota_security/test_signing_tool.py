@@ -62,5 +62,57 @@ class SigningTests(unittest.TestCase):
             ota.verify(self.manifest, wrong.public_key())
 
 
+class OfflineSigningTests(unittest.TestCase):
+    """The build host holds only the public key; an offline host signs the request payload."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.image = Path(self.directory.name) / "rodakos.bin"
+        self.image.write_bytes(b"firmware" * 100)
+        data = self.image.read_bytes()
+        self.manifest = dict(manifestVersion=2, fileName="rodakos.bin", fileSize=len(data),
+                             checksumType="sha256", checksumValue=hashlib.sha256(data).hexdigest())
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def offline_sign(self, request, key=None):
+        return (key or self.key).sign(request["payload"].encode("utf-8"),
+                                      padding.PKCS1v15(), hashes.SHA256()).hex()
+
+    def test_round_trip_matches_direct_signing(self):
+        request = ota.signing_request(self.manifest, self.image, "ota_1_abc", "1.2.3")
+        self.assertEqual(request["payload"].encode("utf-8"),
+                         ota.payload(dict(request, payload=None)))
+        signed = ota.attach_signature(self.manifest, self.key.public_key(), "ota_1_abc", "1.2.3",
+                                      self.offline_sign(request) + "\n", self.image)
+        ota.verify(signed, self.key.public_key(), self.image)
+        self.assertEqual(signed["taskNo"], "ota_1_abc")
+        self.assertEqual(signed["signingKeyId"], ota.key_id(self.key.public_key()))
+        self.assertEqual(signed["fileName"], "rodakos.bin")
+
+    def test_request_rejects_image_that_differs_from_manifest(self):
+        self.image.write_bytes(b"tampered")
+        with self.assertRaises(ValueError):
+            ota.signing_request(self.manifest, self.image, "ota_1_abc", "1.2.3")
+
+    def test_attach_rejects_signature_for_other_task_or_key(self):
+        request = ota.signing_request(self.manifest, self.image, "ota_1_abc", "1.2.3")
+        with self.assertRaises(InvalidSignature):
+            ota.attach_signature(self.manifest, self.key.public_key(), "ota_2_def", "1.2.3",
+                                 self.offline_sign(request), self.image)
+        wrong = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        with self.assertRaises(InvalidSignature):
+            ota.attach_signature(self.manifest, self.key.public_key(), "ota_1_abc", "1.2.3",
+                                 self.offline_sign(request, wrong), self.image)
+        with self.assertRaises(ValueError):
+            ota.attach_signature(self.manifest, self.key.public_key(), "ota_1_abc", "1.2.3",
+                                 "zz" * 256, self.image)
+
+
 if __name__ == "__main__":
     unittest.main()

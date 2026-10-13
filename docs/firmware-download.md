@@ -96,6 +96,10 @@ application version. Private key material never enters the firmware or package:
   -SigningVersion 0.1.2-dev.1
 ```
 
+For the production root, the private key stays on an offline host: package with
+`-OfflineSigning` and the public key only, then sign and attach as described in
+[production signing](production-signing.md).
+
 Use `-DevelopmentPackage` for isolated test keys; flashing those packages additionally requires
 `-AllowDevelopmentPackage`. Neither switch bypasses signature or Recovery trust-anchor checks.
 The main application and Recovery both receive the public key through CMake. `-SkipBuild` still

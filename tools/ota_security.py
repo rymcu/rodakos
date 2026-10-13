@@ -63,6 +63,26 @@ def verify(manifest, key, image=None):
         check_image(manifest, image)
 
 
+def signing_request(manifest, image, task, version):
+    """Return the exact bytes an offline signer must sign; the image never leaves the build host."""
+    data = Path(image).read_bytes()
+    request = dict(manifestVersion=manifest.get("manifestVersion"), taskNo=task, version=version,
+                   fileSize=len(data), checksumType="sha256",
+                   checksumValue=hashlib.sha256(data).hexdigest())
+    if request["checksumValue"] != manifest.get("checksumValue") or request["fileSize"] != manifest.get("fileSize"):
+        raise ValueError("Image size or SHA-256 does not match manifest")
+    request["payload"] = payload(request).decode("utf-8")
+    return request
+
+
+def attach_signature(manifest, key, task, version, signature_hex, image):
+    """Merge an offline signature into the manifest only after it verifies against the trust anchor."""
+    signed = dict(manifest, taskNo=task, version=version, signatureType=ALGORITHM,
+                  signatureValue=signature_hex.strip().lower(), signingKeyId=key_id(key))
+    verify(signed, key, image)
+    return signed
+
+
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".part")
@@ -85,6 +105,21 @@ def main():
             sub.add_argument("--private-key", required=True)
             sub.add_argument("--task", required=True)
             sub.add_argument("--version", required=True)
+    request = commands.add_parser("signing-request",
+                                  help="Write the payload an offline signer signs; needs no private key")
+    request.add_argument("--manifest", required=True)
+    request.add_argument("--image", required=True)
+    request.add_argument("--task", required=True)
+    request.add_argument("--version", required=True)
+    request.add_argument("--output", required=True)
+    attach = commands.add_parser("attach-signature",
+                                 help="Verify an offline signature with the public key and merge it")
+    attach.add_argument("--manifest", required=True)
+    attach.add_argument("--public-key", required=True)
+    attach.add_argument("--image", required=True)
+    attach.add_argument("--task", required=True)
+    attach.add_argument("--version", required=True)
+    attach.add_argument("--signature", required=True, help="File holding 512 lowercase hex characters")
     package = commands.add_parser("verify-package")
     package.add_argument("--directory", required=True)
     package.add_argument("--allow-faults", action="store_true")
@@ -128,7 +163,14 @@ def main():
             raise ValueError("Fault-injection packages require an explicit development test opt-in")
         return
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8-sig"))
+    if args.command == "signing-request":
+        write_json(args.output, signing_request(manifest, args.image, args.task, args.version))
+        return
     key = public_key(args.public_key)
+    if args.command == "attach-signature":
+        signature = Path(args.signature).read_text(encoding="ascii")
+        write_json(args.manifest, attach_signature(manifest, key, args.task, args.version, signature, args.image))
+        return
     if args.command == "sign":
         private = serialization.load_pem_private_key(Path(args.private_key).read_bytes(), password=None)
         if not isinstance(private, rsa.RSAPrivateKey) or private.key_size != 2048 or key_id(private.public_key()) != key_id(key):

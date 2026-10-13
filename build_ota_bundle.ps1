@@ -8,17 +8,30 @@ param(
     [string]$SigningTaskNo = "",
     [string]$SigningVersion = "",
     [switch]$DevelopmentPackage,
-    [switch]$AllowReleaseFaultInjection
+    [switch]$AllowReleaseFaultInjection,
+    # 生产根：本机只有公钥。生成 signing-request.json 交离线签名机，回来后用
+    # tools/ota_security.py attach-signature 合入；未签名前包不通过 verify-package。
+    [switch]$OfflineSigning
 )
 
 $ErrorActionPreference = "Stop"
 
-foreach ($value in @($SigningKeyPath, $VerificationKeyPath, $SigningTaskNo, $SigningVersion)) {
+$requiredSigningInputs = if ($OfflineSigning) {
+    @($VerificationKeyPath, $SigningTaskNo, $SigningVersion)
+} else {
+    @($SigningKeyPath, $VerificationKeyPath, $SigningTaskNo, $SigningVersion)
+}
+foreach ($value in $requiredSigningInputs) {
     if ([string]::IsNullOrWhiteSpace($value)) {
-        throw "Signed packages require SigningKeyPath, VerificationKeyPath, SigningTaskNo and SigningVersion"
+        throw "Signed packages require SigningKeyPath (or -OfflineSigning), VerificationKeyPath, SigningTaskNo and SigningVersion"
     }
 }
-$SigningKeyPath = (Resolve-Path -LiteralPath $SigningKeyPath).Path
+if ($OfflineSigning -and -not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
+    throw "-OfflineSigning 不接受 SigningKeyPath；私钥只能留在离线签名机"
+}
+if (-not $OfflineSigning) {
+    $SigningKeyPath = (Resolve-Path -LiteralPath $SigningKeyPath).Path
+}
 $VerificationKeyPath = (Resolve-Path -LiteralPath $VerificationKeyPath).Path
 
 function Get-PartitionLayout {
@@ -532,6 +545,17 @@ try {
         }
     }
     Copy-Item -LiteralPath $VerificationKeyPath -Destination (Join-Path $packageDir "ota-public.pem")
+    if ($OfflineSigning) {
+        $requestPath = Join-Path $packageDir "signing-request.json"
+        & python (Join-Path $repoRoot "tools/ota_security.py") signing-request `
+            --manifest $manifestPath --image (Join-Path $packageDir $mainPackageName) `
+            --task $SigningTaskNo --version $SigningVersion --output $requestPath
+        if ($LASTEXITCODE -ne 0) { throw "离线签名请求生成失败" }
+        Write-Host "离线签名请求：$requestPath" -ForegroundColor Yellow
+        Write-Host "在离线签名机对 payload 签名后，执行 attach-signature 并重新运行 verify-package" -ForegroundColor Yellow
+        Write-Host "本包尚未签名，不能刷写或上传" -ForegroundColor Yellow
+        return
+    }
     $verifyOptions = @()
     if ($AllowReleaseFaultInjection) { $verifyOptions += "--allow-faults" }
     & python (Join-Path $repoRoot "tools/ota_security.py") verify-package --directory $packageDir @verifyOptions
