@@ -771,6 +771,8 @@ extern "C" void app_main(void) {
         .emit = rodakos::PrintVoiceLifecycleEvent
     });
     serial_provisioning_service.SetVoiceLifecycleDiagnostic(&voice_lifecycle_diagnostic);
+    serial_provisioning_service.SetMqttDropCallback(
+        []() { return unified_mqtt_service.DropTransportForTest(); });
     ESP_LOGW(TAG, "RODAKOS_RELEASE_TESTS active: USB voice lifecycle diagnostic enabled");
 #endif
 

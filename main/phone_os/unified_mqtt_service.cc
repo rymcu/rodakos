@@ -584,6 +584,16 @@ void UnifiedMqttService::RequestCredentialRefresh() {
     esp_restart();
 }
 
+#ifdef RODAKOS_RELEASE_TESTS
+bool UnifiedMqttService::DropTransportForTest() {
+    std::lock_guard<std::mutex> lock(mqtt_mutex_);
+    if (!started_.load() || client_ == nullptr || !connected_.load()) return false;
+    const esp_err_t err = esp_mqtt_client_disconnect(client_);
+    ESP_LOGW(TAG, "Release test: MQTT transport drop requested: %s", esp_err_to_name(err));
+    return err == ESP_OK;
+}
+#endif
+
 void UnifiedMqttService::NetworkEventHandler(void* arg, esp_event_base_t event_base,
                                              int32_t event_id, void* event_data) {
     (void)event_base;

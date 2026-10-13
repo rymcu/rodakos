@@ -55,6 +55,11 @@ public:
     // Apply a provisioning change. An active session restarts so its outbox
     // and event workers cannot cross broker or routing boundaries.
     void RequestCredentialRefresh();
+#ifdef RODAKOS_RELEASE_TESTS
+    // Release test: drop the MQTT transport so ESP-MQTT reconnects with a new TLS handshake,
+    // while every other session (Camera, WebRTC, voice) keeps running.
+    bool DropTransportForTest();
+#endif
     void SetVoiceWakeService(VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
     // The camera peer is injected after the camera hardware service has been
     // constructed. MQTT remains the control plane; JPEG payloads never pass

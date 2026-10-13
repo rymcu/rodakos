@@ -542,6 +542,12 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         ReleaseDmaPressure();
         return true;
     }
+    if (line == "RODAK_RELEASE_TEST_V1 mqtt_drop") {
+        const bool dropped = mqtt_drop_callback_ && mqtt_drop_callback_();
+        std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"mqtt_drop\":%s}\n", dropped ? "true" : "false");
+        std::fflush(stdout);
+        return dropped;
+    }
     if (line == "RODAK_RELEASE_TEST_V1 heap_map") {
         PrintInternalHeapMap();
         return true;

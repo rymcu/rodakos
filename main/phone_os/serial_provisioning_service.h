@@ -44,6 +44,8 @@ public:
     bool IsRunning() const { return running_.load(); }
     void SetAppLaunchCallback(AppLaunchCallback callback);
 #ifdef RODAKOS_RELEASE_TESTS
+    // Configure once before Start; drops the MQTT transport for a TLS reconnect test.
+    void SetMqttDropCallback(std::function<bool()> callback) { mqtt_drop_callback_ = std::move(callback); }
     // Configure once before Start; the controller outlives this service.
     void SetVoiceLifecycleDiagnostic(VoiceLifecycleDiagnostic* diagnostic) {
         voice_lifecycle_diagnostic_ = diagnostic;
@@ -82,6 +84,7 @@ private:
     AppLaunchCallback app_launch_callback_;
 #ifdef RODAKOS_RELEASE_TESTS
     VoiceLifecycleDiagnostic* voice_lifecycle_diagnostic_ = nullptr;
+    std::function<bool()> mqtt_drop_callback_;
 #endif
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> running_{false};
