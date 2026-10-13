@@ -846,18 +846,18 @@ leave the phase empty and `RODAKOS_RELEASE_TESTS=OFF`.
 | Main     | `after_download_fsync`                                                                       | Incomplete staging does not select Recovery                                        | 100 (reset)       |
 | Main     | `after_pending_sidecar`                                                                      | Unjournaled files do not start installation                                        | 100 (reset)       |
 | Main     | `after_pending_journal`                                                                      | Resume staged acknowledgement then Recovery handoff                                | 100 (reset)       |
-| Both     | `before_journal_set`, `after_journal_set`, `after_journal_commit`                            | Select newest valid A/B generation; never erase default NVS                        | Pending           |
-| Recovery | `after_applying_state`, `before_image_erase`, `after_image_erase`, `during_image_write`      | Revalidate candidate and restart write or restore backup                           | Pending           |
-| Recovery | `after_image_write`, `after_ready_to_boot`                                                   | Repeat safe write or resume boot handoff                                           | Pending           |
-| Recovery | `after_restore_state`, `before_restore_erase`, `after_restore_erase`, `during_restore_write` | Repeat validated backup restoration                                                | Pending           |
-| Recovery | `after_restore_write`, `after_rollback_ready`                                                | Repeat restore or resume restored boot                                             | Pending           |
+| Both     | `before_journal_set`, `after_journal_set`, `after_journal_commit`                            | Select newest valid A/B generation; never erase default NVS                        | 101 (reset)       |
+| Recovery | `after_applying_state`, `before_image_erase`, `after_image_erase`, `during_image_write`      | Revalidate candidate and restart write or restore backup                           | 101 (reset)       |
+| Recovery | `after_image_write`, `after_ready_to_boot`                                                   | Repeat safe write or resume boot handoff                                           | 101 (reset)       |
+| Recovery | `after_restore_state`, `before_restore_erase`, `after_restore_erase`, `during_restore_write` | Repeat validated backup restoration                                                | 101 (reset)       |
+| Recovery | `after_restore_write`, `after_rollback_ready`                                                | Repeat restore or resume restored boot                                             | 101 (reset)       |
 | Main     | `after_boot_confirmation`                                                                    | Preserve local confirmation while offline                                          | 100 (reset)       |
 | Main     | `after_result_http_ack`, `after_report_acknowledged`                                         | Server deduplicates a lost acknowledgement; persisted acknowledgement skips resend | 100 (reset)       |
 
 Record trial, firmware hashes, trigger log, journal phase, resets, resulting image, and HTTP result.
-"100 (reset)" means a software reset at that boundary passed on hardware in 100. It is not a power-cut
-result. The Both and Recovery rows need a Recovery fault build, which changes the immutable Recovery
-partition, so they stay Pending.
+"100 (reset)" and "101 (reset)" mean a software reset at that boundary passed on hardware in that
+record. They are not power-cut results. The 101 rows ran with a temporary fault-injection Recovery on
+the test device, and the baseline Recovery was restored and read back afterwards.
 The software hooks bracket erase/write and journal operations; only a controlled power fixture can
 interrupt the flash/NVS operation itself. Also cut power during download and FAT flush/rename.
 Do not call a software reset an actual power-cut result.
@@ -4273,3 +4273,54 @@ m100g `61bf3a778df71b1046bb10ee9939deaca3a08b8a09415d3c2980ca1aafba6d6b`。设�
 
 仍开放：Both 与 Recovery 行需要 Recovery 故障构建，而烧录脚本拒绝与 immutable 基线不一致的 Recovery；
 下载、FAT flush/rename 与 Flash 擦写期间的真实断电需要受控电源夹具。发布继续 **NO_GO**。
+
+## 2026-10-13 Recovery 侧 OTA 中断矩阵 101
+
+中断矩阵 Both 与 Recovery 行共 15 个边界全部在实机通过，至此矩阵所有软件复位行都有实机证据。每个边界
+在测试机上临时换入一份故障注入 Recovery，跑一次经 Rodak 下发的真实 OTA（按任务签名，未写数据库）。
+每项都是一次性软件复位，不是断电；串口均无 panic。
+
+**测试机 Recovery 处理。** 试验前整片读回 2.5 MiB Recovery 分区并保存。每项试验先擦除整个 Recovery
+分区，写入故障 Recovery，同时把 `ota_0` 恢复为普通 dev.1 包 `20261012-192434`，三个区域均经 esptool
+verify。
+
+**写入路径（r101a–r101f）。** `after_applying_state`、`before_image_erase`、`after_image_erase`、
+`during_image_write`、`after_image_write`、`after_ready_to_boot` 各复位一次；Recovery 重新校验候选
+镜像后重写，`after_ready_to_boot` 则续做首次启动交接。6 个任务均 `succeeded` 于 dev.2。
+
+**Journal A/B（r101g–r101i）。** Recovery 写 journal 时在 `before_journal_set`、`after_journal_set`、
+`after_journal_commit` 处复位；下次启动读取最新有效代并完成升级，3 个任务均 `succeeded`。
+
+**恢复路径（r101j–r101o）。** 用一个在 flash 映射代码段翻转 1 字节的 dev.2 包：大小、应用描述和
+签名清单的 SHA-256 都一致，能通过 SD 校验，但 `esp_ota_end` 以 `ESP_ERR_OTA_VALIDATE_FAILED` 拒绝，
+Recovery 转而恢复 dev.1。6 个恢复边界各复位一次，恢复都最终完成并回到 dev.1；Rodak 均记录为
+`failed` / `RECOVERY_FLASH_FAILED`（"新固件启动失败，上一版本已恢复"）。试验前已用基线 Recovery 和同一
+包空跑确认相同的回滚行为（串口 `3ed6ce9f5461fd0c981addc8228ef151b9c7af938bceacdbebf5b20f35a7315e`）。
+
+**收尾。** 已写回基线 Recovery（`ffa412ebe30c714c691bba73c8ab6e4efcaaab14fce5229f595707a8a08f75fd`），
+整片读回与试验前备份逐字节一致（SHA-256 `c69e24d67ac89c86327b56f3f1ae3ccf6d98cbb42a3863598b00f6c16bb30273`），
+`flash_and_test.ps1 -VerifyOnly` 通过，设备运行普通 dev.1 包。
+
+| 试验 | 边界 | Rodak 任务 | 串口 SHA-256 |
+| ---- | ---- | ---------- | ------------ |
+| r101a | `after_applying_state` | `ota_1791843539268_357cc04f` | `4f6b56a32345039ed014bb84c809dd750da83d24839a09a163b18ae9dbda34cf` |
+| r101b | `before_image_erase` | `ota_1791844393219_9a3f09c2` | `fbd15708e9c1f9ead04db41e5f0ba0c270b455843a195adf702b111b05420d0d` |
+| r101c | `after_image_erase` | `ota_1791844747922_51aa4694` | `34f9961eb738f33c3b04b5624b126d2ce9a7db582d9c116d4eb0e07c90715b03` |
+| r101d | `during_image_write` | `ota_1791845038334_1a4ca16c` | `2f5da53b4925d66cc01ad3e4a795555ca72f69d2008fc0ce120965d4b5189486` |
+| r101e | `after_image_write` | `ota_1791845316695_8a696a22` | `7039598319cf39b04a21b51c4af5b8ae34c1490e3c5e43dfc2cac595d8b9d157` |
+| r101f | `after_ready_to_boot` | `ota_1791845730855_a6b83b4a` | `66cfddb8a8e938056b086ebaf1029caf11f70962b0381d9cf6a1b834e2b6fc23` |
+| r101g | `before_journal_set` | `ota_1791846188373_0761e6f6` | `80dee00e8913d15c8c59dc81435de818257bfd8b025f6113b3fda71ed4ee17d4` |
+| r101h | `after_journal_set` | `ota_1791846593640_3bbc05e0` | `93de5b3b4b00fde03d1a7bf61a3dfe9946a885924abdac0f06c4489eb856dd0b` |
+| r101i | `after_journal_commit` | `ota_1791847011821_2ede310a` | `157d2b69d007b87d64dfc2fd19078dfebee97cb4a84bdfd40b28cab6f06af1d2` |
+| r101j | `after_restore_state` | `ota_1791847833765_e320c850` | `576e2ef7767f6f02d8034b9e1662bc60cfebf4600658c119997edc86c993b526` |
+| r101k | `before_restore_erase` | `ota_1791848142206_c7aa9538` | `d8235243757715a2e6bf247adc6e347d3fa839bfbec517b44ad2359044532cad` |
+| r101l | `after_restore_erase` | `ota_1791848457303_c9705082` | `eda715c6e222f64f72e8817ebbaa8f1d0ceb880944dfbe076d20ac249d1f17d2` |
+| r101m | `during_restore_write` | `ota_1791848769515_b7807eb3` | `9778fd6e39c68f0626c19c7af30c9eed967474e9dfd81ee5169aa2e074563285` |
+| r101n | `after_restore_write` | `ota_1791849086975_f1726caf` | `e5fce44e947856c43bcaf5bb67f44483be679825e3c130d8f77ced44220d47e9` |
+| r101o | `after_rollback_ready` | `ota_1791849498612_c1b92eea` | `756af43671cefb0f78ccf51e5a9c9341b9bfd4e1758d9fee0b9c7206838c268d` |
+
+r101b 第一次运行作废：r101a 升级后设备仍在 dev.2，OTA 检查按设计拒绝了 dev.2 → dev.2 任务；此后每项
+试验都先把主程序恢复为 dev.1 再跑。
+
+仍开放：下载、FAT flush/rename 与 Flash 擦写期间的真实断电需要受控电源夹具；TLS/NVS 并发失败、生产签名与
+八小时资格。发布继续 **NO_GO**。

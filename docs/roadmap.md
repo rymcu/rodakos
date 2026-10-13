@@ -1069,3 +1069,34 @@ m100f `ff4ac133…`, m100g `61bf3a77…`. The device is back on the normal dev.1
 The Both and Recovery rows stay open. They need a Recovery fault build, and the flash script refuses a
 Recovery that differs from the immutable baseline. Real power cuts during download, FAT flush or rename
 and flash erase/write need a controlled power fixture. Release stays **NO_GO**.
+
+### 2026-10-13 Recovery-side OTA interruption matrix (101)
+
+All 15 Both and Recovery boundaries passed on hardware, so every software-reset row of the
+interruption matrix now has hardware evidence. Each boundary ran one Rodak OTA (signed per task, no
+database write) with a temporary fault-injection Recovery on the test device. Each trial is a one-shot
+software reset, not a power cut. No serial log has a panic.
+
+- Before the trials, esptool read back and saved the full 2.5 MiB Recovery partition. The trial script
+  erases the partition, writes the fault Recovery, and returns `ota_0` to the normal dev.1 package
+  `20261012-192434`. esptool verifies all three regions.
+- Image write (r101a–r101f): `after_applying_state`, `before_image_erase`, `after_image_erase`,
+  `during_image_write`, `after_image_write` and `after_ready_to_boot` all reset once. Recovery then
+  verified the candidate again and wrote it again, or (`after_ready_to_boot`) resumed the first boot.
+  All six tasks `succeeded` on dev.2.
+- Journal A/B (r101g–r101i): Recovery wrote the journal at `before_journal_set`, `after_journal_set`
+  and `after_journal_commit` and reset there. The next boot loaded the newest valid generation and
+  finished the update. All three tasks `succeeded`.
+- Restore (r101j–r101o): a dev.2 package with one flipped byte in flash-mapped code keeps its size,
+  descriptor and signed SHA-256 manifest, so it passes the SD checks. `esp_ota_end` then rejects it
+  with `ESP_ERR_OTA_VALIDATE_FAILED`, and Recovery restores dev.1. The six restore boundaries reset
+  once each, and the restore always finished on dev.1. Rodak recorded each task as `failed` with
+  `RECOVERY_FLASH_FAILED` ("新固件启动失败，上一版本已恢复"). A run with the baseline Recovery and
+  the same package showed the same rollback before the trials.
+
+After the trials, the baseline Recovery (`ffa412eb…`) went back and the partition read back is
+byte-identical to the saved copy (SHA-256 `c69e24d6…`). `flash_and_test.ps1 -VerifyOnly` passes, and
+the device runs the normal dev.1 package. Serial SHA-256 values are in `ota-release-readiness.md`.
+
+Real power cuts during download, FAT flush or rename, and flash erase or write still need a controlled
+power fixture. Release stays **NO_GO**.
