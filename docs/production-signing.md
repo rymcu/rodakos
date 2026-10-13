@@ -15,15 +15,18 @@ Development test keys under `build/test-keys/` never qualify a release.
 ## 1. Generate the key pair (offline host, once)
 
 ```sh
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out rodak-ota-release-private.pem
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -aes-256-cbc -out rodak-ota-release-private.pem
 openssl pkey -in rodak-ota-release-private.pem -pubout -out rodak-ota-release-public.pem
 openssl pkey -pubin -in rodak-ota-release-public.pem -outform DER | openssl dgst -sha256
 ```
 
-The last line prints the key fingerprint. Firmware embeds it as `RODAK_OTA_TRUST:<fingerprint>`, and
-signed manifests carry it as `signingKeyId`. Record the fingerprint with the release. Move only
-`rodak-ota-release-public.pem` to the build host. Keep a sealed backup of the private key. If you lose
-it, every installed Recovery needs a new wired migration.
+`-aes-256-cbc` encrypts the private key with a passphrase. OpenSSL asks for it here and at every
+signature. Store the passphrase apart from the key file.
+
+The last line prints the key fingerprint. Firmware embeds it as `RODAK_OTA_TRUST:<fingerprint>`,
+and signed manifests carry it as `signingKeyId`. Record the fingerprint with the release. Move only
+`rodak-ota-release-public.pem` to the build host. Keep at least two sealed offline backups of the
+private key. If you lose it, every installed Recovery needs a new wired migration.
 
 ## 2. Build with the public key (build host)
 
