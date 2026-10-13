@@ -894,6 +894,14 @@ The collector requires at least 960 complete MQTT samples over eight hours, no r
 failure, no health gap above 90 seconds, connected/enqueued telemetry, at least 8 KiB largest internal
 block and 512 bytes worker stack headroom, and no internal-free median drop above 8 KiB. These are
 local acceptance thresholds, not proof of sufficient memory for all concurrent device operations.
+
+Decision 2026-10-13: the Camera preview holds internal DMA memory while it runs, so the 8 KiB
+largest-block gate applies only while Camera is closed. After Camera closes, any health source must
+report 8 KiB again within 90 seconds. The leak check uses Camera-closed samples only. The collector
+records Camera-open minima separately (`camera_open_minima`). They need their own threshold, and that
+threshold comes from a test of TLS, MQTT reconnect and screen streaming while Camera runs. If that
+test fails, the Camera-open headroom is a firmware defect, not an acceptance change. Results judged
+before this decision keep their original status.
 Health samples must carry strictly increasing device uptime; missing, repeated, or regressed uptime
 is a failure and cannot increase the valid sample count. The collector also inspects any final
 unterminated serial fragment before saving its result, including on an interrupted capture, so a

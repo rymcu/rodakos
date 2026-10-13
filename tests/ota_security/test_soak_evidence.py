@@ -428,5 +428,80 @@ class CameraSoakTests(unittest.TestCase):
         self.assertEqual(self.report()["status"], "pass-observed")
 
 
+def mqtt(timestamp, largest, free=40000):
+    return (f"I ({timestamp}) UnifiedMqtt: MQTT health: connected=1 internal_free={free} "
+            f"internal_largest={largest} stack_min_free=2048 psram_free=3000000 "
+            "psram_largest=2097152 telemetry_queued=1")
+
+
+class CameraWindowTests(unittest.TestCase):
+    """2026-10-13: the 8 KiB gate applies while Camera is closed; Camera-open minima are recorded."""
+
+    def run_window(self, open_largest, after_close):
+        evidence = Evidence()
+        evidence.accept(mqtt(1000, 8192), 1)
+        evidence.accept("I (2000) CameraApp: Camera app created; preview startup deferred", 2)
+        evidence.accept(mqtt(3000, open_largest), 3)
+        evidence.accept("I (4000) PhoneAppHost: Closing app: camera", 4)
+        for offset, largest in after_close:
+            evidence.accept(mqtt(4000 + offset * 1000, largest), 4 + offset)
+        return evidence.report(4 + after_close[-1][0], 28800)
+
+    def test_low_largest_while_camera_is_open_is_recorded_not_failed(self):
+        report = self.run_window(3328, [(30, 8192)])
+        self.assertEqual(report["failures"], [])
+        self.assertEqual(report["camera_open_minima"]["internal_largest"], 3328)
+        self.assertEqual(report["idle_minima"]["internal_largest"], 8192)
+        self.assertEqual(report["camera_open_samples"], 1)
+        self.assertEqual(report["camera_recoveries"][0]["recovered_at"], 34)
+
+    def test_camera_close_must_recover_8_kib_within_90_seconds(self):
+        report = self.run_window(3328, [(30, 6144), (60, 6144), (120, 6144)])
+        self.assertIn("camera_memory_not_recovered_within_90_seconds", report["failures"])
+        self.assertIsNone(report["camera_recoveries"][0]["recovered_at"])
+
+    def test_late_recovery_is_still_a_failure(self):
+        report = self.run_window(3328, [(30, 6144), (95, 8192)])
+        self.assertIn("camera_memory_not_recovered_within_90_seconds", report["failures"])
+
+    def test_low_largest_while_camera_is_closed_still_fails(self):
+        evidence = Evidence()
+        evidence.accept(mqtt(1000, 6144), 1)
+        self.assertIn("insufficient_memory_or_stack_headroom", evidence.report(1, 28800)["failures"])
+
+    def test_main_health_counts_for_the_idle_gate(self):
+        evidence = Evidence()
+        evidence.accept(mqtt(1000, 8192), 1)
+        evidence.accept("I (1500) RodakOS: Main health: stack_min_free=2640 internal_free=8000 "
+                        "internal_largest=4096 dma_free=5000 dma_largest=4096", 1.5)
+        self.assertIn("insufficient_memory_or_stack_headroom", evidence.report(2, 28800)["failures"])
+
+    def test_replayed_open_line_does_not_reopen_camera(self):
+        evidence = Evidence()
+        evidence.accept("I (2000) CameraApp: Camera app created; preview startup deferred", 2)
+        evidence.accept("I (4000) PhoneAppHost: Closing app: camera", 4)
+        evidence.accept(mqtt(5000, 8192), 5)
+        # An older uptime replays the open line; it must not exempt later low samples.
+        evidence.accept("I (2000) CameraApp: Camera app created; preview startup deferred", 6)
+        evidence.accept(mqtt(7000, 6144), 7)
+        report = evidence.report(7, 28800)
+        self.assertEqual(report["camera_open_samples"], 0)
+        self.assertIn("insufficient_memory_or_stack_headroom", report["failures"])
+
+    def test_leak_check_uses_camera_closed_samples_only(self):
+        evidence = Evidence()
+        for index in range(10):
+            evidence.accept(mqtt(1000 + index * 30000, 8192, 40000), 1 + index * 30)
+        evidence.accept("I (400000) CameraApp: Camera app created; preview startup deferred", 400)
+        for index in range(10):
+            evidence.accept(mqtt(401000 + index * 30000, 3328, 16000), 401 + index * 30)
+        evidence.accept("I (800000) PhoneAppHost: Closing app: camera", 800)
+        for index in range(10):
+            evidence.accept(mqtt(801000 + index * 30000, 8192, 39000), 801 + index * 30)
+        report = evidence.report(1100, 28800)
+        self.assertNotIn("internal_heap_median_drop_over_8KiB", report["failures"])
+        self.assertEqual(report["idle_internal_heap_median_drop"], 1000)
+
+
 if __name__ == "__main__":
     unittest.main()

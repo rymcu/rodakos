@@ -10,6 +10,13 @@ import time
 
 MIN_VOICE_SUPERVISOR_STACK_BYTES = 6144
 MIN_VOICE_SUPERVISOR_STACK_HEADROOM = 4096
+MIN_IDLE_INTERNAL_LARGEST = 8192
+MIN_STACK_HEADROOM = 512
+# 2026-10-13 decision: the Camera preview holds internal DMA memory while it runs, so the 8 KiB
+# idle gate applies only while Camera is closed. Camera-open minima are recorded for a separate,
+# measured threshold. After Camera closes, internal largest must return to 8 KiB within the same
+# 90-second window as the health-gap gate.
+CAMERA_RECOVERY_SECONDS = 90
 
 
 class Evidence:
@@ -33,6 +40,15 @@ class Evidence:
         self.camera_launch_event = None
         self.camera_instance_event = None
         self.camera_log_uptime = None
+        self.camera_open = False
+        self.camera_open_samples = 0
+        self.idle_samples = 0
+        self.camera_open_minima = {}
+        self.idle_minima = {}
+        self.idle_first = []
+        self.idle_last = deque(maxlen=10)
+        self.camera_recovery_deadline = None
+        self.camera_recoveries = []
 
     @staticmethod
     def _fields(line):
@@ -51,7 +67,7 @@ class Evidence:
         if level == "error":
             self.failures.add("error_log_present")
 
-    def _record_resource(self, source, fields):
+    def _record_resource(self, source, fields, elapsed=0):
         if not fields:
             return
         self.resource_samples[source] = self.resource_samples.get(source, 0) + 1
@@ -63,6 +79,26 @@ class Evidence:
             if name in {"internal_free", "internal_min", "internal_largest", "stack_min_free",
                         "psram_free", "psram_min", "psram_largest", "dma_free", "dma_largest"}:
                 self.minima[name] = min(self.minima.get(name, value), value)
+                window = self.camera_open_minima if self.camera_open else self.idle_minima
+                window[name] = min(window.get(name, value), value)
+        if "internal_largest" in fields:
+            self._check_idle_largest(fields["internal_largest"], elapsed)
+
+    def _check_idle_largest(self, largest, elapsed):
+        if self.camera_open:
+            return
+        if self.camera_recovery_deadline is not None:
+            if largest >= MIN_IDLE_INTERNAL_LARGEST:
+                self.camera_recoveries[-1]["recovered_at"] = round(elapsed, 3)
+                if elapsed > self.camera_recovery_deadline:
+                    self.failures.add("camera_memory_not_recovered_within_90_seconds")
+                self.camera_recovery_deadline = None
+            elif elapsed > self.camera_recovery_deadline:
+                self.failures.add("camera_memory_not_recovered_within_90_seconds")
+                self.camera_recovery_deadline = None
+            return
+        if largest < MIN_IDLE_INTERNAL_LARGEST:
+            self.failures.add("insufficient_memory_or_stack_headroom")
 
     def record_app_request(self, app, elapsed):
         self.exercise_requests += 1
@@ -73,6 +109,18 @@ class Evidence:
                          camera_preview_sequence=None, camera_observation_closed=False)
         self.exercise_events.append(event)
 
+    def _set_camera_open(self, is_open, elapsed):
+        if is_open == self.camera_open:
+            return
+        self.camera_open = is_open
+        if not is_open:
+            self.camera_recovery_deadline = elapsed + CAMERA_RECOVERY_SECONDS
+            self.camera_recoveries.append({"closed_at": round(elapsed, 3), "recovered_at": None})
+        elif self.camera_recovery_deadline is not None:
+            # Reopened before any Camera-closed sample: recovery is unobserved, not failed.
+            self.camera_recoveries[-1]["reopened_before_sample"] = True
+            self.camera_recovery_deadline = None
+
     def _close_camera_observation(self):
         event = self.camera_instance_event
         if event is not None:
@@ -82,7 +130,7 @@ class Evidence:
         self.camera_instance_event = None
         self.camera_launch_event = None
 
-    def _record_camera_evidence(self, line):
+    def _record_camera_evidence(self, line, elapsed=0):
         match = re.search(r"\bI\s*\((\d+)\)\s+(PhoneAppHost|CameraApp): (.*)", line)
         if match is None:
             return
@@ -90,6 +138,12 @@ class Evidence:
         if self.camera_log_uptime is not None and uptime < self.camera_log_uptime:
             return
         self.camera_log_uptime = uptime
+        if tag == "CameraApp" and message == "Camera app created; preview startup deferred":
+            self._set_camera_open(True, elapsed)
+        elif (message == "Destroy: capture guard begin" if tag == "CameraApp" else
+              message == "Closing app: camera" or
+              (message.startswith("App launched: ") and message != "App launched: camera")):
+            self._set_camera_open(False, elapsed)
         if tag == "PhoneAppHost":
             if message.startswith("Launching app: "):
                 self.camera_launch_event = None
@@ -148,7 +202,7 @@ class Evidence:
 
     def accept(self, line, elapsed):
         self._record_log_level(line)
-        self._record_camera_evidence(line)
+        self._record_camera_evidence(line, elapsed)
         if re.search(r"Guru Meditation|assert failed|abort\(\)|watchdog.*trigger|rst:|ESP-ROM:|stack overflow|CORRUPT HEAP|panic|brownout|failed to (?:alloc|create)|no mem", line, re.I):
             self.failures.add("reset_or_runtime_failure")
         if 'RODAK_APP_LAUNCH_RESULT {"queued":true}' in line:
@@ -162,20 +216,20 @@ class Evidence:
 
         fields = self._fields(line)
         if "Voice health:" in line:
-            self._record_resource("voice", fields)
+            self._record_resource("voice", fields, elapsed)
         elif "Main health:" in line:
-            self._record_resource("main", fields)
+            self._record_resource("main", fields, elapsed)
         elif "Provisioning health:" in line:
-            self._record_resource("provisioning", fields)
+            self._record_resource("provisioning", fields, elapsed)
         elif "Transport memory " in line:
-            self._record_resource("transport", fields)
+            self._record_resource("transport", fields, elapsed)
         elif re.search(r"\b(?:SRAM|internal)\s+free=\d+\s+largest=\d+", line, re.I):
             app_fields = dict(fields)
             if "free" in app_fields:
                 app_fields["internal_free"] = app_fields["free"]
             if "largest" in app_fields:
                 app_fields["internal_largest"] = app_fields["largest"]
-            self._record_resource("app", app_fields)
+            self._record_resource("app", app_fields, elapsed)
 
         if "MQTT health:" not in line:
             return
@@ -199,18 +253,26 @@ class Evidence:
             self.failures.add("mqtt_disconnected_or_publish_failed")
         for name in required - {"connected", "telemetry_queued"}:
             self.minima[name] = min(self.minima.get(name, fields[name]), fields[name])
-        self._record_resource("mqtt", fields)
+        self._record_resource("mqtt", fields, elapsed)
         if len(self.first) < 10:
             self.first.append(fields["internal_free"])
         self.last.append(fields["internal_free"])
+        if self.camera_open:
+            self.camera_open_samples += 1
+            return
+        self.idle_samples += 1
+        if len(self.idle_first) < 10:
+            self.idle_first.append(fields["internal_free"])
+        self.idle_last.append(fields["internal_free"])
 
     def report(self, elapsed, requested, complete=False):
         gaps = max(self.max_health_gap, elapsed - (self.last_health or 0))
         failures = set(self.failures)
         if gaps > 90:
             failures.add("health_gap_over_90_seconds")
-        if self.minima.get("internal_largest", 8192) < 8192 or self.minima.get("stack_min_free", 512) < 512:
+        if self.minima.get("stack_min_free", MIN_STACK_HEADROOM) < MIN_STACK_HEADROOM:
             failures.add("insufficient_memory_or_stack_headroom")
+
         voice = self.resource_minima.get("voice", {})
         if voice:
             if voice.get("supervisor_stack_bytes", 0) < MIN_VOICE_SUPERVISOR_STACK_BYTES:
@@ -218,7 +280,10 @@ class Evidence:
             if voice.get("supervisor_stack_min_free", 0) < MIN_VOICE_SUPERVISOR_STACK_HEADROOM:
                 failures.add("insufficient_voice_supervisor_stack_headroom")
         drop = statistics.median(self.first) - statistics.median(self.last) if self.first else None
-        if self.samples >= 20 and drop > 8192:
+        # Leak check on Camera-closed samples only; the open preview is expected usage.
+        idle_drop = (statistics.median(self.idle_first) - statistics.median(self.idle_last)
+                     if self.idle_first else None)
+        if self.idle_samples >= 20 and idle_drop > 8192:
             failures.add("internal_heap_median_drop_over_8KiB")
         if complete and self.exercise_requests != self.exercise_acks:
             failures.add("unacknowledged_app_launch")
@@ -240,6 +305,11 @@ class Evidence:
                     resource_minima=self.resource_minima,
                     log_counts=self.log_counts, log_samples=self.log_samples,
                     internal_heap_median_drop=drop,
+                    idle_internal_heap_median_drop=idle_drop,
+                    idle_minima=self.idle_minima,
+                    camera_open_minima=self.camera_open_minima,
+                    camera_open_samples=self.camera_open_samples,
+                    camera_recoveries=self.camera_recoveries,
                     exercise_requests=self.exercise_requests, exercise_acks=self.exercise_acks,
                     exercise_completions=self.exercise_completions,
                     exercise_events=self.exercise_events,
