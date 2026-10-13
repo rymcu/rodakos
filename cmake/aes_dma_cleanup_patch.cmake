@@ -36,6 +36,10 @@ if(NOT aes_cleanup_replacements EQUAL 1)
 endif()
 set(aes_cleanup_command "${aes_cleanup_python}" "${aes_cleanup_script}"
     --idf-path "${aes_cleanup_idf}" --output-dir "${aes_cleanup_output}")
+# Release-test builds add a rate-limited log of AES bounce-buffer operand regions.
+if(RODAKOS_RELEASE_TESTS)
+    list(APPEND aes_cleanup_command --diagnostics)
+endif()
 execute_process(COMMAND ${aes_cleanup_command} --print-inputs
     RESULT_VARIABLE aes_cleanup_result OUTPUT_VARIABLE aes_cleanup_inputs ERROR_VARIABLE aes_cleanup_error
     OUTPUT_STRIP_TRAILING_WHITESPACE)

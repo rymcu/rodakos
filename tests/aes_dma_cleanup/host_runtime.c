@@ -1,8 +1,8 @@
 #include "host_fakes.h"
 #include <stdarg.h>
 
-typedef struct { void *pointer; size_t size; } Allocation;
-static Allocation allocations[32];
+typedef struct { void *pointer; size_t size; bool spiram; } Allocation;
+static Allocation allocations[64];
 static HostState state;
 static unsigned fail_at;
 static const unsigned char *source, *destination;
@@ -10,6 +10,8 @@ static size_t source_size, destination_size;
 static bool source_dma, destination_external;
 static const crypto_dma_desc_t *dma_in, *dma_out;
 static unsigned char iv[16];
+/* ESP32-S3 uses a 64 B data cache line in this build (CONFIG_ESP32S3_DATA_CACHE_LINE_64B). */
+static size_t host_psram_line = 64;
 
 void host_reset(void) {
     assert(state.outstanding_bytes == 0 && state.lock_depth == 0);
@@ -26,27 +28,35 @@ HostState host_state(void) { return state; }
 static bool contains(const void *base, size_t size, const void *pointer) {
     return (uintptr_t)pointer >= (uintptr_t)base && (uintptr_t)pointer - (uintptr_t)base < size;
 }
-bool esp_ptr_external_ram(const void *p) { return destination_external && contains(destination, destination_size, p); }
+/* PSRAM output bounce buffers are tracked as PSRAM, so the DMA path sees a PSRAM output. */
+static bool tracked_spiram(const void *p);
+bool esp_ptr_external_ram(const void *p) {
+    return (destination_external && contains(destination, destination_size, p)) || tracked_spiram(p);
+}
 bool esp_ptr_dma_ext_capable(const void *p) { return esp_ptr_external_ram(p); }
 bool esp_ptr_dma_capable(const void *p) {
     return !esp_ptr_external_ram(p) && !(contains(source, source_size, p) && !source_dma);
 }
-int esp_cache_get_alignment(unsigned caps, size_t *alignment) { *alignment = 32; return ESP_OK; }
+int esp_cache_get_alignment(unsigned caps, size_t *alignment) { *alignment = host_psram_line; return ESP_OK; }
 int esp_cache_msync(void *p, size_t bytes, unsigned flags) { return ESP_OK; }
 unsigned cache_hal_get_cache_line_size(unsigned level, unsigned type) { return 32; }
 void *heap_caps_aligned_alloc(size_t alignment, size_t bytes, unsigned caps) {
-    assert(caps == MALLOC_CAP_DMA);
+    assert(caps == MALLOC_CAP_DMA || caps == (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     state.alloc_calls++;
-    assert(state.alloc_calls <= 16);
-    state.requested_bytes[state.alloc_calls - 1] = bytes;
+    assert(state.alloc_calls <= 64);
+    if (state.alloc_calls <= 16) {
+        state.requested_bytes[state.alloc_calls - 1] = bytes;
+        state.requested_caps[state.alloc_calls - 1] = caps;
+        state.requested_alignment[state.alloc_calls - 1] = alignment;
+    }
     if (state.alloc_calls == fail_at) return NULL;
     if (alignment < sizeof(void *)) alignment = sizeof(void *);
     void *p = NULL;
     int result = posix_memalign(&p, alignment, bytes);
     if (result != 0) abort();
-    for (unsigned i = 0; i < 32; i++) {
+    for (unsigned i = 0; i < 64; i++) {
         if (allocations[i].pointer) continue;
-        allocations[i] = (Allocation){p, bytes};
+        allocations[i] = (Allocation){p, bytes, (caps & MALLOC_CAP_SPIRAM) != 0};
         state.outstanding_bytes += bytes;
         if (state.outstanding_bytes > state.peak_bytes) state.peak_bytes = state.outstanding_bytes;
         return p;
@@ -58,9 +68,16 @@ void *heap_caps_aligned_calloc(size_t alignment, size_t count, size_t bytes, uns
     if (p) memset(p, 0, count * bytes);
     return p;
 }
+static bool tracked_spiram(const void *p) {
+    for (unsigned i = 0; i < 64; i++) {
+        const Allocation *a = &allocations[i];
+        if (a->pointer && a->spiram && contains(a->pointer, a->size, p)) return true;
+    }
+    return false;
+}
 void host_tracked_free(void *p) {
     if (!p) return;
-    for (unsigned i = 0; i < 32; i++) {
+    for (unsigned i = 0; i < 64; i++) {
         if (allocations[i].pointer != p) continue;
         state.outstanding_bytes -= allocations[i].size;
         allocations[i] = (Allocation){0};

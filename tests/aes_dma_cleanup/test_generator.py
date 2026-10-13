@@ -34,11 +34,24 @@ class GeneratorTests(unittest.TestCase):
     def test_exact_minimal_change_and_idempotence(self):
         out = patch.prepare(self.idf, self.base / 'generated')
         original = (self.idf / patch.SOURCE).read_bytes().replace(b'\r\n', b'\n')
-        self.assertEqual(out.read_bytes(), original.decode().replace(patch.BEFORE, patch.AFTER, 1).encode())
+        expected = original.decode().replace(patch.BEFORE, patch.AFTER, 1)
+        expected = expected.replace(patch.PSRAM_BOUNCE_BEFORE, patch.PSRAM_BOUNCE_AFTER, 1)
+        expected = expected.replace(patch.PSRAM_OUTPUT_ALLOC_BEFORE, patch.PSRAM_OUTPUT_ALLOC_AFTER, 1)
+        expected = expected.replace(patch.PSRAM_LOOP_BEFORE, patch.PSRAM_LOOP_AFTER, 1)
+        self.assertEqual(out.read_bytes(), expected.encode())
         before = out.stat().st_mtime_ns
         patch.prepare(self.idf, out.parent)
         self.assertEqual(out.stat().st_mtime_ns, before)
-        self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(), PINS['generated_sha256_lf'])
+        self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(), PINS['generated_psram_bounce_sha256_lf'])
+
+    def test_diagnostics_only_add_logging(self):
+        plain = patch.prepare(self.idf, self.base / 'plain').read_text()
+        diag = patch.prepare(self.idf, self.base / 'diag', True).read_text()
+        self.assertEqual(diag.count('rodak_aes_bounce_diag(input'), 2)
+        removed = diag.replace(patch.DIAG_HELPER, '', 1)
+        removed = removed.replace(patch.DIAG_CALL, patch.DIAG_ANCHOR, 1)
+        removed = removed.replace(patch.DIAG_CALL_S3, patch.DIAG_ANCHOR_S3, 1)
+        self.assertEqual(removed, plain)
 
     def test_every_pin_rejects_drift_before_output(self):
         for index, name in enumerate(PINS['idf_source_hashes_lf']):

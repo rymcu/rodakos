@@ -31,6 +31,7 @@
 #define ESP_AES_BLOCK_MODE_OFB 4
 #define ESP_AES_BLOCK_MODE_CTR 5
 #define MALLOC_CAP_DMA 8u
+#define MALLOC_CAP_8BIT 4u
 #define MALLOC_CAP_SPIRAM 1024u
 #define ESP_CACHE_MSYNC_FLAG_DIR_C2M 1u
 #define ESP_CACHE_MSYNC_FLAG_DIR_M2C 2u
@@ -101,6 +102,8 @@ typedef struct {
     int lock_depth;
     bool clock_enabled;
     size_t requested_bytes[16];
+    unsigned requested_caps[16];
+    size_t requested_alignment[16];
 } HostState;
 void host_reset(void);
 void host_memory(const void *input, size_t input_size, bool input_dma,

@@ -19,6 +19,10 @@ target_compile_definitions(aes_production PRIVATE free=host_tracked_free)
 target_include_directories(aes_production PRIVATE "${generated}/fakes" "${generated}/real" "${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(rodakos_aes_dma_cleanup_tests aes_dma_cleanup_test.c host_runtime.c)
 target_include_directories(rodakos_aes_dma_cleanup_tests PRIVATE "${generated}/fakes" "${generated}/real" .)
+if(RODAK_AES_VARIANT STREQUAL "patched")
+    # 103: the patched overlay rounds a PSRAM output bounce up to the 64 B cache line.
+    target_compile_definitions(rodakos_aes_dma_cleanup_tests PRIVATE RODAK_AES_PSRAM_BOUNCE=1)
+endif()
 target_link_libraries(rodakos_aes_dma_cleanup_tests PRIVATE aes_production)
 foreach(target aes_production rodakos_aes_dma_cleanup_tests)
     target_compile_features(${target} PRIVATE c_std_11)
@@ -55,7 +59,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${RODAKOS_IDF_PATH}/components/mbedtls/port/aes/dma/esp_aes_dma_core.c"
     "${RODAKOS_IDF_PATH}/components/mbedtls/port/aes/esp_aes.c"
     "${RODAKOS_IDF_PATH}/components/mbedtls/port/aes/esp_aes_common.c")
-foreach(scenario output_failure input_failure output_only_failure success)
+foreach(scenario output_failure input_failure output_only_failure success psram_output_bounce)
     add_test(NAME aes_dma_${scenario} COMMAND rodakos_aes_dma_cleanup_tests ${scenario})
     set_tests_properties(aes_dma_${scenario} PROPERTIES TIMEOUT 15)
 endforeach()
