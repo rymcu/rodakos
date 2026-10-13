@@ -4332,3 +4332,47 @@ r101b 第一次运行作废：r101a 升级后设备仍在 dev.2，OTA 检查按�
 
 仍开放：下载、FAT flush/rename 与 Flash 擦写期间的真实断电需要受控电源夹具；TLS/NVS 并发失败、生产签名与
 八小时资格。发布继续 **NO_GO**。
+
+## 2026-10-13 TLS/NVS 并发失败与 Camera 期 AES 102–104
+
+**一次性注入（release-test 构建）。** 新增 `ota_download_read`、`cloud_tls`、`ota_journal_save`、
+`cloud_persist` 四个目标（`e6502cd`、`00ffd9a`），普通构建不含。ESP-IDF 6 的 NVS 在 `nvs_set_*` 时即写入
+Flash，`nvs_commit` 为空操作，所以"保存失败"可能是"已写入但报告失败"；journal 与凭据两个注入按此建模。
+
+| 试验 | 注入 | 结果 |
+| ---- | ---- | ---- |
+| 102a | OTA 下载中途 TLS 读失败 | 删除 `.part`，任务 `failed`/`DOWNLOAD_FAILED`，不进 Recovery，dev.1 不变（任务 `ota_1791887640919_a720cd98`） |
+| 102b | 凭据刷新 TLS 连接失败（停 Rodak 服务 75 s） | 刷新失败、无任何凭据写入，服务恢复后旧凭据重连 |
+| 102c | journal `kPending` 已写入但报告失败 | 5 s 后重试续做交接，Recovery 写入 dev.2，任务 `succeeded`（`ota_1791890459303_db28d720`） |
+| 102d | MQTT 凭据已写入但报告失败（令牌过期 + 停服务 8 s） | 报 "Failed to persist AIoT credentials"、不使用半新凭据，约 4 s 后再次刷新成功并重连 |
+
+**发现并修复的缺陷。**
+- journal `kPending` 已写入但报告失败时，重试读到 `kPending` 直接返回，既不切 Recovery、`OnNetworkReady` 也不处理，
+  设备停在旧镜像直到重启。现在重读到同一任务的 `kPending` 时续做交接（`e6502cd`）。
+- 首次实机仍卡住 9 分钟以上：状态重试任务（6 KiB 内部栈）再创建 `ota_staged_ack`（又 6 KiB），内部内存碎片化时
+  第二个栈分配失败。现在重试任务在自身栈上直接续做交接（`00ffd9a`），102c 由此通过。
+- OTA 失败且 journal 也保存失败时，结果上报循环无上限并持有 SD I/O 锁与 OTA 忙状态；现在最多 2 分钟后释放（`e6502cd`）。
+
+**Camera 期 AES 分配失败（103/104）。** 远程 Camera 串流中出现 316 次 `esp-aes: Failed to allocate memory` 与
+`Write fail -84`。release-test 构建的 bounce 诊断显示：WebRTC 在 PSRAM 内原地加密 SRTP，输出 `0x3c9…` 未按 64 B
+缓存行对齐，IDF 每次从内部 DMA 内存申请最多 1,600 B 的 output bounce；Camera 期内部 DMA 最大连续块仅 1,536 B。
+修复（`3def20e`）：S3 上 PSRAM 输出的 bounce 改从 64 B 对齐的 PSRAM 分配，每段切成缓存行主体与 64 B 静态尾部缓冲，
+避免 DMA 路径再次 bounce；生成器核对新输出哈希 `b363cd2b…`。主机测试 7/7（含 CTR 5,113 B），旧源同场景判红。
+实机 104a：远程 Camera 74 s/1,202 帧，全部 bounce 位于 PSRAM，AES 分配失败与 `Write fail` 均为 0。
+
+**Camera 运行中 TLS 握手（104）。**
+- 102e/104b 用"停 Rodak 服务"触发重连，但停服务同时关闭 Camera 会话，重连时 Camera 已停，**不作为证据**。
+- 104c 用新增 release-test 命令 `mqtt_drop`（`3ca56e1`）在设备侧断开 MQTT：设备按设计在 MQTT 断开时撤销视频
+  stream lease 并停止 Camera（300 ms 内完整 STREAMOFF/fd close/device release），再于约 4 s 后重连，两轮均成功。
+  这说明 **Camera 与 MQTT 重连不会同时存在**，属于现有设计，不是缺陷。
+- 104d 在 Camera 串流中、MQTT 保持连接时两次语音唤醒：WSS 通过路由校验，但 `websocket_client: Error create
+  websocket task` 两次，语音会话无法建立；Camera 继续 125 s/2,084 帧，AES 失败为 0、无 panic。此时内部堆空闲
+  3.3–3.5 KB、最大连续块 1,600 B，不足以创建 WebSocket 任务。**这是新的 Camera 期内部内存余量缺陷**，尚未修复。
+
+**Camera 打开期间门槛。** Camera 期 WebRTC/AES 已不再失败；但同时发起语音（WSS）会失败。按 2026-10-13 决定，
+这作为固件缺陷记录，Camera 打开期间门槛暂不确定。
+
+串口 SHA-256：102a `67b0ddff…`、102b `074e115c…`、102c `41e0faa0…`、102d `ac2169d9…`、103a `d9b8676f…`、
+104a `eab1e32e…`、104c `4e63cebe…`、104d `ddb032b0…`。设备当前运行 release-test 包 `20261014-011157`（dev.1）。
+
+仍开放：Camera 期语音 WSS 任务创建失败、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。

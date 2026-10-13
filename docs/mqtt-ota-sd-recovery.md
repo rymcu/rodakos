@@ -332,3 +332,23 @@ the device runs the normal dev.1 package. Serial SHA-256 values are in `ota-rele
 
 Real power cuts during download, FAT flush or rename, and flash erase or write still need a controlled
 power fixture. Release stays **NO_GO**.
+
+### 2026-10-13 TLS/NVS concurrent failures and Camera-time AES (102-104)
+
+Four one-shot release-test faults passed on hardware: a TLS read failure in the middle of an OTA download,
+a TLS failure in a credential refresh, an OTA journal that was written but reported as failed, and MQTT
+credentials that were written but reported as failed. ESP-IDF 6 NVS writes on `nvs_set_*` and
+`nvs_commit` does nothing, so "save failed" can mean "written, reported as failed".
+
+The work fixed three defects. A `kPending` journal that NVS wrote but reported as failed left the device on the
+old image until a reboot (`e6502cd`). The retry then failed to create a second 6 KiB task when internal RAM was
+fragmented, so the retry worker now runs the handoff on its own stack (`00ffd9a`). The report loop for a result
+that could not be saved had no limit while it held the SD lock. It now stops after 2 minutes (`e6502cd`).
+
+During a remote Camera stream, AES failed 316 times. WebRTC encrypts SRTP in place in PSRAM, and IDF took the
+bounce buffer for an unaligned PSRAM output from internal DMA RAM. `3def20e` takes that bounce from 64 B-aligned
+PSRAM instead. After the fix, a 74 s Camera stream had zero AES allocation failures.
+
+MQTT reconnect cannot run during Camera: an MQTT disconnect revokes the video stream lease by design. A voice
+wake during Camera failed to create the WebSocket task (internal heap 3.3-3.5 KB free, largest 1,600 B). That
+is an open Camera-time internal-memory defect. Release stays **NO_GO**.
