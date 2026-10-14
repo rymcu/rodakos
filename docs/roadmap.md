@@ -1120,3 +1120,19 @@ PSRAM instead. After the fix, a 74 s Camera stream had zero AES allocation failu
 MQTT reconnect cannot run during Camera: an MQTT disconnect revokes the video stream lease by design. A voice
 wake during Camera failed to create the WebSocket task (internal heap 3.3-3.5 KB free, largest 1,600 B). That
 is an open Camera-time internal-memory defect. Release stays **NO_GO**.
+
+### 2026-10-14 Voice takes priority over the remote Camera (105)
+
+`78a5c82` stops the remote Camera stream before a voice session opens its WebSocket. During a Camera
+stream the largest internal block is about 1 KB, so the voice WebSocket task could not start. The new
+`SetBeforeTransportCallback` runs after capture starts and before the transport opens.
+
+On hardware (105a, 105e), the stop took 320-440 ms. The largest internal block then rose to 6.1-6.6 KB.
+The voice WSS connected in all four rounds. AES failures, WebSocket task failures and panics were zero.
+
+One residue stays open. After the first voice session that follows a Camera session, the largest block
+stays at 6,144 B instead of 8,192 B. An 84 B used block splits the 8 KiB segment. Camera alone, voice
+alone (105d) and voice before Camera (105e) do not leave it.
+The local Camera app is not covered. By the code, it holds exclusive audio focus, so voice cannot get
+focus there (not tested on hardware).
+Release stays **NO_GO**.

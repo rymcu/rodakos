@@ -4376,3 +4376,32 @@ Flash，`nvs_commit` 为空操作，所以"保存失败"可能是"已写入但�
 104a `eab1e32e…`、104c `4e63cebe…`、104d `ddb032b0…`。设备当前运行 release-test 包 `20261014-011157`（dev.1）。
 
 仍开放：Camera 期语音 WSS 任务创建失败、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。
+
+## 2026-10-14 语音优先于远程 Camera（105）
+
+**修复（`78a5c82`）。** 104d 中 Camera 串流期间唤醒语音，`websocket_client: Error create websocket task`。
+按 2026-10-14 决定，语音优先：`VoiceAssistantService` 在录音启动后、凭据准备与 transport 打开前调用
+`SetBeforeTransportCallback` 回调；`main.cc` 在远程 Camera 运行时调用 `StopWebRtcCameraStream()`，
+按 lease 撤销路径完整关闭串流并回复 Rodak。回调期间若会话被 Stop，不再打开 transport。
+主机测试覆盖调用顺序与回调期间 Stop；去掉回调的对照判红。没有改 WebSocket 任务栈的位置。
+
+| 试验 | 场景 | 结果 |
+| ---- | ---- | ---- |
+| 105a | 远程 Camera 串流中唤醒，两轮 | 停止前内部最大块 928–1,024 B；320–380 ms 后 6.1–6.4 KB；WSS 建立、会话 ready；Rodak 画面消失 |
+| 105b | 不开 Camera，唤醒/停止两轮（接 105a，同一次开机） | 停止后内部最大块 6,144 B，与 105a 结束时相同 |
+| 105d | 冷启动后不开 Camera，唤醒/停止两轮 | 第一次语音后最大块保持 8,192 B，第二次也是 |
+| 105e | 接 105d（同一次开机，先用过语音），再做 105a 场景 | 停止前 960 B，320–440 ms 后 6,656 B；两轮 WSS 建立；结束后最大块 8,192 B |
+
+105c 的串口 reset 命令没有让设备复位，与 105b 是同一次开机，作废；105d 改用 esptool 硬复位。
+
+105a 结束时最大块为 6,144 B，而不是空闲门槛 8,192 B。对照显示：只开 Camera（104a/104c）或只用语音（105d）都回到
+8,192 B；先用过语音再开 Camera（105e）也回到 8,192 B。缺口只在"本次开机的第一次语音紧接 Camera 之后"出现。
+切开 8,296 B 空闲段的是 `0x3fcc955c` 处一个 84 B 已用块（尺寸与此前 DTLS ctr_drbg 互斥量相同，未确认是否同一对象）。
+这是新的首次使用顺序残留，尚未定位。五次记录中 AES 分配失败、`Write fail`、WebSocket 任务创建失败、panic 与复位均为 0。
+
+**仍不覆盖：** 本地 Camera 应用（预览）运行中唤醒。按代码，Camera 应用持有 owner=camera 的独占音频焦点，
+语音请求焦点会失败（未实机验证）；本修复只停止远程串流，不关本地 Camera 应用。
+
+串口 SHA-256：105a `2864499e…`、105b `0aa4d7f5…`、105c `53da7b7a…`、105d `ad8aa32e…`、105e `85e8a0c4…`。设备当前运行 release-test 包 `20261014-075657`（dev.1，含 `78a5c82`）。
+
+仍开放：Camera 后第一次语音的 2 KB 残留、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。
