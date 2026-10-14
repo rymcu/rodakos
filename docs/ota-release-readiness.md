@@ -4405,3 +4405,30 @@ Flash，`nvs_commit` 为空操作，所以"保存失败"可能是"已写入但�
 串口 SHA-256：105a `2864499e…`、105b `0aa4d7f5…`、105c `53da7b7a…`、105d `ad8aa32e…`、105e `85e8a0c4…`。设备当前运行 release-test 包 `20261014-075657`（dev.1，含 `78a5c82`）。
 
 仍开放：Camera 后第一次语音的 2 KB 残留、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。
+
+## 2026-10-14 Camera 后第一次语音的 2 KB 残留（106）
+
+**根因。** 106a 冷启动后复现：Camera→第一次语音结束后内部最大块 6,144 B。JTAG 读出切开 8,296 B 空闲段的 84 B 块是
+lwIP 线程信号量（`sys_thread_sem_init` 分配的 `StaticSemaphore_t`，内部 RAM）。它挂在 `wake_notify` 任务的 pthread TLS
+（key 2）上，唤醒回调第一次走 socket 写（`netconn_write_partly`）时按需分配；任务长驻不退出，所以永不释放。
+Camera 期间内部堆碎片化，这块恰好落在 8 KiB 段中间；先用语音再开 Camera 时它落在开机时的完整堆上，不切段。
+与此前 DTLS ctr_drbg 互斥量泄漏尺寸相同，但不是同一对象。
+
+**修复（`a75ecba`）。** `wake_notify` 任务入口先调用 `netconn_thread_init()`，在开机、堆完整时预留。
+主机测试要求第一个回调执行前已预留且只预留一次；去掉该调用的对照判红。
+
+| 试验 | 固件 | 结果 |
+| ---- | ---- | ---- |
+| 106a | 修复前 | 冷启动→Camera→第一次语音，结束最大块 6,144 B，84 B 块在 `0x3fcc955c` |
+| 106b | 修复后 | 同场景，结束最大块 8,192 B |
+| 106c | 修复后 | 接 106b 再两轮 Camera→语音，结束最大块 8,192 B |
+
+三次记录 AES 分配失败、`Write fail`、WebSocket 任务创建失败、panic 与复位均为 0。
+
+已有缺陷：`run_observation_negative.py` 的标记在 HEAD `b78132f` 上就已不匹配（干净 worktree 复现同样断言失败），
+与本次修改无关，未修。
+
+串口 SHA-256：106a `81eca6e6…`、106b `74f9f388…`、106c `dfb2a7bd…`。设备当前运行 release-test 包 `20261014-100759`
+（dev.1，含 `a75ecba`）。
+
+仍开放：观测负对照标记失配、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。

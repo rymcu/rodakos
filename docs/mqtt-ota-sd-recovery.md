@@ -368,3 +368,13 @@ alone (105d) and voice before Camera (105e) do not leave it.
 The local Camera app is not covered. By the code, it holds exclusive audio focus, so voice cannot get
 focus there (not tested on hardware).
 Release stays **NO_GO**.
+
+### 2026-10-14 Residue after the first voice session that follows Camera (106)
+
+The 84 B block that split the 8 KiB segment is the lwIP per-thread semaphore of the long-lived `wake_notify`
+task. lwIP allocates it from internal RAM on the first socket write and keeps it while the task lives. After
+a Camera session the heap is fragmented, so the block lands inside the 8 KiB segment.
+
+`a75ecba` calls `netconn_thread_init()` when `wake_notify` starts, so the block is allocated at boot. On
+hardware, a cold boot followed by Camera and the first voice session now ends at 8,192 B (106b; 6,144 B before
+the fix in 106a). Two more rounds also ended at 8,192 B (106c). Release stays **NO_GO**.
