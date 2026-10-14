@@ -4431,4 +4431,14 @@ Camera 期间内部堆碎片化，这块恰好落在 8 KiB 段中间；先用语
 串口 SHA-256：106a `81eca6e6…`、106b `74f9f388…`、106c `dfb2a7bd…`。设备当前运行 release-test 包 `20261014-100759`
 （dev.1，含 `a75ecba`）。
 
-仍开放：观测负对照标记失配、生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。
+仍开放：生产迁移与生产签名 OTA、真实断电。发布继续 **NO_GO**。
+
+## 2026-10-14 主机回归门禁恢复
+
+- 观测负对照（`f933b7a`）：`e1580d8` 改了 stall 分支的快照写法，`run_observation_negative.py` 的标记没跟上，
+  脚本在源码计数处直接失败，两项变异从未编译运行。标记更新后两项均以预期断言判红；frontend 套件 7/7。
+- host-checks CI（`c91f608`、`f3f8405`）：自 2026-10-07（`6666a3e`）起每次失败，脚本在第一个失败套件处退出，
+  所以 105/106 等后续修复都没经过 CI。原因是稀疏检出缺 `freertos/esp_additions`、`freertos/config`、
+  `mbedtls/port/aes`、`mbedtls/port/include`、`soc/esp32s3/include/soc`，宿主依赖缺 `esp-sr` 与
+  `esp_sccb_intf`；另外负对照用 `git show <commit>:<path>` 取冻结基线，浅检出没有这些提交，
+  所以 rodakos 改为完整历史检出。GitHub Actions 运行 38512980288 全部通过，是 10-07 之后第一次。
