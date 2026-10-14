@@ -362,6 +362,12 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     if (!IsInteractionCurrent(interaction_generation)) {
         return false;
     }
+    if (before_transport_callback_) {
+        before_transport_callback_();
+        if (!IsInteractionCurrent(interaction_generation)) {
+            return false;
+        }
+    }
 
     if (!transport_.PrepareInteraction([this, interaction_generation, can_start]() {
             return IsInteractionCurrent(interaction_generation) &&

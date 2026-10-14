@@ -704,6 +704,20 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
     static rodakos::WebRtcCameraService web_rtc_camera_service(&camera_service);
     unified_mqtt_service.SetWebRtcCameraService(&web_rtc_camera_service);
+    // While Camera streams, the largest internal block is about 1.6 KB, too small for the
+    // voice WebSocket task. Voice takes priority, so a new session stops the remote stream.
+    voice_assistant_service.SetBeforeTransportCallback([]() {
+        if (!web_rtc_camera_service.IsRunning()) return;
+        ESP_LOGW(TAG, "Stopping remote Camera stream for voice: internal_free=%u internal_largest=%u",
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                 static_cast<unsigned>(
+                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+        unified_mqtt_service.StopWebRtcCameraStream();
+        ESP_LOGI(TAG, "Remote Camera stream stopped for voice: internal_free=%u internal_largest=%u",
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                 static_cast<unsigned>(
+                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    });
     ESP_LOGI(TAG, "WebRTC camera service ready - starts on MQTT camera.stream.start");
     static rodakos::DisplayService display_service(disp);
     if (lvgl_port_lock(1000)) {

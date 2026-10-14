@@ -483,6 +483,29 @@ RODAK_TEST("Stopping during credential preparation cannot publish a stale error 
     RODAK_CHECK(f.Start());
 }
 
+RODAK_TEST("before-transport callback runs after capture starts and before credential preparation") {
+    Fixture f;
+    std::vector<std::string> order;
+    f.service.SetBeforeTransportCallback([&] {
+        order.push_back(f.recorder.IsRunning() ? "before:recording" : "before:idle");
+    });
+    f.transport.on_prepare = [&] { order.push_back("prepare"); };
+    RODAK_CHECK(f.Start());
+    RODAK_CHECK_EQ(order.size(), 2U);
+    RODAK_CHECK_EQ(order[0], std::string("before:recording"));
+    RODAK_CHECK_EQ(order[1], std::string("prepare"));
+    f.service.StopInteraction();
+
+    // A Stop that lands while the callback runs (Camera teardown can take ~300 ms)
+    // must keep the transport closed.
+    order.clear();
+    f.service.SetBeforeTransportCallback([&] { f.service.StopInteraction(); });
+    RODAK_CHECK_FALSE(f.Start());
+    RODAK_CHECK(order.empty());
+    RODAK_CHECK_EQ(f.service.GetState().phase, rodakos::VoiceAssistantPhase::kIdle);
+    RODAK_CHECK_FALSE(f.recorder.IsRunning());
+}
+
 RODAK_TEST("Voice service drops stale generations and resets handshake and ledger after stop") {
     Fixture f;
     f.StartInitialized();

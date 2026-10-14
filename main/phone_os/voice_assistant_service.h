@@ -36,6 +36,11 @@ public:
 
     bool Init();
     void Deinit();
+    // Configure once before the first interaction. Runs on the starting task after the
+    // recorder starts and before the transport opens, so memory-heavy sessions can stop.
+    void SetBeforeTransportCallback(std::function<void()> callback) {
+        before_transport_callback_ = std::move(callback);
+    }
 
     bool StartInteraction(VoiceAssistantTrigger trigger = VoiceAssistantTrigger::kManual,
                           const std::string& wake_word = "",
@@ -98,6 +103,7 @@ private:
     AudioOutputService& audio_output_;
     VoiceVolumeMcp volume_mcp_;
     std::unique_ptr<VoiceAssistantAudioCodec> audio_codec_;
+    std::function<void()> before_transport_callback_;
     SemaphoreHandle_t mutex_ = nullptr;
     TaskRetirementOwner io_retirement_owner_;
     TaskRetirementTicket io_retirement_;
