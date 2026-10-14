@@ -16,6 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
 IDF_COMMIT = "7101770dc6db2667b3c477cc31365dd1acd6db4e"
+BOARD_COMPONENT = "components/rodakos_hal_boards"
 REVIEWED_REGISTRY_URLS = ("https://components.espressif.com", "https://components.espressif.com/")
 LAYOUT = {"app": (0x2A0000, 0xD50000), "recovery": (0x20000, 0x280000), "otadata": (0xF000, 0x2000)}
 HOME_MARKER = b"RODAKOS_HOME_HARDWARE_TEST_POPULATION_ACTIVE"
@@ -116,20 +117,15 @@ def locked_components(original_lock, *, download=True):
 def normalize_board_paths(root):
     # Same substitutions as fix_gen_paths.ps1; only generated files are changed.
     generated = root / "components/gen_bmgr_codes"
-    board = (root / "components/brookesia_hal_boards").as_posix()
-    managed = (root / "managed_components/espressif__brookesia_hal_boards").as_posix()
+    board = (root / BOARD_COMPONENT).as_posix()
     for name in ("idf_component.yml", "CMakeLists.txt"):
         path = generated / name
         text = path.read_text(encoding="utf-8-sig")
         if name.endswith(".yml"):
-            text = text.replace(managed, "../../components/brookesia_hal_boards")
-            text = text.replace(board, "../brookesia_hal_boards")
+            text = text.replace(board, "../rodakos_hal_boards")
         else:
-            text = text.replace("../../managed_components/espressif__brookesia_hal_boards",
-                                "../../components/brookesia_hal_boards")
-            text = text.replace(managed, "${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards")
-            text = text.replace(board, "${CMAKE_SOURCE_DIR}/components/brookesia_hal_boards")
-        require(root.as_posix() not in text and "espressif__brookesia_hal_boards" not in text,
+            text = text.replace(board, "${CMAKE_SOURCE_DIR}/components/rodakos_hal_boards")
+        require(root.as_posix() not in text and "brookesia_hal_boards" not in text,
                 f"Generated Board Manager path is not portable: {name}")
         path.write_text(text, encoding="utf-8", newline="\n")
     require('Selected Board: rymcu_bigsmart' in (generated / "CMakeLists.txt").read_text(),
@@ -295,7 +291,7 @@ def inspect_builds(idf, output):
     generated = ROOT / "components/gen_bmgr_codes"
     for name in ("gen_board_device_config.c", "gen_board_periph_config.c"):
         require((generated / name).resolve() in compiled, f"Generated board source was not compiled: {name}")
-    setup = ROOT / "components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart/setup_device.c"
+    setup = ROOT / BOARD_COMPONENT / "boards/rymcu/rymcu_bigsmart/setup_device.c"
     require(setup.resolve() in compiled, "Local BigSmart setup_device.c was not compiled")
     overlays = {
         "esp_codec_dev/esp_codec_dev.c": "espressif__esp_codec_dev/esp_codec_dev.c",
@@ -457,7 +453,7 @@ def build():
                                                         serialization.PublicFormat.SubjectPublicKeyInfo))
         for _ in range(2):
             run("idf.py", "bmgr", "-b", "rymcu_bigsmart", "-c",
-                ROOT / "components/brookesia_hal_boards/boards/rymcu/rymcu_bigsmart")
+                ROOT / BOARD_COMPONENT / "boards/rymcu/rymcu_bigsmart")
             normalize_board_paths(ROOT)
         flags = [f"-DRODAK_OTA_PUBLIC_KEY={public}", "-DRODAK_OTA_FAULT_INJECTION_PHASE="]
         run("idf.py", *flags, "-DRODAKOS_HOME_HARDWARE_TEST_POPULATION=OFF", "-DRODAKOS_RELEASE_TESTS=OFF", "reconfigure")
