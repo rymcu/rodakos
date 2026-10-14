@@ -34,8 +34,9 @@ def main():
                         stream_epoch, feed_call, api_return_us, written, AfeElapsedUs(api_begin_us, api_return_us));'''
     release_before_log = '''                xSemaphoreGive(mutex_);
 #if defined(RODAKOS_RELEASE_TESTS)
-                tick_token = ObserveVoiceTickBoundary("stall", generation, epoch, tick_token,
-                    gap.first_stall, observed_us);
+                VoiceTickSnapshot tick_snapshot;
+                tick_token = FreezeVoiceTickObservation(generation, epoch, tick_token,
+                    gap.first_stall, observed_us, false, tick_snapshot);
                 VoiceFeedProgressSnapshot feed_progress;
                 if (producer.stage == AfeProducerStage::kApiBoundary &&
                     producer.generation == generation && producer.epoch == epoch) {
@@ -47,6 +48,8 @@ def main():
                     feed_progress.status = kVoiceFeedProgressStale;
                     feed_progress.flags = kVoiceFeedProgressProducerUnaligned | kVoiceFeedProgressArmAfterUnknown;
                 }
+                // Logging can block while Capture advances the live feed identity.
+                LogVoiceTickObservation("stall", tick_snapshot);
                 LogVoiceFeedProgress("open", feed_progress);
 #endif
                 ESP_LOGW(TAG, "AFE input stalled:'''
