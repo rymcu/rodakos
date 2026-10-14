@@ -14,8 +14,10 @@ from ruamel.yaml import YAML
 HOST_COMPONENTS = (
     "chmorgan/esp-libhelix-mp3",
     "espressif/cjson",
+    "espressif/esp-sr",
     "espressif/esp_codec_dev",
     "espressif/esp_cam_sensor",
+    "espressif/esp_sccb_intf",
     "espressif/esp_video",
     "espressif/esp_websocket_client",
     "espressif/mqtt",

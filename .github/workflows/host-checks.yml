@@ -45,7 +45,7 @@ jobs:
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: /root/.cache/rodakos-components
-          key: rodakos-host-components-v1-${{ hashFiles('dependencies.lock') }}
+          key: rodakos-host-components-v2-${{ hashFiles('dependencies.lock', '.github/workflows/scripts/prepare_host_dependencies.py') }}
 
       - name: Checkout reviewed ESP-IDF source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -65,6 +65,11 @@ jobs:
             components/esp_hw_support/include
             components/xtensa/include
             components/freertos/FreeRTOS-Kernel
+            components/freertos/esp_additions
+            components/freertos/config
+            components/mbedtls/port/aes
+            components/mbedtls/port/include
+            components/soc/esp32s3/include/soc
             tools/cmake
             components/nvs_flash/src
             components/nvs_flash/include
