@@ -28,9 +28,18 @@ bool audio_read_blocked = false;
 size_t audio_read_release_through = 0;
 bool audio_reads_released = false;
 int16_t audio_sample_value = 250;
+// Per task: the first callback must run only after the task reserved its lwIP semaphore.
+std::vector<std::thread::id> netconn_thread_inits;
 
 
 }
+
+namespace rodakos_test {
+void NoteNetconnThreadInit() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    netconn_thread_inits.push_back(std::this_thread::get_id());
+}
+}  // namespace rodakos_test
 
 namespace rodakos_test::voice_frontend {
 void Reset() {
@@ -46,6 +55,17 @@ void Reset() {
     audio_read_blocked = audio_reads_released = false;
     audio_read_release_through = 0;
     audio_sample_value = 250;
+    netconn_thread_inits.clear();
+}
+
+bool NetconnThreadInitialized() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return std::find(netconn_thread_inits.begin(), netconn_thread_inits.end(),
+                     std::this_thread::get_id()) != netconn_thread_inits.end();
+}
+size_t NetconnThreadInitCount() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return netconn_thread_inits.size();
 }
 
 void SupplyAudioReads(size_t count) {

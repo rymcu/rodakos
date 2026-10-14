@@ -18,6 +18,7 @@
 #include <esp_afe_config.h>
 #include <esp_mn_speech_commands.h>
 #include <esp_timer.h>
+#include <lwip/api.h>
 #include <freertos/idf_additions.h>
 #include <model_path.h>
 
@@ -654,6 +655,10 @@ void VoiceAudioFrontend::WakeNotificationTaskEntry(void* arg) {
         vTaskDelete(nullptr);
         return;
     }
+    // Wake callbacks open sockets on this long-lived task. lwIP then allocates an 84 B
+    // per-thread semaphore from internal RAM and keeps it. Allocate it here, before a
+    // Camera session fragments the heap, so it cannot later split the only 8 KiB block.
+    netconn_thread_init();
 
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);

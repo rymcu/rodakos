@@ -156,6 +156,21 @@ RODAK_TEST("Capture creation failure deletes a newly blocked notification worker
     RODAK_CHECK_EQ(retirement_host::Snapshot().live_tasks, 0U);
 }
 
+RODAK_TEST("Notification worker reserves its lwIP semaphore before the first callback") {
+    Fixture fixture;
+    RODAK_CHECK(fixture.frontend.Init());
+    std::atomic<bool> callback_returned{false};
+    std::atomic<bool> reserved_before{false};
+    RODAK_CHECK(fixture.frontend.QueueDiagnosticCommand([&] {
+        reserved_before = frontend_host::NetconnThreadInitialized();
+        callback_returned = true;
+    }));
+    RODAK_CHECK(WaitFor([&] { return callback_returned.load(); }));
+    RODAK_CHECK(reserved_before.load());
+    RODAK_CHECK_EQ(frontend_host::NetconnThreadInitCount(), 1U);
+    fixture.frontend.Deinit();
+}
+
 RODAK_TEST("Notification callback can reenter Deinit then capture can initialize again") {
     Fixture fixture;
     RODAK_CHECK(fixture.frontend.Init());

@@ -41,4 +41,6 @@ bool AfeFeedBufferReleased();
 void ObserveAfeFeedBuffer(void* pointer);
 void ObserveDelete(void* pointer);
 void ResetAllocationObserver();
+bool NetconnThreadInitialized();
+size_t NetconnThreadInitCount();
 }  // namespace rodakos_test::voice_frontend
