@@ -152,7 +152,7 @@ GT911 touch is registered through a cached polling bridge in `main.cc`: a low-pr
 
 Built-in apps are registered in `main/apps/built_in_apps.cc`:
 
-- Home: phone desktop, status area, app grid, dock/page affordances.
+- Home: phone desktop, status area, paged app grid, folders and page indicators.
 - Settings: WiFi, display/theme/brightness, USB disk mode, web/cloud file tools, time sync.
 - Photos: scans `/photos`, `/DCIM`, and fallback roots for images, with separate storage/read
   failure and empty-library states, explicit retry and owned image/thumbnail cleanup.
@@ -162,11 +162,11 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   while an already admitted capture finishes independently. See [media save boundaries](media-save.md).
 - Clock: local display and network time sync entry points.
 - Calendar: local month navigation and current-day selection.
-- File Manager: browses FileService-backed storage, clears stale/partial lists after read failures
+- Files (`file_manager`): browses FileService-backed storage, clears stale/partial lists after read failures
   and retries the attempted folder or image. See [media browsing](media-browsing.md) for error
   propagation and the synchronous I/O boundary.
 - Gyro: motion capability surface for gyroscope/accelerometer samples.
-- System Info: firmware, WiFi, memory, and storage status.
+- System (`system_info`): firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
   Start admission is separate from Saved; final WAV header, flush and close failures remain errors,

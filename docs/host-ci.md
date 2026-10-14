@@ -1,9 +1,11 @@
 # RodakOS 主机测试 CI
 
-2026-10-09 更新：后续交付不依赖、运行或修复 GitHub Actions，包括 workflow 静态修改、
-账单、额度与 required checks；本文带日期
-的失败、修复和成功记录只属于各自历史候选。当前软件验收继续使用下述本地 runner、语法
-检查及源码/日志核验，Actions 缺失或不可用不构成交付阻塞，实际测试失败和硬件门禁继续独立处理。
+当前状态（2026-10-14）：host-checks 自 2026-10-07（`6666a3e`）起持续失败，已由 `c91f608`、
+`f3f8405` 修复（补齐稀疏检出的 IDF 目录与托管组件，负对照改为完整历史检出），`main` 上
+[Actions 38524039977](https://github.com/rymcu/rodakos/actions/runs/38524039977) 通过。
+Actions 是回归信号，不是交付门禁：软件验收以下述本地 runner、语法检查及源码/日志核验为准，
+Actions 不可用不阻塞交付，实际测试失败和硬件门禁独立处理。本文带日期的失败、修复和成功
+记录只属于各自历史候选。
 
 [RodakOS host checks](../.github/workflows/host-checks.yml) 在所有 Pull Request、
 `main` push 和手动触发时运行。这是 [#26](https://github.com/rymcu/rodakos/issues/26)
@@ -52,8 +54,8 @@ OTA/采集器、codec 和 MQTT 补丁生成器的 Python 测试。
 验证真实语音刷新、精确凭据附着、USB 代次、持久化失败及 legacy MQTT-only 合同。
 MQTT suite 同时增加完整客户端替换、旧回调/outbox 隔离、外部 Stop 和失败重试测试。
 CI 保存 4 个凭据生命周期与 2 个 Cloud fence 完整源码负变体的源码、构建/断言日志及哈希。
-release runner 现有 34 个 suite，额外列表中 `voice_volume_service` 重复，合计 38 个独立 suite。
-各候选的实际结果与工件身份须绑定其 commit；历史统计不能替代新候选验证。
+release runner 当前循环 46 个 suite（以 `tools/run_release_host_checks.sh` 为准）；工作流额外列表中的
+`voice_volume_service` 与之重复。各候选的实际结果与工件身份须绑定其 commit；历史统计不能替代新候选验证。
 
 工作流额外编译并运行已有的 `voice_volume_service`、`remote_input`、
 `display_control_ack_service`、`light_service`、`appearance` 五个 CMake 测试目录。

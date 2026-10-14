@@ -131,8 +131,8 @@ layout:
 ```powershell
 . .\activate_idf.ps1 -Version v6.0.2
 .\build_ota_bundle.ps1 `
-  -SigningKeyPath C:\secure\rodak-ota-release-private.pem `
-  -VerificationKeyPath C:\secure\rodak-ota-release-public.pem `
+  -SigningKeyPath C:\secure\ota-dev-private.pem `
+  -VerificationKeyPath C:\secure\ota-dev-public.pem `
   -SigningTaskNo <new-rodak-task> -SigningVersion <compiled-version>
 .\flash_and_test.ps1 -Port COM3 -VerifyOnly
 .\flash_and_test.ps1 -Port COM3 -NoMonitor

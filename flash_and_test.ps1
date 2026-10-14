@@ -1,7 +1,6 @@
-# RodakOS - esp-brookesia HAL 烧录和测试脚本
+# RodakOS - Recovery 布局烧录和测试脚本
 #
-# 参考: Espressif esp-brookesia HAL (https://github.com/espressif/esp-brookesia)
-# 功能: 检查固件大小、烧录到设备、启动串口监视器
+# 功能: 校验签名包与不可变 Recovery、烧录到设备、核对启动交接并启动串口监视器
 #
 param(
     [string]$Port = "COM3",
@@ -47,7 +46,6 @@ if ($Erase -and $VerifyOnly) {
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RodakOS 烧录和测试" -ForegroundColor Cyan
-Write-Host "基于 esp-brookesia HAL" -ForegroundColor Gray
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

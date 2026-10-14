@@ -98,7 +98,10 @@ playback gating, repeated cleanup, and Rodak event correlation. It cannot prove
 real-person wake accuracy, echo attenuation, double-talk performance, or room
 noise rejection.
 
-For acoustic capture use the diagnostic commands:
+For acoustic capture, use the diagnostic commands below. Send each command on
+the serial console with the `RODAK_VOICE_TEST_V1 ` prefix. The device replies
+with `RODAK_AEC_DATA {...}` lines and then one
+`RODAK_VOICE_TEST_RESULT {"ok":...}` line:
 
 ```text
 aec_arm <milliseconds>
@@ -112,6 +115,17 @@ Capture is limited to six seconds of four-channel TDM plus AFE output in PSRAM.
 Readback is available only after capture stops and is limited to 256 samples per
 request. These samples are not hardware-synchronised timestamps and do not by
 themselves establish ERLE.
+
+`tools/capture_aec_diagnostics.py` runs this sequence. It waits for playback,
+arms a capture, reads every channel back and writes one WAV per channel plus
+`metadata.json`. `tools/analyze_aec_diagnostics.py <directory>` then reports
+levels, clipping and lag correlation against the `tdm-slot-1` reference. Its
+output is a diagnostic, not an acoustic acceptance score.
+
+```powershell
+python tools/capture_aec_diagnostics.py --port COM3 --output build/logs/aec-<stamp>
+python tools/analyze_aec_diagnostics.py build/logs/aec-<stamp>
+```
 
 ## Acceptance boundary
 

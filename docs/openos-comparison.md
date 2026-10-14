@@ -76,7 +76,8 @@ which makes duplicate names and renames unsafe.
 RodakOS will apply the product ideas with different invariants:
 
 - 4x3 LVGL pages are derived from the registry and have real dynamic page indicators.
-- Future ordering and folders persist stable descriptor IDs in a versioned schema.
+- Ordering and folders persist stable descriptor IDs in a versioned schema. RodakOS implements
+  this now. See [Home layout](home-layout-design.md).
 - Registry reconciliation removes missing/duplicate IDs and appends newly registered apps.
 - Long press and launch events remain distinct so releasing after an edit gesture does not launch.
 - Overflow is reported explicitly instead of silently dropping apps.

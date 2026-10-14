@@ -1,228 +1,104 @@
 # RodakOS
 
-RodakOS is an ESP32-S3 firmware project that turns the RYMCU BigSmart into a small "Phone OS" experiment: a 320x240 touch-first home screen, system apps, media apps, and hardware services built on ESP-IDF, LVGL, and Board Manager based board definitions.
+RodakOS is ESP32-S3 firmware for the RYMCU BigSmart board. It is a small "Phone OS" experiment
+with a 320x240 touch Home screen, system apps, media apps and hardware services. It uses ESP-IDF,
+LVGL and Espressif Board Manager.
 
-## Current Status
+## Features
 
-Current trusted-server work starts from `7101282`; source, build and hardware
-validation identities are recorded in the linked roadmap and feature documents.
-Current work and dated evidence are separated in the [roadmap](docs/roadmap.md).
-Camera candidates 048–050 release Camera UI/timers/pixels, DVP preview and audio focus before
-Home creation. Candidates 051–055 then reduced the first Home page's internal allocation from about
-14.8 KiB to about 6.2 KiB, but Camera runtime fragmentation still left only a 7,680-byte block before
-Home reconstruction. Candidate 056 reserves an 8,192-byte internal/DMA block while Camera is active
-and releases it after preview shutdown. Its COM3 Camera → Home window retained an 8,192-byte largest
-internal/DMA block through Home ready and the 65-second MQTT/Main/Voice health window, with a normal
-6,144-byte DVP ring, software first frame, all close stages and no Camera/DVP errors. The short-window
-continuous-block gate now passes, while production remains **NO_GO** on the 2,384-byte Voice
-supervisor stack margin. Candidate 057 raises the PSRAM supervisor stack to 6,144 bytes and records
-4,432 bytes of remaining stack after the same Camera → Home path while preserving the 8,192-byte
-internal/DMA block. The bounded continuous-memory and supervisor-stack gates now pass; production
-remains **NO_GO** on physical image, arbitrary OOM/concurrency, production signing/power-cut and
-qualification soak. Candidate 058 separates failed `STREAMON` from a running stream so startup OOM
-can release mappings, the fd and device ownership without an invalid `STREAMOFF`. Its COM3 window
-did not reproduce startup OOM: three local Camera starts while Display was active selected
-6,144/4,096/4,096-byte rings, and a later remote Camera start after Display stopped selected 6,144 B;
-all produced first frames. The remote Camera stop recovered a 6,144-byte largest block after the
-WebRTC window reached 2,560 B. Its sensor JPEG was a uniform dark frame, so transport is proven but
-physical image quality still fails. See the [051–056 evidence](docs/ota-release-readiness.md#2026-10-09-home-重建与返回连续内存-051056),
-[057 evidence](docs/ota-release-readiness.md#2026-10-09-voice-supervisor-栈余量-057) and
-[058 evidence](docs/ota-release-readiness.md#2026-10-10-camera-streamon-失败清理-058).
-Evidence status updated on 2026-10-09. 039 completed one same-boot normal/quiet/normal
-comparison on ordinary 037 package `20261008-202609`, with the same desktop PID 2140.
-All three windows contained two recovered gaps. Q suppressed 36 target PC publications and
-forwarded zero over 110.1013822 seconds; the target PC stream is not necessary for this Q stall.
-Other MQTT/TLS/logging/PI candidates remain unresolved. Original publish, serial capture and
-temporary inspector cleanup are complete; binding/tokenVersion4 remain. These bounded USB
-synthetic-input observations do not establish physical or acoustic acceptance. Root cause is
-**INCONCLUSIVE** and resource/production remain **NO_GO**. See
-[039 evidence](docs/ota-release-readiness.md#2026-10-09-pc-status-causal-comparison-039) and the separately preserved
-[038 software evidence](docs/ota-release-readiness.md#2026-10-08-snapshot-before-log-software-correction-038).
-
-
-- Target hardware: ESP32-S3, 16MB flash, 8MB PSRAM, ST7789 LCD, GT911 touch, PCA9557 IO expander, LEDC backlight.
-- Frameworks: ESP-IDF 6.0.2 with its recommended Xtensa GCC toolchain, LVGL 9.3, `esp_lvgl_port` 2.8, local Board Manager and the RodakOS-owned `rodakos_hal_boards` component.
-- Optional USB-installed server trust now enables pinned HTTPS, MQTTS and WSS with
-  a stable `.local` server name. Bounded DNS-SD address/port candidates are authenticated before
-  endpoint promotion, preserving an existing device binding. Numeric routes now persist
-  and are reused by every trusted transport; compact authority v3 shares the server
-  trust and keeps v1/v2 read compatibility. Compact-v3 package `20261007-023218`
-  passed same-port failover from an unreachable address to the genuine address,
-  retained its numeric MQTTS/WSS route after restart, and passed two trusted USB
-  refreshes, MQTTS/shadow/telemetry and both port migrations on COM3 with
-  wake listening and no crypto allocation errors; port recovery includes a controlled
-  device restart. A separate 45-second hotspot outage recovered WiFi/MQTTS and
-  fresh telemetry without USB provisioning or a reboot. Two synthetic-silence WSS
-  sessions also passed with MQTT and wake recovery, but reported an internal-heap
-  historical minimum of 863 bytes; full audio/concurrency and soak remain open.
-  New-server-address roaming and broader negative cases remain open. An earlier 006 HTTPS
-  wrong-certificate test was rejected before any HTTP request. Further
-  hardware evidence, WSS Host compatibility, and the remaining damaged-trust and
-  power-cut gates are recorded in
+- **Phone OS shell**: static app registry, single lifecycle host, navigation, and a Shell-owned
+  Lock Screen and Control Center that sit above the current app.
+- **Home**: versioned exact-ID layout in `home/layout`, folders, and an Arrange mode with one
+  guarded save. Home has up to eight pages plus a read-only `All Apps` page. Only the active page
+  and its two neighbors keep their widgets. See [Home layout](docs/home-layout-design.md).
+- **Built-in apps**: Home, Settings, Photos, Camera, Clock, Calendar, Files, Gyro, System,
+  Music, Recorder, Assistant, Smart and Wake (Wake-on-LAN).
+- **Hardware services**: display, backlight, cached GT911 touch polling, WiFi, SD card with
+  path-scoped leases, early-boot USB MSC mode, audio playback and recording, GC0308 camera,
+  QMI8658 motion, RGB light and battery monitor. The firmware opens heavy devices on demand, not
+  at boot.
+- **IO10 key**: a single click toggles Control Center, a double click opens Smart, and a long
+  press locks the device. Custom bindings in NVS replace these defaults.
+- **Voice**: local MultiNet wake word, `rodak-realtime-voice/v1` sessions over pinned WSS, AEC and
+  barge-in, volume MCP tools with software receipts, versioned voice identity. See
+  [voice assistant](docs/voice-assistant.md).
+- **Rodak cloud**: MQTT provisioning and same-authority credential refresh, shadow and
+  telemetry, correlated volume and light effects, command results bound to their original
+  connection, and Camera/Display WebRTC peers with MQTT signaling. See the
+  [AIoT contract](docs/rodak-aiot-contract-v1.md).
+- **Trusted server**: a server identity installed over USB pins HTTPS, MQTTS and WSS to a stable
+  `.local` name. The firmware authenticates each DNS-SD candidate before it promotes a route. See
   [trusted server discovery](docs/trusted-server-discovery.md).
-- Display, backlight, LVGL, cached touch polling, WiFi, SD card file service, USB MSC mode, audio playback/recording, camera service, QMI8658 motion sensing, and core Phone OS navigation are integrated. Camera and display WebRTC peer services are wired through MQTT signaling; the normal command path supports camera/display mutual exclusion and explicit stop. Stream instances now revoke at connection changes and clean up outside the MQTT event callback; hardware fault acceptance remains in the roadmap.
-- Five video workers now retire through an external owner after their complete body and local
-  destructors return, avoiding IDF's exit-time cleanup-task creation. Serial app launch and Camera
-  Home use a bounded precreated queue. The historical 030 package recorded seven correlated Stops,
-  four bounded local-Camera/remote-Display order checks and one remote-pointer Home check.
-  The same-boot internal minimum is 359 B; image quality, resource recovery and production
-  release remain open. The three voice exits retain the 031 implementation. Later records distinguish
-  test-flavor Deinit, separate natural-refresh sessions and ordinary OFF restoration; 033 adds
-  model ownership, AFE cancellation/drain and refresh-stack corrections. See [task retirement](docs/task-retirement.md) and
-  [voice task retirement](docs/voice-task-retirement.md).
-- The native Phone Shell owns Lock Screen and Control Center overlays independently of app lifecycle, with startup-lock and gesture preferences under Settings.
-- Signed appearance resources support a desktop-compiled boot logo, Home wallpaper and theme.
-  Publisher trust requires physical confirmation in Settings; SD packages are trialed on the next
-  boot with a 1500 ms loading acceptance budget and built-in EDIX fallback. See
-  [Appearance customization](docs/appearance-customization.md) for limits and hardware gates. The
-  2026-10-02 COM3 run applied revision 14 (remote Dark theme, retained wallpaper) and verified the
-  next-boot trial path.
-- Home resolves a versioned exact-ID layout from `home/layout`, reconciles it against the Registry in
-  RAM, and supports folder browsing plus draft-only reorder/create/rename/move/dissolve commands with
-  one guarded save on Done. It restores its runtime page anchor and caps the managed desktop at eight
-  pages with a read-only `All Apps` slot. Stable tile shells remain allocated, while only the active
-  page and its immediate neighbors retain grids and buttons. Scroll-end refreshes release far-page
-  child trees asynchronously and populate in active, previous, next order; a direction is enabled
-  only after its adjacent page is ready. Pending refreshes are canceled before theme rebuild or
-  navigation teardown, and Home logs final internal-SRAM free space and largest free block.
-- `tests/home_ui` compiles the production Home UI against LVGL 9.3's in-memory display and test
-  pointer. Its tests cover tap-versus-drag suppression on one-page boundaries and real
-  multi-page swipes, long press, Cancel/Done, repeated Home, theme rebuild, keyboard geometry, the
-  96/97-app `All Apps` boundary, asynchronous active-plus-neighbors residency, compiled boot-image
-  pixels, animation lifetime/touch restoration, Home wallpaper and unified theme colors. The current
-  WSL suite reports 43 tests and 0 failures in Debug and ASan/UBSan with leak detection. Its built-in
-  logo font is a host fake; this does not establish EDIX or wireless hardware acceptance.
-- The dated 2026-10-01/02 protected COM3 refresh reached Home with the production app set and completed
-  the local OTA confirmation. That evidence verifies six WebRTC display sessions (320x240,
-  four rounds, 283 JPEG samples), camera/display mutual exclusion, remote text/control cleanup, and
-  appearance revision 14. This proves the integrated paths on COM3; three-page Home turnover,
-  physical page gestures, and true LVGL out-of-memory recovery remain open.
-- IO10 defaults to Control Center on single click, Smart on double click, and Lock on long press; NVS custom bindings remain authoritative.
-- Built-in apps currently registered: Home, Settings, Photos, Camera, Clock, Calendar, File Manager,
-  Gyro, System Info, Music, Recorder, Assistant, Smart, and Wake.
-- Voice sessions expose three MCP tools for setting, raising and lowering volume, with atomic
-  shared configuration, bounded session deduplication and `rodakos.volume-receipt.v1` software
-  receipts. The checked esp_codec_dev 1.5.7 overlay propagates driver errors without changing
-  managed sources. A closed codec accepts RAM configuration without opening hardware; receipts
-  do not claim persistence or physical speaker verification. MQTT shadow reports retain their
-  separate evidence boundary. See [voice volume MCP](docs/voice-volume-mcp.md).
-- MQTT volume effects now carry single-dispatch correlation and publish software results on
-  `effects/receipt`. The device preserves bounded deduplication across same-authority reconnects
-  while connection epochs cancel old queued work/results. Plain reported volume remains state
-  only. See [MQTT volume effects](docs/mqtt-volume-effects.md).
-- Automatic same-authority MQTT credential refresh now replaces the complete SDK client and
-  checks the current persisted credentials at attachment. Old callbacks/outbox entries cannot
-  enter the new generation; changed authority or unconfirmed SDK stop retain restart isolation.
-  See [credential refresh](docs/mqtt-credential-refresh.md) for validation and remaining limits.
-- Ordinary command ACKs and video signal/state results are bound to their original MQTT connection
-  and sent without a replayable SDK outbox item. Stale queued results and late callbacks are dropped.
-  Stream-instance cleanup, final remote-input grants and delayed ACK ownership now use revocable
-  identities. A latest-64 command cache replays original results without repeating retained
-  requests; eviction and device restart have no deduplication guarantee. See the
-  [command result boundary](docs/rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
-- Release-soak collection now rejects missing/repeated/regressed device uptime and requires both
-  queued and successful navigation completion for app exercises, plus an instance-associated
-  software preview submission for Camera. Voice supervisor stack headroom contributes to the
-  shared minimum. These host checks do not close the
-  eight-hour device gate in [OTA release readiness](docs/ota-release-readiness.md).
-- Voice identity uses a bounded versioned record, an accepted revision watermark and explicit
-  runtime/storage recovery states. Temporary expiry uses Unix time plus a monotonic lifetime limit;
-  pending or failed recovery is never reported as a confirmed identity. Software and acoustic
-  evidence remain separate; see [identity and wake word](docs/voice-identity-wake-word.md).
-- Recorder and Web upload hold path-scoped FileService leases through writing and cleanup;
-  Camera uses the short I/O lock and exclusive creation. Recorder and Camera report success only
-  after complete writes, flush and close. Recorder library errors remain separate from save
-  results, and Camera delivers completion through a revocable shared result and UI timer.
-  Real SD, power-loss and hardware audio/camera gates remain open. See
-  [media save boundaries](docs/media-save.md).
-- The `20261006-225642` COM3 package records legacy serial provisioning and same-URL
-  binding preservation; its 7,015,312-byte main image predates TLS pinning. The trusted
-  transport package `20261007-010516` has a 7,081,040-byte main image; its bounded
-  hardware evidence and remaining gates are recorded in
-  [trusted server discovery](docs/trusted-server-discovery.md#validation).
-  Numeric-route/WiFi-recovery package `20261007-020911`, built from `8188e7e`, failed
-  its first USB NVS write gate. Diagnostic package `20261007-022059` passed the
-  bounded USB/port/telemetry gate without reproducing the error; it is not a storage
-  repair. Compact-v3 package `20261007-023218` was built from `2af9ce5` with a
-  7,095,392-byte main image. Its two USB refreshes, bidirectional port recovery and
-  60-second stability window passed, followed by a 45-second hotspot-outage recovery
-  without provisioning or reboot, then two WSS silence sessions. Low internal-heap
-  headroom remains open despite the separate two-address failure/success and
-  post-restart numeric-route gate passing.
-  The main application slot is 13.3125 MiB and supports SD-staged Recovery OTA from Rodak.
+- **OTA**: immutable Recovery, isolated A/B OTA journal, SD-staged updates into one 13.3125 MiB
+  `ota_0` slot, per-task RSA-2048 manifests and offline production signing. See
+  [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md).
+- **Appearance**: signed SD packages for boot logo, wallpaper and theme with publisher
+  confirmation and next-boot trial. See [appearance customization](docs/appearance-customization.md).
+
+Production release is still **NO_GO**. The open gates are the production signing root, real power
+cuts, the eight-hour qualification soak and the remaining physical checks. The
+[roadmap](docs/roadmap.md) lists them. [OTA release readiness](docs/ota-release-readiness.md)
+keeps the dated device evidence.
+
+## Hardware And Frameworks
+
+- RYMCU BigSmart: ESP32-S3, 16 MB flash, 8 MB PSRAM, 320x240 ST7789 LCD, GT911 touch,
+  PCA9557 IO expander, ES8311/ES7210 audio codecs, GC0308 DVP camera, WS2812 RGB light,
+  LEDC backlight.
+- ESP-IDF 6.0.2 with its recommended Xtensa GCC, LVGL 9.3, `esp_lvgl_port` 2.8, Espressif
+  Board Manager and the RodakOS-owned `rodakos_hal_boards` component.
 
 ## Build
 
-Activate the local ESP-IDF environment, then run any project script directly. The activator prefers
-the installed ESP-IDF 6.0.2 baseline, and the build/package/flash entry scripts reject other
-versions. A direct `idf.py build` assumes this 6.0.2 shell is already active. No global PowerShell
-profile is required.
-
-`main/idf_component.yml` pins the resolved direct component versions plus the Board Manager button
-and camera dependencies that otherwise drift when generated configuration is recreated.
-`dependencies.lock` remains the authoritative complete resolved graph and must be reviewed with any
-intentional dependency upgrade.
-
-The root CMake build automatically validates and generates the codec volume/open and I2S failure corrections after
-dependency resolution. See [dependency maintenance](docs/dependency-maintenance.md) for its
-source provenance, drift rejection, host tests and upgrade procedure.
-The same build also applies the checked MQTT custom-event queue correction; it requires the
-reviewed ESP-IDF event source and keeps managed components unchanged.
+Activate the project-local ESP-IDF 6.0.2 environment once per shell. The build, package and flash
+scripts reject other IDF versions. You do not need a global PowerShell profile.
+[Firmware build and flash](docs/firmware-download.md) gives the full procedure.
 
 ```powershell
-# Activate ESP-IDF (prefer the installed 6.0.2 baseline)
+# Activate ESP-IDF. The script prefers the installed 6.0.2. -List shows all installed versions.
 . .\activate_idf.ps1
-
-# Or pick a version, or list what's installed
-. .\activate_idf.ps1 -List
 . .\activate_idf.ps1 -Version v6.0.2
 
 # First build, board changes, or after deleting generated board files
 .\build_rodakos.ps1
 
-# Daily incremental build
+# Daily incremental build of the ota_0 application
 idf.py build
 
-# Build the first-flash Recovery bundle and the normal Rodak OTA artifact
+# Build main + Recovery and a signed package (development key on this host)
 .\build_ota_bundle.ps1 -SigningKeyPath C:\secure\ota-private.pem `
   -VerificationKeyPath C:\secure\ota-public.pem `
   -SigningTaskNo <rodak-task> -SigningVersion <compiled-version>
 
-# Refresh an existing Recovery-layout device, preserving NVS and OTA journal
-.\flash_and_test.ps1
+# Production: keep the private key offline. Package with the public key only.
+.\build_ota_bundle.ps1 -VerificationKeyPath C:\secure\ota-public.pem `
+  -SigningTaskNo <rodak-task> -SigningVersion <compiled-version> -OfflineSigning
 
-# Refresh, verify the complete boot handoff, and leave the device running
-.\flash_and_test.ps1 -NoMonitor
+# Refresh a Recovery-layout device, preserving NVS and the OTA journal
+.\flash_and_test.ps1 -Port COM3 -NoMonitor
 
-# First Recovery-layout migration; intentionally clears all device state
-.\flash_and_test.ps1 -Erase -NoMonitor
-
-# Or choose a port
-.\flash_and_test.ps1 -Port COM5
+# First Recovery-layout migration. This clears all device state.
+.\flash_and_test.ps1 -Port COM3 -Erase -NoMonitor
 ```
 
-Without `-Erase`, the flash script first verifies that the installed partition table and immutable
-Recovery match the package, then writes only `otadata` and `ota_0`; default NVS and the isolated OTA
-journal are preserved. `-Erase` is the explicit first-migration path and writes the complete 16 MiB
-image. Both paths keep the device in download mode until serial capture is ready, then verify
-Recovery handoff, main-image confirmation, and Home startup. The monitor attaches with `--no-reset`,
-so it cannot turn a still-unconfirmed image into an aborted rollback candidate.
+- Do not use root `idf.py flash` or `idf.py app-flash`. They write to the small factory
+  (Recovery) partition. A normal Rodak OTA uploads only `build/rodakos.bin`.
+- Without `-Erase`, the flash script first checks that the installed partition table and
+  immutable Recovery match the package. It then writes only `otadata` and `ota_0`. Then it
+  checks the Recovery handoff, the boot confirmation and the Home startup.
+- [Production signing](docs/production-signing.md) gives the steps for offline signing,
+  signature attachment and readback.
+- Board Manager generates `components/gen_bmgr_codes/`, and Git ignores it.
+  `generate_board_config.ps1` runs the generation, normalizes paths and reconfigures the project.
+- `dependencies.lock` is the authoritative resolved component graph. `main/idf_component.yml`
+  pins the direct versions.
+- The CMake build generates reviewed overlays for some managed components (codec, MQTT,
+  WebSocket, LVGL/LodePNG, camera/DVP, AES DMA) from `patches/`. The build stops if the upstream
+  source changes. See [dependency maintenance](docs/dependency-maintenance.md).
 
-Manual board regeneration is:
+## Host Tests
 
-```powershell
-. .\activate_idf.ps1
-.\generate_board_config.ps1
-idf.py build
-```
-
-`components/gen_bmgr_codes/` is generated by Board Manager and intentionally gitignored.
-`generate_board_config.ps1` owns extension discovery, the two-pass cold bootstrap, generated-path
-normalization, and reconfiguration.
-
-App-model host tests run outside the firmware build and do not change the device partition layout.
-They compile a test-only copy of the resolved `espressif/cjson` managed component used by the
-ESP-IDF 6.0.2 baseline, so no host JSON package or active IDF shell is required:
+Host tests run under WSL/Linux, outside the firmware build. This command runs one suite:
 
 ```powershell
 wsl -d Debian -- bash -lc '
@@ -233,76 +109,60 @@ wsl -d Debian -- bash -lc '
 '
 ```
 
-The Home UI host target compiles the real `HomeApp`, `PhoneUi`, layout, theme, components, and
-`SoftKeyboard` against LVGL 9.3 with an in-memory 320x240 display and LVGL test pointer:
+The full release regression runs all suites with ASan/UBSan and leak checks, plus the Python
+tests. It needs the reviewed ESP-IDF 6.0.2 source tree:
 
-```powershell
-wsl -d Debian -- bash -lc '
-  cmake -S /mnt/d/workspace/rodakos/tests/home_ui \
-        -B ~/.cache/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
-  cmake --build ~/.cache/rodakos-home-ui &&
-  ctest --test-dir ~/.cache/rodakos-home-ui --output-on-failure
-'
+```bash
+export RODAKOS_IDF_PATH=/path/to/esp-idf-v6.0.2
+bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"
 ```
+
+Each `tests/<suite>/README.md` states what the suite compiles and what it does not prove.
+[Host CI](docs/host-ci.md) describes the dependencies and the CI workflow.
 
 ## Project Layout
 
 ```text
 main/
-├── rodakos_adapters/      # Backlight, WiFi, WiFi credentials, SD card file service
-├── phone_os/              # App lifecycle, services, audio, camera, time, cloud, web files
-├── phone_ui/              # LVGL wrapper, fonts, themes, layouts, components, image loading
+├── main.cc                # Boot sequence (see AGENTS.md for the required order)
 ├── apps/                  # Built-in Phone OS apps
+├── phone_os/              # App model, navigation, Shell and system services
+├── phone_ui/              # LVGL wrapper, fonts, themes, layout, components, image loading
+├── rodakos_adapters/      # Board Manager device adapters (audio, camera, files, WiFi, motion)
 └── usb_msc_mode.cc        # Early-boot USB mass-storage mode for SD card access
 
+recovery/                  # Immutable Recovery (factory) application
 components/
-├── rodakos_hal_boards/    # RodakOS board definitions and board-specific helper components
-├── esp_board_manager/     # Board Manager framework
-└── gen_bmgr_codes/        # Generated board config, ignored
+├── rodakos_hal_boards/    # BigSmart board definition and its PCA9557 driver
+├── esp_board_manager/     # Espressif Board Manager
+├── esp_peer/              # WebRTC peer (local copy with RodakOS fixes)
+├── rodak_ota_state/       # OTA journal, signature format and release-test fault points
+├── rodak_appearance/      # Signed appearance package parsing and policy
+├── rodakos_fonts/         # Font subset (Chinese glyphs, Font Awesome, EDIX logo)
+├── json/                  # IDF 5 `json` name re-exported to managed cJSON for ESP-SR
+└── gen_bmgr_codes/        # Generated board config (gitignored)
 
-docs/
-├── architecture.md        # Layering and service/app model
-├── firmware-download.md   # Build, flash, monitor, and esptool details
-├── esp-peer-integration.md # Camera/display WebRTC peer and hardware evidence
-├── media-save.md         # Recorder, camera, file writer and upload save boundaries
-├── appearance-verification.md # Signed appearance resource hardware evidence
-├── home-layout-design.md  # ID-based Home ordering and folder design
-├── openos-comparison.md   # OpenOS research and RodakOS design decisions
-└── roadmap.md             # Current baseline and near-term plan
-
-tests/
-├── app_model/             # Host-side models, lifecycle, policy and audio-volume service tests
-├── voice_volume_service/  # Real voice service startup/queue/stop/reconnect with host dependencies
-├── mqtt_volume_service/   # Real MQTT callback/fragment/worker/epoch and receipt publishing
-├── remote_input/          # Production input grants and final operations against real host LVGL
-├── display_control_ack_service/ # Complete production display ACK sender with fake peers
-└── home_ui/               # Production HomeApp exercised against host LVGL 9.3
+cmake/, patches/           # Reviewed overlays applied to managed components at build time
+tools/                     # OTA signing/verification, overlay generators, serial capture tools
+tests/                     # Host test suites, one directory per suite
+docs/                      # Design, contracts, evidence and plans (see below)
 ```
 
 ## Hardware Configuration
 
-Board configuration lives in:
+Board configuration lives in `components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`:
 
-```text
-components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/
-```
-
-Key files:
-
-- `board_devices.yaml`: LCD, touch, audio codecs, SD card, camera, etc.
-- `board_peripherals.yaml`: GPIO, I2C, SPI, SDMMC, ADC, DVP, LEDC/RMT-level pins.
+- `board_devices.yaml`: LCD, touch, audio codecs, SD card, camera, buttons, RGB light.
+- `board_peripherals.yaml`: GPIO, I2C, SPI, SDMMC, ADC, DVP, LEDC/RMT pins.
 - `board_info.yaml` and `sdkconfig.defaults.board`: board identity and build defaults.
-- `setup_device.c`: board-specific initialization hooks.
+- `setup_device.c`: board-specific initialization hooks (including the camera DVP_EN power reset).
 - `components/esp_io_expander_pca9557/`: the board's local IO-expander driver.
 
-`rodakos_hal_boards` currently contains only `boards/rymcu/rymcu_bigsmart`. Future board ports
-belong under `boards/<vendor>/<board>/`, with explicit build selection and validation; the current
-build entry supports BigSmart only. Board Manager still owns generated tables and device lifecycle,
-while `main/rodakos_adapters/` adapts its handles for Phone OS services. Moving the board definitions
-does not change device names, pins, NVS identity or the Recovery layout.
+BigSmart is the only supported board. Future ports belong under `boards/<vendor>/<board>/` with
+explicit build selection and validation. Board schematics are in `images/`.
 
-The project uses `partitions_16m.csv`. OTA payloads are staged on SD, so internal flash reserves an
-immutable Recovery and one large main application slot:
+The project uses `partitions_16m.csv`. The firmware stages OTA payloads on the SD card. Internal
+flash therefore holds an immutable Recovery and one large main application slot:
 
 ```csv
 # Name,    Type, SubType, Offset,   Size,     Flags
@@ -315,42 +175,51 @@ app,       app,  ota_0,   0x2a0000, 0xd50000,
 coredump,  data, coredump,0xff0000, 0x10000,
 ```
 
-Use hexadecimal partition sizes; shorthand such as `1M`/`15M` has previously caused capacity errors.
+Use hexadecimal partition sizes. Shorthand such as `1M` or `15M` caused capacity errors before.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Dependency maintenance](docs/dependency-maintenance.md)
-- [Appearance customization](docs/appearance-customization.md)
-- [Appearance verification](docs/appearance-verification.md)
-- [Roadmap](docs/roadmap.md)
-- [Firmware build and flash](docs/firmware-download.md)
-- [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md)
-- [BigSmart WebRTC peer integration](docs/esp-peer-integration.md)
-- [OTA release readiness](docs/ota-release-readiness.md)
-- [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md)
-- [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
-- [Voice assistant integration](docs/voice-assistant.md)
-- [Voice task retirement and software evidence](docs/voice-task-retirement.md)
-- [Music scanning, playback errors and retry](docs/music-playback.md)
-- [Photos/Files scanning, image errors and retry](docs/media-browsing.md)
-- [Voice volume MCP and software receipts](docs/voice-volume-mcp.md)
-- [MQTT volume effects and software receipts](docs/mqtt-volume-effects.md)
-- [MQTT light patches and software receipts](docs/mqtt-light-effects.md)
-- [Voice AEC and barge-in integration](docs/voice-aec-integration.md)
-- [Rodak identity and wake word](docs/voice-identity-wake-word.md)
-- [Serial provisioning](docs/serial-provisioning.md)
-- [Trusted server and LAN discovery](docs/trusted-server-discovery.md)
-- [OpenOS comparison and design decisions](docs/openos-comparison.md)
-- [Home layout and folder design](docs/home-layout-design.md)
-- [Historical plans](docs/archive/README.md)
-- [Troubleshooting](TROUBLESHOOTING.md)
-- [Agent/developer notes](AGENTS.md)
+Start here:
 
-The archive preserves superseded plans for traceability. Current build, protocol, runtime knowledge
-and open acceptance work belong in the documents above; dated hardware evidence retains the exact
-package it observed.
+- [Architecture](docs/architecture.md): layers, services and app model
+- [Firmware build and flash](docs/firmware-download.md) and [Troubleshooting](TROUBLESHOOTING.md)
+- [Roadmap](docs/roadmap.md): current baseline and open work
+- [OTA release readiness](docs/ota-release-readiness.md): release gates and dated device evidence
+
+Design and contracts:
+
+- [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md),
+  [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
+- [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md),
+  [production signing](docs/production-signing.md)
+- [Serial provisioning](docs/serial-provisioning.md),
+  [trusted server and LAN discovery](docs/trusted-server-discovery.md),
+  [MQTT credential refresh](docs/mqtt-credential-refresh.md)
+- [Home layout and folder design](docs/home-layout-design.md),
+  [appearance customization](docs/appearance-customization.md),
+  [OpenOS comparison](docs/openos-comparison.md)
+- [Dependency maintenance](docs/dependency-maintenance.md)
+
+Features and their verification boundaries:
+
+- Voice: [assistant](docs/voice-assistant.md), [AEC and barge-in](docs/voice-aec-integration.md),
+  [identity and wake word](docs/voice-identity-wake-word.md),
+  [volume MCP](docs/voice-volume-mcp.md), [task retirement](docs/voice-task-retirement.md)
+- MQTT effects: [volume](docs/mqtt-volume-effects.md), [light](docs/mqtt-light-effects.md)
+- Media: [music playback](docs/music-playback.md), [Photos/Files browsing](docs/media-browsing.md),
+  [media save](docs/media-save.md)
+- Video: [WebRTC peer integration](docs/esp-peer-integration.md),
+  [Camera teardown diagnostics](docs/camera-teardown-diagnostics.md),
+  [video task retirement](docs/task-retirement.md)
+- Appearance hardware evidence: [appearance verification](docs/appearance-verification.md)
+- CI: [host CI](docs/host-ci.md), [firmware CI](docs/firmware-ci.md)
+- [Historical plans](docs/archive/README.md) and [agent notes](AGENTS.md)
+
+Each dated hardware record names the exact package that it observed. Write new evidence in the
+document that owns the feature, not in this README.
 
 ## Acknowledgments
 
-Hardware abstraction is based on Espressif Board Manager and the BigSmart board definition. The UI uses the small RodakOS-owned font subset in `components/rodakos_fonts` for Chinese glyphs and Font Awesome icons.
+The hardware abstraction uses Espressif Board Manager and the BigSmart board definition. The UI
+uses the small RodakOS-owned font subset in `components/rodakos_fonts` for Chinese glyphs and
+Font Awesome icons.

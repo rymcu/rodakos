@@ -1,14 +1,12 @@
-# RodakOS - esp-brookesia HAL 自动化构建脚本
+# RodakOS - 冷启动构建脚本
 #
-# 参考: Espressif esp-brookesia HAL (https://github.com/espressif/esp-brookesia)
-# 功能: 生成板级配置、修正路径、清理、配置并构建
+# 功能: 清理构建目录、经 generate_board_config.ps1 生成板级配置，然后构建主应用
 #
 # 检查是否已在 ESP-IDF 环境中
 if (-not $env:IDF_PATH) {
     Write-Host "❌ 未检测到 ESP-IDF 环境" -ForegroundColor Red
-    Write-Host "请先激活 ESP-IDF 环境，例如：" -ForegroundColor Yellow
-    Write-Host "  - 运行 ESP-IDF PowerShell 快捷方式" -ForegroundColor White
-    Write-Host "  - 或执行 export.ps1 (通常在 esp-idf 目录下)" -ForegroundColor White
+    Write-Host "请先激活 ESP-IDF 环境：" -ForegroundColor Yellow
+    Write-Host "  . .\activate_idf.ps1" -ForegroundColor White
     exit 1
 }
 
@@ -18,7 +16,6 @@ $repoRoot = $PSScriptRoot
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RodakOS 自动化构建脚本" -ForegroundColor Cyan
-Write-Host "基于 esp-brookesia HAL" -ForegroundColor Gray
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

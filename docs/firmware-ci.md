@@ -1,9 +1,11 @@
 # RodakOS 固件构建 CI
 
-2026-10-09 更新：后续交付不依赖、运行或修复 GitHub Actions，包括 workflow 静态修改、
-账单、额度与 required checks。固件继续通过[本地构建与打包入口](firmware-download.md)
-验证源码、依赖、最终 ELF、签名包和产物摘要，再按对应门禁取实机证据。
-Actions 缺失或不可用不构成交付阻塞；下述已有工作流、日期记录及其失败/修复结果保留为历史。
+当前状态（2026-10-14）：板级组件迁移到 `rodakos_hal_boards` 后 firmware-build 每次失败
+（`firmware_ci.py` 仍用旧板级路径），已由 `b57375c` 修复，`main` 上
+[Actions 38524039928](https://github.com/rymcu/rodakos/actions/runs/38524039928) 通过。
+Actions 是回归信号，不是交付门禁：固件以[本地构建与打包入口](firmware-download.md)验证源码、
+依赖、最终 ELF、签名包和产物摘要，再按对应门禁取实机证据；Actions 不可用不阻塞交付。
+下述日期记录及其失败/修复结果保留为历史。
 
 本文带 SHA 的结果保留为历史基线。已取得的 main/PR 精确 Actions 和下载工件核验由
 [#26](https://github.com/rymcu/rodakos/issues/26) 汇总；当前设备运行的原开发根具名包见

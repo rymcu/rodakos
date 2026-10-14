@@ -85,13 +85,14 @@ partition layout.
 Activate ESP-IDF 6.0.2, then build both images and create the handoff package with the signing
 arguments below.
 
-Signed packaging now requires explicit private/public keys, a Rodak task, and the exact compiled
-application version. Private key material never enters the firmware or package:
+Signed packaging requires explicit private/public keys, a Rodak task, and the exact compiled
+application version. This form signs on the build host and is for development keys only. Private
+key material never enters the firmware or package:
 
 ```powershell
 .\build_ota_bundle.ps1 `
-  -SigningKeyPath C:\secure\rodak-ota-release-private.pem `
-  -VerificationKeyPath C:\secure\rodak-ota-release-public.pem `
+  -SigningKeyPath C:\secure\ota-dev-private.pem `
+  -VerificationKeyPath C:\secure\ota-dev-public.pem `
   -SigningTaskNo ota-20260928-001 `
   -SigningVersion 0.1.2-dev.1
 ```
@@ -107,23 +108,14 @@ checks the compiled fingerprints and refuses mismatched or unconfigured images. 
 endpoint must return `manifestVersion: 2`, `signatureType`, and `signatureValue` along with the
 unchanged OTA task fields. Existing unsigned packages cannot be reused as signed Recovery baselines.
 
-The packaging script always regenerates the Board Manager component before building so a stale,
-gitignored IDF 5 artifact cannot enter a release package.
+The packaging script always regenerates the Board Manager component before building so a stale
+gitignored generated component cannot enter a release package.
 
 Use the generated merged image for the first wired migration. Normal Rodak OTA releases upload only
 the generated `rodakos.bin`, never the merged flash image.
 
 Root `idf.py flash` and `idf.py app-flash` are unsafe for this layout because they select the small
 factory partition. See [Rodak MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md).
-
-For a quick incremental build:
-
-```powershell
-.\quick_build.ps1
-```
-
-The former `quick_build.ps1 -Flash` path is intentionally disabled because ESP-IDF selects the
-factory partition for this project layout.
 
 ### Three-page Home hardware gate
 
