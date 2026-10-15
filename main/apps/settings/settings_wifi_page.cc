@@ -115,16 +115,16 @@ lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t i
     const char* signal_icon;
     lv_color_t signal_color;
     if (ap.rssi >= -50) {
-        signal_icon = FONT_AWESOME_SIGNAL_STRONG;
+        signal_icon = ICON_SIGNAL;
         signal_color = rodakos_theme_success();
     } else if (ap.rssi >= -70) {
-        signal_icon = FONT_AWESOME_SIGNAL_GOOD;
+        signal_icon = ICON_SIGNAL;
         signal_color = rodakos_theme_primary();
     } else if (ap.rssi >= -80) {
-        signal_icon = FONT_AWESOME_SIGNAL_FAIR;
+        signal_icon = ICON_SIGNAL;
         signal_color = rodakos_theme_warning();
     } else {
-        signal_icon = FONT_AWESOME_SIGNAL_WEAK;
+        signal_icon = ICON_SIGNAL;
         signal_color = rodakos_theme_error();
     }
 
@@ -136,7 +136,7 @@ lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t i
 
     char info_text[48];
     if (ap.is_secured) {
-        snprintf(info_text, sizeof(info_text), FONT_AWESOME_LOCK " Secured • %d dBm", ap.rssi);
+        snprintf(info_text, sizeof(info_text), ICON_LOCK " Secured • %d dBm", ap.rssi);
     } else {
         snprintf(info_text, sizeof(info_text), "Open • %d dBm", ap.rssi);
     }
@@ -174,7 +174,7 @@ void SettingsApp::CreateWiFiListPage() {
 
     // 状态图标
     auto* status_icon = lv_label_create(info_container);
-    lv_label_set_text(status_icon, FONT_AWESOME_WIFI);
+    lv_label_set_text(status_icon, ICON_WIFI);
     lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
     lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
 

@@ -16,6 +16,16 @@ enum class PhoneAppCategory {
     kGames,
 };
 
+// Home icon color. kDefault follows the category; the others are deliberate
+// per-app identity choices that spread crowded categories apart.
+enum class PhoneAppIconTint {
+    kDefault,
+    kNeutral,
+    kWarm,
+    kCool,
+    kAlert,
+};
+
 enum class PhoneAppRole {
     kRegular,
     kHome,
@@ -58,6 +68,7 @@ struct PhoneAppDescriptor {
     std::string title;
     std::string icon;
     PhoneAppCategory category = PhoneAppCategory::kTools;
+    PhoneAppIconTint icon_tint = PhoneAppIconTint::kDefault;
     PhoneAppRole role = PhoneAppRole::kRegular;
     // Native app requirements are descriptive metadata, not a security boundary.
     PhoneCapability capabilities = PhoneCapability::kNone;

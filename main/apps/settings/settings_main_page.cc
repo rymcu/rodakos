@@ -44,7 +44,7 @@ void SettingsApp::CreateMainPage() {
     lv_obj_set_style_pad_all(brightness_card, 12, 0);
     lv_obj_clear_flag(brightness_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    CreateSettingIcon(brightness_card, FONT_AWESOME_BRIGHTNESS);
+    CreateSettingIcon(brightness_card, ICON_BRIGHTNESS);
 
     auto* brightness_title = CreateSettingLabel(brightness_card, "Brightness");
     lv_obj_align(brightness_title, LV_ALIGN_TOP_LEFT, 28, 0);
@@ -87,7 +87,7 @@ void SettingsApp::CreateMainPage() {
 
     // ===== 主题设置卡片 =====
     auto* theme_card = CreateSettingCard(main_body_, 84);
-    CreateSettingIcon(theme_card, FONT_AWESOME_MOON);
+    CreateSettingIcon(theme_card, ICON_MOON);
 
     auto* theme_title = CreateSettingLabel(theme_card, local_theme ? "Theme" : "Theme (remote)");
     lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 28, 0);
@@ -147,7 +147,7 @@ void SettingsApp::CreateMainPage() {
 
     // ===== 语言设置卡片 =====
     auto* language_card = CreateSettingCard(main_body_, 142);
-    CreateSettingIcon(language_card, FONT_AWESOME_GLOBE);
+    CreateSettingIcon(language_card, ICON_GLOBE);
 
     auto* language_title = CreateSettingLabel(language_card, "Chinese language");
     lv_obj_align(language_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -176,7 +176,7 @@ void SettingsApp::CreateMainPage() {
     // ===== WiFi 设置入口 =====
     auto* wifi_card = CreateSettingCard(main_body_, 200);
     lv_obj_add_flag(wifi_card, LV_OBJ_FLAG_CLICKABLE);
-    CreateSettingIcon(wifi_card, FONT_AWESOME_WIFI);
+    CreateSettingIcon(wifi_card, ICON_WIFI);
 
     auto* wifi_title = CreateSettingLabel(wifi_card, "WiFi Settings");
     lv_obj_align(wifi_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -195,7 +195,7 @@ void SettingsApp::CreateMainPage() {
     // ===== Rodak 连接入口 =====
     auto* cloud_card = CreateSettingCard(main_body_, 258);
     lv_obj_add_flag(cloud_card, LV_OBJ_FLAG_CLICKABLE);
-    CreateSettingIcon(cloud_card, FONT_AWESOME_CLOUD);
+    CreateSettingIcon(cloud_card, ICON_CLOUD);
 
     auto* cloud_title = CreateSettingLabel(cloud_card, "连接 Rodak");
     lv_obj_align(cloud_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -215,7 +215,7 @@ void SettingsApp::CreateMainPage() {
     auto* datetime_card = CreateSettingCard(main_body_, 316);
     lv_obj_add_flag(datetime_card, LV_OBJ_FLAG_CLICKABLE);
 
-    CreateSettingIcon(datetime_card, FONT_AWESOME_CLOCK);
+    CreateSettingIcon(datetime_card, ICON_CLOCK);
 
     auto* datetime_title = CreateSettingLabel(datetime_card, "Date & Time");
     lv_obj_align(datetime_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -235,7 +235,7 @@ void SettingsApp::CreateMainPage() {
     auto* shell_card = CreateSettingCard(main_body_, 374);
     lv_obj_add_flag(shell_card, LV_OBJ_FLAG_CLICKABLE);
 
-    CreateSettingIcon(shell_card, FONT_AWESOME_LOCK);
+    CreateSettingIcon(shell_card, ICON_LOCK);
 
     auto* shell_title = CreateSettingLabel(shell_card, "System Shell");
     lv_obj_align(shell_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -255,7 +255,7 @@ void SettingsApp::CreateMainPage() {
     auto* buttons_card = CreateSettingCard(main_body_, 432);
     lv_obj_add_flag(buttons_card, LV_OBJ_FLAG_CLICKABLE);
 
-    CreateSettingIcon(buttons_card, FONT_AWESOME_KEY);
+    CreateSettingIcon(buttons_card, ICON_KEY);
 
     auto* buttons_title = CreateSettingLabel(buttons_card, "Button Bindings");
     lv_obj_align(buttons_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -275,7 +275,7 @@ void SettingsApp::CreateMainPage() {
     auto* upload_card = CreateSettingCard(main_body_, 490);
     lv_obj_add_flag(upload_card, LV_OBJ_FLAG_CLICKABLE);
 
-    CreateSettingIcon(upload_card, FONT_AWESOME_CLOUD);
+    CreateSettingIcon(upload_card, ICON_CLOUD);
 
     auto* upload_title = CreateSettingLabel(upload_card, "Web Files");
     lv_obj_align(upload_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -295,7 +295,7 @@ void SettingsApp::CreateMainPage() {
     auto* usb_card = CreateSettingCard(main_body_, 548);
     lv_obj_add_flag(usb_card, LV_OBJ_FLAG_CLICKABLE);
 
-    CreateSettingIcon(usb_card, FONT_AWESOME_SD_CARD);
+    CreateSettingIcon(usb_card, ICON_STORAGE);
 
     auto* usb_title = CreateSettingLabel(usb_card, "USB Disk Mode");
     lv_obj_align(usb_title, LV_ALIGN_LEFT_MID, 28, 0);
@@ -313,7 +313,7 @@ void SettingsApp::CreateMainPage() {
 
     auto* appearance_card = CreateSettingCard(main_body_, 606);
     lv_obj_add_flag(appearance_card, LV_OBJ_FLAG_CLICKABLE);
-    CreateSettingIcon(appearance_card, FONT_AWESOME_LOCK);
+    CreateSettingIcon(appearance_card, ICON_LOCK);
     auto* appearance_title = CreateSettingLabel(appearance_card, "外观定制与信任");
     lv_obj_align(appearance_title, LV_ALIGN_LEFT_MID, 28, 0);
     auto* appearance_arrow = CreateSettingLabel(appearance_card, ">", true);

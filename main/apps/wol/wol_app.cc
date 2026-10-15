@@ -265,7 +265,7 @@ void WolApp::CreateDeviceRow(size_t index) {
     lv_obj_set_style_text_color(address, rodakos_theme_text_secondary(), 0);
     lv_label_set_long_mode(address, LV_LABEL_LONG_DOT);
 
-    auto* wake_button = RodakosCreateHeaderIconButton(row, FONT_AWESOME_POWER_OFF);
+    auto* wake_button = RodakosCreateHeaderIconButton(row, ICON_POWER);
     lv_obj_set_size(wake_button, 38, 38);
     lv_obj_align(wake_button, LV_ALIGN_RIGHT_MID, -46, 0);
     lv_obj_set_style_bg_color(wake_button, rodakos_theme_primary(), 0);
@@ -276,7 +276,7 @@ void WolApp::CreateDeviceRow(size_t index) {
         self->WakeDevice(DeviceIndexFromButton(static_cast<lv_obj_t*>(lv_event_get_target(event))));
     }, LV_EVENT_CLICKED, this);
 
-    auto* edit_button = RodakosCreateHeaderIconButton(row, FONT_AWESOME_PEN_TO_SQUARE);
+    auto* edit_button = RodakosCreateHeaderIconButton(row, ICON_EDIT);
     lv_obj_set_size(edit_button, 38, 38);
     lv_obj_align(edit_button, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_user_data(edit_button, reinterpret_cast<void*>(static_cast<uintptr_t>(index + 1)));
@@ -347,7 +347,7 @@ void WolApp::ShowEditor(size_t index) {
     lv_obj_set_style_bg_opa(toolbar, LV_OPA_COVER, 0);
     lv_obj_clear_flag(toolbar, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* cancel = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_XMARK);
+    auto* cancel = RodakosCreateHeaderIconButton(toolbar, ICON_CLOSE);
     lv_obj_align(cancel, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_add_event_cb(cancel, [](lv_event_t* event) {
         static_cast<WolApp*>(lv_event_get_user_data(event))->CloseEditor();
@@ -359,7 +359,7 @@ void WolApp::ShowEditor(size_t index) {
     lv_obj_set_style_text_color(title, rodakos_theme_text_primary(), 0);
     lv_obj_center(title);
 
-    auto* save = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_CHECK);
+    auto* save = RodakosCreateHeaderIconButton(toolbar, ICON_CHECK);
     lv_obj_align(save, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_obj_set_style_bg_color(save, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_color(lv_obj_get_child(save, 0), lv_color_white(), 0);
@@ -518,11 +518,11 @@ void WolApp::UpdateConnectionStatus() {
     WiFiAdapter* wifi = context_->services().wifi();
     const bool connected = wifi != nullptr && wifi->GetStatus() == WiFiStatus::kConnected;
     if (connected) {
-        lv_label_set_text_fmt(connection_label_, FONT_AWESOME_WIFI "  %s",
+        lv_label_set_text_fmt(connection_label_, ICON_WIFI "  %s",
                               wifi->GetConnectedSSID().c_str());
         lv_obj_set_style_text_color(connection_label_, rodakos_theme_success(), 0);
     } else {
-        lv_label_set_text(connection_label_, FONT_AWESOME_WIFI_SLASH "  WiFi disconnected");
+        lv_label_set_text(connection_label_, ICON_WIFI_OFF "  WiFi disconnected");
         lv_obj_set_style_text_color(connection_label_, rodakos_theme_warning(), 0);
     }
     if (add_button_ != nullptr) {
@@ -548,8 +548,9 @@ void RegisterWolApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "wol",
         .title = "Wake",
-        .icon = FONT_AWESOME_POWER_OFF,
+        .icon = ICON_POWER,
         .category = PhoneAppCategory::kTools,
+        .icon_tint = PhoneAppIconTint::kAlert,
         .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"wake", "wake on lan", "network wake", "网络唤醒", "唤醒"},

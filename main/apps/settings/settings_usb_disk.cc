@@ -121,7 +121,7 @@ void SettingsApp::ShowUsbDiskEnablePage() {
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
 
     auto* icon = lv_label_create(usb_disk_hint_page_);
-    lv_label_set_text(icon, FONT_AWESOME_SD_CARD);
+    lv_label_set_text(icon, ICON_STORAGE);
     lv_obj_set_style_text_font(icon, PhoneIconFontLarge(), 0);
     lv_obj_set_style_text_color(icon, rodakos_theme_primary(), 0);
     lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 52);

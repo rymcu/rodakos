@@ -122,8 +122,9 @@ services, Settings, navigation, and fonts use host fakes. The suite covers tap s
 one-page and multi-page drag suppression, boundary and bidirectional page swipes, long-press Arrange,
 Cancel/Done persistence, repeated Home, theme rebuilding, keyboard geometry, 96/97-app `All Apps`,
 and asynchronous active-plus-neighbors residency, boot-image formats/timing/lifetime, touch recovery,
-Home wallpaper and unified theme colors. The current WSL run reports 43 tests and 0 failures in
-Debug and ASan/UBSan with leak detection. The logo font fake does not verify built-in EDIX typography.
+Home wallpaper, unified theme colors, and the category-based icon gradients, radius and press
+feedback ([icon visual refresh](icon-visual-refresh.md)). The current WSL run reports 55 tests and
+0 failures in Debug and ASan/UBSan with leak detection. The logo font fake does not verify built-in EDIX typography.
 
 The latest 2026-10-01/02 COM3 evidence also covers the integrated media peers: six display sessions
 (320x240, four rounds, 283 JPEG samples), camera/display mutual exclusion, and clean stop/navigation
@@ -141,7 +142,9 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
 - `PhoneUi` and `PhoneUiLock` centralize LVGL access.
 - `rodakos_theme` defines dark/light/blue/green theme tokens.
 - `rodakos_layout` provides fixed-screen helpers for header/body/footer, grids, and flex rows.
-- `phone_fonts` initializes the RodakOS-owned CJK and Font Awesome UI font subset.
+- `phone_fonts` initializes the RodakOS-owned CJK and icon font subset. UI icons are `ICON_*`
+  macros from `rodakos_icons.h`, generated from `components/rodakos_fonts/icons.json` by
+  `tools/generate_icon_fonts.py`.
 - `BootAnimation` renders the built-in EDIX fallback or compiled appearance units with elapsed LVGL
   ticks. `PhoneUi` retains a shared RGB565 Home wallpaper and follows the global theme colors.
 - `image_library` scans and loads JPG/PNG/BMP images from FileService-backed storage, preferring SPIRAM.

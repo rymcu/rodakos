@@ -469,7 +469,7 @@ void RegisterGyroApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "gyro",
         .title = "Gyro",
-        .icon = FONT_AWESOME_COMPASS,
+        .icon = ICON_COMPASS,
         .category = PhoneAppCategory::kTools,
         .capabilities = PhoneCapability::kMotion,
         .show_on_home = true,

@@ -199,7 +199,7 @@ void AssistantApp::CreateUi() {
 
     auto* wake_card = CreateCard(root_, 46, 62);
 
-    auto* wake_icon = CreateText(wake_card, FONT_AWESOME_MICROPHONE,
+    auto* wake_icon = CreateText(wake_card, ICON_MICROPHONE,
                                  PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(wake_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
@@ -223,7 +223,7 @@ void AssistantApp::CreateUi() {
     }, LV_EVENT_VALUE_CHANGED, this);
 
     auto* assistant_card = CreateCard(root_, 114, 48);
-    auto* assistant_icon = CreateText(assistant_card, FONT_AWESOME_USER_ROBOT,
+    auto* assistant_icon = CreateText(assistant_card, ICON_ASSISTANT,
                                       PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(assistant_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
@@ -240,7 +240,7 @@ void AssistantApp::CreateUi() {
     lv_obj_align(assistant_detail_label_, LV_ALIGN_TOP_LEFT, 44, 27);
 
     auto* runtime_card = CreateCard(root_, 168, 32);
-    auto* runtime_icon = CreateText(runtime_card, FONT_AWESOME_CIRCLE_INFO, PhoneIconFont(),
+    auto* runtime_icon = CreateText(runtime_card, ICON_INFO, PhoneIconFont(),
                                     rodakos_theme_primary());
     lv_obj_align(runtime_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
@@ -255,7 +255,7 @@ void AssistantApp::CreateUi() {
     lv_obj_add_event_cb(cloud_card, [](lv_event_t* event) {
         static_cast<AssistantApp*>(lv_event_get_user_data(event))->NavigateSettings();
     }, LV_EVENT_CLICKED, this);
-    auto* cloud_icon = CreateText(cloud_card, FONT_AWESOME_CLOUD, PhoneIconFont(), rodakos_theme_primary());
+    auto* cloud_icon = CreateText(cloud_card, ICON_CLOUD, PhoneIconFont(), rodakos_theme_primary());
     lv_obj_align(cloud_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
     cloud_detail_label_ = CreateText(cloud_card, "Settings > Device Cloud", &phone_font_12,
@@ -359,8 +359,9 @@ void RegisterAssistantApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "assistant",
         .title = "Assistant",
-        .icon = FONT_AWESOME_USER_ROBOT,
+        .icon = ICON_ASSISTANT,
         .category = PhoneAppCategory::kTools,
+        .icon_tint = PhoneAppIconTint::kCool,
         .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"voice", "assistant", "siri", "语音", "助手"},

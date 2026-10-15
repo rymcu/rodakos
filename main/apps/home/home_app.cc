@@ -40,6 +40,10 @@ constexpr lv_coord_t kCellHeight = 60;
 constexpr lv_coord_t kGapX = 12;
 constexpr lv_coord_t kGapY = 6;
 constexpr lv_coord_t kIconSize = 46;
+constexpr lv_coord_t kIconRadius = 14;
+constexpr lv_coord_t kIconPressedInset = 1;
+constexpr lv_opa_t kIconGradientDarken = 31;
+constexpr lv_opa_t kIconPressedDarken = 26;
 constexpr int32_t kTileTapSlop = 10;
 constexpr int32_t kTileTapSlopSquared = kTileTapSlop * kTileTapSlop;
 constexpr int kBatteryRefreshTicks = 30;
@@ -93,13 +97,56 @@ void SetButtonEnabled(lv_obj_t* button, bool enabled) {
     }
 }
 
-int IconColorIndex(const std::string& app_id) {
-    uint32_t hash = 2166136261u;
-    for (char ch : app_id) {
-        hash ^= static_cast<unsigned char>(ch);
-        hash *= 16777619u;
+struct IconGradientColors {
+    lv_color_t top;
+    lv_color_t bottom;
+};
+
+int IconSlot(const PhoneAppDescriptor* app) {
+    // IDs without a descriptor (for example a removed app in a folder preview) stay neutral.
+    if (app == nullptr) {
+        return RODAKOS_ICON_SLOT_NEUTRAL;
     }
-    return static_cast<int>(hash % 8u);
+    switch (app->icon_tint) {
+        case PhoneAppIconTint::kNeutral:
+            return RODAKOS_ICON_SLOT_NEUTRAL;
+        case PhoneAppIconTint::kWarm:
+            return RODAKOS_ICON_SLOT_WARM;
+        case PhoneAppIconTint::kCool:
+            return RODAKOS_ICON_SLOT_COOL;
+        case PhoneAppIconTint::kAlert:
+            return RODAKOS_ICON_SLOT_ALERT;
+        case PhoneAppIconTint::kDefault:
+            break;
+    }
+    switch (app->category) {
+        case PhoneAppCategory::kSystem:
+            return RODAKOS_ICON_SLOT_SYSTEM;
+        case PhoneAppCategory::kMedia:
+            return RODAKOS_ICON_SLOT_MEDIA;
+        case PhoneAppCategory::kTools:
+            return RODAKOS_ICON_SLOT_TOOLS;
+        case PhoneAppCategory::kGames:
+            return RODAKOS_ICON_SLOT_GAMES;
+    }
+    return RODAKOS_ICON_SLOT_NEUTRAL;
+}
+
+// LVGL 9.3 has no gradient dithering. If RGB565 banding shows on the panel, replace this with
+// a flat top color plus a one-pixel lighter highlight row; callers do not need to change.
+IconGradientColors IconGradient(lv_color_t top, bool pressed = false) {
+    IconGradientColors colors = {top, lv_color_darken(top, kIconGradientDarken)};
+    if (pressed) {
+        colors.top = lv_color_darken(colors.top, kIconPressedDarken);
+        colors.bottom = lv_color_darken(colors.bottom, kIconPressedDarken);
+    }
+    return colors;
+}
+
+void SetIconGradientStyle(lv_obj_t* object, const IconGradientColors& colors) {
+    lv_obj_set_style_bg_color(object, colors.top, 0);
+    lv_obj_set_style_bg_grad_color(object, colors.bottom, 0);
+    lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_VER, 0);
 }
 
 void ClockTimerCallback(lv_timer_t* timer) {
@@ -111,21 +158,21 @@ void ClockTimerCallback(lv_timer_t* timer) {
 
 const char* BatteryIconForLevel(int level_percent, bool charging) {
     if (charging) {
-        return FONT_AWESOME_BATTERY_BOLT;
+        return ICON_BATTERY_CHARGING;
     }
     if (level_percent >= 80) {
-        return FONT_AWESOME_BATTERY_FULL;
+        return ICON_BATTERY_FULL;
     }
     if (level_percent >= 55) {
-        return FONT_AWESOME_BATTERY_THREE_QUARTERS;
+        return ICON_BATTERY_FULL;
     }
     if (level_percent >= 30) {
-        return FONT_AWESOME_BATTERY_HALF;
+        return ICON_BATTERY_HALF;
     }
     if (level_percent > 0) {
-        return FONT_AWESOME_BATTERY_QUARTER;
+        return ICON_BATTERY_HALF;
     }
-    return FONT_AWESOME_BATTERY_EMPTY;
+    return ICON_BATTERY_EMPTY;
 }
 
 }  // namespace
@@ -155,7 +202,7 @@ struct HomeApp::TilePayload {
     bool press_cancelled = false;
     bool long_press_pending = false;
     const char* icon = nullptr;
-    lv_color_t icon_color{};
+    int icon_slot = RODAKOS_ICON_SLOT_NEUTRAL;
 };
 
 HomeApp::TilePayload* HomeApp::AllocateTilePayload() {
@@ -219,13 +266,27 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
                 .x2 = static_cast<lv_coord_t>(object_area.x1 + (kCellWidth + kIconSize) / 2 - 1),
                 .y2 = static_cast<lv_coord_t>(object_area.y1 + kIconSize - 1),
             };
+            // A press that turns into a scroll clears LV_STATE_PRESSED without PRESS_LOST, so
+            // the object state is the only reliable source for the pressed look.
+            const bool pressed = lv_obj_has_state(object, LV_STATE_PRESSED);
+            lv_area_t background_area = icon_area;
+            if (pressed) {
+                lv_area_increase(&background_area, -kIconPressedInset, -kIconPressedInset);
+            }
+            const IconGradientColors colors =
+                IconGradient(rodakos_theme_icon_color(payload->icon_slot), pressed);
             lv_draw_rect_dsc_t background;
             lv_draw_rect_dsc_init(&background);
-            background.radius = LV_RADIUS_CIRCLE;
-            background.bg_color = payload->icon_color;
+            background.radius = kIconRadius;
+            background.bg_color = colors.top;
             background.bg_opa = LV_OPA_COVER;
+            background.bg_grad.dir = LV_GRAD_DIR_VER;
+            background.bg_grad.stops_count = 2;
+            background.bg_grad.stops[0] = {.color = colors.top, .opa = LV_OPA_COVER, .frac = 0};
+            background.bg_grad.stops[1] = {
+                .color = colors.bottom, .opa = LV_OPA_COVER, .frac = 255};
             background.border_width = 0;
-            lv_draw_rect(layer, &background, &icon_area);
+            lv_draw_rect(layer, &background, &background_area);
 
             lv_point_t icon_size;
             lv_text_get_size(&icon_size, payload->icon, PhoneIconFontLarge(), 0, 0,
@@ -246,6 +307,8 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
             break;
         }
         case LV_EVENT_PRESSED: {
+            // Tiles have no pressed styles, so LVGL does not invalidate them on state changes.
+            lv_obj_invalidate(lv_event_get_target_obj(event));
             payload->launch_guard.BeginPress();
             payload->pointer_tracking = false;
             payload->pointer_moved = false;
@@ -269,6 +332,7 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
             }
             break;
         case LV_EVENT_RELEASED:
+            lv_obj_invalidate(lv_event_get_target_obj(event));
             update_pointer_movement();
             payload->pointer_tracking = false;
             if (!payload->pointer_moved && !payload->press_cancelled &&
@@ -279,10 +343,15 @@ void HomeApp::AppButtonEvent(lv_event_t* event) {
             }
             break;
         case LV_EVENT_PRESS_LOST:
+            lv_obj_invalidate(lv_event_get_target_obj(event));
             payload->pointer_tracking = false;
             payload->pointer_moved = true;
             payload->press_cancelled = true;
             payload->long_press_pending = false;
+            break;
+        case LV_EVENT_INDEV_RESET:
+            // The touch bridge resets the input device on cancel, which clears the state silently.
+            lv_obj_invalidate(lv_event_get_target_obj(event));
             break;
         case LV_EVENT_SHORT_CLICKED:
             if (!payload->pointer_moved && !payload->press_cancelled &&
@@ -497,12 +566,12 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     lv_obj_clear_flag(status_cluster_, LV_OBJ_FLAG_SCROLLABLE);
 
     wifi_label_ = lv_label_create(status_cluster_);
-    lv_label_set_text(wifi_label_, FONT_AWESOME_WIFI_SLASH);
+    lv_label_set_text(wifi_label_, ICON_WIFI_OFF);
     lv_obj_set_style_text_color(wifi_label_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(wifi_label_, PhoneIconFont(), 0);
 
     battery_icon_ = lv_label_create(status_cluster_);
-    lv_label_set_text(battery_icon_, FONT_AWESOME_BATTERY_SLASH);
+    lv_label_set_text(battery_icon_, ICON_BATTERY_UNKNOWN);
     lv_obj_set_style_text_color(battery_icon_, rodakos_theme_text_tertiary(), 0);
     lv_obj_set_style_text_font(battery_icon_, PhoneIconFont(), 0);
 
@@ -704,7 +773,7 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
                 });
             if (payload != nullptr) {
                 payload->icon = app->icon.c_str();
-                payload->icon_color = rodakos_theme_icon_color(IconColorIndex(app->id));
+                payload->icon_slot = IconSlot(app);
             }
         } else {
             BindTileAction(
@@ -724,25 +793,29 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
             lv_obj_remove_style_all(icon_bg);
             lv_obj_set_size(icon_bg, kIconSize, kIconSize);
             lv_obj_align(icon_bg, LV_ALIGN_TOP_MID, 0, 0);
-            lv_obj_set_style_radius(icon_bg, static_cast<lv_coord_t>(8), 0);
-            lv_obj_set_style_bg_color(
-                icon_bg,
-                all_apps ? rodakos_theme_secondary() : rodakos_theme_bg_tertiary(), 0);
+            lv_obj_set_style_radius(icon_bg, kIconRadius, 0);
+            if (all_apps) {
+                SetIconGradientStyle(icon_bg, IconGradient(rodakos_theme_primary()));
+            } else {
+                lv_obj_set_style_bg_color(icon_bg, rodakos_theme_bg_tertiary(), 0);
+            }
             lv_obj_set_style_bg_opa(icon_bg, LV_OPA_COVER, 0);
             lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
 
             if (all_apps) {
+                // A custom primary can be light, so follow the theme's button foreground.
+                const lv_color_t foreground = ui_->theme().accent_text;
                 auto* icon_label = lv_label_create(icon_bg);
-                lv_label_set_text(icon_label, FONT_AWESOME_ARROW_RIGHT);
-                lv_obj_set_style_text_color(icon_label, lv_color_white(), 0);
+                lv_label_set_text(icon_label, ICON_ARROW_RIGHT);
+                lv_obj_set_style_text_color(icon_label, foreground, 0);
                 lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
                 lv_obj_center(icon_label);
 
                 auto* count_label = lv_label_create(icon_bg);
                 const std::string count = std::to_string(projection_.overflow_items.size());
                 lv_label_set_text(count_label, count.c_str());
-                lv_obj_set_style_text_color(count_label, lv_color_white(), 0);
+                lv_obj_set_style_text_color(count_label, foreground, 0);
                 lv_obj_set_style_text_font(count_label, &phone_font_12, 0);
                 lv_obj_align(count_label, LV_ALIGN_TOP_RIGHT, -3, 2);
             } else {
@@ -757,7 +830,9 @@ bool HomeApp::PopulateHomePage(size_t page_index) {
                     lv_obj_set_style_radius(preview, 5, 0);
                     lv_obj_set_style_bg_color(
                         preview,
-                        rodakos_theme_icon_color(IconColorIndex(item->apps[preview_index])), 0);
+                        rodakos_theme_icon_color(IconSlot(
+                            context_->registry().FindById(item->apps[preview_index]))),
+                        0);
                     lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
                     lv_obj_clear_flag(preview, LV_OBJ_FLAG_CLICKABLE);
                     lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
@@ -1108,7 +1183,7 @@ void HomeApp::OpenCollection(const std::string& title,
     BindTileAction(back, TileAction::kCloseCollection);
 
     auto* back_icon = lv_label_create(back);
-    lv_label_set_text(back_icon, FONT_AWESOME_ARROW_LEFT);
+    lv_label_set_text(back_icon, ICON_ARROW_LEFT);
     lv_obj_set_style_text_color(back_icon, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(back_icon, PhoneIconFont(), 0);
     lv_obj_center(back_icon);
@@ -1191,12 +1266,12 @@ void HomeApp::AddCollectionRow(lv_obj_t* parent, const rodakos::HomeLayoutItem& 
     lv_obj_remove_style_all(icon_bg);
     lv_obj_set_size(icon_bg, 28, 28);
     lv_obj_align(icon_bg, LV_ALIGN_LEFT_MID, 6, 0);
-    lv_obj_set_style_radius(icon_bg, app != nullptr ? LV_RADIUS_CIRCLE : 6, 0);
-    lv_obj_set_style_bg_color(
-        icon_bg,
-        app != nullptr ? rodakos_theme_icon_color(IconColorIndex(app->id))
-                       : rodakos_theme_bg_tertiary(),
-        0);
+    lv_obj_set_style_radius(icon_bg, 8, 0);
+    if (app != nullptr) {
+        SetIconGradientStyle(icon_bg, IconGradient(rodakos_theme_icon_color(IconSlot(app))));
+    } else {
+        lv_obj_set_style_bg_color(icon_bg, rodakos_theme_bg_tertiary(), 0);
+    }
     lv_obj_set_style_bg_opa(icon_bg, LV_OPA_COVER, 0);
     lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
@@ -1218,7 +1293,7 @@ void HomeApp::AddCollectionRow(lv_obj_t* parent, const rodakos::HomeLayoutItem& 
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 44, 0);
 
     auto* arrow = lv_label_create(row);
-    lv_label_set_text(arrow, FONT_AWESOME_ANGLE_RIGHT);
+    lv_label_set_text(arrow, ICON_CHEVRON_RIGHT);
     lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
     lv_obj_set_style_text_font(arrow, PhoneIconFont(), 0);
     lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, -8, 0);
@@ -1382,7 +1457,7 @@ void HomeApp::CreateLayoutEditorOverviewUi() {
     lv_obj_align(toolbar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(toolbar, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* cancel = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_XMARK);
+    auto* cancel = RodakosCreateHeaderIconButton(toolbar, ICON_CLOSE);
     lv_obj_set_size(cancel, 44, 40);
     lv_obj_align(cancel, LV_ALIGN_LEFT_MID, 4, 0);
     BindTileAction(cancel, TileAction::kCancelEditing);
@@ -1393,7 +1468,7 @@ void HomeApp::CreateLayoutEditorOverviewUi() {
     lv_obj_set_style_text_font(mode_title, &phone_font_14, 0);
     lv_obj_center(mode_title);
 
-    editor_done_button_ = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_CHECK);
+    editor_done_button_ = RodakosCreateHeaderIconButton(toolbar, ICON_CHECK);
     lv_obj_set_size(editor_done_button_, 44, 40);
     lv_obj_align(editor_done_button_, LV_ALIGN_RIGHT_MID, -4, 0);
     BindTileAction(editor_done_button_, TileAction::kSaveEditing);
@@ -1402,15 +1477,15 @@ void HomeApp::CreateLayoutEditorOverviewUi() {
     lv_obj_remove_style_all(icon_bg);
     lv_obj_set_pos(icon_bg, 16, 42);
     lv_obj_set_size(icon_bg, 40, 40);
-    lv_obj_set_style_radius(
-        icon_bg,
-        item->type == rodakos::HomeLayoutItemType::kApp ? LV_RADIUS_CIRCLE : 8, 0);
-    lv_obj_set_style_bg_color(
-        icon_bg,
-        item->type == rodakos::HomeLayoutItemType::kApp
-            ? rodakos_theme_icon_color(IconColorIndex(item->id))
-            : rodakos_theme_bg_tertiary(),
-        0);
+    lv_obj_set_style_radius(icon_bg, 12, 0);
+    if (item->type == rodakos::HomeLayoutItemType::kApp) {
+        const PhoneAppDescriptor* descriptor =
+            context_ != nullptr ? context_->registry().FindById(item->id) : nullptr;
+        SetIconGradientStyle(
+            icon_bg, IconGradient(rodakos_theme_icon_color(IconSlot(descriptor))));
+    } else {
+        lv_obj_set_style_bg_color(icon_bg, rodakos_theme_bg_tertiary(), 0);
+    }
     lv_obj_set_style_bg_opa(icon_bg, LV_OPA_COVER, 0);
     lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
@@ -1447,8 +1522,11 @@ void HomeApp::CreateLayoutEditorOverviewUi() {
             const lv_coord_t y = preview_index < 2 ? -7 : 7;
             lv_obj_align(preview, LV_ALIGN_CENTER, x, y);
             lv_obj_set_style_radius(preview, 3, 0);
+            const PhoneAppDescriptor* descriptor =
+                context_ != nullptr ? context_->registry().FindById(item->apps[preview_index])
+                                    : nullptr;
             lv_obj_set_style_bg_color(
-                preview, rodakos_theme_icon_color(IconColorIndex(item->apps[preview_index])), 0);
+                preview, rodakos_theme_icon_color(IconSlot(descriptor)), 0);
             lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
             lv_obj_clear_flag(preview, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
@@ -1505,9 +1583,9 @@ void HomeApp::CreateLayoutEditorOverviewUi() {
     };
 
     editor_previous_button_ = create_button(
-        16, 86, 136, 42, FONT_AWESOME_ARROW_LEFT, TileAction::kMovePrevious);
+        16, 86, 136, 42, ICON_ARROW_LEFT, TileAction::kMovePrevious);
     editor_next_button_ = create_button(
-        168, 86, 136, 42, FONT_AWESOME_ARROW_RIGHT, TileAction::kMoveNext);
+        168, 86, 136, 42, ICON_ARROW_RIGHT, TileAction::kMoveNext);
 
     if (editing_target_->kind == LayoutEditTargetKind::kFolderApp) {
         editor_primary_action_ = create_button(
@@ -1544,7 +1622,7 @@ void HomeApp::CreateLayoutDestinationUi() {
     lv_obj_align(toolbar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(toolbar, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* back = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_ARROW_LEFT);
+    auto* back = RodakosCreateHeaderIconButton(toolbar, ICON_ARROW_LEFT);
     lv_obj_set_size(back, 44, 40);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, 4, 0);
     BindTileAction(back, TileAction::kCloseEditorSubview);
@@ -1639,7 +1717,7 @@ void HomeApp::CreateLayoutDissolveUi() {
     lv_obj_remove_style_all(toolbar);
     lv_obj_set_size(toolbar, LV_PCT(100), 40);
     lv_obj_align(toolbar, LV_ALIGN_TOP_MID, 0, 0);
-    auto* back = RodakosCreateHeaderIconButton(toolbar, FONT_AWESOME_ARROW_LEFT);
+    auto* back = RodakosCreateHeaderIconButton(toolbar, ICON_ARROW_LEFT);
     lv_obj_set_size(back, 44, 40);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, 4, 0);
     BindTileAction(back, TileAction::kCloseEditorSubview);
@@ -1918,7 +1996,7 @@ void HomeApp::OpenFolderNameDialog(FolderNameMode mode) {
     lv_obj_set_style_radius(box, 6, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* cancel = RodakosCreateHeaderIconButton(box, FONT_AWESOME_XMARK);
+    auto* cancel = RodakosCreateHeaderIconButton(box, ICON_CLOSE);
     lv_obj_set_size(cancel, 40, 40);
     lv_obj_align(cancel, LV_ALIGN_TOP_LEFT, 2, 0);
     BindTileAction(cancel, TileAction::kCancelFolderName);
@@ -1927,7 +2005,7 @@ void HomeApp::OpenFolderNameDialog(FolderNameMode mode) {
     lv_obj_set_style_text_color(title, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(title, &phone_font_14, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
-    auto* apply = RodakosCreateHeaderIconButton(box, FONT_AWESOME_CHECK);
+    auto* apply = RodakosCreateHeaderIconButton(box, ICON_CHECK);
     lv_obj_set_size(apply, 40, 40);
     lv_obj_align(apply, LV_ALIGN_TOP_RIGHT, -2, 0);
     BindTileAction(apply, TileAction::kApplyFolderName);
@@ -2340,7 +2418,7 @@ void HomeApp::UpdateClock() {
     if (wifi_label_ != nullptr && context_ != nullptr) {
         auto* wifi = context_->services().wifi();
         const bool connected = wifi != nullptr && wifi->GetStatus() == WiFiStatus::kConnected;
-        lv_label_set_text(wifi_label_, connected ? FONT_AWESOME_WIFI : FONT_AWESOME_WIFI_SLASH);
+        lv_label_set_text(wifi_label_, connected ? ICON_WIFI : ICON_WIFI_OFF);
         lv_obj_set_style_text_color(wifi_label_,
                                     connected ? rodakos_theme_text_primary() : rodakos_theme_text_tertiary(), 0);
     }
@@ -2364,7 +2442,7 @@ void HomeApp::UpdateBatteryStatus() {
 
     const bool available = snapshot.level_percent >= 0;
     if (!available) {
-        lv_label_set_text(battery_icon_, FONT_AWESOME_BATTERY_SLASH);
+        lv_label_set_text(battery_icon_, ICON_BATTERY_UNKNOWN);
         lv_label_set_text(battery_label_, "--%");
         lv_obj_set_style_text_color(battery_icon_, rodakos_theme_text_tertiary(), 0);
         lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
@@ -2390,7 +2468,7 @@ void RegisterHomeApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "home",
         .title = "Home",
-        .icon = FONT_AWESOME_HOUSE,
+        .icon = ICON_HOME,
         .category = PhoneAppCategory::kSystem,
         .role = PhoneAppRole::kHome,
         .capabilities = PhoneCapability::kNone,

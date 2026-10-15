@@ -207,7 +207,7 @@ void ClockApp::CreateUi() {
     lv_obj_align(date_label_, LV_ALIGN_BOTTOM_LEFT, 16, -12);
 
     auto* tz_card = CreateCard(root_, 150, 34);
-    auto* tz_icon = CreateTextLabel(tz_card, FONT_AWESOME_GLOBE, PhoneIconFont(),
+    auto* tz_icon = CreateTextLabel(tz_card, ICON_GLOBE, PhoneIconFont(),
                                     rodakos_theme_primary());
     lv_obj_align(tz_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -218,7 +218,7 @@ void ClockApp::CreateUi() {
     lv_obj_align(timezone_label_, LV_ALIGN_LEFT_MID, 28, 0);
 
     auto* server_card = CreateCard(root_, 190, 34);
-    auto* server_icon = CreateTextLabel(server_card, FONT_AWESOME_CLOUD, PhoneIconFont(),
+    auto* server_icon = CreateTextLabel(server_card, ICON_CLOUD, PhoneIconFont(),
                                         rodakos_theme_primary());
     lv_obj_align(server_icon, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -237,7 +237,7 @@ void ClockApp::CreateUi() {
     lv_obj_set_style_radius(sync_btn, 6, 0);
     lv_obj_clear_flag(sync_btn, LV_OBJ_FLAG_SCROLLABLE);
     auto* sync_icon = lv_label_create(sync_btn);
-    lv_label_set_text(sync_icon, FONT_AWESOME_ARROWS_ROTATE);
+    lv_label_set_text(sync_icon, ICON_REFRESH);
     lv_obj_set_style_text_color(sync_icon, lv_color_white(), 0);
     lv_obj_set_style_text_font(sync_icon, PhoneIconFont(), 0);
     lv_obj_center(sync_icon);
@@ -376,8 +376,9 @@ void RegisterClockApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "clock",
         .title = "Clock",
-        .icon = FONT_AWESOME_CLOCK,
+        .icon = ICON_CLOCK,
         .category = PhoneAppCategory::kTools,
+        .icon_tint = PhoneAppIconTint::kWarm,
         .capabilities = PhoneCapability::kNetwork,
         .show_on_home = true,
         .aliases = {"time", "ntp", "时钟", "时间"},

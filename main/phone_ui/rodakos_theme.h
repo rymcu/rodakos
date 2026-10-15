@@ -41,9 +41,22 @@ typedef struct {
     uint32_t divider;        // 分割线
     uint32_t overlay;        // 遮罩层
 
-    // 图标色板（8种柔和的颜色用于应用图标）
+    // 图标色板：下标为语义槽位，见 RODAKOS_ICON_SLOT_*
     uint32_t icon_palette[8];
 } rodakos_theme_t;
+
+// 图标色板槽位
+enum {
+    RODAKOS_ICON_SLOT_SYSTEM = 0,   // 系统，石板蓝灰
+    RODAKOS_ICON_SLOT_MEDIA = 1,    // 媒体，珊瑚
+    RODAKOS_ICON_SLOT_TOOLS = 2,    // 工具，蓝
+    RODAKOS_ICON_SLOT_GAMES = 3,    // 游戏，绿
+    RODAKOS_ICON_SLOT_NEUTRAL = 4,  // 中性，暖灰
+    RODAKOS_ICON_SLOT_WARM = 5,     // 暖色，琥珀
+    RODAKOS_ICON_SLOT_COOL = 6,     // 冷色，青
+    RODAKOS_ICON_SLOT_ALERT = 7,    // 警示，玫红
+    RODAKOS_ICON_SLOT_COUNT = 8,
+};
 
 // 预设主题
 typedef enum {
@@ -116,7 +129,7 @@ lv_color_t rodakos_theme_overlay(void);
 /**
  * 获取图标色板中的颜色
  *
- * @param index 索引（0-7）
+ * @param index 槽位（RODAKOS_ICON_SLOT_*），越界时回退到 SYSTEM
  * @return 图标颜色
  */
 lv_color_t rodakos_theme_icon_color(int index);

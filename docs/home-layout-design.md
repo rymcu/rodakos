@@ -145,7 +145,8 @@ in the [current roadmap](roadmap.md); do not recreate these phases as a new deli
   one-page and multi-page drag suppression, bidirectional boundaries/page swipes, long-press Arrange,
   Cancel/Done semantics, repeated Home, theme rebuild, keyboard geometry, the 96/97-app `All Apps`
   boundary, and async active-plus-neighbors residency. The normal suite also passed 20 consecutive
-  runs; ASan/UBSan with leak detection passed.
+  runs; ASan/UBSan with leak detection passed. The
+  [icon visual refresh](icon-visual-refresh.md#verification-status) adds 12 icon tests (55 total).
 - The latest protected COM3 refresh reached Home with 13 visible apps and a `2/2` resident-page
   window. This proves the multi-page population boots, but not page swipes, Arrange, page-anchor
   restoration, or three-page far-page release. A production-off 25-app population remains available

@@ -384,7 +384,7 @@ void RegisterSettingsApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "settings",
         .title = "Settings",
-        .icon = FONT_AWESOME_GEAR,
+        .icon = ICON_SETTINGS,
         .category = PhoneAppCategory::kSystem,
         .capabilities = PhoneCapability::kNone,
         .show_on_home = true,

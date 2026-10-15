@@ -27,7 +27,7 @@ void SettingsApp::CreateDateTimePage() {
     auto* tz_card = CreateSettingCard(datetime_body_, 4, 64);
     lv_obj_set_style_pad_all(tz_card, 8, 0);
     auto* tz_icon = lv_label_create(tz_card);
-    lv_label_set_text(tz_icon, FONT_AWESOME_GLOBE);
+    lv_label_set_text(tz_icon, ICON_GLOBE);
     lv_obj_set_style_text_color(tz_icon, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_font(tz_icon, PhoneIconFont(), 0);
     lv_obj_align(tz_icon, LV_ALIGN_LEFT_MID, 0, 0);
@@ -60,7 +60,7 @@ void SettingsApp::CreateDateTimePage() {
     auto* server_card = CreateSettingCard(datetime_body_, 72, 64);
     lv_obj_set_style_pad_all(server_card, 8, 0);
     auto* server_icon = lv_label_create(server_card);
-    lv_label_set_text(server_icon, FONT_AWESOME_CLOUD);
+    lv_label_set_text(server_icon, ICON_CLOUD);
     lv_obj_set_style_text_color(server_icon, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_font(server_icon, PhoneIconFont(), 0);
     lv_obj_align(server_icon, LV_ALIGN_LEFT_MID, 0, 0);
@@ -109,7 +109,7 @@ void SettingsApp::CreateDateTimePage() {
     lv_obj_set_style_radius(edit_btn, 6, 0);
     lv_obj_clear_flag(edit_btn, LV_OBJ_FLAG_SCROLLABLE);
     auto* edit_icon = lv_label_create(edit_btn);
-    lv_label_set_text(edit_icon, FONT_AWESOME_PEN_TO_SQUARE);
+    lv_label_set_text(edit_icon, ICON_EDIT);
     lv_obj_set_style_text_color(edit_icon, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(edit_icon, PhoneIconFont(), 0);
     lv_obj_center(edit_icon);
@@ -127,7 +127,7 @@ void SettingsApp::CreateDateTimePage() {
     lv_obj_set_style_radius(sync_btn, 6, 0);
     lv_obj_clear_flag(sync_btn, LV_OBJ_FLAG_SCROLLABLE);
     auto* sync_icon = lv_label_create(sync_btn);
-    lv_label_set_text(sync_icon, FONT_AWESOME_ARROWS_ROTATE);
+    lv_label_set_text(sync_icon, ICON_REFRESH);
     lv_obj_set_style_text_color(sync_icon, lv_color_white(), 0);
     lv_obj_set_style_text_font(sync_icon, PhoneIconFont(), 0);
     lv_obj_center(sync_icon);

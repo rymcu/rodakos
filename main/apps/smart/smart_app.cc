@@ -497,8 +497,9 @@ void RegisterSmartApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "smart",
         .title = "Smart",
-        .icon = FONT_AWESOME_POWER_OFF,
+        .icon = ICON_LIGHT,
         .category = PhoneAppCategory::kTools,
+        .icon_tint = PhoneAppIconTint::kCool,
         .capabilities = PhoneCapability::kNone,
         .show_on_home = true,
         .aliases = {"light", "rgb", "lamp", "smart home", "灯", "灯光", "智能"},

@@ -27,8 +27,11 @@ add_executable(rodakos_home_ui_tests
     lvgl_creation_failures.cc
     remote_text_input_test.cc
     display_capture_test.cc
+    icon_font_test.cc
     jpeg_allocator_host.cc
     fakes/test_fonts.cc
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_20_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_30_4.c"
     "${RODAKOS_ROOT}/main/apps/home/home_app.cc"
     "${RODAKOS_ROOT}/main/apps/home/home_layout_model.cc"
     "${RODAKOS_ROOT}/main/apps/home/home_layout_codec.cc"

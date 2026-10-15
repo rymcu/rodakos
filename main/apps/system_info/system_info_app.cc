@@ -333,21 +333,21 @@ void SystemInfoApp::CreateUi() {
     lv_obj_set_scroll_dir(body_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(body_, LV_SCROLLBAR_MODE_AUTO);
 
-    wifi_ = CreateInfoCard(body_, FONT_AWESOME_WIFI, "WiFi");
-    memory_ = CreateInfoCard(body_, FONT_AWESOME_MICROCHIP_AI, "Heap free/total");
-    storage_ = CreateInfoCard(body_, FONT_AWESOME_SD_CARD, "Storage");
-    uptime_ = CreateInfoCard(body_, FONT_AWESOME_ARROWS_ROTATE, "Uptime");
-    firmware_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Firmware");
-    chip_ = CreateInfoCard(body_, FONT_AWESOME_SIGNAL, "Hardware");
-    heap_detail_ = CreateInfoCard(body_, FONT_AWESOME_CIRCLE_INFO, "Largest block");
-    runtime_ = CreateInfoCard(body_, FONT_AWESOME_MICROCHIP_AI, "Runtime");
-    buses_ = CreateInfoCard(body_, FONT_AWESOME_LINK, "Buses");
-    camera_ = CreateInfoCard(body_, FONT_AWESOME_CAMERA, "Camera");
-    audio_ = CreateInfoCard(body_, FONT_AWESOME_VOLUME_HIGH, "Audio");
-    motion_ = CreateInfoCard(body_, FONT_AWESOME_COMPASS, "Motion");
-    web_ = CreateInfoCard(body_, FONT_AWESOME_CLOUD, "Web files");
-    voice_ = CreateInfoCard(body_, FONT_AWESOME_MICROPHONE, "Voice");
-    buttons_ = CreateInfoCard(body_, FONT_AWESOME_KEY, "Buttons");
+    wifi_ = CreateInfoCard(body_, ICON_WIFI, "WiFi");
+    memory_ = CreateInfoCard(body_, ICON_CHIP, "Heap free/total");
+    storage_ = CreateInfoCard(body_, ICON_STORAGE, "Storage");
+    uptime_ = CreateInfoCard(body_, ICON_REFRESH, "Uptime");
+    firmware_ = CreateInfoCard(body_, ICON_INFO, "Firmware");
+    chip_ = CreateInfoCard(body_, ICON_SIGNAL, "Hardware");
+    heap_detail_ = CreateInfoCard(body_, ICON_INFO, "Largest block");
+    runtime_ = CreateInfoCard(body_, ICON_CHIP, "Runtime");
+    buses_ = CreateInfoCard(body_, ICON_LINK, "Buses");
+    camera_ = CreateInfoCard(body_, ICON_CAMERA, "Camera");
+    audio_ = CreateInfoCard(body_, ICON_VOLUME, "Audio");
+    motion_ = CreateInfoCard(body_, ICON_COMPASS, "Motion");
+    web_ = CreateInfoCard(body_, ICON_CLOUD, "Web files");
+    voice_ = CreateInfoCard(body_, ICON_MICROPHONE, "Voice");
+    buttons_ = CreateInfoCard(body_, ICON_KEY, "Buttons");
 }
 
 SystemInfoApp::InfoLabels SystemInfoApp::CreateInfoCard(lv_obj_t* parent,
@@ -637,7 +637,7 @@ void RegisterSystemInfoApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "system",
         .title = "System",
-        .icon = FONT_AWESOME_CIRCLE_INFO,
+        .icon = ICON_INFO,
         .category = PhoneAppCategory::kSystem,
         .capabilities = PhoneCapability::kStorage | PhoneCapability::kNetwork,
         .show_on_home = true,

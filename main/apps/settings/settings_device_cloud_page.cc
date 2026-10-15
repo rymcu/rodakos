@@ -163,7 +163,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_pad_all(status_card, 10, 0);
 
     auto* status_icon = lv_label_create(status_card);
-    lv_label_set_text(status_icon, FONT_AWESOME_CLOUD);
+    lv_label_set_text(status_icon, ICON_CLOUD);
     lv_obj_set_style_text_color(status_icon, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
     lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
@@ -181,7 +181,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_pad_all(url_card, 8, 0);
 
     auto* url_icon = lv_label_create(url_card);
-    lv_label_set_text(url_icon, FONT_AWESOME_LINK);
+    lv_label_set_text(url_icon, ICON_LINK);
     lv_obj_set_style_text_color(url_icon, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_font(url_icon, PhoneIconFont(), 0);
     lv_obj_align(url_icon, LV_ALIGN_LEFT_MID, 0, 0);
@@ -206,7 +206,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_radius(edit_btn, 6, 0);
     lv_obj_clear_flag(edit_btn, LV_OBJ_FLAG_SCROLLABLE);
     auto* edit_icon = lv_label_create(edit_btn);
-    lv_label_set_text(edit_icon, FONT_AWESOME_PEN_TO_SQUARE);
+    lv_label_set_text(edit_icon, ICON_EDIT);
     lv_obj_set_style_text_color(edit_icon, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(edit_icon, PhoneIconFont(), 0);
     lv_obj_center(edit_icon);
@@ -224,7 +224,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_style_radius(refresh_btn, 6, 0);
     lv_obj_clear_flag(refresh_btn, LV_OBJ_FLAG_SCROLLABLE);
     auto* refresh_icon = lv_label_create(refresh_btn);
-    lv_label_set_text(refresh_icon, FONT_AWESOME_ARROWS_ROTATE);
+    lv_label_set_text(refresh_icon, ICON_REFRESH);
     lv_obj_set_style_text_color(refresh_icon, lv_color_white(), 0);
     lv_obj_set_style_text_font(refresh_icon, PhoneIconFont(), 0);
     lv_obj_center(refresh_icon);

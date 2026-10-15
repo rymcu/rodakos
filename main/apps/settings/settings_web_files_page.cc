@@ -34,7 +34,7 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
     lv_obj_set_style_pad_all(status_card, 10, 0);
 
     auto* status_icon = lv_label_create(status_card);
-    lv_label_set_text(status_icon, FONT_AWESOME_CLOUD);
+    lv_label_set_text(status_icon, ICON_CLOUD);
     lv_obj_set_style_text_color(status_icon, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
     lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);

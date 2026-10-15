@@ -303,7 +303,7 @@ void PhoneShell::CreateControlCenter() {
     lv_obj_set_style_bg_opa(close_button, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(close_button, rodakos_theme_primary(), LV_STATE_PRESSED);
     lv_obj_clear_flag(close_button, LV_OBJ_FLAG_SCROLLABLE);
-    auto* close_icon = CreateLabel(close_button, FONT_AWESOME_XMARK, PhoneIconFont(),
+    auto* close_icon = CreateLabel(close_button, ICON_CLOSE, PhoneIconFont(),
                                    rodakos_theme_text_primary());
     lv_obj_center(close_icon);
     lv_obj_add_event_cb(close_button, CloseCallback, LV_EVENT_SHORT_CLICKED, this);
@@ -322,8 +322,8 @@ void PhoneShell::CreateControlCenter() {
         wifi_status = services_.wifi()->GetStatus();
     }
     const char* wifi_icon = wifi_status == WiFiStatus::kConnected
-                                ? FONT_AWESOME_WIFI
-                                : FONT_AWESOME_WIFI_SLASH;
+                                ? ICON_WIFI
+                                : ICON_WIFI_OFF;
     auto* wifi_icon_label = CreateLabel(wifi_panel, wifi_icon, PhoneIconFont(),
                                         rodakos_theme_text_primary());
     lv_obj_align(wifi_icon_label, LV_ALIGN_LEFT_MID, 12, 0);
@@ -341,7 +341,7 @@ void PhoneShell::CreateControlCenter() {
     lv_obj_clear_flag(brightness_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* brightness_title = CreateLabel(brightness_panel,
-                                         FONT_AWESOME_BRIGHTNESS "  Brightness",
+                                         ICON_BRIGHTNESS "  Brightness",
                                          &phone_font_14,
                                          rodakos_theme_text_primary());
     lv_obj_align(brightness_title, LV_ALIGN_TOP_LEFT, 12, 8);
@@ -361,11 +361,11 @@ void PhoneShell::CreateControlCenter() {
     lv_obj_add_event_cb(slider, BrightnessChangedCallback, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_add_event_cb(slider, BrightnessReleasedCallback, LV_EVENT_RELEASED, this);
 
-    auto* settings_button = CreateActionButton(overlay_, FONT_AWESOME_GEAR, "Settings");
+    auto* settings_button = CreateActionButton(overlay_, ICON_SETTINGS, "Settings");
     lv_obj_align(settings_button, LV_ALIGN_BOTTOM_LEFT, 14, -18);
     lv_obj_add_event_cb(settings_button, OpenSettingsCallback, LV_EVENT_SHORT_CLICKED, this);
 
-    auto* lock_button = CreateActionButton(overlay_, FONT_AWESOME_LOCK, "Lock");
+    auto* lock_button = CreateActionButton(overlay_, ICON_LOCK, "Lock");
     lv_obj_align(lock_button, LV_ALIGN_BOTTOM_RIGHT, -14, -18);
     lv_obj_add_event_cb(lock_button, LockCallback, LV_EVENT_SHORT_CLICKED, this);
 
@@ -383,11 +383,11 @@ void PhoneShell::CreateLockScreen() {
     lv_obj_add_flag(overlay_, LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_clear_flag(overlay_, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* lock_icon = CreateLabel(overlay_, FONT_AWESOME_LOCK, PhoneIconFont(),
+    auto* lock_icon = CreateLabel(overlay_, ICON_LOCK, PhoneIconFont(),
                                   rodakos_theme_text_secondary());
     lv_obj_align(lock_icon, LV_ALIGN_TOP_LEFT, 14, 12);
 
-    lock_wifi_label_ = CreateLabel(overlay_, FONT_AWESOME_WIFI_SLASH, PhoneIconFont(),
+    lock_wifi_label_ = CreateLabel(overlay_, ICON_WIFI_OFF, PhoneIconFont(),
                                    rodakos_theme_text_secondary());
     lv_obj_align(lock_wifi_label_, LV_ALIGN_TOP_RIGHT, -14, 12);
 
@@ -399,7 +399,7 @@ void PhoneShell::CreateLockScreen() {
                               rodakos_theme_text_secondary());
     lv_obj_align(date_label_, LV_ALIGN_CENTER, 0, -8);
 
-    auto* unlock_icon = CreateLabel(overlay_, FONT_AWESOME_ARROW_UP, PhoneIconFont(),
+    auto* unlock_icon = CreateLabel(overlay_, ICON_ARROW_UP, PhoneIconFont(),
                                     rodakos_theme_text_primary());
     lv_obj_align(unlock_icon, LV_ALIGN_BOTTOM_MID, 0, -28);
     auto* unlock_label = CreateLabel(overlay_, "Unlock", &phone_font_12,
@@ -434,8 +434,8 @@ void PhoneShell::UpdateLockScreen() {
     if (lock_wifi_label_ != nullptr) {
         const bool connected = services_.wifi() != nullptr &&
                                services_.wifi()->GetStatus() == WiFiStatus::kConnected;
-        lv_label_set_text(lock_wifi_label_, connected ? FONT_AWESOME_WIFI
-                                                      : FONT_AWESOME_WIFI_SLASH);
+        lv_label_set_text(lock_wifi_label_, connected ? ICON_WIFI
+                                                      : ICON_WIFI_OFF);
     }
 }
 

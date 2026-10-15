@@ -76,7 +76,7 @@ void SettingsApp::UpdateButtonBindingsPage() {
     auto* buttons = context_ != nullptr ? context_->services().buttons() : nullptr;
     if (buttons == nullptr || !buttons->IsAvailable()) {
         auto* empty_card = CreateSettingCard(buttons_body_, 8, 76);
-        CreateSettingIcon(empty_card, FONT_AWESOME_KEY);
+        CreateSettingIcon(empty_card, ICON_KEY);
         auto* title = CreateSettingLabel(empty_card, "No button devices");
         lv_obj_align(title, LV_ALIGN_TOP_LEFT, 28, 2);
         auto* detail = CreateSettingLabel(empty_card, "Check board_devices.yaml", true);
@@ -88,7 +88,7 @@ void SettingsApp::UpdateButtonBindingsPage() {
     lv_coord_t y = 8;
     for (const auto& button : buttons->ListButtons()) {
         auto* title_card = CreateSettingCard(buttons_body_, y, 42);
-        CreateSettingIcon(title_card, FONT_AWESOME_KEY);
+        CreateSettingIcon(title_card, ICON_KEY);
         auto* title = CreateSettingLabel(title_card, button.title.c_str());
         lv_obj_align(title, LV_ALIGN_LEFT_MID, 28, 0);
         auto* device = CreateSettingLabel(title_card, button.device_name.c_str(), true);
@@ -183,7 +183,7 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
     lv_obj_set_style_shadow_width(close_btn, 0, 0);
 
     auto* close_icon = lv_label_create(close_btn);
-    lv_label_set_text(close_icon, FONT_AWESOME_XMARK);
+    lv_label_set_text(close_icon, ICON_CLOSE);
     lv_obj_set_style_text_color(close_icon, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(close_icon, PhoneIconFont(), 0);
     lv_obj_center(close_icon);
@@ -239,7 +239,7 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
 
         if (SameButtonAction(option.action, binding.action)) {
             auto* check = lv_label_create(row);
-            lv_label_set_text(check, FONT_AWESOME_CHECK);
+            lv_label_set_text(check, ICON_CHECK);
             lv_obj_set_style_text_color(check, rodakos_theme_primary(), 0);
             lv_obj_set_style_text_font(check, PhoneIconFont(), 0);
             lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);

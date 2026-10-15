@@ -230,7 +230,7 @@ void MusicApp::CreateUi() {
     lv_obj_set_style_pad_all(now_card, 0, 0);
     lv_obj_clear_flag(now_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* music_icon = CreateText(now_card, FONT_AWESOME_MUSIC, PhoneIconFontLarge(), rodakos_theme_primary());
+    auto* music_icon = CreateText(now_card, ICON_MUSIC, PhoneIconFontLarge(), rodakos_theme_primary());
     lv_obj_align(music_icon, LV_ALIGN_LEFT_MID, 14, 0);
 
     track_title_label_ = CreateText(now_card, "No track", &phone_font_18, rodakos_theme_text_primary());
@@ -282,7 +282,7 @@ void MusicApp::CreateUi() {
     auto* prev_btn = lv_btn_create(controls);
     StyleRoundButton(prev_btn, 34, false);
     auto* prev_icon = lv_label_create(prev_btn);
-    lv_label_set_text(prev_icon, FONT_AWESOME_BACKWARD_STEP);
+    lv_label_set_text(prev_icon, ICON_SKIP_BACK);
     lv_obj_set_style_text_font(prev_icon, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(prev_icon, rodakos_theme_text_primary(), 0);
     lv_obj_center(prev_icon);
@@ -310,7 +310,7 @@ void MusicApp::CreateUi() {
     auto* play_btn = lv_btn_create(controls);
     StyleRoundButton(play_btn, 42, true);
     play_icon_label_ = lv_label_create(play_btn);
-    lv_label_set_text(play_icon_label_, FONT_AWESOME_PLAY);
+    lv_label_set_text(play_icon_label_, ICON_PLAY);
     lv_obj_set_style_text_font(play_icon_label_, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(play_icon_label_, lv_color_white(), 0);
     lv_obj_center(play_icon_label_);
@@ -321,7 +321,7 @@ void MusicApp::CreateUi() {
     auto* volume_btn = lv_btn_create(controls);
     StyleRoundButton(volume_btn, 34, false);
     auto* control_volume_icon = lv_label_create(volume_btn);
-    lv_label_set_text(control_volume_icon, FONT_AWESOME_VOLUME_HIGH);
+    lv_label_set_text(control_volume_icon, ICON_VOLUME);
     lv_obj_set_style_text_font(control_volume_icon, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(control_volume_icon, rodakos_theme_text_primary(), 0);
     lv_obj_center(control_volume_icon);
@@ -332,7 +332,7 @@ void MusicApp::CreateUi() {
     auto* next_btn = lv_btn_create(controls);
     StyleRoundButton(next_btn, 34, false);
     auto* next_icon = lv_label_create(next_btn);
-    lv_label_set_text(next_icon, FONT_AWESOME_FORWARD_STEP);
+    lv_label_set_text(next_icon, ICON_SKIP_FORWARD);
     lv_obj_set_style_text_font(next_icon, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(next_icon, rodakos_theme_text_primary(), 0);
     lv_obj_center(next_icon);
@@ -377,7 +377,7 @@ void MusicApp::CreateUi() {
     lv_obj_clear_flag(volume_panel_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(volume_panel_, LV_OBJ_FLAG_HIDDEN);
 
-    auto* volume_icon = CreateText(volume_panel_, FONT_AWESOME_VOLUME_HIGH, PhoneIconFont(),
+    auto* volume_icon = CreateText(volume_panel_, ICON_VOLUME, PhoneIconFont(),
                                    rodakos_theme_primary());
     lv_obj_align(volume_icon, LV_ALIGN_LEFT_MID, 12, 0);
 
@@ -420,7 +420,7 @@ void MusicApp::CreateUi() {
     lv_obj_set_style_bg_color(volume_done_btn, rodakos_theme_primary(), LV_STATE_PRESSED);
     lv_obj_set_style_translate_y(volume_done_btn, 1, LV_STATE_PRESSED);
     lv_obj_clear_flag(volume_done_btn, LV_OBJ_FLAG_SCROLLABLE);
-    auto* volume_done_icon = CreateText(volume_done_btn, FONT_AWESOME_XMARK, PhoneIconFont(),
+    auto* volume_done_icon = CreateText(volume_done_btn, ICON_CLOSE, PhoneIconFont(),
                                         rodakos_theme_text_primary());
     lv_obj_center(volume_done_icon);
     lv_obj_add_event_cb(volume_done_btn, [](lv_event_t* e) {
@@ -515,7 +515,7 @@ void MusicApp::RebuildTrackList() {
         lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
         lv_obj_align(detail, LV_ALIGN_TOP_LEFT, 12, 24);
 
-        auto* play_hint = CreateText(row, FONT_AWESOME_PLAY, PhoneIconFont(), rodakos_theme_primary());
+        auto* play_hint = CreateText(row, ICON_PLAY, PhoneIconFont(), rodakos_theme_primary());
         lv_obj_align(play_hint, LV_ALIGN_RIGHT_MID, -12, 0);
 
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
@@ -614,12 +614,12 @@ const char* MusicApp::PlaybackModeIconText() const {
         : rodakos::MusicPlaybackMode::kSequential;
     switch (mode) {
         case rodakos::MusicPlaybackMode::kShuffle:
-            return LV_SYMBOL_SHUFFLE;
+            return ICON_SHUFFLE;
         case rodakos::MusicPlaybackMode::kRepeatOne:
-            return LV_SYMBOL_LOOP;
+            return ICON_REPEAT;
         case rodakos::MusicPlaybackMode::kSequential:
         default:
-            return FONT_AWESOME_ARROW_RIGHT;
+            return ICON_ARROW_RIGHT;
     }
 }
 
@@ -751,7 +751,7 @@ void MusicApp::RefreshState() {
     lv_label_set_text_fmt(progress_label_, "%d%%", state.progress_percent);
     const bool show_pause = state.status == rodakos::AudioPlaybackStatus::kPlaying ||
                             state.status == rodakos::AudioPlaybackStatus::kLoading;
-    lv_label_set_text(play_icon_label_, show_pause ? FONT_AWESOME_PAUSE : FONT_AWESOME_PLAY);
+    lv_label_set_text(play_icon_label_, show_pause ? ICON_PAUSE : ICON_PLAY);
 
     if (volume_slider_ != nullptr) {
         lv_slider_set_value(volume_slider_, state.volume, LV_ANIM_OFF);
@@ -770,7 +770,7 @@ void RegisterMusicApp(PhoneAppRegistry& registry) {
     PhoneAppDescriptor descriptor;
     descriptor.id = "music";
     descriptor.title = "Music";
-    descriptor.icon = FONT_AWESOME_MUSIC;
+    descriptor.icon = ICON_MUSIC;
     descriptor.category = PhoneAppCategory::kMedia;
     descriptor.capabilities = PhoneCapability::kStorage |
                               PhoneCapability::kAudioPlayback;

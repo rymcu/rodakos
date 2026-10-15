@@ -138,7 +138,7 @@ components/
 ├── esp_peer/              # WebRTC peer (local copy with RodakOS fixes)
 ├── rodak_ota_state/       # OTA journal, signature format and release-test fault points
 ├── rodak_appearance/      # Signed appearance package parsing and policy
-├── rodakos_fonts/         # Font subset (Chinese glyphs, Font Awesome, EDIX logo)
+├── rodakos_fonts/         # Font subset (Chinese glyphs, Ionicons UI icons, EDIX logo)
 ├── json/                  # IDF 5 `json` name re-exported to managed cJSON for ESP-SR
 └── gen_bmgr_codes/        # Generated board config (gitignored)
 
@@ -222,4 +222,4 @@ document that owns the feature, not in this README.
 
 The hardware abstraction uses Espressif Board Manager and the BigSmart board definition. The UI
 uses the small RodakOS-owned font subset in `components/rodakos_fonts` for Chinese glyphs and
-Font Awesome icons.
+Ionicons UI icons (MIT).

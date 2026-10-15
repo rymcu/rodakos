@@ -198,7 +198,7 @@ void CalendarApp::CreateUi() {
         }
     }, this);
 
-    previous_button_ = RodakosCreateHeaderIconButton(root_, FONT_AWESOME_ANGLE_LEFT);
+    previous_button_ = RodakosCreateHeaderIconButton(root_, ICON_CHEVRON_LEFT);
     lv_obj_set_pos(previous_button_, 8, 45);
     lv_obj_add_event_cb(previous_button_, [](lv_event_t* event) {
         auto* self = static_cast<CalendarApp*>(lv_event_get_user_data(event));
@@ -224,7 +224,7 @@ void CalendarApp::CreateUi() {
         }
     }, LV_EVENT_CLICKED, this);
 
-    next_button_ = RodakosCreateHeaderIconButton(root_, FONT_AWESOME_ANGLE_RIGHT);
+    next_button_ = RodakosCreateHeaderIconButton(root_, ICON_CHEVRON_RIGHT);
     lv_obj_set_pos(next_button_, 262, 45);
     lv_obj_add_event_cb(next_button_, [](lv_event_t* event) {
         auto* self = static_cast<CalendarApp*>(lv_event_get_user_data(event));
@@ -470,7 +470,7 @@ void RegisterCalendarApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "calendar",
         .title = "Calendar",
-        .icon = FONT_AWESOME_CALENDAR,
+        .icon = ICON_CALENDAR,
         .category = PhoneAppCategory::kTools,
         .capabilities = PhoneCapability::kNone,
         .show_on_home = true,

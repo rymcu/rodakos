@@ -222,7 +222,7 @@ void FileManagerApp::CreateUi() {
     lv_obj_set_style_bg_opa(refresh_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(refresh_btn, 6, 0);
 
-    auto* refresh_icon = CreateText(refresh_btn, FONT_AWESOME_ARROWS_ROTATE, PhoneIconFont(),
+    auto* refresh_icon = CreateText(refresh_btn, ICON_REFRESH, PhoneIconFont(),
                                     rodakos_theme_primary());
     lv_obj_center(refresh_icon);
     lv_obj_add_event_cb(refresh_btn, [](lv_event_t* e) {
@@ -319,7 +319,7 @@ void FileManagerApp::RebuildList() {
         lv_obj_align(meta, LV_ALIGN_BOTTOM_LEFT, 48, 0);
 
         auto* arrow = CreateText(item,
-                                 entry.is_directory ? FONT_AWESOME_ANGLE_RIGHT : FONT_AWESOME_CIRCLE_INFO,
+                                 entry.is_directory ? ICON_CHEVRON_RIGHT : ICON_INFO,
                                  PhoneIconFont(), rodakos_theme_text_tertiary());
         lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
 
@@ -602,8 +602,9 @@ void RegisterFileManagerApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "files",
         .title = "Files",
-        .icon = FONT_AWESOME_SD_CARD,
+        .icon = ICON_FOLDER,
         .category = PhoneAppCategory::kTools,
+        .icon_tint = PhoneAppIconTint::kNeutral,
         .capabilities = PhoneCapability::kStorage,
         .show_on_home = true,
         .aliases = {"file", "files", "manager", "sd", "文件", "文件管理"},

@@ -38,7 +38,7 @@ void SettingsApp::CreateSystemShellPage() {
     const PhoneShellPreferences preferences = context_->navigation().GetShellPreferences();
 
     auto* lock_card = CreateSettingCard(system_shell_body_, 8, 62);
-    CreateSettingIcon(lock_card, FONT_AWESOME_LOCK);
+    CreateSettingIcon(lock_card, ICON_LOCK);
     auto* lock_title = CreateSettingLabel(lock_card, "Lock after startup");
     lv_obj_align(lock_title, LV_ALIGN_LEFT_MID, 28, 0);
 
@@ -59,7 +59,7 @@ void SettingsApp::CreateSystemShellPage() {
     }, LV_EVENT_VALUE_CHANGED, this);
 
     auto* gesture_card = CreateSettingCard(system_shell_body_, 80, 62);
-    CreateSettingIcon(gesture_card, FONT_AWESOME_ARROW_DOWN);
+    CreateSettingIcon(gesture_card, ICON_ARROW_DOWN);
     auto* gesture_title = CreateSettingLabel(gesture_card, "Control Center swipe");
     lv_obj_align(gesture_title, LV_ALIGN_LEFT_MID, 28, 0);
 

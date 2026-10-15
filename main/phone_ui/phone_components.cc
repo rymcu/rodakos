@@ -71,7 +71,7 @@ lv_obj_t* CreateAppHeader(lv_obj_t* parent,
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* back_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_ARROW_LEFT);
+    auto* back_btn = RodakosCreateHeaderIconButton(header, ICON_ARROW_LEFT);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
     if (back_cb != nullptr) {
         lv_obj_add_event_cb(back_btn, back_cb, LV_EVENT_CLICKED, user_data);
@@ -83,7 +83,7 @@ lv_obj_t* CreateAppHeader(lv_obj_t* parent,
     lv_obj_set_style_text_font(label, &phone_font_18, 0);
     lv_obj_center(label);
 
-    auto* home_btn = RodakosCreateHeaderIconButton(header, FONT_AWESOME_HOUSE);
+    auto* home_btn = RodakosCreateHeaderIconButton(header, ICON_HOME);
     lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     if (home_cb != nullptr) {
         lv_obj_add_event_cb(home_btn, home_cb, LV_EVENT_CLICKED, user_data);

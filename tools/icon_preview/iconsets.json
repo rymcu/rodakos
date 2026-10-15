@@ -1,0 +1,124 @@
+{
+  "size": 30,
+  "bpp": 4,
+  "packages": {
+    "phosphor": {"npm": "@phosphor-icons/web", "version": "2.1.2", "license": "MIT"},
+    "material-symbols": {"npm": "material-symbols", "version": "0.48.0", "license": "Apache-2.0"},
+    "carbon": {"npm": "@iconify-json/carbon", "version": "1.2.28", "license": "Apache-2.0"},
+    "ion": {"npm": "@iconify-json/ion", "version": "1.2.7", "license": "MIT"}
+  },
+  "apps": ["settings", "system", "music", "camera", "recorder", "calendar", "gyro",
+           "assistant", "smart", "clock", "photos", "wol", "files"],
+  "sets": {
+    "current": {
+      "label": "Production icons (components/rodakos_fonts)",
+      "source": "production",
+      "glyphs": {
+        "settings": "SETTINGS",
+        "system": "INFO",
+        "music": "MUSIC",
+        "camera": "CAMERA",
+        "recorder": "MICROPHONE",
+        "calendar": "CALENDAR",
+        "gyro": "COMPASS",
+        "assistant": "ASSISTANT",
+        "smart": "LIGHT",
+        "clock": "CLOCK",
+        "photos": "IMAGE",
+        "wol": "POWER",
+        "files": "FOLDER"
+      }
+    },
+    "ph_fill": {
+      "label": "Phosphor Fill",
+      "source": {"package": "phosphor", "file": "src/fill/Phosphor-Fill.ttf"},
+      "glyphs": {
+        "settings": "e270", "system": "e2ce", "music": "e340", "camera": "e10e",
+        "recorder": "e326", "calendar": "e10a", "gyro": "e1c8", "assistant": "e762",
+        "smart": "e2dc", "clock": "e19a", "photos": "e2ca", "wol": "e3da", "files": "e25a"
+      }
+    },
+    "ph_bold": {
+      "label": "Phosphor Bold",
+      "source": {"package": "phosphor", "file": "src/bold/Phosphor-Bold.ttf"},
+      "glyphs": {
+        "settings": "e270", "system": "e2ce", "music": "e340", "camera": "e10e",
+        "recorder": "e326", "calendar": "e10a", "gyro": "e1c8", "assistant": "e762",
+        "smart": "e2dc", "clock": "e19a", "photos": "e2ca", "wol": "e3da", "files": "e25a"
+      }
+    },
+    "ms_fill_400": {
+      "label": "Material Symbols Rounded Fill, weight 400",
+      "source": {"package": "material-symbols", "file": "material-symbols-rounded.woff2",
+                 "axes": {"FILL": 1, "GRAD": 0, "opsz": 24, "wght": 400}},
+      "glyphs": {
+        "settings": "e8b8", "system": "e88e", "music": "e3a1", "camera": "e3b0",
+        "recorder": "e029", "calendar": "ebcc", "gyro": "e87a", "assistant": "f06c",
+        "smart": "e0f0", "clock": "e192", "photos": "e251", "wol": "e8ac", "files": "e2c7"
+      }
+    },
+    "ms_fill_600": {
+      "label": "Material Symbols Rounded Fill, weight 600",
+      "source": {"package": "material-symbols", "file": "material-symbols-rounded.woff2",
+                 "axes": {"FILL": 1, "GRAD": 0, "opsz": 24, "wght": 600}},
+      "glyphs": {
+        "settings": "e8b8", "system": "e88e", "music": "e3a1", "camera": "e3b0",
+        "recorder": "e029", "calendar": "ebcc", "gyro": "e87a", "assistant": "f06c",
+        "smart": "e0f0", "clock": "e192", "photos": "e251", "wol": "e8ac", "files": "e2c7"
+      }
+    },
+    "carbon": {
+      "label": "Carbon",
+      "source": {"package": "carbon", "iconify": true},
+      "glyphs": {
+        "settings": "settings", "system": "information", "music": "music", "camera": "camera",
+        "recorder": "microphone", "calendar": "calendar", "gyro": "compass", "assistant": "bot",
+        "smart": "idea", "clock": "time", "photos": "image", "wol": "power", "files": "folder"
+      }
+    },
+    "carbon_mixed": {
+      "label": "Carbon, filled where available",
+      "source": {"package": "carbon", "iconify": true},
+      "glyphs": {
+        "settings": "settings", "system": "information-filled", "music": "music",
+        "camera": "camera", "recorder": "microphone-filled", "calendar": "calendar",
+        "gyro": "compass", "assistant": "bot", "smart": "light-filled", "clock": "time-filled",
+        "photos": "image", "wol": "power", "files": "folder"
+      }
+    },
+    "ion_outline": {
+      "label": "Ionicons outline",
+      "source": {"package": "ion", "iconify": true},
+      "glyphs": {
+        "settings": "settings-outline", "system": "information-circle-outline",
+        "music": "musical-notes-outline", "camera": "camera-outline", "recorder": "mic-outline",
+        "calendar": "calendar-number-outline", "gyro": "compass-outline",
+        "assistant": "chatbubble-ellipses-outline", "smart": "bulb-outline",
+        "clock": "time-outline", "photos": "image-outline", "wol": "power-outline",
+        "files": "folder-outline"
+      }
+    },
+    "ion_outline_48": {
+      "label": "Ionicons outline, stroke 48 of 512",
+      "source": {"package": "ion", "iconify": true, "stroke_width": 48},
+      "glyphs": {
+        "settings": "settings-outline", "system": "information-circle-outline",
+        "music": "musical-notes-outline", "camera": "camera-outline", "recorder": "mic-outline",
+        "calendar": "calendar-number-outline", "gyro": "compass-outline",
+        "assistant": "chatbubble-ellipses-outline", "smart": "bulb-outline",
+        "clock": "time-outline", "photos": "image-outline", "wol": "power-outline",
+        "files": "folder-outline"
+      }
+    },
+    "ion": {
+      "label": "Ionicons (filled)",
+      "source": {"package": "ion", "iconify": true},
+      "glyphs": {
+        "settings": "settings", "system": "information-circle", "music": "musical-notes",
+        "camera": "camera", "recorder": "mic", "calendar": "calendar-clear", "gyro": "compass",
+        "assistant": "chatbubble-ellipses", "smart": "bulb", "clock": "time", "photos": "image",
+        "wol": "power", "files": "folder"
+      }
+    }
+  }
+}

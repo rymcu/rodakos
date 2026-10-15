@@ -31,8 +31,9 @@ void RegisterHomeHardwareTestPopulation(PhoneAppRegistry& registry) {
         registry.Register(PhoneAppDescriptor{
             .id = id,
             .title = title,
-            .icon = FONT_AWESOME_CIRCLE_INFO,
+            .icon = ICON_INFO,
             .category = PhoneAppCategory::kTools,
+            .icon_tint = PhoneAppIconTint::kNeutral,
             .capabilities = PhoneCapability::kNetwork,
             .show_on_home = true,
             .aliases = {},

@@ -69,7 +69,7 @@ lv_obj_t* CreateCaptureButton(lv_obj_t* parent) {
     lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* icon = lv_label_create(button);
-    lv_label_set_text(icon, FONT_AWESOME_CAMERA);
+    lv_label_set_text(icon, ICON_CAMERA);
     lv_obj_set_style_text_font(icon, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(icon, lv_color_white(), 0);
     lv_obj_center(icon);
@@ -640,7 +640,7 @@ void RegisterCameraApp(PhoneAppRegistry& registry) {
     PhoneAppDescriptor desc;
     desc.id = "camera";
     desc.title = "Camera";
-    desc.icon = FONT_AWESOME_CAMERA;
+    desc.icon = ICON_CAMERA;
     desc.category = PhoneAppCategory::kMedia;
     desc.capabilities = PhoneCapability::kCamera | PhoneCapability::kStorage;
     desc.show_on_home = true;

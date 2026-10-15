@@ -3,8 +3,8 @@
 // RodakOS-owned 字体子集（每个字体是独立的 .c 文件，只有被引用的
 // 字体才会被链接进固件，未引用的不会占用 flash）。
 LV_FONT_DECLARE(font_puhui_16_4);    // 中文 / CJK
-LV_FONT_DECLARE(font_awesome_20_4);  // 图标（状态栏 / 列表 / 文本内联）
-LV_FONT_DECLARE(font_awesome_30_4);  // 图标（桌面大图标）
+LV_FONT_DECLARE(rodakos_icons_20_4);  // 图标（状态栏 / 列表 / 文本内联）
+LV_FONT_DECLARE(rodakos_icons_30_4);  // 图标（桌面大图标）
 LV_FONT_DECLARE(font_edix_36_4);     // EDIX 启动字标
 
 lv_font_t phone_font_12;
@@ -14,7 +14,7 @@ lv_font_t phone_font_logo;
 
 namespace {
 
-// Font Awesome 20px 的可写副本，其回退指向普惠体，
+// 20px 图标字体的可写副本，其回退指向普惠体，
 // 作为文本组合字体的中间环（图标 -> 中文）。
 lv_font_t s_icon_20;
 bool s_initialized = false;
@@ -35,9 +35,9 @@ void PhoneFontsInit(void) {
     }
 
     // 图标字体回退到中文：图标 -> 中文。
-    MakeComposite(&s_icon_20, &font_awesome_20_4, &font_puhui_16_4);
+    MakeComposite(&s_icon_20, &rodakos_icons_20_4, &font_puhui_16_4);
 
-    // 文本字体回退链：Montserrat（拉丁） -> Font Awesome（图标） -> 普惠体（中文）。
+    // 文本字体回退链：Montserrat（拉丁） -> 图标 -> 普惠体（中文）。
     MakeComposite(&phone_font_12, &lv_font_montserrat_12, &s_icon_20);
     MakeComposite(&phone_font_14, &lv_font_montserrat_14, &s_icon_20);
     MakeComposite(&phone_font_18, &lv_font_montserrat_18, &s_icon_20);
@@ -51,5 +51,5 @@ const lv_font_t* PhoneIconFont(void) {
 }
 
 const lv_font_t* PhoneIconFontLarge(void) {
-    return &font_awesome_30_4;
+    return &rodakos_icons_30_4;
 }

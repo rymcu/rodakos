@@ -32,16 +32,16 @@ static const rodakos_theme_t theme_dark = {
     .divider = 0x262626,      // 分割线
     .overlay = 0x000000,      // 遮罩（配合透明度）
 
-    // 图标色板（柔和的彩色）
+    // 图标色板，顺序见 RODAKOS_ICON_SLOT_*
     .icon_palette = {
-        0x5E7DAA,  // mist blue
-        0x6D8C68,  // sage
-        0xA07869,  // clay
-        0x7F6FA7,  // lavender
-        0xB08A55,  // brass
-        0x5F9A9B,  // teal
-        0xA0667A,  // rose
-        0x6F86A1,  // steel
+        0x5A6E8C,  // system, slate
+        0xD0644E,  // media, coral
+        0x3D7DD3,  // tools, blue
+        0x3A9A5F,  // games, green
+        0x7A7068,  // neutral, warm gray
+        0xB87A22,  // warm, amber
+        0x23919F,  // cool, teal
+        0xC23A6E,  // alert, rose
     },
 };
 
@@ -69,8 +69,8 @@ static const rodakos_theme_t theme_light = {
     .overlay = 0x000000,
 
     .icon_palette = {
-        0x5E7DAA, 0x6D8C68, 0xA07869, 0x7F6FA7,
-        0xB08A55, 0x5F9A9B, 0xA0667A, 0x6F86A1,
+        0x52637E, 0xC4553E, 0x2F6CC2, 0x2E8550,
+        0x6E645C, 0xA86C17, 0x1C7F8C, 0xB2305F,
     },
 };
 
@@ -98,8 +98,8 @@ static const rodakos_theme_t theme_blue = {
     .overlay = 0x0D1B2A,
 
     .icon_palette = {
-        0x5E7DAA, 0x6D8C68, 0xA07869, 0x7F6FA7,
-        0xB08A55, 0x5F9A9B, 0xA0667A, 0x6F86A1,
+        0x667A98, 0xD46A52, 0x4A8BE6, 0x3E9E63,
+        0x857A71, 0xBC7E26, 0x2496A0, 0xC8406F,
     },
 };
 
@@ -126,9 +126,10 @@ static const rodakos_theme_t theme_green = {
     .divider = 0x1F3823,
     .overlay = 0x1B2A1F,
 
+    // Games 偏青绿、Cool 偏蓝青，避免与绿色背景混在一起
     .icon_palette = {
-        0x5E7DAA, 0x6D8C68, 0xA07869, 0x7F6FA7,
-        0xB08A55, 0x5F9A9B, 0xA0667A, 0x6F86A1,
+        0x62759A, 0xD2674F, 0x4082D8, 0x2F9C86,
+        0x847970, 0xBA7C24, 0x2A8FB0, 0xC63E6E,
     },
 };
 
@@ -269,10 +270,10 @@ lv_color_t rodakos_theme_overlay(void) {
 }
 
 lv_color_t rodakos_theme_icon_color(int index) {
-    if (index < 0 || index >= 8) {
-        index = 0;
+    if (index < 0 || index >= RODAKOS_ICON_SLOT_COUNT) {
+        index = RODAKOS_ICON_SLOT_SYSTEM;
     }
-    return lv_color_hex(current_theme->icon_palette[index % 8]);
+    return lv_color_hex(current_theme->icon_palette[index]);
 }
 
 void rodakos_theme_apply_to_lvgl(void) {

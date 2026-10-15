@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <memory>
@@ -313,6 +315,177 @@ void EnterArrange(HomeFixture& fixture) {
     RODAK_CHECK(fixture.navigation.launches.empty());
 }
 
+// The module-level HomePageSession keeps the page that an earlier test left active.
+void ShowFirstHomePage(HomeApp& home) {
+    lv_obj_update_layout(home.tileview_);
+    lv_tileview_set_tile(home.tileview_, home.page_tiles_[0], LV_ANIM_OFF);
+    RODAK_CHECK_EQ(lv_obj_send_event(home.tileview_, LV_EVENT_SCROLL_END, nullptr), LV_RESULT_OK);
+    Pump(10);
+    RODAK_CHECK_EQ(home.ActivePageIndex(), 0U);
+}
+
+void PressAt(int32_t x, int32_t y) {
+    lv_test_mouse_release();
+    lv_test_wait(50);
+    lv_test_mouse_move_to(x, y);
+    lv_test_mouse_press();
+    lv_test_wait(50);
+}
+
+struct IconAppSpec {
+    const char* id;
+    PhoneAppCategory category;
+    PhoneAppIconTint tint;
+};
+
+// Built-in Home population with production categories and tints, in Registry order.
+constexpr std::array<IconAppSpec, 13> kBuiltInIconApps = {{
+    {"settings", PhoneAppCategory::kSystem, PhoneAppIconTint::kDefault},
+    {"system", PhoneAppCategory::kSystem, PhoneAppIconTint::kDefault},
+    {"music", PhoneAppCategory::kMedia, PhoneAppIconTint::kDefault},
+    {"camera", PhoneAppCategory::kMedia, PhoneAppIconTint::kDefault},
+    {"recorder", PhoneAppCategory::kMedia, PhoneAppIconTint::kDefault},
+    {"calendar", PhoneAppCategory::kTools, PhoneAppIconTint::kDefault},
+    {"gyro", PhoneAppCategory::kTools, PhoneAppIconTint::kDefault},
+    {"assistant", PhoneAppCategory::kTools, PhoneAppIconTint::kCool},
+    {"smart", PhoneAppCategory::kTools, PhoneAppIconTint::kCool},
+    {"clock", PhoneAppCategory::kTools, PhoneAppIconTint::kWarm},
+    {"photos", PhoneAppCategory::kMedia, PhoneAppIconTint::kWarm},
+    {"wol", PhoneAppCategory::kTools, PhoneAppIconTint::kAlert},
+    {"files", PhoneAppCategory::kTools, PhoneAppIconTint::kNeutral},
+}};
+
+struct IconFixture {
+    explicit IconFixture(std::string_view layout_json = {})
+        : ui(320, 240), context(ui, navigation, registry, services, settings) {
+        if (!layout_json.empty()) {
+            rodakos_home_ui_test::SetCommittedSetting("home", "layout", std::string(layout_json));
+        }
+        for (const auto& spec : kBuiltInIconApps) {
+            PhoneAppDescriptor descriptor;
+            descriptor.id = spec.id;
+            descriptor.title = spec.id;
+            descriptor.icon = "*";
+            descriptor.category = spec.category;
+            descriptor.icon_tint = spec.tint;
+            registry.Register(std::move(descriptor));
+        }
+        RODAK_CHECK(home.OnCreate(context));
+        ShowFirstHomePage(home);
+    }
+
+    ~IconFixture() {
+        home.OnDestroy();
+        Pump();
+        lv_obj_clean(lv_screen_active());
+        Pump();
+    }
+
+    PhoneUi ui;
+    PhoneNavigation navigation;
+    PhoneAppRegistry registry;
+    PhoneServices services;
+    Settings settings;
+    PhoneAppContext context;
+    HomeApp home;
+};
+
+size_t BuiltInIconIndex(std::string_view id) {
+    for (size_t index = 0; index < kBuiltInIconApps.size(); ++index) {
+        if (id == kBuiltInIconApps[index].id) {
+            return index;
+        }
+    }
+    RODAK_CHECK(false);
+    return 0;
+}
+
+// Shows the page holding a default-layout built-in app and returns its desktop tile.
+lv_obj_t* BuiltInIconTile(HomeApp& home, std::string_view id) {
+    const size_t index = BuiltInIconIndex(id);
+    const size_t page = index / rodakos::kHomeAppsPerPage;
+    if (home.ActivePageIndex() != page) {
+        lv_tileview_set_tile(home.tileview_, home.page_tiles_[page], LV_ANIM_OFF);
+        RODAK_CHECK_EQ(lv_obj_send_event(home.tileview_, LV_EVENT_SCROLL_END, nullptr),
+                       LV_RESULT_OK);
+        Pump(10);
+        RODAK_CHECK_EQ(home.ActivePageIndex(), page);
+    }
+    return HomeButton(home, static_cast<uint32_t>(index % rodakos::kHomeAppsPerPage));
+}
+
+lv_area_t DesktopIconArea(lv_obj_t* button) {
+    lv_obj_update_layout(lv_screen_active());
+    lv_area_t area;
+    lv_obj_get_coords(button, &area);
+    const int32_t left = area.x1 + (lv_obj_get_width(button) - 46) / 2;
+    return {left, area.y1, left + 45, area.y1 + 45};
+}
+
+lv_color_t PixelColor(int32_t x, int32_t y) {
+    return lv_color_hex(rodakos_home_ui_test::FramebufferPixel(x, y));
+}
+
+int32_t ChannelSum(lv_color_t color) {
+    return color.red + color.green + color.blue;
+}
+
+bool ColorNear(lv_color_t actual, lv_color_t expected, int32_t tolerance) {
+    return std::abs(actual.red - expected.red) <= tolerance &&
+           std::abs(actual.green - expected.green) <= tolerance &&
+           std::abs(actual.blue - expected.blue) <= tolerance;
+}
+
+int32_t PaintedRowWidth(int32_t y, int32_t x1, int32_t x2, lv_color_t background) {
+    int32_t width = 0;
+    for (int32_t x = x1; x <= x2; ++x) {
+        if (!ColorNear(PixelColor(x, y), background, 2)) {
+            ++width;
+        }
+    }
+    return width;
+}
+
+lv_color_t DesktopIconCenter(lv_obj_t* button) {
+    const lv_area_t icon = DesktopIconArea(button);
+    // Sample left of center: the host glyph font draws into the middle of the tile.
+    return PixelColor(icon.x1 + 6, (icon.y1 + icon.y2) / 2);
+}
+
+lv_obj_t* FirstChildOfClass(lv_obj_t* parent, const lv_obj_class_t* object_class) {
+    const uint32_t count = lv_obj_get_child_count(parent);
+    for (uint32_t index = 0; index < count; ++index) {
+        lv_obj_t* child = lv_obj_get_child(parent, index);
+        if (lv_obj_check_type(child, object_class)) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+// Evaluates the color the RGB565 panel shows: LVGL truncates red/blue to 5 bits and green to 6.
+double RelativeLuminance(uint32_t rgb) {
+    const auto channel = [](uint32_t value, uint32_t mask) {
+        const double normalized = static_cast<double>(value & mask) / 255.0;
+        return normalized <= 0.04045 ? normalized / 12.92
+                                     : std::pow((normalized + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel((rgb >> 16) & 0xFFU, 0xF8U) +
+           0.7152 * channel((rgb >> 8) & 0xFFU, 0xFCU) +
+           0.0722 * channel(rgb & 0xFFU, 0xF8U);
+}
+
+double ContrastRatio(uint32_t first, uint32_t second) {
+    const double a = RelativeLuminance(first);
+    const double b = RelativeLuminance(second);
+    return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
+}
+
+uint32_t ColorHex(lv_color_t color) {
+    return (static_cast<uint32_t>(color.red) << 16) |
+           (static_cast<uint32_t>(color.green) << 8) | color.blue;
+}
+
 }  // namespace
 
 RODAK_TEST("long press enters Arrange through the LVGL pointer input") {
@@ -339,7 +512,7 @@ RODAK_TEST("status bar displays the current battery level") {
 
     RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_label_)), "86%");
     RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_icon_)),
-                   FONT_AWESOME_BATTERY_FULL);
+                   ICON_BATTERY_FULL);
 }
 
 RODAK_TEST("tap slop launches but one-page drags over an app do not") {
@@ -872,4 +1045,313 @@ RODAK_TEST("failed neighbor page allocation preserves active page and allows ret
     RODAK_CHECK(fixture.home.RefreshHomePageWindow(1));
     RODAK_CHECK(fixture.home.page_populated_[2]);
     RODAK_CHECK_EQ(lv_obj_get_child_count(fixture.home.page_tiles_[2]), 1U);
+}
+
+RODAK_TEST("desktop icon is a rounded vertical gradient in its slot color") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_init(RODAKOS_THEME_DARK);
+    {
+        IconFixture fixture;
+        lv_obj_t* button = BuiltInIconTile(fixture.home, "calendar");
+        const lv_area_t icon = DesktopIconArea(button);
+        const lv_color_t top = rodakos_theme_icon_color(RODAKOS_ICON_SLOT_TOOLS);
+        const lv_color_t bottom = lv_color_darken(top, 31);
+        const lv_color_t background = rodakos_theme_bg_primary();
+        const int32_t sample_x = icon.x1 + 6;
+
+        RODAK_CHECK(ColorNear(PixelColor(icon.x1, icon.y1), background, 2));
+        RODAK_CHECK(ColorNear(PixelColor(icon.x2, icon.y2), background, 2));
+        // Radius 14, not a circle: the row 4px from the top is much wider than a circle's.
+        RODAK_CHECK(PaintedRowWidth(icon.y1 + 4, icon.x1, icon.x2, background) >= 36);
+
+        const lv_color_t near_top = PixelColor(sample_x, icon.y1 + 4);
+        const lv_color_t near_bottom = PixelColor(sample_x, icon.y2 - 4);
+        RODAK_CHECK(ChannelSum(near_top) > ChannelSum(near_bottom));
+        RODAK_CHECK(ColorNear(near_top, top, 6));
+        RODAK_CHECK(ColorNear(PixelColor(sample_x, (icon.y1 + icon.y2) / 2),
+                              lv_color_mix(bottom, top, 128), 6));
+        // The corner curve covers x1 + 6 on the last row, so read the bottom stop at the
+        // horizontal center, which the host glyph does not reach.
+        RODAK_CHECK(ColorNear(PixelColor((icon.x1 + icon.x2) / 2, icon.y2), bottom, 3));
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("icon colors follow category and tint instead of the app id") {
+    ResetScreen();
+    ResetSettings();
+    IconFixture fixture;
+    const auto center = [&](const char* id) {
+        return DesktopIconCenter(BuiltInIconTile(fixture.home, id));
+    };
+
+    RODAK_CHECK(lv_color_eq(center("settings"), center("system")));
+    RODAK_CHECK(lv_color_eq(center("music"), center("camera")));
+    RODAK_CHECK(lv_color_eq(center("music"), center("recorder")));
+    RODAK_CHECK(lv_color_eq(center("calendar"), center("gyro")));
+    RODAK_CHECK(lv_color_eq(center("assistant"), center("smart")));
+    RODAK_CHECK(lv_color_eq(center("clock"), center("photos")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("assistant"), center("calendar")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("photos"), center("music")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("wol"), center("calendar")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("files"), center("calendar")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("settings"), center("files")));
+
+    const auto top_of = [&](const char* id) {
+        const lv_area_t icon = DesktopIconArea(BuiltInIconTile(fixture.home, id));
+        return PixelColor((icon.x1 + icon.x2) / 2, icon.y1);
+    };
+    const std::array<std::pair<const char*, int>, 8> expected_slots = {{
+        {"settings", RODAKOS_ICON_SLOT_SYSTEM},
+        {"music", RODAKOS_ICON_SLOT_MEDIA},
+        {"calendar", RODAKOS_ICON_SLOT_TOOLS},
+        {"assistant", RODAKOS_ICON_SLOT_COOL},
+        {"clock", RODAKOS_ICON_SLOT_WARM},
+        {"photos", RODAKOS_ICON_SLOT_WARM},
+        {"wol", RODAKOS_ICON_SLOT_ALERT},
+        {"files", RODAKOS_ICON_SLOT_NEUTRAL},
+    }};
+    for (const auto& [id, slot] : expected_slots) {
+        RODAK_CHECK(ColorNear(top_of(id), rodakos_theme_icon_color(slot), 4));
+    }
+}
+
+RODAK_TEST("apps with the same category and no tint share one icon color") {
+    ResetScreen();
+    ResetSettings();
+    // HomeFixture registers default Tools descriptors with distinct ids; the old FNV hash
+    // spread app000..app003 across palette entries.
+    HomeFixture fixture(4);
+    ShowFirstHomePage(fixture.home);
+    const lv_color_t first = DesktopIconCenter(HomeButton(fixture.home, 0));
+    for (uint32_t index = 1; index < 4; ++index) {
+        RODAK_CHECK(lv_color_eq(DesktopIconCenter(HomeButton(fixture.home, index)), first));
+    }
+}
+
+RODAK_TEST("pressing a desktop icon insets and darkens it until release") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_init(RODAKOS_THEME_DARK);
+    {
+        IconFixture fixture;
+        lv_obj_t* button = BuiltInIconTile(fixture.home, "music");
+        const lv_area_t icon = DesktopIconArea(button);
+        const lv_color_t background = rodakos_theme_bg_primary();
+        const int32_t middle_y = (icon.y1 + icon.y2) / 2;
+        const lv_color_t idle_center = DesktopIconCenter(button);
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 46);
+
+        PressAt((icon.x1 + icon.x2) / 2, middle_y);
+        RODAK_CHECK(lv_obj_has_state(button, LV_STATE_PRESSED));
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 44);
+        const lv_color_t pressed_center = DesktopIconCenter(button);
+        RODAK_CHECK(ChannelSum(pressed_center) < ChannelSum(idle_center));
+
+        lv_test_mouse_release();
+        Pump(50);
+        RODAK_CHECK_FALSE(lv_obj_has_state(button, LV_STATE_PRESSED));
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 46);
+        RODAK_CHECK(lv_color_eq(DesktopIconCenter(button), idle_center));
+        RODAK_CHECK_EQ(fixture.navigation.launches.size(), 1U);
+        RODAK_CHECK_EQ(fixture.navigation.launches.front(), std::string("music"));
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("a press that becomes a page swipe ends with the idle icon") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_init(RODAKOS_THEME_DARK);
+    {
+        HomeFixture fixture(24);
+        ShowFirstHomePage(fixture.home);
+        lv_obj_t* button = HomeButton(fixture.home, 2);
+        const lv_area_t icon = DesktopIconArea(button);
+        const lv_color_t background = rodakos_theme_bg_primary();
+        const int32_t middle_y = (icon.y1 + icon.y2) / 2;
+        const lv_color_t idle_center = DesktopIconCenter(button);
+
+        Swipe(button, -160);
+        Pump(1200);
+        RODAK_CHECK_EQ(fixture.home.ActivePageIndex(), 1U);
+        Swipe(HomeButton(fixture.home, 2), 160);
+        Pump(1200);
+        RODAK_CHECK_EQ(fixture.home.ActivePageIndex(), 0U);
+        RODAK_CHECK(fixture.navigation.launches.empty());
+
+        button = HomeButton(fixture.home, 2);
+        RODAK_CHECK_FALSE(lv_obj_has_state(button, LV_STATE_PRESSED));
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 46);
+        RODAK_CHECK(lv_color_eq(DesktopIconCenter(button), idle_center));
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("an input reset during a press restores the idle icon") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_init(RODAKOS_THEME_DARK);
+    {
+        HomeFixture fixture(4);
+        ShowFirstHomePage(fixture.home);
+        lv_obj_t* button = HomeButton(fixture.home, 2);
+        const lv_area_t icon = DesktopIconArea(button);
+        const lv_color_t background = rodakos_theme_bg_primary();
+        const int32_t middle_y = (icon.y1 + icon.y2) / 2;
+
+        PressAt((icon.x1 + icon.x2) / 2, middle_y);
+        RODAK_CHECK(lv_obj_has_state(button, LV_STATE_PRESSED));
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 44);
+
+        lv_indev_reset(nullptr, nullptr);
+        lv_refr_now(nullptr);
+        RODAK_CHECK_FALSE(lv_obj_has_state(button, LV_STATE_PRESSED));
+        RODAK_CHECK_EQ(PaintedRowWidth(middle_y, icon.x1 - 2, icon.x2 + 2, background), 46);
+        lv_test_mouse_release();
+        Pump(50);
+        RODAK_CHECK(fixture.navigation.launches.empty());
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("folder previews, collection rows and Arrange header use slot colors") {
+    ResetScreen();
+    ResetSettings();
+    IconFixture fixture(
+        R"({"v":1,"rev":0,"items":[{"type":"folder","id":"f_0000000a","name":"Mix",)"
+        R"("apps":["settings","music","assistant","files"]},{"type":"app","id":"calendar"}]})");
+    RODAK_CHECK_EQ(fixture.home.layout_.items.front().type, rodakos::HomeLayoutItemType::kFolder);
+
+    lv_obj_t* folder_tile = HomeButton(fixture.home, 0);
+    lv_obj_t* folder_icon = FirstChildOfClass(folder_tile, &lv_obj_class);
+    RODAK_CHECK(folder_icon != nullptr);
+    RODAK_CHECK_EQ(lv_obj_get_style_radius(folder_icon, 0), 14);
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(folder_icon, 0), rodakos_theme_bg_tertiary()));
+    RODAK_CHECK_EQ(lv_obj_get_child_count(folder_icon), 4U);
+    const std::array<int, 4> preview_slots = {
+        RODAKOS_ICON_SLOT_SYSTEM, RODAKOS_ICON_SLOT_MEDIA,
+        RODAKOS_ICON_SLOT_COOL, RODAKOS_ICON_SLOT_NEUTRAL};
+    for (uint32_t index = 0; index < 4; ++index) {
+        lv_obj_t* preview = lv_obj_get_child(folder_icon, index);
+        RODAK_CHECK_EQ(lv_obj_get_style_radius(preview, 0), 5);
+        RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(preview, 0),
+                                rodakos_theme_icon_color(preview_slots[index])));
+        RODAK_CHECK_EQ(lv_obj_get_style_bg_grad_dir(preview, 0), LV_GRAD_DIR_NONE);
+    }
+
+    Click(folder_tile);
+    RODAK_CHECK_EQ(fixture.home.collection_state_.kind, HomeApp::CollectionKind::kFolder);
+    lv_obj_t* music_row = lv_obj_get_parent(FindLabel(fixture.home.collection_view_, "music"));
+    RODAK_CHECK(music_row != nullptr);
+    lv_obj_t* row_icon = lv_obj_get_child(music_row, 0);
+    RODAK_CHECK_EQ(lv_obj_get_width(row_icon), 28);
+    RODAK_CHECK_EQ(lv_obj_get_style_radius(row_icon, 0), 8);
+    const lv_color_t media = rodakos_theme_icon_color(RODAKOS_ICON_SLOT_MEDIA);
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(row_icon, 0), media));
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_grad_color(row_icon, 0), lv_color_darken(media, 31)));
+    RODAK_CHECK_EQ(lv_obj_get_style_bg_grad_dir(row_icon, 0), LV_GRAD_DIR_VER);
+
+    LongPress(music_row);
+    RODAK_CHECK(fixture.home.HasEditingTarget());
+    lv_obj_t* header_icon = lv_obj_get_child(fixture.home.layout_editor_, 1);
+    RODAK_CHECK_EQ(lv_obj_get_width(header_icon), 40);
+    RODAK_CHECK_EQ(lv_obj_get_style_radius(header_icon, 0), 12);
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(header_icon, 0), media));
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_grad_color(header_icon, 0), lv_color_darken(media, 31)));
+    RODAK_CHECK_EQ(lv_obj_get_style_bg_grad_dir(header_icon, 0), LV_GRAD_DIR_VER);
+}
+
+RODAK_TEST("folder previews of unregistered apps fall back to the neutral slot") {
+    ResetScreen();
+    ResetSettings();
+    IconFixture fixture(
+        R"({"v":1,"rev":0,"items":[{"type":"folder","id":"f_0000000b","name":"Mix",)"
+        R"("apps":["settings","music"]}]})");
+    // Reconciliation drops unknown IDs, so exercise the lookup fallback through Arrange's
+    // draft, which can still reference an app that is no longer registered.
+    LongPress(HomeButton(fixture.home, 0));
+    RODAK_CHECK(fixture.home.HasEditingTarget());
+    fixture.home.draft_layout_.items.front().apps.push_back("removed_app");
+    fixture.home.CreateLayoutEditorUi();
+    Pump();
+    lv_obj_t* header_icon = lv_obj_get_child(fixture.home.layout_editor_, 1);
+    RODAK_CHECK_EQ(lv_obj_get_child_count(header_icon), 3U);
+    RODAK_CHECK_EQ(lv_obj_get_style_radius(lv_obj_get_child(header_icon, 0), 0), 3);
+    RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(lv_obj_get_child(header_icon, 2), 0),
+                            rodakos_theme_icon_color(RODAKOS_ICON_SLOT_NEUTRAL)));
+}
+
+RODAK_TEST("All Apps overflow tile uses the primary gradient and button foreground") {
+    ResetScreen();
+    ResetSettings();
+    const auto previous_theme = *rodakos_theme_get();
+    rodakos_theme_apply_preset_primary("dark", 0xF4F4A0);
+    {
+        HomeFixture fixture(97);
+        fixture.ui.SyncThemeName("dark");
+        RODAK_CHECK(fixture.home.OnThemeChanged(fixture.context));
+        lv_tileview_set_tile(fixture.home.tileview_, fixture.home.page_tiles_[7], LV_ANIM_OFF);
+        RODAK_CHECK_EQ(
+            lv_obj_send_event(fixture.home.tileview_, LV_EVENT_SCROLL_END, nullptr),
+            LV_RESULT_OK);
+        Pump(10);
+
+        lv_obj_t* label = FindLabel(fixture.home.page_tiles_[7], "All Apps");
+        RODAK_CHECK(label != nullptr);
+        lv_obj_t* overflow_icon = FirstChildOfClass(lv_obj_get_parent(label), &lv_obj_class);
+        RODAK_CHECK(overflow_icon != nullptr);
+        const lv_color_t primary = lv_color_hex(0xF4F4A0);
+        const lv_color_t foreground = fixture.ui.theme().accent_text;
+        RODAK_CHECK(lv_color_eq(foreground, lv_color_black()));
+        RODAK_CHECK_EQ(lv_obj_get_style_radius(overflow_icon, 0), 14);
+        RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_color(overflow_icon, 0), primary));
+        RODAK_CHECK(lv_color_eq(lv_obj_get_style_bg_grad_color(overflow_icon, 0),
+                                lv_color_darken(primary, 31)));
+        RODAK_CHECK_EQ(lv_obj_get_style_bg_grad_dir(overflow_icon, 0), LV_GRAD_DIR_VER);
+        RODAK_CHECK_EQ(lv_obj_get_child_count(overflow_icon), 2U);
+        for (uint32_t index = 0; index < 2; ++index) {
+            RODAK_CHECK(lv_color_eq(
+                lv_obj_get_style_text_color(lv_obj_get_child(overflow_icon, index), 0), foreground));
+        }
+    }
+    rodakos_theme_set_custom(&previous_theme);
+}
+
+RODAK_TEST("every preset palette keeps readable, distinct icon slots") {
+    const auto previous_theme = *rodakos_theme_get();
+    for (const char* preset : {"dark", "light", "blue", "green"}) {
+        rodakos_theme_init_from_name(preset);
+        const auto* theme = rodakos_theme_get();
+        const bool light = rodakos_theme_is_light_name(preset);
+        for (int slot = 0; slot < RODAKOS_ICON_SLOT_COUNT; ++slot) {
+            const uint32_t top = theme->icon_palette[slot];
+            const uint32_t bottom = ColorHex(lv_color_darken(lv_color_hex(top), 31));
+            RODAK_CHECK(ContrastRatio(0xFFFFFF, top) >= 3.0);
+            RODAK_CHECK(ContrastRatio(bottom, theme->bg_primary) >= (light ? 3.0 : 2.0));
+            for (int other = slot + 1; other < RODAKOS_ICON_SLOT_COUNT; ++other) {
+                const lv_color_t a = lv_color_hex(top);
+                const lv_color_t b = lv_color_hex(theme->icon_palette[other]);
+                const int32_t dr = a.red - b.red;
+                const int32_t dg = a.green - b.green;
+                const int32_t db = a.blue - b.blue;
+                RODAK_CHECK(dr * dr + dg * dg + db * db >= 40 * 40);
+            }
+        }
+        RODAK_CHECK(lv_color_eq(rodakos_theme_icon_color(-1),
+                                rodakos_theme_icon_color(RODAKOS_ICON_SLOT_SYSTEM)));
+        RODAK_CHECK(lv_color_eq(rodakos_theme_icon_color(RODAKOS_ICON_SLOT_COUNT),
+                                rodakos_theme_icon_color(RODAKOS_ICON_SLOT_SYSTEM)));
+
+        rodakos_theme_apply_preset_primary(preset, 0x123456);
+        for (int slot = 0; slot < RODAKOS_ICON_SLOT_COUNT; ++slot) {
+            RODAK_CHECK_EQ(rodakos_theme_get()->icon_palette[slot], theme->icon_palette[slot]);
+        }
+    }
+    rodakos_theme_set_custom(&previous_theme);
 }

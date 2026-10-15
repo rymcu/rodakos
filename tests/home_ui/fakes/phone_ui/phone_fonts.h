@@ -1,6 +1,6 @@
 #pragma once
 
-#include <font_awesome.h>
+#include <rodakos_icons.h>
 #include <lvgl.h>
 
 #ifdef __cplusplus

@@ -312,7 +312,7 @@ void RecorderApp::CreateUi() {
     lv_obj_set_style_pad_all(status_card, 0, 0);
     lv_obj_clear_flag(status_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* mic_icon = CreateText(status_card, FONT_AWESOME_MICROPHONE, PhoneIconFontLarge(),
+    auto* mic_icon = CreateText(status_card, ICON_MICROPHONE, PhoneIconFontLarge(),
                                 rodakos_theme_primary());
     lv_obj_align(mic_icon, LV_ALIGN_LEFT_MID, 14, 0);
 
@@ -342,7 +342,7 @@ void RecorderApp::CreateUi() {
     StyleRoundButton(record_button_, 48, rodakos_theme_primary());
     lv_obj_align(record_button_, LV_ALIGN_RIGHT_MID, -12, 0);
     record_icon_label_ = lv_label_create(record_button_);
-    lv_label_set_text(record_icon_label_, FONT_AWESOME_MICROPHONE);
+    lv_label_set_text(record_icon_label_, ICON_MICROPHONE);
     lv_obj_set_style_text_font(record_icon_label_, PhoneIconFont(), 0);
     lv_obj_set_style_text_color(record_icon_label_, lv_color_white(), 0);
     lv_obj_center(record_icon_label_);
@@ -353,7 +353,7 @@ void RecorderApp::CreateUi() {
     tone_button_ = lv_btn_create(root_);
     StyleRoundButton(tone_button_, 28, rodakos_theme_bg_tertiary());
     lv_obj_set_pos(tone_button_, 178, 120);
-    auto* tone_icon = CreateText(tone_button_, FONT_AWESOME_VOLUME_HIGH, PhoneIconFont(),
+    auto* tone_icon = CreateText(tone_button_, ICON_VOLUME, PhoneIconFont(),
                                  rodakos_theme_primary());
     lv_obj_center(tone_icon);
     lv_obj_add_event_cb(tone_button_, [](lv_event_t* e) {
@@ -471,7 +471,7 @@ void RecorderApp::RebuildRecordingList() {
         lv_label_set_long_mode(detail_label, LV_LABEL_LONG_DOT);
         lv_obj_align(detail_label, LV_ALIGN_TOP_LEFT, 12, 21);
 
-        auto* play_icon = CreateText(row, FONT_AWESOME_PLAY, PhoneIconFont(),
+        auto* play_icon = CreateText(row, ICON_PLAY, PhoneIconFont(),
                                      rodakos_theme_primary());
         lv_obj_align(play_icon, LV_ALIGN_RIGHT_MID, -13, 0);
 
@@ -641,7 +641,7 @@ void RecorderApp::UpdateRecordButton(bool recording) {
     lv_obj_set_style_bg_color(record_button_,
                               recording ? rodakos_theme_error() : rodakos_theme_primary(),
                               0);
-    lv_label_set_text(record_icon_label_, recording ? LV_SYMBOL_STOP : FONT_AWESOME_MICROPHONE);
+    lv_label_set_text(record_icon_label_, recording ? ICON_STOP : ICON_MICROPHONE);
     lv_obj_center(record_icon_label_);
 }
 
@@ -660,7 +660,7 @@ void RegisterRecorderApp(PhoneAppRegistry& registry) {
     registry.Register(PhoneAppDescriptor{
         .id = "recorder",
         .title = "Recorder",
-        .icon = FONT_AWESOME_MICROPHONE,
+        .icon = ICON_MICROPHONE,
         .category = PhoneAppCategory::kMedia,
         .capabilities = PhoneCapability::kStorage |
                         PhoneCapability::kAudioPlayback |

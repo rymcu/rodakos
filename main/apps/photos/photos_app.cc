@@ -593,14 +593,14 @@ void PhotosApp::CreateGridView() {
     lv_obj_set_style_pad_hor(title_bar, 12, 0);
     lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
 
-    auto* back_btn = RodakosCreateHeaderIconButton(title_bar, FONT_AWESOME_ARROW_LEFT);
+    auto* back_btn = RodakosCreateHeaderIconButton(title_bar, ICON_ARROW_LEFT);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->NavigateBack();
     }, LV_EVENT_CLICKED, this);
 
-    auto* home_btn = RodakosCreateHeaderIconButton(title_bar, FONT_AWESOME_HOUSE);
+    auto* home_btn = RodakosCreateHeaderIconButton(title_bar, ICON_HOME);
     lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
@@ -702,7 +702,7 @@ void PhotosApp::CreateFullScreenView() {
     lv_obj_set_style_pad_hor(top_bar, 12, 0);
     lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 0);
 
-    auto* close_btn = RodakosCreateHeaderIconButton(top_bar, FONT_AWESOME_ARROW_LEFT);
+    auto* close_btn = RodakosCreateHeaderIconButton(top_bar, ICON_ARROW_LEFT);
     lv_obj_align(close_btn, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_add_event_cb(close_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
@@ -717,7 +717,7 @@ void PhotosApp::CreateFullScreenView() {
     lv_obj_set_style_text_color(filename_label_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(filename_label_, &phone_font_14, 0);
     lv_obj_align(filename_label_, LV_ALIGN_CENTER, 0, 0);
-    preview_retry_button_ = RodakosCreateHeaderIconButton(top_bar, FONT_AWESOME_ARROWS_ROTATE);
+    preview_retry_button_ = RodakosCreateHeaderIconButton(top_bar, ICON_REFRESH);
     lv_obj_align(preview_retry_button_, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_event_cb(preview_retry_button_, [](lv_event_t* event) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(event));
@@ -743,21 +743,21 @@ void PhotosApp::CreateFullScreenView() {
     lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
 
     // 上一张按钮
-    auto* prev_btn = CreateRoundButton(controls, FONT_AWESOME_BACKWARD_STEP, false);
+    auto* prev_btn = CreateRoundButton(controls, ICON_SKIP_BACK, false);
     lv_obj_add_event_cb(prev_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->ShowPreviousPhoto();
     }, LV_EVENT_CLICKED, this);
 
     // 返回网格按钮（中间，主按钮）
-    auto* back_btn = CreateRoundButton(controls, FONT_AWESOME_IMAGE, true);
+    auto* back_btn = CreateRoundButton(controls, ICON_IMAGE, true);
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->BackToGrid();
     }, LV_EVENT_CLICKED, this);
 
     // 下一张按钮
-    auto* next_btn = CreateRoundButton(controls, FONT_AWESOME_FORWARD_STEP, false);
+    auto* next_btn = CreateRoundButton(controls, ICON_SKIP_FORWARD, false);
     lv_obj_add_event_cb(next_btn, [](lv_event_t* e) {
         auto* self = static_cast<PhotosApp*>(lv_event_get_user_data(e));
         self->ShowNextPhoto();
@@ -809,8 +809,9 @@ void RegisterPhotosApp(PhoneAppRegistry& registry) {
     PhoneAppDescriptor desc;
     desc.id = "photos";
     desc.title = "Photos";
-    desc.icon = FONT_AWESOME_IMAGE;  // Font Awesome 图片图标
+    desc.icon = ICON_IMAGE;  // Font Awesome 图片图标
     desc.category = PhoneAppCategory::kMedia;
+    desc.icon_tint = PhoneAppIconTint::kWarm;
     desc.capabilities = PhoneCapability::kStorage;
     desc.show_on_home = true;
     desc.create = []() -> std::unique_ptr<PhoneApp> {
