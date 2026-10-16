@@ -34,8 +34,9 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
 ## Device Cloud Diagnosis and Recovery
 
 The Assistant status distinguishes an unconfigured binding, rejected credentials, credentials that
-need refresh, a failed refresh, an unreachable server, unavailable voice capability, and invalid
-server trust. `DeviceCloudConfigService` holds the current typed diagnosis in RAM; UI polling does
+need refresh, a failed refresh, an unreachable server, unavailable voice capability, invalid
+server trust, and low device memory. Low device memory means the voice WebSocket client or its task
+could not be allocated, before any network I/O; it is not a server or credential fault. `DeviceCloudConfigService` holds the current typed diagnosis in RAM; UI polling does
 not read NVS or parse certificates. Refresh failures remain visible across ordinary configuration
 reads, while a later successful refresh replaces them. Superseded configuration requests cannot
 publish a diagnosis for the new configuration. A shared RAM revision orders cloud and voice

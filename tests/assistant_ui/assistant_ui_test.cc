@@ -57,7 +57,8 @@ RODAK_TEST("Assistant shows fixed cloud diagnosis and recovery guidance") {
                       rodakos::CloudDiagnosticCode::kRefreshFailed,
                       rodakos::CloudDiagnosticCode::kNetworkUnavailable,
                       rodakos::CloudDiagnosticCode::kVoiceUnavailable,
-                      rodakos::CloudDiagnosticCode::kTrustUnavailable}) {
+                      rodakos::CloudDiagnosticCode::kTrustUnavailable,
+                      rodakos::CloudDiagnosticCode::kDeviceMemoryLow}) {
         cloud_ui_test::state = {code, 100};
         f.assistant.state.message = "raw-secret-token-response";
         f.app.RefreshState();

@@ -62,6 +62,11 @@ struct VoiceTransportFailure {
 inline CloudDiagnosticCode VoiceFailureDiagnostic(const VoiceTransportFailure& failure) {
     if (failure.code == "access_token_expired") return CloudDiagnosticCode::kCredentialsExpired;
     if (failure.code == "credential_refresh_failed") return failure.diagnostic;
+    // Allocation failures before any network I/O; lock timeouts stay generic.
+    if (failure.kind == VoiceTransportFailureKind::kResource &&
+        (failure.code == "websocket_start_failed" || failure.code == "websocket_client_create_failed")) {
+        return CloudDiagnosticCode::kDeviceMemoryLow;
+    }
     switch (failure.kind) {
         case VoiceTransportFailureKind::kAuthentication: return CloudDiagnosticCode::kCredentialsRejected;
         case VoiceTransportFailureKind::kNetwork:

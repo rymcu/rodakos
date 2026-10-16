@@ -424,7 +424,9 @@ bool RodakRealtimeVoiceTransport::OpenAudioChannel(VoiceOpenGuard can_continue) 
         ESP_LOGE(TAG, "Websocket start failed: %s, required_internal_stack=%d",
                  esp_err_to_name(err), ws_config.task_stack);
         LogTransportMemory("task_start_failed");
-        SetFailure(VoiceTransportFailureKind::kNetwork,
+        // esp_websocket_client_start() only fails before any network I/O: transport creation or
+        // the client task allocation. Reporting it as a network fault sent users to check Rodak.
+        SetFailure(VoiceTransportFailureKind::kResource,
                    "websocket_start_failed",
                    std::string("Websocket start failed: ") + esp_err_to_name(err),
                    true, generation);

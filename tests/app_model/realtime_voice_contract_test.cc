@@ -951,3 +951,24 @@ RODAK_TEST("canonical realtime voice server control payloads validate field type
         cJSON_Delete(root);
     }
 }
+
+RODAK_TEST("websocket task allocation failures report low device memory, not an unreachable server") {
+    using rodakos::CloudDiagnosticCode;
+    using rodakos::VoiceTransportFailureKind;
+    for (const char* code : {"websocket_start_failed", "websocket_client_create_failed"}) {
+        rodakos::VoiceTransportFailure failure;
+        failure.kind = VoiceTransportFailureKind::kResource;
+        failure.code = code;
+        RODAK_CHECK(rodakos::VoiceFailureDiagnostic(failure) == CloudDiagnosticCode::kDeviceMemoryLow);
+    }
+    rodakos::VoiceTransportFailure lock_timeout;
+    lock_timeout.kind = VoiceTransportFailureKind::kResource;
+    lock_timeout.code = "transport_lock_unavailable";
+    RODAK_CHECK(rodakos::VoiceFailureDiagnostic(lock_timeout) == CloudDiagnosticCode::kVoiceUnavailable);
+    rodakos::VoiceTransportFailure disconnected;
+    disconnected.kind = VoiceTransportFailureKind::kNetwork;
+    disconnected.code = "websocket_disconnected";
+    RODAK_CHECK(rodakos::VoiceFailureDiagnostic(disconnected) == CloudDiagnosticCode::kNetworkUnavailable);
+    RODAK_CHECK(std::string(rodakos::CloudDiagnosticTitle(CloudDiagnosticCode::kDeviceMemoryLow)) ==
+                "Device memory low");
+}

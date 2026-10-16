@@ -16,6 +16,7 @@ enum class CloudDiagnosticCode {
     kVoiceUnavailable,
     kTrustUnavailable,
     kCancelled,
+    kDeviceMemoryLow,
 };
 
 struct CloudDiagnosticState {
@@ -49,6 +50,7 @@ inline const char* CloudDiagnosticTitle(CloudDiagnosticCode code) {
         case CloudDiagnosticCode::kVoiceUnavailable: return "Voice service unavailable";
         case CloudDiagnosticCode::kTrustUnavailable: return "Server trust needs attention";
         case CloudDiagnosticCode::kCancelled: return "Preparation cancelled";
+        case CloudDiagnosticCode::kDeviceMemoryLow: return "Device memory low";
     }
     return "Device Cloud needs attention";
 }
@@ -65,6 +67,7 @@ inline const char* CloudDiagnosticHint(CloudDiagnosticCode code) {
         case CloudDiagnosticCode::kVoiceUnavailable: return "Enable voice in Rodak, then refresh.";
         case CloudDiagnosticCode::kTrustUnavailable: return "Check trusted USB setup; keep the binding.";
         case CloudDiagnosticCode::kCancelled: return "Wake again when ready.";
+        case CloudDiagnosticCode::kDeviceMemoryLow: return "Close other apps or restart, then retry.";
     }
     return "Open Settings > Device Cloud.";
 }
