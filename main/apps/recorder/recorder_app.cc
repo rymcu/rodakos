@@ -71,7 +71,9 @@ void ToneTask(void* arg) {
 
     if (output != nullptr &&
         output->OpenForOwner(kToneOutputOwner, kToneSampleRate, 1, 16)) {
-        output->SetVolume(90);
+        const int previous_volume = output->volume();
+        const bool boosted = previous_volume < kRecordingPlaybackVolume &&
+                             output->SetVolume(kRecordingPlaybackVolume);
         constexpr size_t kFramesPerChunk = 240;
         int16_t samples[kFramesPerChunk] = {};
         uint32_t frame_index = 0;
@@ -95,6 +97,10 @@ void ToneTask(void* arg) {
             frame_index += frames;
         }
         output->CloseForOwner(kToneOutputOwner);
+        // Keep a volume chosen elsewhere (MQTT, voice, Music) while the tone played.
+        if (boosted && output->volume() == kRecordingPlaybackVolume) {
+            output->SetVolume(previous_volume);
+        }
         ESP_LOGI(TAG, "Speaker test tone ended");
     } else {
         ESP_LOGW(TAG, "Speaker test tone could not open audio output");
@@ -250,6 +256,7 @@ void RecorderApp::OnDestroy() {
     if (recording_ != nullptr) {
         recording_->Stop();
     }
+    RestorePlaybackVolume();
 
     context_ = nullptr;
     ui_ = nullptr;
@@ -505,6 +512,7 @@ void RecorderApp::ToggleRecording() {
     if (audio_ != nullptr) {
         audio_->ReleasePlaybackHardware();
     }
+    RestorePlaybackVolume();
     if (!recording_->Start()) {
         if (ui_ != nullptr) {
             const auto next_state = recording_->GetState();
@@ -528,6 +536,8 @@ void RecorderApp::StartSpeakerTest() {
     if (audio_ != nullptr) {
         audio_->ReleasePlaybackHardware();
     }
+    // The tone task samples the current volume as the value it restores afterwards.
+    RestorePlaybackVolume();
 
     auto* payload = new ToneTaskPayload();
     payload->output = audio_output_;
@@ -568,17 +578,37 @@ void RecorderApp::PlayRecording(size_t index) {
         return;
     }
 
-    if (audio_->volume() < kRecordingPlaybackVolume) {
-        audio_->SetVolume(kRecordingPlaybackVolume);
-    }
+    BoostPlaybackVolume();
     if (!audio_->PlayFile(entry.full_path, entry.title)) {
+        RestorePlaybackVolume();
         if (ui_ != nullptr) {
             ui_->ShowToastUnlocked("Cannot play recording");
         }
     }
 }
 
+void RecorderApp::BoostPlaybackVolume() {
+    const int current = audio_->volume();
+    if (current < kRecordingPlaybackVolume && audio_->SetVolume(kRecordingPlaybackVolume)) {
+        restore_volume_ = current;
+    }
+}
+
+void RecorderApp::RestorePlaybackVolume() {
+    if (restore_volume_ < 0 || audio_ == nullptr) {
+        return;
+    }
+    // Keep a volume chosen elsewhere (MQTT, voice, Music) while the recording played.
+    if (audio_->volume() == kRecordingPlaybackVolume) {
+        audio_->SetVolume(restore_volume_);
+    }
+    restore_volume_ = -1;
+}
+
 void RecorderApp::RefreshState() {
+    if (restore_volume_ >= 0 && audio_ != nullptr && !IsPlaybackActive(audio_->GetState().status)) {
+        RestorePlaybackVolume();
+    }
     if (title_label_ == nullptr || status_label_ == nullptr) {
         return;
     }

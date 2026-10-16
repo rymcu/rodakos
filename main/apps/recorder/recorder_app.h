@@ -36,6 +36,8 @@ private:
     void ToggleRecording();
     void StartSpeakerTest();
     void PlayRecording(size_t index);
+    void BoostPlaybackVolume();
+    void RestorePlaybackVolume();
     void UpdateRecordButton(bool recording);
     void NavigateHome();
     static void RefreshTimerCallback(lv_timer_t* timer);
@@ -46,6 +48,8 @@ private:
     rodakos::AudioService* audio_ = nullptr;
     rodakos::AudioOutputService* audio_output_ = nullptr;
     rodakos::RecordingStatus last_status_ = rodakos::RecordingStatus::kIdle;
+    // Volume to restore after recording playback raised it; -1 when no boost is pending.
+    int restore_volume_ = -1;
     std::string last_library_error_;
     std::string last_recording_error_;
     std::vector<rodakos::RecordingEntry> displayed_recordings_;

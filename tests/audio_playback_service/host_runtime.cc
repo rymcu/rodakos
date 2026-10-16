@@ -21,7 +21,7 @@ BaseType_t xTaskCreate(TaskFunction_t function, const char*, uint32_t, void* arg
     if (audio_host::fail_task_creation) return pdFAIL;
     std::lock_guard<std::mutex> lock(audio_host::task_mutex);
     auto task = std::make_unique<std::thread>();
-    *handle = task.get();
+    if (handle != nullptr) *handle = task.get();
     const auto hook = audio_host::task_start_hook;
     *task = std::thread([=]() { if (hook) hook(); function(argument); });
     audio_host::tasks.push_back(std::move(task));

@@ -13,9 +13,12 @@ ctest --test-dir build-host-media-save/recorder-ui-debug --output-on-failure -V
 ASan/UBSan 在独立构建目录为 C/C++ 添加 `-fsanitize=address,undefined -fno-omit-frame-pointer`，
 运行时设置 `ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1`。
 
-14 项用例验证真实保存失败显示、文件头/flush/close 错误与重试、成功保存但列表读取失败时保留
+18 项用例验证真实保存失败显示、文件头/flush/close 错误与重试、成功保存但列表读取失败时保留
 Saved、缺卡与空列表区分、录音期间刷新隔离、旧错误恢复、timer 创建失败及主题切换生命周期。
 标题、状态、时长和文件大小的位置有布局检查；实际保存错误、Saved+列表错误、缺卡截图已查看。
+
+录音回放和扬声器测试音临时把全局音量提到 90，结束、开始录音或关闭 App 时恢复原值；播放期间
+被其他入口（MQTT、语音、Music）改过的音量保持不变，原本高于 90 的音量不会被降低。
 
 保存结果与 `library_error` 分开：列表不可用不能把已完整保存的文件变成保存失败，也不能假装
 没有录音。真实触摸、麦克风、扬声器、SD 故障、音频焦点集成与资源压力仍须单独验收。

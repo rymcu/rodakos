@@ -326,3 +326,64 @@ RODAK_TEST("a result completed between UI ticks still refreshes the recording li
     RODAK_CHECK_EQ(f.Status(), "Saved");
     RODAK_CHECK_EQ(f.app.displayed_recordings_.size(), 1U);
 }
+RODAK_TEST("recording playback boost is restored after playback ends or the app closes") {
+    Fixture f;
+    f.Create();
+    f.Start();
+    f.Stop();
+    auto* row = lv_obj_get_child(f.app.list_, 0);
+    lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
+    RODAK_CHECK_EQ(f.audio.configured_volume, 90);
+    Pump();
+    RODAK_CHECK_EQ(f.audio.configured_volume, 90);
+    f.audio.state.status = rodakos::AudioPlaybackStatus::kCompleted;
+    Pump();
+    RODAK_CHECK_EQ(f.audio.configured_volume, 60);
+
+    lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
+    RODAK_CHECK_EQ(f.audio.configured_volume, 90);
+    f.app.OnDestroy();
+    f.created = false;
+    RODAK_CHECK_EQ(f.audio.configured_volume, 60);
+}
+RODAK_TEST("recording playback keeps a volume changed elsewhere and never lowers a loud setting") {
+    Fixture f;
+    f.Create();
+    f.Start();
+    f.Stop();
+    auto* row = lv_obj_get_child(f.app.list_, 0);
+    lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
+    f.audio.configured_volume = 45;
+    f.audio.state.status = rodakos::AudioPlaybackStatus::kStopped;
+    Pump();
+    RODAK_CHECK_EQ(f.audio.configured_volume, 45);
+
+    f.audio.configured_volume = 95;
+    lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
+    f.audio.state.status = rodakos::AudioPlaybackStatus::kCompleted;
+    Pump();
+    RODAK_CHECK_EQ(f.audio.configured_volume, 95);
+}
+RODAK_TEST("starting a recording ends a pending playback boost") {
+    Fixture f;
+    f.Create();
+    f.Start();
+    f.Stop();
+    lv_obj_send_event(lv_obj_get_child(f.app.list_, 0), LV_EVENT_CLICKED, nullptr);
+    RODAK_CHECK_EQ(f.audio.configured_volume, 90);
+    f.Start();
+    RODAK_CHECK_EQ(f.audio.configured_volume, 60);
+    f.Stop();
+}
+RODAK_TEST("speaker test tone plays at the test volume and restores the previous volume") {
+    Fixture f;
+    f.Create();
+    int volume_during_tone = -1;
+    f.output.write_hook = [&]() { volume_during_tone = f.output.configured_volume; };
+    lv_obj_send_event(f.app.tone_button_, LV_EVENT_CLICKED, nullptr);
+    audio_host::JoinTasks();
+    f.output.write_hook = {};
+    RODAK_CHECK_EQ(volume_during_tone, 90);
+    RODAK_CHECK_EQ(f.output.configured_volume.load(), 60);
+    RODAK_CHECK_FALSE(f.output.IsOpenForOwner("recorder-tone"));
+}
