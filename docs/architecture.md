@@ -204,6 +204,13 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   revision and receipt under the output mutex. With the codec closed, a setter accepts configuration
   for the next open. Failure of the initial codec volume API call closes that open attempt and
   clears its format state so a later request can retry. This preserves on-demand hardware ownership.
+  `AudioCodecOutput` applies a three-point volume curve (1→-40 dB, 50→-12 dB, 100→0 dB) so
+  mid-range settings are audible on the BigSmart speaker; volume 100 still maps to 0 dB, keeping
+  maximum output and clipping headroom unchanged. It converts each user volume to the matching
+  value on esp_codec_dev's default linear -50..0 dB curve before writing it, rather than calling
+  `esp_codec_dev_set_vol_curve()`. That call keeps a small internal-RAM allocation for the device
+  lifetime; made on the first playback, it split a free block and left too little contiguous RAM for
+  the voice WebSocket task. The stored and reported volume remains the user's 0–100 value.
 - MQTT desired-volume application checks the setter result and reports the retained configuration
   on failure. A source-verified build overlay for esp_codec_dev 1.5.7 propagates the selected
   codec/software-volume driver's exact error and only commits the dependency cache on success.

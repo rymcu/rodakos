@@ -1,5 +1,9 @@
 #include "rodakos_adapters/audio_codec_output.h"
 
+#include <algorithm>
+#include <cmath>
+#include <iterator>
+
 #include <dev_audio_codec.h>
 #include <esp_board_manager.h>
 #include <esp_codec_dev.h>
@@ -12,6 +16,53 @@ namespace {
 constexpr const char* TAG = "AudioCodecOutput";
 constexpr const char* kAudioDacDeviceName = "audio_dac";
 constexpr const char* kI2sCommonTag = "i2s_common";
+
+// esp_codec_dev's default curve maps 1-100 linearly onto -50..0 dB, which leaves the default
+// volume 60 at -20 dB and hard to hear on BigSmart's small speaker. Lift the middle of the range
+// but keep the 100 endpoint at 0 dB so maximum output and ES8311 clipping headroom are unchanged.
+//
+// The curve is applied here instead of through esp_codec_dev_set_vol_curve(): that call reallocates
+// a small internal-RAM block on the first playback and keeps it for the device lifetime. On BigSmart
+// that block landed inside a fragmented heap and left too little contiguous RAM for the voice
+// WebSocket task.
+constexpr struct {
+    int volume;
+    float db;
+} kVolumeCurve[] = {
+    {1, -40.0f},
+    {50, -12.0f},
+    {100, 0.0f},
+};
+// Linear span of the codec's default curve for volumes 1..100.
+constexpr float kCodecDefaultMinDb = -50.0f;
+constexpr float kCodecDefaultMaxDb = 0.0f;
+
+float VolumeCurveDb(int volume) {
+    if (volume >= kVolumeCurve[std::size(kVolumeCurve) - 1].volume) {
+        return kVolumeCurve[std::size(kVolumeCurve) - 1].db;
+    }
+    for (size_t i = 1; i < std::size(kVolumeCurve); ++i) {
+        const auto& upper = kVolumeCurve[i];
+        if (volume < upper.volume) {
+            const auto& lower = kVolumeCurve[i - 1];
+            return lower.db + (volume - lower.volume) * (upper.db - lower.db) /
+                                  static_cast<float>(upper.volume - lower.volume);
+        }
+    }
+    return kVolumeCurve[0].db;
+}
+
+// Returns the codec-default volume whose dB matches this project's curve.
+int ToCodecVolume(int volume) {
+    if (volume <= 0) {
+        return 0;
+    }
+    const float db = std::clamp(VolumeCurveDb(volume), kCodecDefaultMinDb, kCodecDefaultMaxDb);
+    const float codec_volume =
+        (db - kCodecDefaultMinDb) * 100.0f / (kCodecDefaultMaxDb - kCodecDefaultMinDb);
+    // Volume 0 means mute in esp_codec_dev, so audible settings must stay at least 1.
+    return std::clamp(static_cast<int>(std::lround(codec_volume)), 1, 100);
+}
 
 esp_codec_dev_handle_t CodecFromHandle(void* dac_handle) {
     auto* handle = static_cast<dev_audio_codec_handles_t*>(dac_handle);
@@ -28,6 +79,10 @@ int OpenCodecSuppressingBenignI2sDisable(esp_codec_dev_handle_t codec,
     return ret;
 }
 }  // namespace
+
+int AudioCodecVolumeForUserVolume(int volume) {
+    return ToCodecVolume(volume);
+}
 
 bool AudioCodecOutput::Init() {
     if (initialized_) {
@@ -102,7 +157,7 @@ bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bi
     sample_rate_ = sample_rate;
     channels_ = channels;
     bits_per_sample_ = bits_per_sample;
-    const int vol_ret = esp_codec_dev_set_out_vol(codec, volume);
+    const int vol_ret = esp_codec_dev_set_out_vol(codec, ToCodecVolume(volume));
     if (vol_ret != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set volume to %d", volume);
         Close();
@@ -143,7 +198,7 @@ bool AudioCodecOutput::SetVolume(int volume) {
         return true;
     }
 
-    const int ret = esp_codec_dev_set_out_vol(codec, volume);
+    const int ret = esp_codec_dev_set_out_vol(codec, ToCodecVolume(volume));
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "Failed to set volume to %d", volume);
         return false;

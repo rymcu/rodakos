@@ -2,6 +2,7 @@
 
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
+#include "rodakos_adapters/audio_codec_output.h"
 
 #include <algorithm>
 #include <atomic>
@@ -15,6 +16,7 @@ namespace {
 using fake_codec::fail_volume_write;
 using fake_codec::volume_writes;
 int& codec_volume = fake_codec::volume;
+int Codec(int volume) { return rodakos::AudioCodecVolumeForUserVolume(volume); }
 
 void ResetCodec() {
     fake_codec::Reset();
@@ -29,7 +31,7 @@ RODAK_TEST("Audio output keeps the last accepted volume when the codec rejects a
     fail_volume_write = true;
     RODAK_CHECK_FALSE(output.SetVolume(35));
     RODAK_CHECK_EQ(output.volume(), 60);
-    RODAK_CHECK_EQ(codec_volume, 60);
+    RODAK_CHECK_EQ(codec_volume, Codec(60));
     RODAK_CHECK(output.IsOpenForOwner("test"));
 }
 
@@ -44,7 +46,7 @@ RODAK_TEST("Audio output can retry after a rejected volume without losing its ow
     fail_volume_write = false;
     RODAK_CHECK(output.SetVolume(90));
     RODAK_CHECK_EQ(output.volume(), 90);
-    RODAK_CHECK_EQ(codec_volume, 90);
+    RODAK_CHECK_EQ(codec_volume, Codec(90));
 }
 
 RODAK_TEST("Audio output retains closed-codec volume as a setting for the next open") {
@@ -56,7 +58,7 @@ RODAK_TEST("Audio output retains closed-codec volume as a setting for the next o
     RODAK_CHECK_EQ(fake_codec::initializations, 0);
     RODAK_CHECK_EQ(fake_codec::opens, 0);
     RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
-    RODAK_CHECK_EQ(codec_volume, 27);
+    RODAK_CHECK_EQ(codec_volume, Codec(27));
 }
 
 RODAK_TEST("Audio output only commits a clamped volume after the open codec accepts it") {
@@ -71,7 +73,7 @@ RODAK_TEST("Audio output only commits a clamped volume after the open codec acce
     fail_volume_write = false;
     RODAK_CHECK(output.SetVolume(-10));
     RODAK_CHECK_EQ(output.volume(), 0);
-    RODAK_CHECK_EQ(codec_volume, 0);
+    RODAK_CHECK_EQ(codec_volume, Codec(0));
 }
 
 RODAK_TEST("Initial codec volume failure closes the codec and releases the output owner") {
@@ -91,7 +93,7 @@ RODAK_TEST("Initial codec volume failure closes the codec and releases the outpu
     RODAK_CHECK(output.IsOpenForOwner("retry"));
     RODAK_CHECK_EQ(fake_codec::opens, 2);
     RODAK_CHECK_EQ(fake_codec::initializations, 1);
-    RODAK_CHECK_EQ(codec_volume, 27);
+    RODAK_CHECK_EQ(codec_volume, Codec(27));
 }
 
 RODAK_TEST("A same-format volume failure preserves the existing open codec and owner") {
@@ -134,13 +136,13 @@ RODAK_TEST("Audio service keeps playback and UI volumes when the codec rejects a
     RODAK_CHECK_EQ(audio.volume(), 20);
     RODAK_CHECK_EQ(audio.GetState().volume, 20);
     RODAK_CHECK_EQ(output.volume(), 20);
-    RODAK_CHECK_EQ(codec_volume, 20);
+    RODAK_CHECK_EQ(codec_volume, Codec(20));
     fail_volume_write = false;
     RODAK_CHECK(audio.SetVolume(90));
     RODAK_CHECK_EQ(audio.volume(), 90);
     RODAK_CHECK_EQ(audio.GetState().volume, 90);
     RODAK_CHECK_EQ(output.volume(), 90);
-    RODAK_CHECK_EQ(codec_volume, 90);
+    RODAK_CHECK_EQ(codec_volume, Codec(90));
 }
 
 RODAK_TEST("Audio service accepts clamped configuration without opening the codec") {
@@ -155,7 +157,7 @@ RODAK_TEST("Audio service accepts clamped configuration without opening the code
     RODAK_CHECK_EQ(fake_codec::opens, 0);
     RODAK_CHECK_EQ(volume_writes, 0);
     RODAK_CHECK(output.OpenForOwner("audio-playback", 16000, 1, 16));
-    RODAK_CHECK_EQ(codec_volume, 100);
+    RODAK_CHECK_EQ(codec_volume, Codec(100));
     fail_volume_write = true;
     RODAK_CHECK_FALSE(audio.SetVolume(-10));
     RODAK_CHECK_EQ(audio.GetState().volume, 100);
@@ -164,7 +166,7 @@ RODAK_TEST("Audio service accepts clamped configuration without opening the code
     RODAK_CHECK_EQ(audio.volume(), 0);
     RODAK_CHECK_EQ(audio.GetState().volume, 0);
     RODAK_CHECK_EQ(output.volume(), 0);
-    RODAK_CHECK_EQ(codec_volume, 0);
+    RODAK_CHECK_EQ(codec_volume, Codec(0));
 }
 
 RODAK_TEST("Volume receipts distinguish deferred configuration from a codec API application") {
@@ -181,14 +183,14 @@ RODAK_TEST("Volume receipts distinguish deferred configuration from a codec API 
     RODAK_CHECK_EQ(volume_writes, 0);
 
     RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
-    RODAK_CHECK_EQ(codec_volume, 27);
+    RODAK_CHECK_EQ(codec_volume, Codec(27));
     const auto applied = output.ApplyVolume(rodakos::AudioVolumeOperation::kUp, 3);
     RODAK_CHECK(applied.accepted);
     RODAK_CHECK_EQ(applied.previous_volume, 27);
     RODAK_CHECK_EQ(applied.volume, 30);
     RODAK_CHECK_EQ(applied.configuration_revision, 2U);
     RODAK_CHECK(applied.application == rodakos::AudioVolumeApplication::kCodecApplied);
-    RODAK_CHECK_EQ(codec_volume, 30);
+    RODAK_CHECK_EQ(codec_volume, Codec(30));
 
     output.CloseForOwner("test");
     const auto deferred = output.ApplyVolume(rodakos::AudioVolumeOperation::kDown, 10);
@@ -307,7 +309,7 @@ RODAK_TEST("Playback and UI read externally changed volume across initialization
     RODAK_CHECK(audio.Init());
     RODAK_CHECK_EQ(audio.GetState().volume, 47);
     RODAK_CHECK(output.OpenForOwner("audio-playback", 16000, 1, 16));
-    RODAK_CHECK_EQ(codec_volume, 47);
+    RODAK_CHECK_EQ(codec_volume, Codec(47));
     RODAK_CHECK(output.ApplyVolume(rodakos::AudioVolumeOperation::kDown, 7).accepted);
     RODAK_CHECK_EQ(audio.volume(), 40);
     RODAK_CHECK_EQ(audio.GetState().volume, 40);
@@ -317,7 +319,7 @@ RODAK_TEST("Playback and UI read externally changed volume across initialization
     fail_volume_write = false;
     RODAK_CHECK(audio.ReleasePlaybackHardware());
     RODAK_CHECK(output.OpenForOwner("audio-playback", 16000, 1, 16));
-    RODAK_CHECK_EQ(codec_volume, 40);
+    RODAK_CHECK_EQ(codec_volume, Codec(40));
     RODAK_CHECK_EQ(audio.GetState().volume, 40);
 }
 
@@ -336,4 +338,35 @@ RODAK_TEST("Legacy clamped setters share the same revision stream as strict oper
     RODAK_CHECK_EQ(increased.previous_volume, 0);
     RODAK_CHECK_EQ(increased.volume, 10);
     RODAK_CHECK_EQ(increased.configuration_revision, 4U);
+}
+
+RODAK_TEST("Volume mapping lifts mid-range output but keeps 0 muted and 100 at full scale") {
+    // esp_codec_dev's default curve is linear -50..0 dB over 1..100, so codec volume v is
+    // -50 + v / 2 dB. The project curve is 1 -> -40 dB, 50 -> -12 dB, 100 -> 0 dB.
+    RODAK_CHECK_EQ(Codec(0), 0);
+    RODAK_CHECK_EQ(Codec(-5), 0);
+    RODAK_CHECK_EQ(Codec(1), 20);
+    RODAK_CHECK_EQ(Codec(50), 76);
+    RODAK_CHECK_EQ(Codec(60), 81);
+    RODAK_CHECK_EQ(Codec(100), 100);
+    RODAK_CHECK_EQ(Codec(150), 100);
+    // The old linear mapping wrote the user volume unchanged; 60 meant -20 dB.
+    RODAK_CHECK(-50.0f + Codec(60) / 2.0f > -20.0f);
+    for (int volume = 2; volume <= 100; ++volume) {
+        RODAK_CHECK(Codec(volume) >= Codec(volume - 1));
+        RODAK_CHECK(Codec(volume) >= 1);
+    }
+}
+
+RODAK_TEST("Audio output writes the mapped codec volume on open and on change") {
+    ResetCodec();
+    rodakos::AudioOutputService output;
+    RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
+    RODAK_CHECK_EQ(output.volume(), 60);
+    RODAK_CHECK_EQ(codec_volume, 81);
+    RODAK_CHECK(output.SetVolume(0));
+    RODAK_CHECK_EQ(output.volume(), 0);
+    RODAK_CHECK_EQ(codec_volume, 0);
+    RODAK_CHECK(output.SetVolume(100));
+    RODAK_CHECK_EQ(codec_volume, 100);
 }

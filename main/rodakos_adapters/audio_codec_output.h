@@ -4,6 +4,9 @@
 
 namespace rodakos {
 
+// Maps a user volume (0-100) to the esp_codec_dev volume that produces this project's output curve.
+int AudioCodecVolumeForUserVolume(int volume);
+
 class AudioCodecOutput {
 public:
     bool Init();
