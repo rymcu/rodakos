@@ -573,6 +573,15 @@ bool AppearanceService::GetLocalTheme(std::string& preset, uint32_t& primary) co
     preset = local_preset_; primary = local_primary_; return true;
 }
 bool AppearanceService::ThemeIsLocal() const { std::lock_guard<std::mutex> lock(mutex_); return local_theme_ || active_.revision == 0; }
+AppearanceStatusSnapshot AppearanceService::GetStatusSnapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    AppearanceStatusSnapshot snapshot;
+    snapshot.status = status_; snapshot.progress = progress_; snapshot.error = error_; snapshot.fallback_reason = fallback_reason_;
+    snapshot.active_revision = active_.revision; snapshot.pending_revision = pending_.revision;
+    snapshot.theme_local = local_theme_ || active_.revision == 0;
+    snapshot.publisher_trusted = !trusted_key_id_.empty();
+    return snapshot;
+}
 bool AppearanceService::ApplyDesiredJson(const std::string& encoded) {
     AppearanceDesired desired;
     if (!DecodeAppearanceDesired(encoded, desired)) return false;

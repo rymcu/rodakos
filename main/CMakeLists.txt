@@ -99,6 +99,7 @@ set(SOURCES
     "phone_ui/phone_components.cc"
     "phone_ui/rodakos_layout.cc"
     "phone_ui/rodakos_theme.cc"
+    "phone_ui/theme_presets.cc"
     "phone_ui/soft_keyboard.cc"
     "phone_ui/image_library.cc"
     "phone_ui/jpg/jpeg_to_image.c"
@@ -109,7 +110,6 @@ set(SOURCES
     "apps/home/home_app.cc"
     "apps/settings/settings_app.cc"
     "apps/settings/settings_app_internal.cc"
-    "apps/settings/settings_appearance_page.cc"
     "apps/settings/settings_buttons_page.cc"
     "apps/settings/settings_datetime_page.cc"
     "apps/settings/settings_device_cloud_page.cc"
@@ -132,6 +132,7 @@ set(SOURCES
     "apps/wol/wol_device_codec.cc"
     "apps/wol/wol_device_store.cc"
     "apps/wol/wol_app.cc"
+    "apps/themes/themes_app.cc"
 )
 
 if(RODAKOS_HOME_HARDWARE_TEST_POPULATION)

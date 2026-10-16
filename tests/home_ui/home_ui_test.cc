@@ -339,7 +339,7 @@ struct IconAppSpec {
 };
 
 // Built-in Home population with production categories and tints, in Registry order.
-constexpr std::array<IconAppSpec, 13> kBuiltInIconApps = {{
+constexpr std::array<IconAppSpec, 14> kBuiltInIconApps = {{
     {"settings", PhoneAppCategory::kSystem, PhoneAppIconTint::kDefault},
     {"system", PhoneAppCategory::kSystem, PhoneAppIconTint::kDefault},
     {"music", PhoneAppCategory::kMedia, PhoneAppIconTint::kDefault},
@@ -353,6 +353,7 @@ constexpr std::array<IconAppSpec, 13> kBuiltInIconApps = {{
     {"photos", PhoneAppCategory::kMedia, PhoneAppIconTint::kWarm},
     {"wol", PhoneAppCategory::kTools, PhoneAppIconTint::kAlert},
     {"files", PhoneAppCategory::kTools, PhoneAppIconTint::kNeutral},
+    {"themes", PhoneAppCategory::kSystem, PhoneAppIconTint::kWarm},
 }};
 
 struct IconFixture {
@@ -1093,6 +1094,8 @@ RODAK_TEST("icon colors follow category and tint instead of the app id") {
     RODAK_CHECK(lv_color_eq(center("calendar"), center("gyro")));
     RODAK_CHECK(lv_color_eq(center("assistant"), center("smart")));
     RODAK_CHECK(lv_color_eq(center("clock"), center("photos")));
+    RODAK_CHECK(lv_color_eq(center("clock"), center("themes")));
+    RODAK_CHECK_FALSE(lv_color_eq(center("themes"), center("settings")));
     RODAK_CHECK_FALSE(lv_color_eq(center("assistant"), center("calendar")));
     RODAK_CHECK_FALSE(lv_color_eq(center("photos"), center("music")));
     RODAK_CHECK_FALSE(lv_color_eq(center("wol"), center("calendar")));
@@ -1103,7 +1106,7 @@ RODAK_TEST("icon colors follow category and tint instead of the app id") {
         const lv_area_t icon = DesktopIconArea(BuiltInIconTile(fixture.home, id));
         return PixelColor((icon.x1 + icon.x2) / 2, icon.y1);
     };
-    const std::array<std::pair<const char*, int>, 8> expected_slots = {{
+    const std::array<std::pair<const char*, int>, 9> expected_slots = {{
         {"settings", RODAKOS_ICON_SLOT_SYSTEM},
         {"music", RODAKOS_ICON_SLOT_MEDIA},
         {"calendar", RODAKOS_ICON_SLOT_TOOLS},
@@ -1112,6 +1115,7 @@ RODAK_TEST("icon colors follow category and tint instead of the app id") {
         {"photos", RODAKOS_ICON_SLOT_WARM},
         {"wol", RODAKOS_ICON_SLOT_ALERT},
         {"files", RODAKOS_ICON_SLOT_NEUTRAL},
+        {"themes", RODAKOS_ICON_SLOT_WARM},
     }};
     for (const auto& [id, slot] : expected_slots) {
         RODAK_CHECK(ColorNear(top_of(id), rodakos_theme_icon_color(slot), 4));

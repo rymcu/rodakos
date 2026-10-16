@@ -54,7 +54,7 @@ OTA/采集器、codec 和 MQTT 补丁生成器的 Python 测试。
 验证真实语音刷新、精确凭据附着、USB 代次、持久化失败及 legacy MQTT-only 合同。
 MQTT suite 同时增加完整客户端替换、旧回调/outbox 隔离、外部 Stop 和失败重试测试。
 CI 保存 4 个凭据生命周期与 2 个 Cloud fence 完整源码负变体的源码、构建/断言日志及哈希。
-release runner 当前循环 46 个 suite（以 `tools/run_release_host_checks.sh` 为准）；工作流额外列表中的
+release runner 当前循环 44 个 suite（以 `tools/run_release_host_checks.sh` 为准，含 `themes_ui`）；工作流额外列表中的
 `voice_volume_service` 与之重复。各候选的实际结果与工件身份须绑定其 commit；历史统计不能替代新候选验证。
 
 工作流额外编译并运行已有的 `voice_volume_service`、`remote_input`、

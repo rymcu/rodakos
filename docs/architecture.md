@@ -156,7 +156,10 @@ GT911 touch is registered through a cached polling bridge in `main.cc`: a low-pr
 Built-in apps are registered in `main/apps/built_in_apps.cc`:
 
 - Home: phone desktop, status area, paged app grid, folders and page indicators.
-- Settings: WiFi, display/theme/brightness, USB disk mode, web/cloud file tools, time sync.
+- Settings: WiFi, brightness, USB disk mode, web/cloud file tools, time sync, and an entry row
+  that opens Themes.
+- Themes (`themes`): appearance preview, local color presets, appearance package status and the
+  physical-touch publisher trust page. See [theme store design](theme-store-design.md#phase-1-themes-app).
 - Photos: scans `/photos`, `/DCIM`, and fallback roots for images, with separate storage/read
   failure and empty-library states, explicit retry and owned image/thumbnail cleanup.
 - Camera: opens camera service on demand, previews and captures to storage. Capture completion is
@@ -336,6 +339,7 @@ and [navigation host coverage](../tests/navigation_ui/README.md).
 - [Firmware build and flash](firmware-download.md)
 - [BigSmart WebRTC peer integration](esp-peer-integration.md)
 - [Appearance verification](appearance-verification.md)
+- [Theme store design](theme-store-design.md)
 - [Project roadmap](roadmap.md)
 - [OpenOS comparison and design decisions](openos-comparison.md)
 - [Home layout and folder design](home-layout-design.md)

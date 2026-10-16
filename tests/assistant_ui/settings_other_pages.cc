@@ -2,8 +2,6 @@
 // pages stay absent so this target does not pretend to validate their hardware.
 #include "apps/settings/settings_app.h"
 void SettingsApp::CreateMainPage() {}
-void SettingsApp::CreateAppearancePage() {}
-void SettingsApp::UpdateAppearancePage() {}
 void SettingsApp::CreateWiFiListPage() {}
 void SettingsApp::CreateWiFiDetailPage() {}
 void SettingsApp::UpdateWiFiDetailPage() {}

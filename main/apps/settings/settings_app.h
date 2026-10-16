@@ -46,7 +46,6 @@ enum class SettingsPage {
     kButtons,     // 按键绑定页面
     kDeviceCloud, // 设备云配置页面
     kWebFiles,    // Web 文件管理页面
-    kAppearance,  // 外观发布端信任页面
 };
 
 class SettingsApp final : public PhoneApp {
@@ -77,9 +76,6 @@ private:
     void ResetUiPointers();
     void ShowPage(SettingsPage page);
     void CreateMainPage();
-    void CreateAppearancePage();
-    void UpdateAppearancePage();
-    void ConfirmAppearancePublisher();
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
@@ -132,22 +128,11 @@ private:
     lv_obj_t* main_body_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
     lv_obj_t* brightness_slider_ = nullptr;
-    lv_obj_t* theme_buttons_[4] = {};
     lv_obj_t* language_switch_ = nullptr;
     lv_obj_t* usb_disk_dialog_ = nullptr;
     lv_obj_t* usb_disk_hint_page_ = nullptr;
     lv_timer_t* usb_disk_restart_timer_ = nullptr;
     lv_obj_t* header_title_label_ = nullptr;
-
-    lv_obj_t* appearance_body_ = nullptr;
-    lv_obj_t* appearance_fingerprint_label_ = nullptr;
-    lv_obj_t* appearance_status_label_ = nullptr;
-    lv_obj_t* appearance_error_label_ = nullptr;
-    lv_obj_t* appearance_confirm_button_ = nullptr;
-    lv_obj_t* appearance_refresh_button_ = nullptr;
-    lv_timer_t* appearance_timer_ = nullptr;
-    std::string appearance_displayed_key_id_;
-    std::string appearance_pressed_key_id_;
 
     // 日期与时间页面控件
     lv_obj_t* datetime_body_ = nullptr;

@@ -15,7 +15,8 @@ interruption recovery, SD timing and display readability need separate device ev
    product key is `rymcu-bigsmart`.
 2. In Rodak, design, generate a preview and publish the previewed release. The default is EDIX
    `RODAKOS`, 2500 ms, with a letter entrance.
-3. Open device **Settings → Appearance**, tap **读取/刷新**, and compare **发布端指纹** with Rodak.
+3. Open the device **Themes** app (主题), tap **发布端**, tap **读取/刷新**, and compare
+   **发布端指纹** with Rodak.
    Exit remote control, then physically touch **指纹一致，确认信任**. Both press and click must
    originate from physical touch, and the displayed key must remain unchanged. Remote pointer
    and serial events cannot grant trust.
@@ -152,7 +153,7 @@ States are `idle`, `awaiting_trust`, `waiting_device`, `deferred_busy`, `downloa
 streams, or when the largest free internal block is below 8192 bytes. The MQTT-connected main loop
 retries scheduling periodically.
 
-Selecting a theme in Settings immediately applies that preset/default primary and saves a local
+Selecting a preset in the Themes app immediately applies that preset/default primary and saves a local
 override without removing animation/wallpaper. Ordinary later boots retain it. A newer online
 version clears that override on adoption. Global RodakOS and `PhoneUi` share colors; primary button
 foreground is selected for contrast.

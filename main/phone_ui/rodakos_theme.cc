@@ -192,6 +192,19 @@ void rodakos_theme_apply_preset_primary(const char* theme_id, uint32_t primary) 
     current_theme = &custom_theme;
 }
 
+uint32_t rodakos_theme_preset_primary(rodakos_theme_preset_t preset) {
+    switch (preset) {
+        case RODAKOS_THEME_LIGHT:
+            return theme_light.primary;
+        case RODAKOS_THEME_BLUE:
+            return theme_blue.primary;
+        case RODAKOS_THEME_GREEN:
+            return theme_green.primary;
+        default:
+            return theme_dark.primary;
+    }
+}
+
 void rodakos_theme_set_custom(const rodakos_theme_t* theme) {
     if (theme != nullptr) {
         custom_theme = *theme;

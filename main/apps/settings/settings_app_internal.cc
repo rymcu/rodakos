@@ -16,10 +16,10 @@ void DeferReturnHome(void* user_data) {
     }
 }
 
-void DeferReloadSettings(void* user_data) {
+void DeferOpenThemes(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        context->navigation().RefreshTheme();
+        context->navigation().Launch("themes");
     }
 }
 
@@ -60,22 +60,6 @@ std::string TrimCloudUrl(const char* text) {
 void UpdateBrightnessLabel(lv_obj_t* label, int value) {
     if (label != nullptr) {
         lv_label_set_text_fmt(label, "%d%%", value);
-    }
-}
-
-int ThemeIndexFromId(const std::string& theme) {
-    for (size_t i = 0; i < kThemeOptions.size(); ++i) {
-        if (theme == kThemeOptions[i].id) {
-            return static_cast<int>(i);
-        }
-    }
-    return 0;
-}
-
-void ApplyThemeToRuntime(PhoneUi* ui, const ThemeOption& option) {
-    rodakos_theme_init_from_name(option.id);
-    if (ui != nullptr) {
-        ui->SyncThemeName(option.id);
     }
 }
 

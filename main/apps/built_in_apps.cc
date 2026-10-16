@@ -13,6 +13,7 @@
 #include "apps/assistant/assistant_app.h"
 #include "apps/system_info/system_info_app.h"
 #include "apps/smart/smart_app.h"
+#include "apps/themes/themes_app.h"
 #include "apps/wol/wol_app.h"
 #include "phone_os/phone_app_registry.h"
 
@@ -35,6 +36,7 @@ void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterAssistantApp(registry);
     RegisterSmartApp(registry);
     RegisterWolApp(registry);
+    RegisterThemesApp(registry);
 #if RODAKOS_HOME_HARDWARE_TEST_POPULATION
     RegisterHomeHardwareTestPopulation(registry);
 #endif

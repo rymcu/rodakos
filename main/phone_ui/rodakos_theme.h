@@ -84,6 +84,14 @@ rodakos_theme_preset_t rodakos_theme_init_from_name(const char* theme_id);
 void rodakos_theme_apply_preset_primary(const char* theme_id, uint32_t primary);
 
 /**
+ * 获取预设主题的默认主色，不改变当前主题。
+ *
+ * @param preset 预设主题；CUSTOM 或越界值回退到深色主题
+ * @return 0xRRGGBB 主色
+ */
+uint32_t rodakos_theme_preset_primary(rodakos_theme_preset_t preset);
+
+/**
  * 判断指定主题是否应使用 PhoneUi 的浅色组件主题。
  */
 bool rodakos_theme_is_light_name(const char* theme_id);

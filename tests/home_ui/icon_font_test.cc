@@ -57,7 +57,7 @@ RODAK_TEST("every UI icon is in the 20px font and centered in its advance") {
              ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT, ICON_CHIP, ICON_CLOCK, ICON_CLOSE, ICON_CLOUD,
              ICON_COMPASS, ICON_EDIT, ICON_FOLDER, ICON_GLOBE, ICON_HOME, ICON_IMAGE, ICON_INFO,
              ICON_KEY, ICON_LIGHT, ICON_LINK, ICON_LOCK, ICON_MICROPHONE, ICON_MOON, ICON_MUSIC,
-             ICON_PAUSE, ICON_PLAY, ICON_POWER, ICON_REFRESH, ICON_REPEAT, ICON_SETTINGS,
+             ICON_PALETTE, ICON_PAUSE, ICON_PLAY, ICON_POWER, ICON_REFRESH, ICON_REPEAT, ICON_SETTINGS,
              ICON_SHUFFLE, ICON_SIGNAL, ICON_SKIP_BACK, ICON_SKIP_FORWARD, ICON_STOP,
              ICON_STORAGE, ICON_VOLUME, ICON_WIFI, ICON_WIFI_OFF}) {
         CheckCenteredGlyph(rodakos_icons_20_4, icon);
@@ -68,7 +68,7 @@ RODAK_TEST("desktop icons are in the 30px font and centered in their advance") {
     for (const char* icon : {
              ICON_SETTINGS, ICON_INFO, ICON_MUSIC, ICON_CAMERA, ICON_MICROPHONE, ICON_CALENDAR,
              ICON_COMPASS, ICON_ASSISTANT, ICON_LIGHT, ICON_CLOCK, ICON_IMAGE, ICON_POWER,
-             ICON_FOLDER, ICON_STORAGE}) {
+             ICON_FOLDER, ICON_STORAGE, ICON_PALETTE}) {
         CheckCenteredGlyph(rodakos_icons_30_4, icon);
     }
 }

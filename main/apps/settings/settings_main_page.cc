@@ -3,31 +3,16 @@
 
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_services.h"
-#include "phone_os/appearance_service.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "rodakos_adapters/backlight_adapter.h"
 #include "settings.h"
 
-#include <esp_log.h>
-
-namespace {
-constexpr const char* TAG = "SettingsApp";
-}  // namespace
-
 using namespace rodakos_settings;
 void SettingsApp::CreateMainPage() {
     Settings display_settings(kDisplayNamespace, false);
     const int brightness = display_settings.GetInt(kBrightnessKey, 75);
-    std::string theme = display_settings.GetString(kThemeKey, "dark");
-    bool local_theme = true;
-    if (auto* appearance = context_->services().appearance(); appearance != nullptr) {
-        uint32_t primary = 0;
-        appearance->GetLocalTheme(theme, primary);
-        local_theme = appearance->ThemeIsLocal();
-    }
     const std::string language = display_settings.GetString(kLanguageKey, "en");
-    const int selected_theme = local_theme ? ThemeIndexFromId(theme) : -1;
 
     lv_obj_add_flag(main_body_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(main_body_, LV_DIR_VER);
@@ -85,65 +70,24 @@ void SettingsApp::CreateMainPage() {
         self->ui_->ShowToastUnlocked("Brightness saved");
     }, LV_EVENT_RELEASED, this);
 
-    // ===== 主题设置卡片 =====
+    // ===== 主题入口 =====
     auto* theme_card = CreateSettingCard(main_body_, 84);
-    CreateSettingIcon(theme_card, ICON_MOON);
+    lv_obj_add_flag(theme_card, LV_OBJ_FLAG_CLICKABLE);
+    CreateSettingIcon(theme_card, ICON_PALETTE);
 
-    auto* theme_title = CreateSettingLabel(theme_card, local_theme ? "Theme" : "Theme (remote)");
-    lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 28, 0);
+    auto* theme_title = CreateSettingLabel(theme_card, "主题");
+    lv_obj_align(theme_title, LV_ALIGN_LEFT_MID, 28, 0);
 
-    auto* theme_row = lv_obj_create(theme_card);
-    lv_obj_remove_style_all(theme_row);
-    lv_obj_set_size(theme_row, 188, 30);
-    lv_obj_align(theme_row, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_flex_flow(theme_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(theme_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(theme_row, LV_OBJ_FLAG_SCROLLABLE);
+    auto* theme_arrow = lv_label_create(theme_card);
+    lv_label_set_text(theme_arrow, ">");
+    lv_obj_set_style_text_color(theme_arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(theme_arrow, &phone_font_18, 0);
+    lv_obj_align(theme_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    for (size_t i = 0; i < kThemeOptions.size(); ++i) {
-        auto* btn = lv_btn_create(theme_row);
-        theme_buttons_[i] = btn;
-        lv_obj_set_user_data(btn, const_cast<ThemeOption*>(&kThemeOptions[i]));
-        lv_obj_set_size(btn, 42, 28);
-        lv_obj_set_style_radius(btn, 6, 0);
-        lv_obj_set_style_shadow_width(btn, 0, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(kThemeOptions[i].swatch), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(btn, i == static_cast<size_t>(selected_theme) ? 2 : 1, 0);
-        lv_obj_set_style_border_color(btn,
-                                      i == static_cast<size_t>(selected_theme)
-                                          ? rodakos_theme_primary()
-                                          : rodakos_theme_border(),
-                                      0);
-        lv_obj_set_style_pad_all(btn, 0, 0);
-
-        auto* label = lv_label_create(btn);
-        lv_label_set_text(label, kThemeOptions[i].button_label);
-        lv_obj_set_style_text_color(label, lv_color_hex(kThemeOptions[i].label_color), 0);
-        lv_obj_set_style_text_font(label, &phone_font_12, 0);
-        lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_center(label);
-
-        lv_obj_add_event_cb(btn, [](lv_event_t* e) {
+    lv_obj_add_event_cb(theme_card, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        auto* btn = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
-        auto* option = static_cast<const ThemeOption*>(lv_obj_get_user_data(btn));
-        if (option != nullptr) {
-            auto* appearance = self->context_->services().appearance();
-            const uint32_t primary = option->preset == RODAKOS_THEME_LIGHT ? 0x2196F3 :
-                option->preset == RODAKOS_THEME_BLUE ? 0x1976D2 :
-                option->preset == RODAKOS_THEME_GREEN ? 0x388E3C : 0x79CBFF;
-            if (appearance == nullptr || !appearance->SetLocalTheme(option->id, primary)) {
-                self->ui_->ShowToastUnlocked("Theme save failed");
-                return;
-            }
-            ApplyThemeToRuntime(self->ui_, *option);
-            self->ui_->ShowToastUnlocked("Theme changed");
-            ESP_LOGI(TAG, "Theme changed to %s, reloading settings", option->id);
-            lv_async_call(DeferReloadSettings, self->context_);
-        }
-        }, LV_EVENT_CLICKED, this);
-    }
+        lv_async_call(DeferOpenThemes, self->context_);
+    }, LV_EVENT_CLICKED, this);
 
     // ===== 语言设置卡片 =====
     auto* language_card = CreateSettingCard(main_body_, 142);
@@ -309,16 +253,5 @@ void SettingsApp::CreateMainPage() {
     lv_obj_add_event_cb(usb_card, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->ShowUsbDiskDialog();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* appearance_card = CreateSettingCard(main_body_, 606);
-    lv_obj_add_flag(appearance_card, LV_OBJ_FLAG_CLICKABLE);
-    CreateSettingIcon(appearance_card, ICON_LOCK);
-    auto* appearance_title = CreateSettingLabel(appearance_card, "外观定制与信任");
-    lv_obj_align(appearance_title, LV_ALIGN_LEFT_MID, 28, 0);
-    auto* appearance_arrow = CreateSettingLabel(appearance_card, ">", true);
-    lv_obj_align(appearance_arrow, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(appearance_card, [](lv_event_t* e) {
-        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowPage(SettingsPage::kAppearance);
     }, LV_EVENT_CLICKED, this);
 }

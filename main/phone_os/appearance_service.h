@@ -1,5 +1,6 @@
 #pragma once
 
+#include "phone_os/appearance_status.h"
 #include "rodak_appearance_assets.h"
 
 #include <atomic>
@@ -16,15 +17,6 @@ namespace rodakos {
 
 class DeviceCloudConfigService;
 class FileService;
-
-struct AppearancePublisherState {
-    std::string key_id;
-    std::string fingerprint;
-    std::string public_key;
-    bool trusted = false;
-    bool loading = false;
-    std::string error;
-};
 
 class AppearanceService {
 public:
@@ -56,6 +48,7 @@ public:
     bool SetLocalTheme(const std::string& preset, uint32_t primary);
     bool GetLocalTheme(std::string& preset, uint32_t& primary) const;
     bool ThemeIsLocal() const;
+    AppearanceStatusSnapshot GetStatusSnapshot() const;
 
 private:
     struct StoredRelease {

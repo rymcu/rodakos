@@ -12,7 +12,7 @@ LVGL and Espressif Board Manager.
   guarded save. Home has up to eight pages plus a read-only `All Apps` page. Only the active page
   and its two neighbors keep their widgets. See [Home layout](docs/home-layout-design.md).
 - **Built-in apps**: Home, Settings, Photos, Camera, Clock, Calendar, Files, Gyro, System,
-  Music, Recorder, Assistant, Smart and Wake (Wake-on-LAN).
+  Music, Recorder, Assistant, Smart, Wake (Wake-on-LAN) and Themes.
 - **Hardware services**: display, backlight, cached GT911 touch polling, WiFi, SD card with
   path-scoped leases, early-boot USB MSC mode, audio playback and recording, GC0308 camera,
   QMI8658 motion, RGB light and battery monitor. The firmware opens heavy devices on demand, not

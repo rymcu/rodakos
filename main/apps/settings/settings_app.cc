@@ -11,7 +11,6 @@
 #include "settings.h"
 
 #include <esp_log.h>
-#include <algorithm>
 #include <memory>
 
 namespace {
@@ -119,10 +118,6 @@ bool SettingsApp::OnThemeChanged(PhoneAppContext& context) {
 }
 
 void SettingsApp::DestroyUi() {
-    if (appearance_timer_ != nullptr) {
-        lv_timer_delete(appearance_timer_);
-        appearance_timer_ = nullptr;
-    }
     CloseUsbDiskDialog();
     CloseButtonActionDialog();
     if (usb_disk_restart_timer_ != nullptr) {
@@ -153,15 +148,6 @@ void SettingsApp::DestroyUi() {
 void SettingsApp::ResetUiPointers() {
     root_ = nullptr;
     main_body_ = nullptr;
-    appearance_body_ = nullptr;
-    appearance_fingerprint_label_ = nullptr;
-    appearance_status_label_ = nullptr;
-    appearance_error_label_ = nullptr;
-    appearance_confirm_button_ = nullptr;
-    appearance_refresh_button_ = nullptr;
-    appearance_timer_ = nullptr;
-    appearance_displayed_key_id_.clear();
-    appearance_pressed_key_id_.clear();
     wifi_body_ = nullptr;
     wifi_detail_body_ = nullptr;
     datetime_body_ = nullptr;
@@ -170,7 +156,6 @@ void SettingsApp::ResetUiPointers() {
     device_cloud_body_ = nullptr;
     brightness_label_ = nullptr;
     brightness_slider_ = nullptr;
-    std::fill(std::begin(theme_buttons_), std::end(theme_buttons_), nullptr);
     language_switch_ = nullptr;
     usb_disk_dialog_ = nullptr;
     button_action_dialog_ = nullptr;
@@ -218,10 +203,6 @@ void SettingsApp::ShowPage(SettingsPage page) {
 
     CloseButtonActionDialog();
     current_page_ = page;
-    appearance_pressed_key_id_.clear();
-    if (appearance_timer_ != nullptr && page != SettingsPage::kAppearance) {
-        lv_timer_pause(appearance_timer_);
-    }
     if (cloud_pairing_timer_ != nullptr && page != SettingsPage::kDeviceCloud) {
         lv_timer_pause(cloud_pairing_timer_);
     }
@@ -248,26 +229,10 @@ void SettingsApp::ShowPage(SettingsPage page) {
     if (device_cloud_body_ != nullptr) {
         lv_obj_add_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
     }
-    if (appearance_body_ != nullptr) {
-        lv_obj_add_flag(appearance_body_, LV_OBJ_FLAG_HIDDEN);
-    }
     web_files_page_.Hide();
 
     // 显示目标页面
     switch (page) {
-        case SettingsPage::kAppearance:
-            if (appearance_body_ == nullptr) {
-                CreateAppearancePage();
-            }
-            lv_obj_clear_flag(appearance_body_, LV_OBJ_FLAG_HIDDEN);
-            if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "外观定制");
-            }
-            UpdateAppearancePage();
-            if (appearance_timer_ != nullptr) {
-                lv_timer_resume(appearance_timer_);
-            }
-            break;
         case SettingsPage::kMain:
             if (main_body_ != nullptr) {
                 lv_obj_clear_flag(main_body_, LV_OBJ_FLAG_HIDDEN);
@@ -362,7 +327,6 @@ void SettingsApp::NavigateBack() {
         current_page_ == SettingsPage::kSystemShell ||
         current_page_ == SettingsPage::kButtons ||
         current_page_ == SettingsPage::kDeviceCloud ||
-        current_page_ == SettingsPage::kAppearance ||
         current_page_ == SettingsPage::kWebFiles) {
         ShowPage(SettingsPage::kMain);
         return;
