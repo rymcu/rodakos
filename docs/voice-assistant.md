@@ -126,6 +126,10 @@ releases the DAC; after TTS drains, music reopens its original format and resume
 decode position. Recorder and camera requests intentionally keep their existing non-resuming focus
 policy.
 
+Each reply's `Playback audio stats` log line also reports `pcm_peak_dbfs` and `pcm_rms_dbfs`, measured
+on decoded PCM before the DAC volume stage, plus the shared output `volume`. Use them to tell a
+quiet TTS source (low RMS) apart from a low device volume when a reply is hard to hear.
+
 ## Wire behavior
 
 The device uses `rodak-realtime-voice/v1` over the endpoint supplied by the AIoT

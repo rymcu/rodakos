@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/pcm_level_meter.h"
 #include "phone_os/task-retirement.h"
 #include "phone_os/voice_assistant_state.h"
 #include "phone_os/voice_assistant_reconnect_coordinator.h"
@@ -150,6 +151,7 @@ private:
     uint32_t playback_decoded_frames_ = 0;
     uint64_t playback_decoded_pcm_bytes_ = 0;
     uint32_t playback_write_failures_ = 0;
+    PcmLevelMeter playback_level_;
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
     std::string message_ = "Ready";

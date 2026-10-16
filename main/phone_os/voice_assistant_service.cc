@@ -1167,6 +1167,7 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             playback_decoded_frames_ = 0;
             playback_decoded_pcm_bytes_ = 0;
             playback_write_failures_ = 0;
+            playback_level_.Reset();
             // A queued reply supersedes the previous stop's delayed listen rearm.
             follow_up_rearm_pending_ = false;
             follow_up_rearm_not_before_us_ = 0;
@@ -1199,6 +1200,7 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             ++playback_audio_events_;
             ++playback_decoded_frames_;
             playback_decoded_pcm_bytes_ += pcm.size() * sizeof(int16_t);
+            playback_level_.Add(pcm.data(), pcm.size());
             if (!audio_output_.IsOpenForOwner(kFocusOwner) &&
                 !audio_output_.OpenForOwner(
                     kFocusOwner, static_cast<uint32_t>(sample_rate), 1, 16)) {
@@ -1218,9 +1220,13 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
         case VoiceInboundEventType::kSpeakingStopped: {
             ESP_LOGI(TAG, "Playback audio stats: packets=%" PRIu32
                      " decoded_frames=%" PRIu32 " pcm_bytes=%" PRIu64
-                     " write_failures=%" PRIu32,
+                     " write_failures=%" PRIu32 " pcm_peak_dbfs=%.1f pcm_rms_dbfs=%.1f"
+                     " volume=%d",
                      playback_audio_events_, playback_decoded_frames_,
-                     playback_decoded_pcm_bytes_, playback_write_failures_);
+                     playback_decoded_pcm_bytes_, playback_write_failures_,
+                     static_cast<double>(playback_level_.PeakDbfs()),
+                     static_cast<double>(playback_level_.RmsDbfs()),
+                     audio_output_.volume());
             VoiceConversationAction action = VoiceConversationAction::kIgnore;
             xSemaphoreTake(mutex_, portMAX_DELAY);
             barge_in_policy_.StopPlayback();

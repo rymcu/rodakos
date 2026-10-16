@@ -14,6 +14,7 @@ add_executable(rodakos_app_model_tests
     voice_conversation_policy_test.cc
     voice_barge_in_policy_test.cc
     voice_pcm_assembler_test.cc
+    pcm_level_meter_test.cc
     voice_aec_diagnostic_capture_test.cc
     voice_wake_settings_test.cc
     voice_identity_test.cc
