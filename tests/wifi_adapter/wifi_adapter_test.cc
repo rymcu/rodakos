@@ -37,6 +37,23 @@ struct Gate {
 };
 }
 
+RODAK_TEST("WiFi init sets the DHCP hostname and registers the same mDNS name before connecting") {
+    Fixture f;
+    RODAK_CHECK(NetifHostname() == "rodakos-c3b430");
+    RODAK_CHECK(MdnsHostname() == "rodakos-c3b430");
+    RODAK_CHECK(MdnsInstanceName() == "RodakOS");
+    RODAK_CHECK(ConnectCalls() == 0);
+}
+
+RODAK_TEST("WiFi init still succeeds when mDNS cannot start") {
+    Reset();
+    SetMdnsInitResult(ESP_ERR_NO_MEM);
+    std::unique_ptr<WiFiAdapter> wifi(CreateWiFiAdapter());
+    RODAK_CHECK(wifi->Init());
+    RODAK_CHECK(NetifHostname() == "rodakos-c3b430");
+    RODAK_CHECK(MdnsHostname().empty());
+}
+
 RODAK_TEST("WiFi recovery backs off through a long AP outage and resumes the same configuration") {
     Fixture f; f.Establish();
     RODAK_CHECK_EQ(f.callbacks.size(), 1u);

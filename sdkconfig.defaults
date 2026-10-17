@@ -113,7 +113,7 @@ CONFIG_MBEDTLS_X509_CREATE_C=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC is not set
 
-# Trusted-server mDNS discovery starts lazily on the first route failure and keeps its
+# mDNS starts with WiFi (device hostname + trusted-server discovery) and keeps its
 # task stack and records for the rest of uptime. Keep them in PSRAM so internal RAM
 # stays available for WebRTC/TLS AES-DMA bounce buffers.
 CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y

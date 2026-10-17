@@ -31,4 +31,8 @@ int IPInfoCalls();
 int LiveTimers();
 bool TimerDeletionRequested();
 std::string ConfiguredSSID();
+std::string NetifHostname();
+std::string MdnsHostname();
+std::string MdnsInstanceName();
+void SetMdnsInitResult(esp_err_t error);
 }

@@ -3,6 +3,7 @@
 
 #include <esp_event.h>
 #include <esp_log.h>
+#include <esp_mac.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
 #include <esp_wifi_default.h>
@@ -10,6 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
+#include <mdns.h>
 #include <nvs_flash.h>
 
 #include <algorithm>
@@ -110,6 +112,7 @@ public:
     std::string GetIPAddress() const override;
 
 private:
+    void AnnounceLocalHostname(esp_netif_t* sta_netif);
     static void WiFiEventHandler(void* arg, esp_event_base_t event_base,
                                  int32_t event_id, void* event_data);
     void HandleWiFiEvent(esp_event_base_t event_base, int32_t event_id, void* event_data);
@@ -518,8 +521,37 @@ bool ESP32WiFiAdapter::Init() {
         event_task_handle_.store(nullptr, std::memory_order_release);
     }
 
+    AnnounceLocalHostname(sta_netif);
     ESP_LOGI(TAG, "WiFi initialized");
     return true;
+}
+
+void ESP32WiFiAdapter::AnnounceLocalHostname(esp_netif_t* sta_netif) {
+    uint8_t mac[6] = {};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) return;
+    char hostname[20] = {};
+    std::snprintf(hostname, sizeof(hostname), "rodakos-%02x%02x%02x", mac[3], mac[4], mac[5]);
+
+    // DHCP 在首次关联时携带主机名，必须在 Connect 之前设置，路由器列表里才不是 "espressif"。
+    esp_err_t ret = ESP_OK;
+    {
+        std::lock_guard<std::mutex> api_lock(api_mutex_);
+        ret = esp_netif_set_hostname(sta_netif, hostname);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set DHCP hostname: %s", esp_err_to_name(ret));
+    }
+
+    // 与服务器发现共用同一个 mDNS 实例（mdns_init 可重入）；任务栈与记录已配置在 PSRAM，
+    // 常驻不占内部堆。mDNS 跟随 STA 的 GOT_IP/LOST_IP 自动上线和下线。
+    ret = mdns_init();
+    if (ret == ESP_OK) ret = mdns_hostname_set(hostname);
+    if (ret == ESP_OK) ret = mdns_instance_name_set("RodakOS");
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS hostname registration failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "mDNS hostname: %s.local", hostname);
 }
 
 void ESP32WiFiAdapter::Deinit() {

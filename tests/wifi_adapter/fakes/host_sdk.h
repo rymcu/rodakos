@@ -18,6 +18,7 @@ inline constexpr int ESP_EVENT_ANY_ID = -1, WIFI_EVENT_STA_START = 1,
     WIFI_EVENT_STA_CONNECTED = 2, WIFI_EVENT_STA_DISCONNECTED = 3, WIFI_EVENT_SCAN_DONE = 4,
     IP_EVENT_STA_GOT_IP = 5, IP_EVENT_STA_LOST_IP = 6, WIFI_MODE_STA = 1,
     WIFI_IF_STA = 1, WIFI_SCAN_TYPE_ACTIVE = 1, WIFI_AUTH_OPEN = 0;
+enum esp_mac_type_t { ESP_MAC_WIFI_STA = 0 };
 struct esp_netif_t {};
 struct esp_ip4_addr_t { uint32_t addr = 0; };
 struct esp_netif_ip_info_t { esp_ip4_addr_t ip; };
@@ -50,6 +51,11 @@ esp_err_t esp_event_loop_create_default();
 esp_netif_t* esp_netif_create_default_wifi_sta();
 void esp_netif_destroy_default_wifi(void*);
 esp_err_t esp_netif_get_ip_info(esp_netif_t*, esp_netif_ip_info_t*);
+esp_err_t esp_netif_set_hostname(esp_netif_t*, const char*);
+esp_err_t esp_read_mac(uint8_t*, esp_mac_type_t);
+esp_err_t mdns_init();
+esp_err_t mdns_hostname_set(const char*);
+esp_err_t mdns_instance_name_set(const char*);
 esp_err_t esp_wifi_init(const wifi_init_config_t*);
 esp_err_t esp_wifi_deinit();
 esp_err_t esp_wifi_start();

@@ -27,6 +27,8 @@ std::atomic<int> ip_info_calls{0};
 int timers_in_flight = 0;
 bool timer_deletion = false, associated = false, event_post_failure = false;
 std::string configured_ssid, associated_ssid;
+std::string netif_hostname, mdns_hostname, mdns_instance_name;
+esp_err_t mdns_init_result = ESP_OK;
 esp_err_t connect_result = ESP_OK, disconnect_result = ESP_ERR_WIFI_NOT_CONNECT;
 esp_err_t ap_info_result = ESP_OK;
 esp_err_t ip_info_result = ESP_OK;
@@ -47,6 +49,8 @@ void Enqueue(esp_event_base_t base, int id, const void* payload, size_t size) {
 namespace wifi_host {
 void Reset() {
     std::lock_guard<std::mutex> lock(mutex);
+    netif_hostname.clear(); mdns_hostname.clear(); mdns_instance_name.clear();
+    mdns_init_result = ESP_OK;
     handlers.clear(); timers.clear(); events.clear();
     now = 0; connect_calls = 0; disconnect_calls = 0; overlaps = 0; driver_calls = 0;
     timer_deletion = associated = event_post_failure = false;
@@ -154,6 +158,10 @@ int IPInfoCalls() { return ip_info_calls; }
 int LiveTimers() { std::lock_guard<std::mutex> lock(mutex); return static_cast<int>(timers.size()); }
 bool TimerDeletionRequested() { std::lock_guard<std::mutex> lock(mutex); return timer_deletion; }
 std::string ConfiguredSSID() { std::lock_guard<std::mutex> lock(mutex); return configured_ssid; }
+std::string NetifHostname() { std::lock_guard<std::mutex> lock(mutex); return netif_hostname; }
+std::string MdnsHostname() { std::lock_guard<std::mutex> lock(mutex); return mdns_hostname; }
+std::string MdnsInstanceName() { std::lock_guard<std::mutex> lock(mutex); return mdns_instance_name; }
+void SetMdnsInitResult(esp_err_t error) { std::lock_guard<std::mutex> lock(mutex); mdns_init_result = error; }
 }
 const char* esp_err_to_name(esp_err_t) { return "fake-error"; }
 esp_err_t nvs_flash_init() { return ESP_OK; }
@@ -166,6 +174,20 @@ esp_err_t esp_netif_get_ip_info(esp_netif_t*, esp_netif_ip_info_t* result) {
     DriverCall call; ++ip_info_calls; std::lock_guard<std::mutex> lock(mutex);
     if (ip_info_result != ESP_OK) return ip_info_result;
     result->ip.addr = live_ip; return ESP_OK;
+}
+esp_err_t esp_netif_set_hostname(esp_netif_t*, const char* hostname) {
+    DriverCall call; std::lock_guard<std::mutex> lock(mutex); netif_hostname = hostname; return ESP_OK;
+}
+esp_err_t esp_read_mac(uint8_t* mac, esp_mac_type_t) {
+    const uint8_t fixed[6] = {0x44, 0x1b, 0xf6, 0xc3, 0xb4, 0x30};
+    std::copy(fixed, fixed + 6, mac); return ESP_OK;
+}
+esp_err_t mdns_init() { std::lock_guard<std::mutex> lock(mutex); return mdns_init_result; }
+esp_err_t mdns_hostname_set(const char* hostname) {
+    std::lock_guard<std::mutex> lock(mutex); mdns_hostname = hostname; return ESP_OK;
+}
+esp_err_t mdns_instance_name_set(const char* instance) {
+    std::lock_guard<std::mutex> lock(mutex); mdns_instance_name = instance; return ESP_OK;
 }
 esp_err_t esp_wifi_init(const wifi_init_config_t*) { DriverCall call; return ESP_OK; }
 esp_err_t esp_wifi_deinit() { DriverCall call; return ESP_OK; }
