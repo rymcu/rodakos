@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 using esp_codec_dev_handle_t = void*;
 constexpr int ESP_CODEC_DEV_OK = 0;
@@ -22,6 +23,8 @@ inline int closes = 0;
 inline int initializations = 0;
 inline int deinitializations = 0;
 inline int handle = 0;
+inline esp_codec_dev_sample_info_t format{};
+inline std::vector<int16_t> written;
 
 inline void Reset() {
     fail_volume_write = false;
@@ -32,11 +35,14 @@ inline void Reset() {
     closes = 0;
     initializations = 0;
     deinitializations = 0;
+    format = {};
+    written.clear();
 }
 }  // namespace fake_codec
 
-inline int esp_codec_dev_open(esp_codec_dev_handle_t, esp_codec_dev_sample_info_t*) {
+inline int esp_codec_dev_open(esp_codec_dev_handle_t, esp_codec_dev_sample_info_t* format) {
     ++fake_codec::opens;
+    fake_codec::format = *format;
     fake_codec::open = true;
     return ESP_CODEC_DEV_OK;
 }
@@ -51,6 +57,9 @@ inline int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t, int volume) {
     fake_codec::volume = volume;
     return ESP_CODEC_DEV_OK;
 }
-inline int esp_codec_dev_write(esp_codec_dev_handle_t, void*, int) {
-    return fake_codec::open ? ESP_CODEC_DEV_OK : -1;
+inline int esp_codec_dev_write(esp_codec_dev_handle_t, void* data, int bytes) {
+    if (!fake_codec::open) return -1;
+    const auto* samples = static_cast<const int16_t*>(data);
+    fake_codec::written.insert(fake_codec::written.end(), samples, samples + bytes / sizeof(int16_t));
+    return ESP_CODEC_DEV_OK;
 }

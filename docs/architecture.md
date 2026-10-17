@@ -102,8 +102,10 @@ eight pages, including boundary clamping and active/previous/next order; this ta
 
 The same target now compiles production `AudioOutputService`, `AudioService`, and
 `AudioCodecOutput` with fake lower-level board/codec APIs. It verifies volume API error propagation,
-configuration-cache retention, atomic relative updates and initial-open cleanup/retry. It also
-compiles the production volume MCP dispatcher. `tests/voice_volume_service/` compiles the real
+configuration-cache retention, atomic relative updates and initial-open cleanup/retry, plus the
+fixed four-slot playback frame and its sample expansion. It also compiles the production volume
+MCP dispatcher. `tests/codec_volume/` runs the patched esp_codec_dev I2S negotiation and checks
+that capture and playback opens keep the shared TX DMA ring size. `tests/voice_volume_service/` compiles the real
 `VoiceAssistantService`, inbound queue, I/O loop and reconnect coordinator with host dependencies,
 covering early initialize, Stop cancellation, stale generations and session ledger reset.
 `tests/codec_volume/` separately
@@ -211,6 +213,14 @@ Built-in apps are registered in `main/apps/built_in_apps.cc`:
   `esp_codec_dev_set_vol_curve()`. That call keeps a small internal-RAM allocation for the device
   lifetime; made on the first playback, it split a free block and left too little contiguous RAM for
   the voice WebSocket task. The stored and reported volume remains the user's 0–100 value.
+- ES8311 playback and ES7210 capture share I2S0. `AudioCodecOutput` opens every playback stream in
+  capture's four-slot 16-bit frame with slot mask `0x3`, expanding each mono or stereo 16-bit sample
+  into both halves of the two 32-bit TX slots. esp_codec_dev reprograms the TX channel for
+  whichever side opens. A mono 16-bit playback frame shrank the TX DMA ring from 6 × 1,920 B to
+  6 × 480 B, and the next capture open regrew it. Each size change frees and reallocates the ring
+  in internal RAM. After a spoken reply, the regrown buffers split the contiguous block the voice
+  WebSocket task needs, so the next wake failed with "Device memory low". Playback accepts only
+  1–2 channel 16-bit PCM; it stages conversions in a reusable PSRAM buffer.
 - MQTT desired-volume application checks the setter result and reports the retained configuration
   on failure. A source-verified build overlay for esp_codec_dev 1.5.7 propagates the selected
   codec/software-volume driver's exact error and only commits the dependency cache on success.

@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -172,6 +173,8 @@ inline unsigned heap_caps_get_minimum_free_size(unsigned) { return 1024 * 1024; 
 inline unsigned heap_caps_get_largest_free_block(unsigned caps) {
     return caps == MALLOC_CAP_DEFAULT ? 16384 : 1024 * 1024;
 }
+inline void* heap_caps_malloc(size_t bytes, unsigned) { return std::malloc(bytes); }
+inline void heap_caps_free(void* pointer) { std::free(pointer); }
 
 struct HostMqttClient;
 using esp_mqtt_client_handle_t = HostMqttClient*;

@@ -370,3 +370,67 @@ RODAK_TEST("Audio output writes the mapped codec volume on open and on change") 
     RODAK_CHECK(output.SetVolume(100));
     RODAK_CHECK_EQ(codec_volume, 100);
 }
+
+RODAK_TEST("Playback opens the capture-shaped I2S frame for every source format") {
+    // Capture's 4x16-bit frame sizes the shared I2S0 TX DMA ring. Any other playback frame makes
+    // IDF free and regrow that ring in internal RAM on the next capture open.
+    const struct {
+        uint32_t sample_rate;
+        uint16_t channels;
+    } formats[] = {{16000, 1}, {24000, 1}, {44100, 2}, {48000, 2}};
+    for (const auto& format : formats) {
+        ResetCodec();
+        rodakos::AudioOutputService output;
+        RODAK_CHECK(output.OpenForOwner("test", format.sample_rate, format.channels, 16));
+        RODAK_CHECK_EQ(static_cast<int>(fake_codec::format.channel), 4);
+        RODAK_CHECK_EQ(static_cast<int>(fake_codec::format.bits_per_sample), 16);
+        RODAK_CHECK_EQ(static_cast<int>(fake_codec::format.channel_mask), 0x3);
+        RODAK_CHECK_EQ(fake_codec::format.sample_rate, format.sample_rate);
+    }
+}
+
+RODAK_TEST("Playback expands each source frame into both halves of the two 32-bit slots") {
+    ResetCodec();
+    rodakos::AudioOutputService output;
+    RODAK_CHECK(output.OpenForOwner("mono", 16000, 1, 16));
+    const int16_t mono[] = {100, -200, 32767};
+    RODAK_CHECK(output.WriteForOwner("mono", mono, sizeof(mono)));
+    const std::vector<int16_t> mono_frames = {
+        100, 100, 100, 100, -200, -200, -200, -200, 32767, 32767, 32767, 32767};
+    RODAK_CHECK(fake_codec::written == mono_frames);
+    output.CloseForOwner("mono");
+
+    fake_codec::written.clear();
+    RODAK_CHECK(output.OpenForOwner("stereo", 48000, 2, 16));
+    // A trailing half frame is dropped instead of shifting later channels.
+    const int16_t stereo[] = {1, 2, -3, 4, 5};
+    RODAK_CHECK(output.WriteForOwner("stereo", stereo, sizeof(stereo)));
+    const std::vector<int16_t> stereo_frames = {1, 1, 2, 2, -3, -3, 4, 4};
+    RODAK_CHECK(fake_codec::written == stereo_frames);
+}
+
+RODAK_TEST("Playback splits long writes into whole frames without losing samples") {
+    ResetCodec();
+    rodakos::AudioOutputService output;
+    RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
+    std::vector<int16_t> pcm(2049);
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        pcm[i] = static_cast<int16_t>(i);
+    }
+    RODAK_CHECK(output.WriteForOwner("test", pcm.data(), static_cast<int>(pcm.size() * sizeof(int16_t))));
+    RODAK_CHECK_EQ(fake_codec::written.size(), pcm.size() * 4);
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        RODAK_CHECK_EQ(fake_codec::written[i * 4], pcm[i]);
+        RODAK_CHECK_EQ(fake_codec::written[i * 4 + 3], pcm[i]);
+    }
+}
+
+RODAK_TEST("Playback rejects formats the fixed codec frame cannot carry") {
+    ResetCodec();
+    rodakos::AudioOutputService output;
+    RODAK_CHECK_FALSE(output.OpenForOwner("test", 16000, 1, 24));
+    RODAK_CHECK_FALSE(output.OpenForOwner("test", 16000, 4, 16));
+    RODAK_CHECK_FALSE(output.IsOpen());
+    RODAK_CHECK_EQ(fake_codec::opens, 0);
+    RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
+}

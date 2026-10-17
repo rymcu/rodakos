@@ -8,6 +8,7 @@
 #include <esp_board_manager.h>
 #include <esp_codec_dev.h>
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_log_level.h>
 
@@ -16,6 +17,20 @@ namespace {
 constexpr const char* TAG = "AudioCodecOutput";
 constexpr const char* kAudioDacDeviceName = "audio_dac";
 constexpr const char* kI2sCommonTag = "i2s_common";
+
+// ES8311 playback and ES7210 capture share I2S0, and esp_codec_dev reprograms the TX channel to
+// match whichever side opens. Capture's four 16-bit TDM slots leave TX as two 32-bit slots. A mono
+// or stereo 16-bit playback format would shrink the TX DMA ring, and the next capture open would
+// grow it back. IDF frees and reallocates its six internal-RAM DMA buffers on every size change,
+// and the regrown buffers split the contiguous block the voice WebSocket task needs. Playing
+// through the capture frame keeps the ring size fixed.
+//
+// esp_codec_dev passes the channel mask through as the STD slot mask, so 0x3 enables both TX slots
+// (capture's 0xF matches neither). Each 16-bit sample fills both halves of its 32-bit slot, so the
+// ES8311 hears it whichever half its 16-bit word length samples.
+constexpr uint8_t kCodecFrameSlots = 4;
+constexpr uint16_t kCodecPlaybackSlotMask = 0x3;
+constexpr size_t kWriteChunkFrames = 512;
 
 // esp_codec_dev's default curve maps 1-100 linearly onto -50..0 dB, which leaves the default
 // volume 60 at -20 dB and hard to hear on BigSmart's small speaker. Lift the middle of the range
@@ -84,6 +99,11 @@ int AudioCodecVolumeForUserVolume(int volume) {
     return ToCodecVolume(volume);
 }
 
+AudioCodecOutput::~AudioCodecOutput() {
+    // Board Manager devices outlive this adapter; only release memory the adapter owns.
+    heap_caps_free(frame_buffer_);
+}
+
 bool AudioCodecOutput::Init() {
     if (initialized_) {
         return true;
@@ -119,6 +139,8 @@ void AudioCodecOutput::Deinit() {
         dac_handle_ = nullptr;
         ESP_LOGI(TAG, "Audio codec output deinitialized");
     }
+    heap_caps_free(frame_buffer_);
+    frame_buffer_ = nullptr;
 }
 
 bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bits_per_sample, int volume) {
@@ -132,17 +154,30 @@ bool AudioCodecOutput::Open(uint32_t sample_rate, uint16_t channels, uint16_t bi
     if (codec_open_) {
         Close();
     }
+    if (bits_per_sample != 16 || (channels != 1 && channels != 2)) {
+        ESP_LOGE(TAG, "Unsupported playback format: %u ch, %u bits",
+                 static_cast<unsigned>(channels), static_cast<unsigned>(bits_per_sample));
+        return false;
+    }
 
     esp_codec_dev_handle_t codec = CodecFromHandle(dac_handle_);
     if (codec == nullptr) {
         ESP_LOGE(TAG, "Audio DAC unavailable");
         return false;
     }
+    if (frame_buffer_ == nullptr) {
+        frame_buffer_ = static_cast<int16_t*>(heap_caps_malloc(
+            kWriteChunkFrames * kCodecFrameSlots * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (frame_buffer_ == nullptr) {
+            ESP_LOGE(TAG, "Playback frame buffer unavailable");
+            return false;
+        }
+    }
 
     esp_codec_dev_sample_info_t sample_info = {};
-    sample_info.bits_per_sample = static_cast<uint8_t>(bits_per_sample);
-    sample_info.channel = static_cast<uint8_t>(channels);
-    sample_info.channel_mask = 0;
+    sample_info.bits_per_sample = 16;
+    sample_info.channel = kCodecFrameSlots;
+    sample_info.channel_mask = kCodecPlaybackSlotMask;
     sample_info.sample_rate = sample_rate;
     sample_info.mclk_multiple = (sample_rate % 11025U) == 0 ? 384 : 256;
 
@@ -175,7 +210,7 @@ void AudioCodecOutput::Close() {
 }
 
 bool AudioCodecOutput::Write(const void* data, int bytes) {
-    if (data == nullptr || bytes <= 0 || !codec_open_) {
+    if (data == nullptr || bytes <= 0 || !codec_open_ || frame_buffer_ == nullptr) {
         return false;
     }
 
@@ -184,10 +219,29 @@ bool AudioCodecOutput::Write(const void* data, int bytes) {
         return false;
     }
 
-    const int ret = esp_codec_dev_write(codec, const_cast<void*>(data), bytes);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Codec write failed: %d", ret);
-        return false;
+    const auto* samples = static_cast<const int16_t*>(data);
+    // A trailing partial frame cannot be played and is dropped.
+    size_t frames = static_cast<size_t>(bytes) / (channels_ * sizeof(int16_t));
+    while (frames > 0) {
+        const size_t chunk = std::min(frames, kWriteChunkFrames);
+        int16_t* slot = frame_buffer_;
+        for (size_t i = 0; i < chunk; ++i) {
+            const int16_t left = samples[0];
+            const int16_t right = channels_ == 2 ? samples[1] : left;
+            slot[0] = left;
+            slot[1] = left;
+            slot[2] = right;
+            slot[3] = right;
+            samples += channels_;
+            slot += kCodecFrameSlots;
+        }
+        const int ret = esp_codec_dev_write(
+            codec, frame_buffer_, static_cast<int>(chunk * kCodecFrameSlots * sizeof(int16_t)));
+        if (ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Codec write failed: %d", ret);
+            return false;
+        }
+        frames -= chunk;
     }
     return true;
 }

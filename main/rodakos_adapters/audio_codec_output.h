@@ -9,6 +9,11 @@ int AudioCodecVolumeForUserVolume(int volume);
 
 class AudioCodecOutput {
 public:
+    AudioCodecOutput() = default;
+    ~AudioCodecOutput();
+    AudioCodecOutput(const AudioCodecOutput&) = delete;
+    AudioCodecOutput& operator=(const AudioCodecOutput&) = delete;
+
     bool Init();
     void Deinit();
 
@@ -30,6 +35,8 @@ private:
     uint16_t channels_ = 0;
     uint16_t bits_per_sample_ = 0;
     void* dac_handle_ = nullptr;
+    // PSRAM staging for the codec's four-slot frame; kept until Deinit.
+    int16_t* frame_buffer_ = nullptr;
 };
 
 }  // namespace rodakos

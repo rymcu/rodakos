@@ -17,6 +17,9 @@ struct FakeI2sChannel {
     int unsafe_enables = 0;
     int slot_calls = 0;
     int io_calls = 0;
+    int std_slot_mask = 0;
+    uint32_t dma_buf_size = 0;
+    int dma_reallocations = 0;
 };
 
 namespace {
@@ -29,6 +32,20 @@ int SetSlot(FakeI2sChannel* channel) {
     }
     // Model IDF's stale buf_size: a retry can report success with DMA still absent.
     return ESP_OK;
+}
+
+// Mirrors i2s_std_set_slot() in IDF 6.0.2: the TX DMA ring is freed and reallocated whenever
+// frame_num * bytes_per_sample * active_slot changes.
+void RecordStdSlot(FakeI2sChannel* channel, const i2s_std_slot_config_t* config) {
+    constexpr uint32_t kDmaFrameNum = 240;
+    const uint32_t active_slots = config->slot_mode == I2S_SLOT_MODE_MONO ? 1 : 2;
+    const uint32_t buf_size =
+        kDmaFrameNum * static_cast<uint32_t>((config->data_bit_width + 7) / 8) * active_slots;
+    if (buf_size != channel->dma_buf_size) {
+        channel->dma_buf_size = buf_size;
+        ++channel->dma_reallocations;
+    }
+    channel->std_slot_mask = config->slot_mask;
 }
 
 esp_codec_dev_sample_info_t Format() {
@@ -98,8 +115,10 @@ esp_err_t i2s_channel_enable(i2s_chan_handle_t channel) {
 esp_err_t i2s_channel_disable(i2s_chan_handle_t channel) {
     channel->enabled = false; return ESP_OK;
 }
-esp_err_t i2s_channel_reconfig_std_slot(i2s_chan_handle_t channel, const i2s_std_slot_config_t*) {
-    return SetSlot(channel);
+esp_err_t i2s_channel_reconfig_std_slot(i2s_chan_handle_t channel, const i2s_std_slot_config_t* config) {
+    const esp_err_t result = SetSlot(channel);
+    if (result == ESP_OK) RecordStdSlot(channel, config);
+    return result;
 }
 esp_err_t i2s_channel_reconfig_tdm_slot(i2s_chan_handle_t channel, const i2s_tdm_slot_config_t*) {
     return SetSlot(channel);
@@ -112,6 +131,52 @@ esp_err_t i2s_channel_read(i2s_chan_handle_t channel, void*, size_t bytes, size_
 esp_err_t i2s_channel_write(i2s_chan_handle_t channel, const void*, size_t bytes, size_t* written, uint32_t) {
     ++channel->io_calls; *written = bytes; return channel->dma_valid ? ESP_OK : ESP_FAIL;
 }
+}
+
+// Registered before the fault tests below, which latch both I2S ports for the process lifetime.
+RODAK_TEST("Capture-shaped playback keeps the shared I2S TX DMA ring size across capture and playback") {
+    FakeI2sChannel tx;
+    FakeI2sChannel rx{I2S_COMM_MODE_TDM, I2S_DIR_RX};
+    const auto* output = Data(0, &tx, nullptr);
+    const auto* input = Data(0, nullptr, &rx);
+    auto dac = Codec(output, ESP_CODEC_DEV_TYPE_OUT);
+    auto adc = Codec(input, ESP_CODEC_DEV_TYPE_IN);
+    auto capture = Format();
+    auto playback = Format();
+    playback.channel_mask = 0x3;
+
+    RODAK_CHECK_EQ(esp_codec_dev_open(adc, &capture), ESP_CODEC_DEV_OK);
+    const uint32_t ring = tx.dma_buf_size;
+    const int reallocations = tx.dma_reallocations;
+    RODAK_CHECK_EQ(ring, 1920U);
+
+    // Playback during capture, then capture alone again (the voice-session sequence).
+    RODAK_CHECK_EQ(esp_codec_dev_open(dac, &playback), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(tx.std_slot_mask, I2S_STD_SLOT_BOTH);
+    RODAK_CHECK_EQ(esp_codec_dev_close(dac), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_close(adc), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_open(adc, &capture), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_close(adc), ESP_CODEC_DEV_OK);
+
+    // Playback alone, then capture opened while playback runs.
+    RODAK_CHECK_EQ(esp_codec_dev_open(dac, &playback), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_open(adc, &capture), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_close(dac), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(tx.dma_buf_size, ring);
+    RODAK_CHECK_EQ(tx.dma_reallocations, reallocations);
+
+    // The previous mono 16-bit playback format shrank the ring while capture was running.
+    esp_codec_dev_sample_info_t mono = capture;
+    mono.channel = 1;
+    mono.channel_mask = 0;
+    RODAK_CHECK_EQ(esp_codec_dev_open(dac, &mono), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(tx.dma_buf_size, 480U);
+    RODAK_CHECK(tx.dma_reallocations > reallocations);
+
+    esp_codec_dev_delete(dac);
+    esp_codec_dev_delete(adc);
+    audio_codec_delete_data_if(input);
+    audio_codec_delete_data_if(output);
 }
 
 RODAK_TEST("I2S paired TX DMA failure is propagated and shared port remains blocked across retries") {

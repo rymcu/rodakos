@@ -324,9 +324,12 @@ The dedicated host target compiles the generated full `esp_codec_dev.c` and
 upstream codec headers. I2S/RTOS facilities and hardware callbacks are host fakes. The no-codec
 case exercises real software PCM gain. The I2S fixture models DMA loss and a misleadingly
 successful same-format retry; it verifies paired/duplex failure propagation, blocked re-enable,
-read/write rejection and the latch surviving interface recreation.
+read/write rejection and the latch surviving interface recreation. A separate case models IDF's
+TX DMA buffer sizing and checks that `AudioCodecOutput`'s capture-shaped playback frame keeps the
+shared TX ring size across capture and playback opens. The fix is in RodakOS, not the overlay, so
+this case also passes against upstream.
 
-The current 19 cases pass in Debug and ASan/UBSan with leak detection; 15 Python checks validate
+The current 20 cases pass in Debug and ASan/UBSan with leak detection; 15 Python checks validate
 source drift rejection and generation. Running the same cases on the untouched upstream source
 produces 11 expected failures, including both I2S failure cases. Host allocation injection does
 not prove real DMA recovery or acoustic behavior. Firmware build, identified-device startup,
