@@ -279,6 +279,35 @@ RELOCATION RECORDS FOR [.text.jpeg_enc_open]:
             edges.append({"caller": caller, "address": 0x7050 + index * 0x100, "target": 0x6100})
         return elf, edges
 
+    def test_reviewed_scope_callers_are_decoded_within_their_own_bounds(self):
+        # Actual final ELF after unrelated code moved LoadMemoryImage: the full linear
+        # objdump printed its bytes as raw words, so the scope lifetime looked missing.
+        symbols = {
+            "_ZN7rodakos12ImageLibrary12_GLOBAL__N_1L15LoadMemoryImageEv":
+                {"type": 2, "address": 0x7000, "size": 0x20},
+            "_ZN7rodakos13CameraService11CaptureJpegEv": {"type": 2, "address": 0x7100, "size": 0x20},
+            "_ZN7rodakos14DisplayService10EncodeJpegEv": {"type": 2, "address": 0x7200, "size": 0x20},
+            "_ZN7rodakos9PhotosApp6UpdateEv": {"type": 2, "address": 0x7300, "size": 0x20},
+            "_ZN7rodakos12ImageLibrary16IsSupportedImageEv": {"type": 2, "address": 0x7400, "size": 0x20},
+            "_ZN7rodakos14DisplayService10EncodeJpegEv.cold": {"type": 2, "address": 0x7500, "size": 0},
+        }
+        self.assertEqual(check.reviewed_scope_callers(symbols), {
+            "_ZN7rodakos12ImageLibrary12_GLOBAL__N_1L15LoadMemoryImageEv",
+            "_ZN7rodakos13CameraService11CaptureJpegEv",
+            "_ZN7rodakos14DisplayService10EncodeJpegEv",
+        })
+        name = "_ZN7rodakos12ImageLibrary12_GLOBAL__N_1L15LoadMemoryImageEv"
+        text = f"""00007000 <{name}>:
+    7000: 004136 entry a1, 32
+    7003: 000081 l32r a8, 3c001000 <literal>
+    7006: 0008e0 callx8 a8
+    7009: 000005 call8 6100 <_ZN7rodakos25ScreenJpegAllocationScopeD1Ev>
+    7100: 000005 call8 6000 <outside_bounds>
+"""
+        edges, unknown = check.linked_calls(text, lambda address: 0x6000, {name: symbols[name]})
+        self.assertEqual([edge["target"] for edge in edges], [0x6000, 0x6100])
+        self.assertEqual(unknown, [])
+
     def test_native_tls_scope_records_real_calls_and_alignment(self):
         elf, edges = self.scope_fixture()
         self.assertEqual(check.verify_scope(elf, edges)["per_task_aligned_bytes"], 16)

@@ -417,6 +417,31 @@ def audited_scope_calls(args, elf):
     return required, edges, unresolved
 
 
+def reviewed_scope_callers(symbols):
+    return {name for name, info in symbols.items() if info["type"] == 2 and info["size"] and
+            any(owner in name and function in name for owner, function in SCOPE_CALLERS)}
+
+
+def audited_scope_caller_calls(args, elf):
+    # .xt.prop is incomplete in IDF 6 links, so a full linear objdump of the final ELF can
+    # leave a reviewed caller undecoded when unrelated code shifts the layout. Decode exactly
+    # those callers within their symbol bounds on the load-identical metadata-free view.
+    callers = reviewed_scope_callers(elf.symbols)
+    directory = args.output.parent if args.output else None
+    with tempfile.TemporaryDirectory(prefix="jpeg-scope-", dir=directory) as temporary:
+        view = Path(temporary) / "analysis-only.elf"
+        make_analysis_view(elf, view)
+        edges, unresolved = [], []
+        for name in sorted(callers):
+            info = elf.symbols[name]
+            text = run_tool(args.tool_prefix, "objdump", "-d", f"--start-address={info['address']}",
+                            f"--stop-address={info['address'] + info['size']}", view)
+            found, unknown = linked_calls(text, elf.word, {name: info})
+            edges.extend(found)
+            unresolved.extend(unknown)
+    return callers, edges, unresolved
+
+
 def verify_edges(symbols, expected, edges, unresolved):
     originals, wrappers = {}, {}
     for name in ALLOCATORS:
@@ -577,6 +602,9 @@ def main():
             scoped, scope_edges, scope_unknown = audited_scope_calls(args, elf)
             edges = [edge for edge in edges if edge["caller"] not in scoped] + scope_edges
             unresolved = [edge for edge in unresolved if edge["caller"] not in scoped] + scope_unknown
+            callers, caller_edges, caller_unknown = audited_scope_caller_calls(args, elf)
+            edges = [edge for edge in edges if edge["caller"] not in callers] + caller_edges
+            unresolved = [edge for edge in unresolved if edge["caller"] not in callers] + caller_unknown
             verify_edges(elf.symbols, report["expected_callers"], edges, unresolved)
             scope = verify_scope(elf, edges)
             scope["native_thread_pointer_functions"] = verify_native_tls(elf, disassembly, unresolved)
