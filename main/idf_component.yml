@@ -45,6 +45,8 @@ dependencies:
   espressif/esp_sccb_intf: "0.0.8"
   espressif/tinyusb: "0.21.0~1"
   espressif/usb_host_uvc: "2.5.1"
+  # usb_host_uvc 只约束 ^1.0.0：注册表发布 1.6.0 后重新配置会静默升级，改变 Camera 依赖图
+  espressif/usb: "1.5.0"
 
   idf:
     version: "6.0.2"
