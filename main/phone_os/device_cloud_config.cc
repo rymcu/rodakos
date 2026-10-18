@@ -1994,10 +1994,16 @@ bool DeviceCloudConfigService::PrepareTrustSetupIdentity(std::string& device_sec
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveTrustSetup(
     const ServerTrust& trust, uint16_t https_port, const std::string& connect_address,
     const std::string& request_id, const std::string& request_token) {
-    std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::try_to_lock);
-    if (!refresh_lock.owns_lock()) {
-        SetError("Device cloud refresh is busy; retry first setup");
-        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    // Rodak 已在 /trust 中作废旧令牌，放弃保存就会丢失这次确认；未绑定设备的后台 Refresh
+    // 会周期性占用此锁（尝试默认地址失败约需 10 秒），因此等待而不是立即放弃。
+    std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::defer_lock);
+    const int64_t deadline_ms = esp_timer_get_time() / 1000 + 30000;
+    while (!refresh_lock.try_lock()) {
+        if (esp_timer_get_time() / 1000 >= deadline_ms) {
+            SetError("Device cloud refresh is busy; retry first setup");
+            return ProvisioningUrlSaveResult::kFailedRolledBack;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
     std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
     std::string error;

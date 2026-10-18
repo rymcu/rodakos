@@ -4,9 +4,12 @@
 #include "phone_os/trust_setup_transport.h"
 
 #include <cJSON.h>
+#include <esp_app_desc.h>
+#include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_memory_utils.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -175,6 +178,36 @@ void LanOnboardingService::TaskBody(void* arg) {
     service->busy_.store(false);
 }
 
+void LanOnboardingService::RunWithInternalStack(const std::function<void()>& work) {
+    if (esp_ptr_internal(esp_cpu_get_sp()) || internal_work_task_ == nullptr) {
+        work();
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(internal_work_mutex_);
+        // 只有单个首次接入任务会交出工作，槽位此时必然空闲
+        internal_work_ = &work;
+        internal_work_waiter_ = xTaskGetCurrentTaskHandle();
+    }
+    xTaskNotifyGive(internal_work_task_);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+
+void LanOnboardingService::PumpInternalStackWork() {
+    const std::function<void()>* work = nullptr;
+    TaskHandle_t waiter = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(internal_work_mutex_);
+        work = internal_work_;
+        waiter = internal_work_waiter_;
+        internal_work_ = nullptr;
+        internal_work_waiter_ = nullptr;
+    }
+    if (work == nullptr) return;
+    (*work)();
+    xTaskNotifyGive(waiter);
+}
+
 bool LanOnboardingService::Cancelled() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return cancel_generation_.load() != job_generation_;
@@ -218,8 +251,16 @@ void LanOnboardingService::RunDiscover() {
 void LanOnboardingService::RunConnect(const DiscoveredRodakServer& server) {
     std::string error;
     std::string device_secret;
-    if (!cloud_.PrepareTrustSetupIdentity(device_secret)) {
-        Publish(LanOnboardingPhase::kFailed, cloud_.last_error());
+    std::string client_id;
+    bool identity_ready = false;
+    std::string identity_error;
+    RunWithInternalStack([&]() {
+        identity_ready = cloud_.PrepareTrustSetupIdentity(device_secret);
+        if (!identity_ready) identity_error = cloud_.last_error();
+        else client_id = cloud_.GetClientId();
+    });
+    if (!identity_ready) {
+        Publish(LanOnboardingPhase::kFailed, identity_error);
         return;
     }
     const auto base_url = BaseUrl(server.address, server.port);
@@ -263,7 +304,18 @@ void LanOnboardingService::RunConnect(const DiscoveredRodakServer& server) {
     cJSON_AddStringToObject(request, "productKey", kRodakBigSmartProductKey);
     cJSON_AddStringToObject(request, "deviceKey", device_key.c_str());
     cJSON_AddStringToObject(request, "deviceName", "RodakOS RYMCU BigSmart");
-    cJSON_AddStringToObject(request, "clientId", cloud_.GetClientId().c_str());
+    cJSON_AddStringToObject(request, "clientId", client_id.c_str());
+    // Rodak 据 application/board 认定这是 RodakOS BigSmart，与现有绑定申请一致
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const char* firmware_version = app_desc != nullptr ? app_desc->version : "unknown";
+    cJSON_AddStringToObject(request, "firmwareVersion", firmware_version);
+    cJSON_AddStringToObject(request, "hardwareVersion", "rymcu_bigsmart");
+    cJSON* application = cJSON_AddObjectToObject(request, "application");
+    cJSON_AddStringToObject(application, "name", "rodakos");
+    cJSON_AddStringToObject(application, "version", firmware_version);
+    cJSON* board = cJSON_AddObjectToObject(request, "board");
+    cJSON_AddStringToObject(board, "type", "rymcu_bigsmart");
+    cJSON_AddStringToObject(board, "productKey", kRodakBigSmartProductKey);
     cJSON* trust_setup = cJSON_Parse(session->RequestObjectJson().c_str());
     cJSON_AddItemToObject(request, "trustSetup", trust_setup);
     char* printed = cJSON_PrintUnformatted(request);
@@ -383,12 +435,17 @@ void LanOnboardingService::RunConnect(const DiscoveredRodakServer& server) {
         RecordFailure("服务器身份校验失败，已停止");
         return;
     }
-    const auto saved = cloud_.SaveTrustSetup(trust, server.port, server.address, request_id,
-                                             rotated_token);
+    ProvisioningUrlSaveResult saved = ProvisioningUrlSaveResult::kFailedRolledBack;
+    std::string save_error;
+    RunWithInternalStack([&]() {
+        saved = cloud_.SaveTrustSetup(trust, server.port, server.address, request_id,
+                                      rotated_token);
+        if (saved != ProvisioningUrlSaveResult::kSaved) save_error = cloud_.last_error();
+    });
     if (saved != ProvisioningUrlSaveResult::kSaved) {
         RecordFailure(saved == ProvisioningUrlSaveResult::kStateUncertain
                           ? "保存服务器信息失败，请重启设备后重试"
-                          : cloud_.last_error());
+                          : save_error);
         return;
     }
     ESP_LOGI(TAG, "First setup pinned Rodak server %s", trust.tls_name.c_str());

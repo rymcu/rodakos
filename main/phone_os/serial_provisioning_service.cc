@@ -548,6 +548,15 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         std::fflush(stdout);
         return dropped;
     }
+    constexpr char kLanOnboardingPrefix[] = "RODAK_RELEASE_TEST_V1 lan_onboarding ";
+    if (line.rfind(kLanOnboardingPrefix, 0) == 0) {
+        const bool queued = lan_onboarding_test_callback_ &&
+            lan_onboarding_test_callback_(line.substr(sizeof(kLanOnboardingPrefix) - 1));
+        std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"lan_onboarding\":%s}\n",
+                     queued ? "true" : "false");
+        std::fflush(stdout);
+        return queued;
+    }
     if (line == "RODAK_RELEASE_TEST_V1 heap_map") {
         PrintInternalHeapMap();
         return true;

@@ -4,6 +4,9 @@
 #include "phone_os/server_trust.h"
 #include "phone_os/task-retirement.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -62,6 +65,11 @@ public:
     // 成功固定服务器后回调（在后台任务中调用），用于触发现有的 Refresh。
     void SetCompletedCallback(std::function<void()> callback);
 
+    // 后台任务栈在 PSRAM：NVS/flash 访问会关闭 cache，必须交给内部 RAM 栈的任务执行。
+    // 与 OtaUpdateService 相同，由 main 循环所在的常驻任务泵出。
+    void SetInternalWorkTask(TaskHandle_t task) { internal_work_task_ = task; }
+    void PumpInternalStackWork();
+
 private:
     enum class Job { kDiscover, kConnect };
     bool StartJob(Job job, const DiscoveredRodakServer& server);
@@ -71,6 +79,7 @@ private:
     void Publish(LanOnboardingPhase phase, std::string message = {});
     void RecordFailure(const std::string& message);
     bool Cancelled() const;
+    void RunWithInternalStack(const std::function<void()>& work);
 
     DeviceCloudConfigService& cloud_;
     mutable std::mutex mutex_;
@@ -84,6 +93,10 @@ private:
     int consecutive_failures_ = 0;
     TaskRetirementOwner retirement_owner_;
     TaskRetirementTicket retirement_;
+    TaskHandle_t internal_work_task_ = nullptr;
+    std::mutex internal_work_mutex_;
+    const std::function<void()>* internal_work_ = nullptr;
+    TaskHandle_t internal_work_waiter_ = nullptr;
 };
 
 }  // namespace rodakos

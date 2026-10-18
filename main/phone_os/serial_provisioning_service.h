@@ -46,6 +46,10 @@ public:
 #ifdef RODAKOS_RELEASE_TESTS
     // Configure once before Start; drops the MQTT transport for a TLS reconnect test.
     void SetMqttDropCallback(std::function<bool()> callback) { mqtt_drop_callback_ = std::move(callback); }
+    // Configure once before Start; drives first setup without the touch screen in hardware tests.
+    void SetLanOnboardingTestCallback(std::function<bool(const std::string&)> callback) {
+        lan_onboarding_test_callback_ = std::move(callback);
+    }
     // Configure once before Start; the controller outlives this service.
     void SetVoiceLifecycleDiagnostic(VoiceLifecycleDiagnostic* diagnostic) {
         voice_lifecycle_diagnostic_ = diagnostic;
@@ -85,6 +89,7 @@ private:
 #ifdef RODAKOS_RELEASE_TESTS
     VoiceLifecycleDiagnostic* voice_lifecycle_diagnostic_ = nullptr;
     std::function<bool()> mqtt_drop_callback_;
+    std::function<bool(const std::string&)> lan_onboarding_test_callback_;
 #endif
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> running_{false};

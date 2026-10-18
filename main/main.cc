@@ -71,6 +71,7 @@
 #include <lvgl.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -658,6 +659,7 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
     unified_mqtt_service.SetVoiceWakeService(&voice_wake_service);
+    static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
     static rodakos::SerialProvisioningService serial_provisioning_service(
         wifi, device_cloud_config_service,
         []() { unified_mqtt_service.RequestCredentialRefresh(); },
@@ -788,6 +790,34 @@ extern "C" void app_main(void) {
     serial_provisioning_service.SetVoiceLifecycleDiagnostic(&voice_lifecycle_diagnostic);
     serial_provisioning_service.SetMqttDropCallback(
         []() { return unified_mqtt_service.DropTransportForTest(); });
+    // 硬件验收：discover / connect <index> / manual <ipv4> <port> / cancel / status
+    serial_provisioning_service.SetLanOnboardingTestCallback([](const std::string& command) {
+        if (command == "discover") return lan_onboarding_service.StartDiscovery();
+        if (command == "cancel") {
+            lan_onboarding_service.Cancel();
+            return true;
+        }
+        const auto snapshot = lan_onboarding_service.Snapshot();
+        if (command == "status") {
+            ESP_LOGI(TAG, "LAN onboarding status: phase=%d servers=%u code=%s message=%s",
+                     static_cast<int>(snapshot.phase), static_cast<unsigned>(snapshot.servers.size()),
+                     snapshot.code.c_str(), snapshot.message.c_str());
+            return true;
+        }
+        if (command.rfind("connect ", 0) == 0) {
+            const size_t index = std::strtoul(command.c_str() + 8, nullptr, 10);
+            return index < snapshot.servers.size() &&
+                lan_onboarding_service.Connect(snapshot.servers[index]);
+        }
+        if (command.rfind("manual ", 0) == 0) {
+            char address[48] = {};
+            unsigned port = 0;
+            return std::sscanf(command.c_str() + 7, "%47s %u", address, &port) == 2 &&
+                port > 0 && port < 65536 &&
+                lan_onboarding_service.ConnectManual(address, static_cast<uint16_t>(port));
+        }
+        return false;
+    });
     ESP_LOGW(TAG, "RODAKOS_RELEASE_TESTS active: USB voice lifecycle diagnostic enabled");
 #endif
 
@@ -806,7 +836,6 @@ extern "C" void app_main(void) {
     services.SetButtons(&button_binding_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
-    static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
     // 首次接入只固定了服务器证书；凭据由现有的 status → token 流程取得，再通知 MQTT 重连
     lan_onboarding_service.SetCompletedCallback([]() {
         unified_mqtt_service.RequestCredentialRefresh();
@@ -912,6 +941,7 @@ extern "C" void app_main(void) {
     uint32_t main_health_ticks = 0;
     // OTA hands its flash and NVS steps to this internal-RAM stack and wakes it at once.
     ota_update_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
+    lan_onboarding_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
     while (true) {
 #ifdef RODAKOS_RELEASE_TESTS
         // Outside all service/UI/serial locks, on the permanent internal-stack task.
@@ -919,6 +949,7 @@ extern "C" void app_main(void) {
 #endif
         rodakos::PumpTaskRetirements();
         ota_update_service.PumpInternalStackWork();
+        lan_onboarding_service.PumpInternalStackWork();
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
             appearance_service.ReleaseBootAssets();
@@ -949,6 +980,7 @@ extern "C" void app_main(void) {
             const TickType_t elapsed = xTaskGetTickCount() - tick_start;
             if (ulTaskNotifyTake(pdTRUE, tick_period - elapsed) != 0) {
                 ota_update_service.PumpInternalStackWork();
+                lan_onboarding_service.PumpInternalStackWork();
             }
         }
     }
