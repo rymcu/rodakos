@@ -548,6 +548,27 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         std::fflush(stdout);
         return dropped;
     }
+    // 硬件验收：与设置页“选择 Wi-Fi”相同——只切换并在连上后保存 Wi-Fi，不改设备云配置，
+    // 用于验证换网后经 mDNS 找回服务器。SSID 不能含空格。
+    constexpr char kWifiSwitchPrefix[] = "RODAK_RELEASE_TEST_V1 wifi_switch ";
+    if (line.rfind(kWifiSwitchPrefix, 0) == 0 && wifi_ != nullptr) {
+        const std::string arguments = line.substr(sizeof(kWifiSwitchPrefix) - 1);
+        const size_t split = arguments.find(' ');
+        const std::string ssid = arguments.substr(0, split);
+        const std::string password = split == std::string::npos ? std::string() : arguments.substr(split + 1);
+        const bool started = !ssid.empty() && wifi_->DisconnectAndWait(2000) &&
+            wifi_->Connect(ssid, password, [ssid, password](WiFiStatus status) {
+                if (status != WiFiStatus::kConnected) return;
+                WiFiConfig config;
+                if (!config.SaveCredentials(ssid, password)) {
+                    ESP_LOGW(TAG, "Release test WiFi switch connected but credentials were not saved");
+                }
+            });
+        std::fprintf(stdout, "RODAK_RELEASE_TEST_RESULT {\"wifi_switch\":%s}\n",
+                     started ? "true" : "false");
+        std::fflush(stdout);
+        return started;
+    }
     constexpr char kLanOnboardingPrefix[] = "RODAK_RELEASE_TEST_V1 lan_onboarding ";
     if (line.rfind(kLanOnboardingPrefix, 0) == 0) {
         const bool queued = lan_onboarding_test_callback_ &&
