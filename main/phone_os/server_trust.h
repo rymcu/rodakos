@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -64,5 +65,15 @@ std::string ServerTrustConnectUrl(const ServerTrust& trust, const std::string& l
 // DNS-SD is only a bounded, unauthenticated source of candidate addresses/ports. The
 // caller must authenticate every returned endpoint with the existing TLS pin.
 std::vector<ServerRouteCandidate> DiscoverServerTrustRoutes(const ServerTrust& trust);
+
+// 首次接入用：列出局域网上全部 `_rodak._tcp`（尚无可固定的身份）。结果只是未认证的提示，
+// server_id 和名称都可被伪造；身份由 SRP 之上的证书绑定 HMAC 认证。
+struct DiscoveredRodakServer {
+    std::string server_id;
+    std::string display_name;
+    std::string address;
+    uint16_t port = 0;
+};
+std::vector<DiscoveredRodakServer> DiscoverRodakServers();
 
 }  // namespace rodakos

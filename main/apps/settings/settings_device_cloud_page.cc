@@ -3,6 +3,7 @@
 
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/device_pairing_policy.h"
+#include "phone_os/lan_onboarding_service.h"
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_services.h"
 #include "phone_ui/phone_fonts.h"
@@ -267,6 +268,22 @@ void SettingsApp::CreateDeviceCloudPage() {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowDeviceCloudUnbindDialog();
     }, LV_EVENT_CLICKED, this);
 
+    // 未固定服务器的新设备：不用 USB，经局域网与屏幕配对码首次接入
+    cloud_lan_onboarding_button_ = lv_btn_create(device_cloud_body_);
+    lv_obj_set_size(cloud_lan_onboarding_button_, 288, 38);
+    lv_obj_set_pos(cloud_lan_onboarding_button_, 4, 400);
+    lv_obj_set_style_bg_color(cloud_lan_onboarding_button_, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(cloud_lan_onboarding_button_, 7, 0);
+    auto* lan_label = lv_label_create(cloud_lan_onboarding_button_);
+    lv_label_set_text(lan_label, "连接到电脑上的 Rodak");
+    lv_obj_set_style_text_color(lan_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lan_label, &phone_font_14, 0);
+    lv_obj_center(lan_label);
+    lv_obj_add_event_cb(cloud_lan_onboarding_button_, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowLanOnboarding();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_add_flag(cloud_lan_onboarding_button_, LV_OBJ_FLAG_HIDDEN);
+
     cloud_pairing_timer_ = lv_timer_create([](lv_timer_t* timer) {
         auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
         if (self != nullptr && self->cloud_refresh_guard_ &&
@@ -290,10 +307,12 @@ void SettingsApp::UpdateDeviceCloudPage() {
 
     rodakos::DeviceCloudConfig config;
     device_cloud->Load(config);
-    if (!config.pairing_code.empty()) {
+    const bool trust_setup_request =
+        config.pairing_code == rodakos::kTrustSetupPairingCodePlaceholder;
+    if (!config.pairing_code.empty() && !trust_setup_request) {
         cloud_pairing_code_ = config.pairing_code;
     }
-    const std::string pairing_code = !config.pairing_code.empty()
+    const std::string pairing_code = !config.pairing_code.empty() && !trust_setup_request
                                          ? config.pairing_code
                                          : cloud_pairing_code_;
     const bool aiot_bound = config.aiot_registered && config.aiot_activated && !config.unbind_pending;
@@ -367,6 +386,20 @@ void SettingsApp::UpdateDeviceCloudPage() {
             lv_obj_add_flag(cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (cloud_lan_onboarding_button_ != nullptr) {
+        auto* onboarding = context_->services().lan_onboarding();
+        const bool lan_available = !aiot_bound && onboarding != nullptr && onboarding->Available();
+        if (lan_available) {
+            lv_obj_clear_flag(cloud_lan_onboarding_button_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(cloud_lan_onboarding_button_, LV_OBJ_FLAG_HIDDEN);
+        }
+        // 未固定服务器时首次接入是主入口，原有的按地址配对移到下方作备选
+        lv_obj_set_y(cloud_lan_onboarding_button_, 258);
+        if (cloud_pairing_button_ != nullptr) {
+            lv_obj_set_y(cloud_pairing_button_, lan_available ? 400 : 258);
         }
     }
     if (cloud_unbind_button_ != nullptr) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/phone_app.h"
+#include "phone_os/server_trust.h"
 #include "phone_ui/soft_keyboard.h"
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
@@ -96,6 +97,9 @@ private:
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
     bool SaveCloudProvisioningUrl(const std::string& url);
+    void ShowLanOnboarding();
+    void CloseLanOnboarding();
+    void UpdateLanOnboarding();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -170,6 +174,15 @@ private:
     std::string cloud_pairing_error_;
     std::string cloud_pairing_code_;
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
+    lv_obj_t* cloud_lan_onboarding_button_ = nullptr;
+
+    // 首次接入（无 USB）全屏页
+    lv_obj_t* lan_onboarding_overlay_ = nullptr;
+    lv_obj_t* lan_onboarding_body_ = nullptr;
+    lv_obj_t* lan_onboarding_countdown_ = nullptr;
+    lv_timer_t* lan_onboarding_timer_ = nullptr;
+    uint32_t lan_onboarding_revision_ = 0;
+    std::vector<rodakos::DiscoveredRodakServer> lan_onboarding_servers_;
 
     // Web 上传页面控件
     SettingsWebFilesPage web_files_page_;

@@ -23,6 +23,7 @@
 #include "phone_os/battery_monitor.h"
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_service.h"
+#include "phone_os/lan_onboarding_service.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
@@ -805,6 +806,12 @@ extern "C" void app_main(void) {
     services.SetButtons(&button_binding_service);
     services.SetAudioFocus(&audio_focus_service);
     services.SetDeviceCloud(&device_cloud_config_service);
+    static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
+    // 首次接入只固定了服务器证书；凭据由现有的 status → token 流程取得，再通知 MQTT 重连
+    lan_onboarding_service.SetCompletedCallback([]() {
+        unified_mqtt_service.RequestCredentialRefresh();
+    });
+    services.SetLanOnboarding(&lan_onboarding_service);
     services.SetSerialProvisioning(&serial_provisioning_service);
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);

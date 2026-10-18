@@ -15,6 +15,7 @@ class ButtonBindingService;
 class CameraService;
 class DeviceCloudConfigService;
 class FileService;
+class LanOnboardingService;
 class LightService;
 class MotionService;
 class MusicPlayerService;
@@ -69,6 +70,9 @@ public:
     void SetDeviceCloud(rodakos::DeviceCloudConfigService* device_cloud) { device_cloud_ = device_cloud; }
     rodakos::DeviceCloudConfigService* device_cloud() { return device_cloud_; }
 
+    void SetLanOnboarding(rodakos::LanOnboardingService* onboarding) { lan_onboarding_ = onboarding; }
+    rodakos::LanOnboardingService* lan_onboarding() { return lan_onboarding_; }
+
     void SetSerialProvisioning(rodakos::SerialProvisioningService* provisioning) {
         serial_provisioning_ = provisioning;
     }
@@ -121,6 +125,7 @@ private:
     rodakos::ButtonBindingService* buttons_ = nullptr;
     rodakos::AudioFocusService* audio_focus_ = nullptr;
     rodakos::DeviceCloudConfigService* device_cloud_ = nullptr;
+    rodakos::LanOnboardingService* lan_onboarding_ = nullptr;
     rodakos::SerialProvisioningService* serial_provisioning_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
     rodakos::VoiceWakeService* voice_wake_ = nullptr;

@@ -22,6 +22,13 @@ size_t lan_trust_setup_random_remaining(void) {
 }
 
 void esp_fill_random(void* buffer, size_t length) {
+    if (g_length == 0) {
+        // 未排队时退回系统随机源：生产模块自行生成码、salt 与 nonce
+        FILE* source = fopen("/dev/urandom", "rb");
+        if (source == NULL || fread(buffer, 1, length, source) != length) abort();
+        fclose(source);
+        return;
+    }
     if (g_offset + length > g_length) {
         fprintf(stderr, "random queue exhausted: need %zu, have %zu\n", length, g_length - g_offset);
         abort();

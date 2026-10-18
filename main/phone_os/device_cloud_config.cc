@@ -1947,6 +1947,115 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
     return result;
 }
 
+bool DeviceCloudConfigService::PrepareTrustSetupIdentity(std::string& device_secret) {
+    device_secret.clear();
+    std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+    auto current = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (current == nullptr) {
+        SetError("Not enough memory to inspect device identity");
+        return false;
+    }
+    Load(*current);
+    if (current->server_trust_error || !current->server_trust.empty()) {
+        SetError("This device already trusts a Rodak server; use USB to change it");
+        return false;
+    }
+    if (current->aiot_registered && current->aiot_activated) {
+        SetError("This device is already bound; unbind it before first setup");
+        return false;
+    }
+    Settings settings(kCloudNamespace, true);
+    std::string secret;
+    const auto status = settings.ReadString(kAiotSecretKey, secret, 512);
+    if (status != SettingsStringReadStatus::kOk && status != SettingsStringReadStatus::kNotFound) {
+        SetError("Failed to read device identity");
+        return false;
+    }
+    if (status == SettingsStringReadStatus::kNotFound || secret.empty()) {
+        uint8_t primary_channel = 0;
+        wifi_second_chan_t secondary_channel = WIFI_SECOND_CHAN_NONE;
+        // esp_fill_random requires active RF entropy for a new long-term key.
+        if (esp_wifi_get_home_channel(&primary_channel, &secondary_channel) != ESP_OK) {
+            SetError("WiFi must be connected before first setup");
+            return false;
+        }
+        secret = GenerateDeviceSecret();
+        if (!settings.SetString(kAiotSecretKey, secret) || !settings.Commit()) {
+            (void)settings.Commit();
+            SetError("Failed to persist device identity");
+            return false;
+        }
+    }
+    device_secret = std::move(secret);
+    last_error_.clear();
+    return true;
+}
+
+ProvisioningUrlSaveResult DeviceCloudConfigService::SaveTrustSetup(
+    const ServerTrust& trust, uint16_t https_port, const std::string& connect_address,
+    const std::string& request_id, const std::string& request_token) {
+    std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::try_to_lock);
+    if (!refresh_lock.owns_lock()) {
+        SetError("Device cloud refresh is busy; retry first setup");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+    std::string error;
+    const auto route = NormalizeServerRouteAddress(connect_address);
+    const std::string bootstrap = "https://" + trust.tls_name +
+        (https_port == 443 ? "" : ":" + std::to_string(https_port)) +
+        "/api/v1/aiot/devices/bootstrap";
+    if (!ValidateServerTrust(trust, error) || !IsServerTrustBootstrap(trust, bootstrap) ||
+        route.empty() || request_id.empty() || request_token.empty()) {
+        SetError("First setup returned an invalid server identity");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    auto previous = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (previous == nullptr) {
+        SetError("Not enough memory to snapshot first setup");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    Load(*previous);
+    // 首次接入期间如果已经经 USB 装了信任或完成了绑定，以那边为准，不覆盖
+    if (previous->server_trust_error || !previous->server_trust.empty() ||
+        (previous->aiot_registered && previous->aiot_activated) ||
+        previous->aiot_device_secret.empty()) {
+        SetError("Device identity changed during first setup; it was not applied");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    ServerAuthority authority;
+    authority.pending = {bootstrap, trust, false, route};
+    std::string encoded;
+    if (!EncodeServerAuthority(authority, encoded)) {
+        SetError("Server authority candidate cannot be encoded");
+        return ProvisioningUrlSaveResult::kFailedRolledBack;
+    }
+    // 配对申请凭据先落盘：此后即使断电，重启后也会用固定证书继续轮询这同一申请
+    previous->pairing_request_id = request_id;
+    previous->pairing_request_token = request_token;
+    previous->pairing_code = kTrustSetupPairingCodePlaceholder;
+    previous->pairing_status = "confirmed";
+    previous->aiot_pending = true;
+    if (!PersistAiotIdentity(*previous)) {
+        SetError("Failed to persist first setup pairing request");
+        return ProvisioningUrlSaveResult::kStateUncertain;
+    }
+    Settings settings(kCloudNamespace, true);
+    // 与 USB 路径相同：先置位固定标记，缺失或损坏的 authority 不会回退到明文
+    if (!settings.SetBool(kServerPinnedKey, true) || !settings.Commit() ||
+        !settings.SetString(kServerAuthorityKey, encoded) || !settings.Commit()) {
+        (void)settings.Commit();
+        ++config_generation_;
+        SetError("Server authority persistence is uncertain; cloud access blocked");
+        return ProvisioningUrlSaveResult::kStateUncertain;
+    }
+    ++config_generation_;
+    fresh_access_token_.clear();
+    credential_freshness_.ObserveRefresh(false, 0, 0);
+    last_error_.clear();
+    return ProvisioningUrlSaveResult::kSaved;
+}
+
 ProvisioningUrlSaveResult DeviceCloudConfigService::SaveProvisioningUrl(
     const std::string& url, ProvisioningUrlSaveMode mode) {
     std::lock_guard<std::recursive_mutex> lock(config_mutex_);

@@ -131,6 +131,14 @@ void SettingsApp::DestroyUi() {
     CloseNtpServerDialog();
     CloseCloudProvisioningUrlDialog();
     CloseDeviceCloudUnbindDialog();
+    if (lan_onboarding_timer_ != nullptr) {
+        lv_timer_delete(lan_onboarding_timer_);
+        lan_onboarding_timer_ = nullptr;
+    }
+    if (lan_onboarding_overlay_ != nullptr && lv_obj_is_valid(lan_onboarding_overlay_)) {
+        lv_obj_delete(lan_onboarding_overlay_);
+    }
+    lan_onboarding_overlay_ = nullptr;
     if (time_sync_timer_ != nullptr) {
         lv_timer_delete(time_sync_timer_);
         time_sync_timer_ = nullptr;
@@ -183,6 +191,12 @@ void SettingsApp::ResetUiPointers() {
     cloud_pairing_timer_ = nullptr;
     cloud_url_dialog_ = nullptr;
     cloud_url_textarea_ = nullptr;
+    cloud_lan_onboarding_button_ = nullptr;
+    lan_onboarding_overlay_ = nullptr;
+    lan_onboarding_body_ = nullptr;
+    lan_onboarding_countdown_ = nullptr;
+    lan_onboarding_timer_ = nullptr;
+    lan_onboarding_servers_.clear();
     cloud_pairing_error_.clear();
     cloud_pairing_code_.clear();
     web_files_page_.Reset();

@@ -77,6 +77,9 @@ set(SOURCES
     "phone_os/server_trust_route.cc"
     "phone_os/server_trust_transport.cc"
     "phone_os/server_trust_discovery.cc"
+    "phone_os/trust_setup_protocol.cc"
+    "phone_os/trust_setup_transport.cc"
+    "phone_os/lan_onboarding_service.cc"
     "phone_os/device_pairing_protocol.cc"
     "phone_os/battery_level_model.cc"
     "phone_os/battery_monitor.cc"
@@ -113,6 +116,7 @@ set(SOURCES
     "apps/settings/settings_buttons_page.cc"
     "apps/settings/settings_datetime_page.cc"
     "apps/settings/settings_device_cloud_page.cc"
+    "apps/settings/settings_lan_onboarding_page.cc"
     "apps/settings/settings_main_page.cc"
     "apps/settings/settings_system_shell_page.cc"
     "apps/settings/settings_usb_disk.cc"
@@ -179,6 +183,7 @@ idf_component_register(
         esp_timer
         heap
         mbedtls
+        protocomm
         rodak_ota_state
         rodak_appearance
         led_strip

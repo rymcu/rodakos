@@ -30,22 +30,29 @@ add_executable(lan_trust_setup_tests
     ../app_model/test_main.cc
     lan_trust_setup_test.cc
     protocol_vectors_test.cc
+    trust_setup_protocol_test.cc
+    ../../main/phone_os/trust_setup_protocol.cc
+    ../../main/phone_os/server_trust.cc
+    ../../main/phone_os/server_trust_route.cc
     host_random.c
     srp_harness.cc
     ../app_model/third_party/cjson/cJSON.c
     "${srp}/src/crypto/srp6a/esp_srp.c"
     "${srp}/src/crypto/srp6a/esp_srp_mpi.c")
 target_include_directories(lan_trust_setup_tests BEFORE PRIVATE
-    fakes . ../app_model ../app_model/third_party/cjson "${srp}/include/crypto/srp6a" "${srp}/src/crypto/srp6a")
+    fakes . ../../main ../app_model ../app_model/third_party/cjson "${srp}/include/crypto/srp6a" "${srp}/src/crypto/srp6a")
 target_compile_definitions(lan_trust_setup_tests PRIVATE
     LAN_TRUST_SETUP_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/srp6a-esp-vectors.json"
-    LAN_TRUST_SETUP_PROTOCOL_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/trust-setup-protocol-vectors.json")
+    LAN_TRUST_SETUP_PROTOCOL_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/trust-setup-protocol-vectors.json"
+    LAN_TRUST_SETUP_TEST_CA="${CMAKE_CURRENT_SOURCE_DIR}/../server_trust/test-ca.pem")
 target_compile_features(lan_trust_setup_tests PRIVATE cxx_std_20)
 set_source_files_properties(
     "${srp}/src/crypto/srp6a/esp_srp.c" "${srp}/src/crypto/srp6a/esp_srp_mpi.c"
     PROPERTIES COMPILE_OPTIONS "-w")
-set_source_files_properties(lan_trust_setup_test.cc protocol_vectors_test.cc srp_harness.cc host_random.c
+set_source_files_properties(lan_trust_setup_test.cc protocol_vectors_test.cc
+    trust_setup_protocol_test.cc ../../main/phone_os/trust_setup_protocol.cc srp_harness.cc host_random.c
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
-target_link_libraries(lan_trust_setup_tests PRIVATE "${MBEDCRYPTO_LIBRARY}")
+find_library(MBEDX509_LIBRARY mbedx509 REQUIRED)
+target_link_libraries(lan_trust_setup_tests PRIVATE "${MBEDX509_LIBRARY}" "${MBEDCRYPTO_LIBRARY}")
 add_test(NAME lan_trust_setup COMMAND lan_trust_setup_tests)
 set_tests_properties(lan_trust_setup PROPERTIES TIMEOUT 120)

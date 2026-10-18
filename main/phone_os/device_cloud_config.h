@@ -19,6 +19,8 @@ namespace rodakos {
 inline constexpr char kRodakBigSmartProductKey[] = "rymcu-bigsmart";
 inline constexpr char kRodakAiotProtocol[] = "rodak-aiot";
 inline constexpr int kRodakAiotProtocolVersion = 1;
+// 首次接入的码只在内存与屏幕上；确认后落盘的申请用这个占位值，界面不能把它当配对码显示。
+inline constexpr char kTrustSetupPairingCodePlaceholder[] = "trust-setup";
 
 struct DeviceCloudConfig {
     std::string provisioning_url;
@@ -122,6 +124,16 @@ public:
     ProvisioningUrlSaveResult SaveSerialProvisioning(
         const std::string& url, const std::string& binding_nonce, std::string& binding_proof,
         const ServerTrust* server_trust = nullptr);
+    // 首次接入（无 USB）：未固定服务器且未绑定时才可用。返回现有或新建的设备密钥，
+    // 新建时同 USB 路径一样写入 NVS；不会替换已有身份。
+    bool PrepareTrustSetupIdentity(std::string& device_secret);
+    // 首次接入成功：把经 SRP 认证的 server_trust 固定为 pending authority，并写入已轮换的
+    // 配对申请凭据；之后的 Refresh 用固定证书完成现有的 status → token 流程。
+    // connect_address 为用户选中的数字地址，与经 mDNS 恢复的路由语义相同。
+    ProvisioningUrlSaveResult SaveTrustSetup(const ServerTrust& trust, uint16_t https_port,
+                                             const std::string& connect_address,
+                                             const std::string& request_id,
+                                             const std::string& request_token);
     // 返回 AIoT 配对与云端主题使用的稳定设备标识。
     std::string GetDeviceKey();
     std::string GetClientId();
