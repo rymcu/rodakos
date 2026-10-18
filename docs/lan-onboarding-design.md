@@ -1,6 +1,6 @@
 # 无 USB 局域网首次接入设计
 
-状态：设计已确认，按分阶段实施；第 1 步（测试向量）与第 2 步（Rodak 端）已完成，第 3 步（设备端）未开始。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
+状态：第 1–3 步已完成，2026-10-18 首次实机验收通过（见文末“实机验收”）；伪造响应者、过期与取消场景尚未实机验证。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
 设备认领规则见 Rodak 仓库 `docs/device-binding-authentication.md`。
 
 ## 目标
@@ -337,3 +337,26 @@ Rodak（Node crypto）与本仓库主机测试（mbedTLS PSA）各自独立重�
 1. 信任建立模式使用 **6 位**数字码；现有模式保持 8 位不变。
 2. 家庭空间**可选**，不选时放入“未分配”。
 3. “Rodak 主动发现附近未接入设备”（设备注册 `_rodakos-setup._tcp`）放到**第二版**。
+
+## 实机验收（2026-10-18）
+
+设备 `44:1b:f6:c3:b4:30`，固件 `lan-onboarding-004`（开发签名测试包），擦除 NVS 后在设备屏幕
+连接 Wi-Fi；Rodak 以新代码运行 HTTPS。经 release-test 串口钩子与 Rodak 渲染进程 API 驱动：
+
+| 阶段 | 结果 |
+| --- | --- |
+| mDNS 发现 | 找到 1 台 Rodak |
+| 首次连接 + 申请 | 1.8 s 后屏幕显示 6 位码，Rodak 列表出现“首次接入”申请 |
+| 桌面端输码 | `awaiting-device`（22 ms） |
+| 设备 SRP 校验、证书绑定、`/trust`、写入信任 | 约 3.3 s 后 Rodak 显示 `confirmed` |
+| 重启并用固定证书取凭据 | 重启后约 6.5 s MQTTS 连接成功 |
+
+内部堆在显示配对码期间为 29.7–31.8 KB（largest 17,408 B），流程中无断言或重启。
+
+验收中修复了三处问题：PSRAM 栈任务直接访问 NVS 触发 cache 断言（改为交给内部 RAM
+常驻任务执行）；`SaveTrustSetup` 与后台 Refresh 争用刷新锁时立即放弃（改为最多等待
+30 秒）；申请缺少 application/board 身份字段。
+
+尚未实机验证：同网段伪造 `_rodak._tcp` 响应者、码输错与过期、用户取消、热点网络、
+接入后换 Wi-Fi 找回。首次接入使用 `skip_cert_common_name_check`，esp-tls 每次请求会打印一条
+警告，这是有意为之（身份由证书绑定 HMAC 认证）。
