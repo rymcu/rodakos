@@ -31,7 +31,7 @@ Actions 不可用不阻塞交付，实际测试失败和硬件门禁独立处理
 - 按锁文件哈希缓存组件下载源；命中缓存后仍做哈希校验。测试构建目录、生成补丁及签名
   fixture 每次重新生成，不从缓存恢复。
 - ESP-IDF 仅获取 `v6.0.2` 的源提交 `7101770dc6db2667b3c477cc31365dd1acd6db4e`，
-  用于传输 overlay 的来源核验与真实 NVS Storage 测试。主机 job 不安装 Xtensa 编译器，
+  用于传输 overlay 的来源核验、真实 NVS Storage 测试，以及 `esp_srp` 信任建立测试向量。主机 job 不安装 Xtensa 编译器，
   不执行固件构建。
 - Actions 使用已核对的完整 commit SHA，工作流 token 只有 `contents: read`，checkout
   不保留凭据；PR 检查不使用 `pull_request_target`。

@@ -1,11 +1,11 @@
 # 无 USB 局域网首次接入设计
 
-状态：提案，未实现。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
+状态：设计已确认，按分阶段实施；第 1 步（SRP 测试向量）已完成，见 `tests/lan_trust_setup`。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
 设备认领规则见 Rodak 仓库 `docs/device-binding-authentication.md`。
 
 ## 目标
 
-用户第一次拿到设备，只在设备屏幕上连 Wi-Fi、在 Rodak 桌面端输一次配对码，就能把设备
+用户第一次拿到设备，只在设备屏幕上连 Wi-Fi、在 Rodak 桌面端输一次 6 位配对码，就能把设备
 接入同一局域网内的 Rodak 服务器，并获得与 USB 下发等价的服务器信任。不需要数据线、手机
 App、蓝牙或电脑热点。
 
@@ -48,7 +48,7 @@ App、蓝牙或电脑热点。
 ─────────────                                  ──────────────
 1. 用户选 Wi-Fi，入网
 2. 查询 _rodak._tcp → 列出服务器，用户选一台
-3. 本地生成 8 位码，屏幕显示（码不发出）
+3. 本地生成 6 位码，屏幕显示（码不发出）
 4. HTTPS（仅记录证书指纹）POST binding/request
    附带 trustSetup：SRP salt、B、看到的 SPKI 指纹
    （不带 deviceSecret）─────────────────────────▶
@@ -92,11 +92,21 @@ Rodak 只根据请求中是否带 `trustSetup` 区分两种模式。旧固件不
 由 `protocomm` 导出，主程序 `REQUIRES protocomm` 即可复用。
 
 SRP 参数：username 固定为 `rodak-trust-setup/v1`；salt 16 字节，由设备随机生成；口令为
-8 位码去掉分隔符后的 ASCII。Rodak 端实现必须与 `esp_srp` 的 `k`、`u`、`M1`、`M2` 计算
+6 位码去掉分隔符后的 ASCII。Rodak 端实现必须与 `esp_srp` 的 `k`、`u`、`M1`、`M2` 计算
 （含 PAD 规则）逐字节一致，以同一组测试向量验证。
 
 > 待验证：3072 位模幂在 ESP32-S3 上的耗时需实测，预计 1–3 秒，必须在后台任务中执行，
 > 不能阻塞 LVGL。
+
+`esp_srp` 有两处限制，设备端必须绕开（第 1 步的主机测试已覆盖或记录）：
+
+- `esp_srp_srv_pubkey` / `esp_srp_gen_salt_verifier` 自行生成 salt 时，若首字节为 0，
+  `esp_mpi_to_bin` 会把它去掉：返回的 salt 只有 15 字节，verifier 也按 15 字节计算，
+  调用方却按 16 字节读取。设备应自行生成 16 字节 salt、按参考公式计算 verifier，再用
+  `esp_srp_set_salt_verifier` + `esp_srp_srv_pubkey_from_salt_verifier`（与 Security 2 相同）；
+- `esp_srp_get_session_key` 在 `A mod N == 0` 时的错误路径跳过了哈希对象的初始化，随后
+  对它调用 `psa_hash_abort`，属于未定义行为。设备在调用前须先检查 `A` 为 384 字节且
+  `A mod N != 0`，不依赖该分支。
 
 ### 证书绑定
 
@@ -135,7 +145,8 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 ### 抗暴力破解
 
-8 位数字约 26.6 比特：
+6 位数字约 19.9 比特。在线猜测每次会话只能试一个码，按下面的限制，攻击者平均需要
+数十万次会话、每次都要用户在桌面端配合输码，实际不可行：
 
 - 每个码只允许一次 SRP 尝试。Rodak 对同一申请只接受一次输码；码是否正确由设备校验 `M1`
   得出，失败时设备通过 `/trust` 发送 `abort`，Rodak 将申请标记为 `revoked`，设备丢弃该码
@@ -217,12 +228,14 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 ## 设备端改动
 
-- `DeviceCloudConfigService` 的申请分支：未固定服务器时生成 8 位码（`esp_fill_random`），
+- `DeviceCloudConfigService` 的申请分支：未固定服务器时生成 6 位码（`esp_fill_random`，拒绝采样避免取模偏差），
   计算 SRP salt/verifier/B，随申请发送 `trustSetup`，**不发送 `deviceSecret`**；码只保存在
   内存和屏幕上，不写 NVS，重启即作废，需重新发起。
 - 新增“仅记录指纹”的 TLS 配置：不加载 CA bundle，在 mbedTLS 验证回调里取对端证书 SPKI
   后放行。只在信任建立模式的 `binding/request`、`status`、`trust` 三个请求中使用，并且
   只针对用户选定的那个地址。
+- SRP 会话：自行生成 16 字节 salt 并计算 verifier，经 `esp_srp_set_salt_verifier` 注入；
+  收到 `A` 后先做长度与 `A mod N != 0` 预检，再调用 `esp_srp_get_session_key`。
 - status 轮询遇到 `awaiting-device`：校验 `M1` 和服务器绑定 HMAC，调用 `trust` 接口
   （附加密的 `deviceSecret`），解密并校验 `server_trust`，用新 `requestToken` 替换旧令牌，
   然后用 `SaveSerialProvisioning(..., &server_trust)` 的同一事务写入。这样 pending → active、
@@ -266,13 +279,14 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
    - 多台：列表显示计算机名和 `id` 前 8 位；
    - 没有：提示检查是否同一网络、是否开了访客网络或 AP 隔离，并提供手动输入
      `https://<IP>:9443`，后续流程相同；
-4. 显示 8 位码（4+4 分组、大字号）和倒计时；
+4. 显示 6 位码（3+3 分组、大字号）和倒计时；
 5. 成功后显示“已接入 t14p 上的 Rodak”。
 
 **桌面端**
 
-现有智能家居或设备云页面的“待确认设备”列表出现该设备，标注“首次接入”。用户输入码，
-选择家庭空间（可选），确认即可，和现在的绑定确认是同一个对话框。
+现有智能家居或设备云页面的“待确认设备”列表出现该设备，标注“首次接入”。用户输入 6 位码，
+家庭空间可选（不选则放入“未分配”），确认即可，和现在的绑定确认是同一个对话框。
+输码框需同时接受现有模式的 8 位码和信任建立模式的 6 位码，按申请类型校验长度。
 
 ## 风险与边界
 
@@ -293,8 +307,9 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 ## 分阶段
 
-1. **SRP 测试向量**：在主机上用 `esp_srp` 生成固定 salt/私钥的向量，Rodak 的
-   `srp6a-client.ts` 逐字节对齐。
+1. **SRP 测试向量（已完成）**：`tests/lan_trust_setup` 直接编译 `esp_srp` 生成
+   `srp6a-esp-vectors.json`，覆盖 salt、`A`、`B`、`S` 的前导零边界；Rodak 的
+   `srp6a-client.ts` 用同一份向量逐字节对齐。
 2. **Rodak 端**：绑定服务分支、`/trust` 路由、桌面端状态，用脚本模拟设备跑通。
 3. **设备端**：申请分支、指纹记录、status 处理、信任事务，先主机测试再上实机。
 4. **实机验收**：
@@ -306,9 +321,8 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 5. **文档**：更新本页状态、`trusted-server-discovery.md`、`serial-provisioning.md`，以及 Rodak
    的 `device-binding-authentication.md`。
 
-## 待决问题
+## 已确认的决定（2026-10-18）
 
-1. 码长度：8 位（与现有一致）还是 6 位？在“每码一次、3 次锁定”的前提下，6 位也足够，
-   输入更快。
-2. 接入后是否必须选择家庭空间？建议可选，默认放入“未分配”。
-3. 是否需要“Rodak 主动发现附近未接入设备”？这需要设备开放监听端口，建议放到第二版。
+1. 信任建立模式使用 **6 位**数字码；现有模式保持 8 位不变。
+2. 家庭空间**可选**，不选时放入“未分配”。
+3. “Rodak 主动发现附近未接入设备”（设备注册 `_rodakos-setup._tcp`）放到**第二版**。

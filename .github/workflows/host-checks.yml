@@ -78,6 +78,8 @@ jobs:
             components/nvs_flash/private_include
             components/esp_rom/linux
             components/esp_rom/include
+            components/protocomm/src/crypto/srp6a
+            components/protocomm/include/crypto/srp6a
 
       - name: Initialize container workspace paths
         run: |
