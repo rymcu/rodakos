@@ -34,5 +34,10 @@ cmake --build build/lan-trust
 ctest --test-dir build/lan-trust --output-on-failure
 ```
 
+`trust-setup-protocol-vectors.json` 是 SRP 之上的协议层向量（HKDF-SHA256 派生、证书绑定
+HMAC-SHA256、AES-256-GCM），由 Rodak `scripts/generate-trust-setup-protocol-vectors.ts` 生成；
+`protocol_vectors_test.cc` 用固件同一套 mbedTLS PSA API 独立重算并比对。两份文件在两个
+仓库中保持同一副本。
+
 只有规则或边界有意变更时才重新生成向量：设置 `LAN_TRUST_SETUP_WRITE_VECTORS=1` 运行一次，
 提交更新后的 JSON，并同步 Rodak 仓库中的副本。

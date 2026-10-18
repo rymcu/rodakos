@@ -1,6 +1,6 @@
 # 无 USB 局域网首次接入设计
 
-状态：设计已确认，按分阶段实施；第 1 步（SRP 测试向量）已完成，见 `tests/lan_trust_setup`。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
+状态：设计已确认，按分阶段实施；第 1 步（测试向量）与第 2 步（Rodak 端）已完成，第 3 步（设备端）未开始。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
 设备认领规则见 Rodak 仓库 `docs/device-binding-authentication.md`。
 
 ## 目标
@@ -115,10 +115,11 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 - 信任建立模式下，设备第一次连接 Rodak 的 HTTPS 时不验证证书，只记录服务器出示证书的
   SubjectPublicKeyInfo SHA-256，记为 `seen_spki`，并在请求中带上；
-- 双方从 SRP 会话密钥 `K` 派生 `bind_key = HKDF-SHA256(K, info = "rodak-trust-setup/v1 bind")`；
-- 绑定 HMAC 的输入为
-  `requestId ‖ deviceKey ‖ seen_spki ‖ server_spki ‖ 角色标签`，角色标签分别为 `"server"`
-  和 `"device"`，防止反射；
+- 双方从 SRP 会话密钥 `K`（64 字节）派生
+  `bind_key = HKDF-SHA256(IKM = K, salt = 空, info = "rodak-trust-setup/v1 bind", L = 32)`；
+- 绑定 HMAC-SHA256 的输入为 `LP("rodak-trust-setup/v1") ‖ LP(requestId) ‖ LP(deviceKey) ‖
+  LP(seen_spki) ‖ LP(server_spki) ‖ LP(角色)`，`LP` 为 2 字节大端长度加原始字节，字符串按
+  UTF-8；角色分别为 `"server"` 和 `"device"`，防止反射；
 - Rodak 用自己真实的 `server_spki` 计算；设备用 `seen_spki` 同时填两个位置计算并比对。
   只要设备看到的证书不是 Rodak 自己的，HMAC 就不一致，双方中止；
 - Rodak 最后下发的 `server_trust` 用下文的 `srv_key` 加密。设备解密后再检查
@@ -138,7 +139,11 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
   拿到旧令牌，也领不到 AIoT token；
 - 两个方向使用不同的密钥：
   `dev_key = HKDF(K, "rodak-trust-setup/v1 device")`，`srv_key = HKDF(K, "rodak-trust-setup/v1 server")`，
-  均为 AES-256-GCM，并以 `requestId` 作为附加数据。
+  均为 AES-256-GCM：nonce 12 字节随机，附加数据为 UTF-8 的 `requestId`，16 字节标签追加在
+  密文末尾；明文为紧凑 JSON。线上格式为 `{ "nonce": "<base64>", "ciphertext": "<base64>" }`。
+
+以上派生、绑定与加密规则的测试向量见 `tests/lan_trust_setup/trust-setup-protocol-vectors.json`，
+Rodak（Node crypto）与本仓库主机测试（mbedTLS PSA）各自独立重算，结果一致。
 
 中间人能做的只剩下：拿旧令牌轮询到公开的 SRP 参数（不含口令信息），或伪造 `abort`
 让本次接入失败。后者只是拒绝服务，用户重新生成码即可。
@@ -197,7 +202,8 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 ### `GET /api/v1/aiot/devices/binding/requests/:requestId/status`
 
-状态枚举新增 `awaiting-device`。处于该状态时，响应附带：
+状态枚举新增 `awaiting-device`。首次接入申请在 `pending` 时 `trustSetup` 为 `true`（只作标记，
+不含挑战）；处于 `awaiting-device` 时，响应附带：
 
 ```json
 {
@@ -216,8 +222,10 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
   `credentials` 是用 `dev_key` 加密的 `{ "deviceSecret": "..." }`。
 - Rodak 校验 `M2` 和设备绑定 HMAC，并解密 `credentials`：
   - 通过：用 `deviceSecret` 补上 `__pairedSecretHash`，调用现有的 `completeManualPairing`
-    和 `markConfirmed`；作废旧 `requestToken`；响应返回用 `srv_key` 加密的
-    `{ "serverTrust": {...}, "requestToken": "<新令牌>" }`；
+    和 `markConfirmed`；作废旧 `requestToken`；响应为
+    `{ "status": "confirmed", "sealed": { "nonce", "ciphertext" } }`，`sealed` 用 `srv_key` 解密后为
+    `{ "serverTrust": { "version": 1, "server_id", "tls_name", "ca_pem" }, "requestToken": "<新令牌>" }`。
+    `serverTrust` 与 USB 下发的 `server_trust` 字段完全相同，设备可直接复用 `ParseServerTrust`；
   - 任一校验失败：申请标记为 `revoked`，返回 401。
 - 每个申请只接受一次成功的 `/trust`，重放返回 409。
 - 设备若校验 `M1` 失败（码输错），也调用此接口，发送 `{ "abort": "proof_mismatch" }`，
@@ -307,10 +315,13 @@ SRP 只证明双方知道同一个码。中间人如果原样转发 SRP 消息�
 
 ## 分阶段
 
-1. **SRP 测试向量（已完成）**：`tests/lan_trust_setup` 直接编译 `esp_srp` 生成
+1. **测试向量（已完成）**：`tests/lan_trust_setup` 直接编译 `esp_srp` 生成
    `srp6a-esp-vectors.json`，覆盖 salt、`A`、`B`、`S` 的前导零边界；Rodak 的
-   `srp6a-client.ts` 用同一份向量逐字节对齐。
-2. **Rodak 端**：绑定服务分支、`/trust` 路由、桌面端状态，用脚本模拟设备跑通。
+   `srp6a-client.ts` 用同一份向量逐字节对齐。协议层（HKDF、绑定 HMAC、AES-GCM）向量
+   `trust-setup-protocol-vectors.json` 由 Rodak 生成，本仓库用 PSA 独立重算。
+2. **Rodak 端（已完成）**：绑定服务分支、`/trust` 路由、桌面端“首次接入”标记、6 位输码与
+   “等待设备确认”状态。集成测试在真实 HTTPS 上用设备模拟器（已用 `esp_srp` 向量校验）跑通
+   成功接入、码输错、TLS 中间人、HMAC 篡改与重放、明文端口拒绝、携带密钥拒绝和现有模式回归。
 3. **设备端**：申请分支、指纹记录、status 处理、信任事务，先主机测试再上实机。
 4. **实机验收**：
    - 全新 NVS 设备，在热点和路由器两种网络下各接入一次；

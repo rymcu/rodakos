@@ -1,0 +1,38 @@
+{
+  "description": "RodakOS 首次接入协议层测试向量：HKDF-SHA256 密钥派生、证书绑定 HMAC-SHA256、AES-256-GCM。字节串为小写十六进制。",
+  "generator": "rodak scripts/generate-trust-setup-protocol-vectors.ts",
+  "rules": {
+    "hkdf": "HKDF-SHA256(IKM = K, salt = 空, info = \"rodak-trust-setup/v1 <purpose>\", L = 32)，purpose 为 bind / device / server",
+    "binding": "HMAC-SHA256(bind, LP(\"rodak-trust-setup/v1\") | LP(requestId) | LP(deviceKey) | LP(seenSpki) | LP(serverSpki) | LP(role))，LP = 2 字节大端长度 + 字节，字符串为 UTF-8",
+    "deviceBinding": "设备两处都填自己看到的 SPKI；Rodak 填 seenSpki 与自己真实的 SPKI",
+    "aead": "AES-256-GCM，nonce 12 字节，AAD = UTF-8(requestId)，密文末尾附 16 字节标签；明文为 JSON（JSON.stringify，无空白）",
+    "encoding": "HTTP 中 nonce 与 ciphertext 均为标准 base64（含填充）"
+  },
+  "K": "5caf07ff5a77f224173e303172dfa7f5568061db15f2a150a5f37bbb2bf5fdfb355efe1327bc54e90d0db9aba73050866751165fa10234434f090cf86172b441",
+  "keys": {
+    "bind": "8f6effe402671d0fbcf1b9febe97eda558a028d62149335abd442daaeaf10ecc",
+    "device": "addbf8a5bc0d3aceff035fecbbae5d991352fcb9bb7586cc330d622005330442",
+    "server": "04d71557a54f277739c41f4e7c7a1e67598997012a50447f2c34889ab93bb2cc"
+  },
+  "binding": {
+    "requestId": "3f1a9c2e7b4d58a6c0e1f2a3b4c5d6e7",
+    "deviceKey": "44:1b:f6:c3:b4:30",
+    "serverSpki": "9206d5d43f55034d5afac468f7c2af5125bcd298b8946ce1bafa20419e3369d3",
+    "attackerSpki": "0d5c9f7e2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5",
+    "serverRole": "0c04e0678b23df87431eca2ba94138a43f57292e06bed344553a1617e9a3cbbb",
+    "deviceRole": "3aa557b711120ca3917689d181ce3a1143a41f449eba4bc76c73c5db0aacbc49",
+    "serverRoleWhenDeviceSawAttacker": "8eda6e417affc642c6716440cb7764b61f5a3a13d025e75cf01e4edb9a4f1326"
+  },
+  "aead": {
+    "requestId": "3f1a9c2e7b4d58a6c0e1f2a3b4c5d6e7",
+    "nonce": "a1b2c3d4e5f60718293a4b5c",
+    "device": {
+      "plaintext": "{\"deviceSecret\":\"a3f9c1e07b5d2864\"}",
+      "ciphertext": "88135dcc1403e2ded2ff907aaefddc968f9eb51fe7aa8940b085c50073012f5dda5279db0bdc3b0d4d15549b49eaff819cf4a4"
+    },
+    "server": {
+      "plaintext": "{\"serverTrust\":{\"version\":1,\"server_id\":\"9206d5d43f55034d5afac468f7c2af5125bcd298b8946ce1bafa20419e3369d3\",\"tls_name\":\"rodak-9206d5d43f55034d.local\",\"ca_pem\":\"-----BEGIN CERTIFICATE-----\\nMIIB\\n-----END CERTIFICATE-----\\n\"},\"requestToken\":\"pT0kEn-rotated_example\"}",
+      "ciphertext": "f4465d2e6170b01ad8962ed6fea6ddaba1f527a9a3f7a998df809cc9e16985f53bcc01d0ff9b7882308e0851d0a05d3cfeebf0680e617c4bea90e2662333785f9a43caa60710ffea877f75b71fa3d1dc556616c7ee42ab8661914313f2af1f37b7b169225d0945b86479f4cebbe7ff5c7fb5c01cccbbb559eeb0c9615c1a96033749ffddf410c8fc5711a6241d40aa5304454ba97facaaff91022cf2dc00bc768d075a7abfe4eef8f63aa9216e88ac7cfea08d5917c0f70069cae792aa690a83f9426b97208820eda1e69e364c3b48aa8e498f964d2d73153a64b3dede97d74d797df5a108a795c679066ee3c3d75fc7e80d8a001f4d1a9e6836816464f53243fd5aaa27c3799d08b5bf307ec1e4a598dc8cfeb00926e735"
+    }
+  }
+}
