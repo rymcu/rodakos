@@ -22,6 +22,7 @@ add_executable(rodakos_app_model_tests
     serial_provisioning_frame_test.cc
     mqtt_credential_refresh_policy_test.cc
     cloud_credential_freshness_test.cc
+    cloud_credential_renewal_test.cc
     device_pairing_policy_test.cc
     device_pairing_protocol_test.cc
     realtime_voice_contract_test.cc

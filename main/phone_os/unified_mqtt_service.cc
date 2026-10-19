@@ -666,6 +666,11 @@ void UnifiedMqttService::WorkerLoop() {
         if (reset_scheduled_.load() && !ShouldDeferCredentialRefresh()) {
             RefreshCredentials();
         }
+        // 与路由迁移的 Refresh 同在本任务的内部 RAM 栈上，NVS 写入安全；语音会话中不续期，
+        // 避免与会话抢网络和内部内存。
+        if (!reset_scheduled_.load() && connected_.load() && !ShouldDeferCredentialRefresh()) {
+            config_service_.RenewAccessTokenIfDue();
+        }
         if (connecting_.load() && started_.load() && pending_credential_config_ == nullptr &&
             !credential_restart_pending_ && !client_lifecycle_failed_.load()) {
             RunConnection();

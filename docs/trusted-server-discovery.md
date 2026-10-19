@@ -773,4 +773,36 @@ and 150 s idle, six switches between the hotspot and the router each replaced th
 No panic, `Device memory low`, task-creation or stack-size errors occurred. Serial SHA-256
 `4f80319393aa99d2f9d18c664b49034b9abd5786bc47ff0be289aaea8faaf6cc`; evidence is in
 `.codex-temp/gain-host/wifi-cycle-fixed.log`. This covers six replacements in about 13
-minutes. A multi-hour soak with replacements and TTS replies is still open.
+minutes.
+
+Six-hour soak on the committed fix (`ee656d4`, main app SHA-256
+`2f6b3d64d3317d3c6b6d6e32dcd7cf46f242f05d12080a9ede3ba1b5adc2f909`, NVS kept): 75 rounds, each one
+spoken session that waits for the TTS reply plus two silent wakes, with a switch between the hotspot
+and the router every three rounds.
+
+| Result | Count |
+|---|---|
+| WiFi switches that replaced the MQTT client | 27 / 27 |
+| Wakes that reached WebSocket start | 184; largest internal block 8,192 B at every start |
+| Spoken sessions with a TTS reply | 61 (34–389 packets) |
+| Wakes that failed in the 3 s credential preparation on the hotspot | 36 |
+| Session with no audio after `output.start` (round 74) | 1; blocked 5 later wakes |
+
+Outside the stuck session, heap maps gave a largest internal block of 8,192 B, except one 4,608 B
+sample taken while a session was still releasing memory. Free internal memory stayed between about
+20.9 KB and 25.3 KB, with no downward trend. No panic, `Device memory low`, MQTT message drop,
+task-creation or stack-size error occurred.
+
+The 36 hotspot failures happened once the token was due: about 575 s after each switch to the
+hotspot. A refresh makes two new HTTPS requests, and on the hotspot link they did not fit in the 3 s
+wake budget. The WebSocket connect median was 1.9 s on the hotspot and 0.9 s on the router. The
+background token renewal in `docs/voice-assistant.md` addresses this.
+
+In round 74 Rodak sent `output.start` and then sent no audio and no `output.stop`. The WebSocket
+stayed open for 17 min 45 s, and the device stayed in the session. While a session is active, the
+session itself holds internal RAM, so the largest block was 2,176 B during this time. Every one of
+the 184 sessions showed 2,048–2,432 B while active. The next WiFi switch broke the WebSocket. The
+session then closed normally, and memory returned to 24,983 B free with an 8,192 B largest block. The
+device has no timeout for a session that stops receiving audio after `output.start`; this is open.
+Serial SHA-256 `e87508c9ad70ec57aeb808597a4da765baf56146ced222f948b148cf17e265ea`; evidence is in
+`.codex-temp/gain-host/soak-6h.log` and `soak-6h.csv`.

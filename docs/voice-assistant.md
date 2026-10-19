@@ -30,6 +30,20 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
   Credential preparation uses a shared three-second budget for lock waiting and HTTP stages.
   This is cooperative: an in-flight DNS or HTTP library call can return later, after which its
   result is rejected. Immediate Stop cancellation during those calls remains a hardware gate.
+- A refresh needs two new HTTPS requests (bootstrap, then token). On a slow link these do not fit
+  in three seconds. On a laptop hotspot one WebSocket connect took a median of 1.9 s (0.9 s on the
+  router), and every wake after the token expired failed in preparation. To prevent this, the MQTT
+  worker renews the token in the background before it expires. Renewal starts a quarter of the token
+  lifetime before expiry, between 60 s and 300 s, and never earlier than half the lifetime. A
+  3600 s token renews 300 s early, before the 30 s margin at which a wake would refresh it. Renewal
+  runs only while MQTT is connected, no voice session is active, and no MQTT recovery is pending. It
+  takes the refresh lock without waiting, so a wake, OTA or MQTT recovery that is already
+  refreshing goes first. Renewal has a 20 s budget. If it fails on the network, the current token
+  stays in use, the diagnosis and error shown before the renewal are restored, and renewal retries
+  after 15 s, doubling to at most 8 minutes. A credential rejection or a configuration change stops
+  renewal and keeps its diagnosis for the next wake. Rodak issues the renewed token with the same
+  token version, so a session that uses the previous token is not revoked. The renewal timing is in
+  `main/phone_os/cloud_credential_renewal.h`.
 
 ## Device Cloud Diagnosis and Recovery
 

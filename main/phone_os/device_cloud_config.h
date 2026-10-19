@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/cloud_credential_freshness.h"
+#include "phone_os/cloud_credential_renewal.h"
 #include "phone_os/cloud_diagnostic.h"
 #include "phone_os/server_trust.h"
 
@@ -112,6 +113,9 @@ public:
                             const std::function<bool()>& can_continue = {},
                             CloudDiagnosticCode* failure = nullptr);
     void InvalidateAccessTokenFreshness(const std::string& rejected_token);
+    // 后台在令牌到期前续期，使唤醒时的 PrepareVoiceConfig 不必走网络。只在到期窗口
+    // 内、且拿得到刷新锁时才发请求；返回是否发起了续期。
+    bool RenewAccessTokenIfDue();
     bool IsVoiceConfigCurrent(const DeviceCloudConfig& config) const;
     // The callback is the MQTT admission linearization point. It may only
     // attach prepared state; no SDK calls, joins, HTTP or resource cleanup.
@@ -173,6 +177,7 @@ private:
     mutable uint32_t diagnostic_revision_ = 0;
     std::string fresh_access_token_;
     CloudCredentialFreshness credential_freshness_;
+    CloudCredentialRenewal credential_renewal_;
 };
 
 }  // namespace rodakos

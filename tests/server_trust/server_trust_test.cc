@@ -760,6 +760,98 @@ RODAK_TEST("Cancelled HTTP preparation cannot publish ready or mutate credential
     RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kReady);
 }
 
+RODAK_TEST("Background renewal refreshes the token before expiry so voice preparation needs no network") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    const auto authority = trust_test::strings["device_cloud/server_auth"];
+    // 3600 s 令牌：到期前 300 s 续期，早于语音准备在到期前 30 s 的刷新点。
+    trust_test::requests.clear();
+    trust_test::AdvanceTimeMs(3299000 - 100);
+    RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
+    RODAK_CHECK(trust_test::requests.empty());
+    trust_test::AdvanceTimeMs(1100);
+    RespondRotatedToken("renewed-in-background");
+    RODAK_CHECK(service.RenewAccessTokenIfDue());
+    RODAK_CHECK_EQ(trust_test::requests.size(), 2U);
+    RODAK_CHECK(trust_test::requests.front().url.ends_with("/bootstrap"));
+    RODAK_CHECK(trust_test::requests.back().url.ends_with("/auth/token"));
+    RODAK_CHECK(trust_test::requests.back().tls_verified);
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/server_auth"], authority);
+    // 原令牌本来在 300 s 后到期；现在语音准备直接用续期后的令牌，不走网络。
+    trust_test::requests.clear();
+    trust_test::AdvanceTimeMs(310000);
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK(trust_test::requests.empty());
+    RODAK_CHECK_EQ(config.aiot_access_token, "renewed-in-background");
+    RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
+}
+
+RODAK_TEST("A failed background renewal keeps the valid token, hides the error and backs off") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    RespondVoice();
+    service.InvalidateAccessTokenFreshness("new-token");
+    DeviceCloudConfig config;
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kReady);
+    const auto before = trust_test::strings;
+    trust_test::AdvanceTimeMs(3300000);
+    trust_test::replies.clear();
+    trust_test::requests.clear();
+    RODAK_CHECK(service.RenewAccessTokenIfDue());
+    RODAK_CHECK_FALSE(trust_test::requests.empty());
+    RODAK_CHECK_EQ(trust_test::strings, before);
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kReady);
+    RODAK_CHECK(service.last_error().empty());
+    // 15 s 退避内不再发请求；当前令牌仍可直接用于语音。
+    trust_test::requests.clear();
+    trust_test::AdvanceTimeMs(14000);
+    RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK(trust_test::requests.empty());
+    trust_test::AdvanceTimeMs(1100);
+    RespondRotatedToken("renewed-after-retry");
+    RODAK_CHECK(service.RenewAccessTokenIfDue());
+    RODAK_CHECK(service.PrepareVoiceConfig(config));
+    RODAK_CHECK_EQ(config.aiot_access_token, "renewed-after-retry");
+}
+
+RODAK_TEST("Background renewal stops on credential rejection and leaves it for the foreground") {
+    using rodakos::CloudDiagnosticCode;
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Activate(service);
+    const auto secret = trust_test::strings["device_cloud/device_secret"];
+    trust_test::AdvanceTimeMs(3300000);
+    trust_test::RespondBound();
+    const auto token_url = rodakos::ServerTrustUrlOrigin(trust_test::BootstrapUrl()) +
+                           "/api/v1/aiot/devices/auth/token";
+    trust_test::replies[token_url] = {401, R"({"message":"rejected"})"};
+    RODAK_CHECK(service.RenewAccessTokenIfDue());
+    RODAK_CHECK_EQ(service.diagnostic(), CloudDiagnosticCode::kCredentialsRejected);
+    RODAK_CHECK_EQ(trust_test::strings["device_cloud/device_secret"], secret);
+    trust_test::requests.clear();
+    trust_test::AdvanceTimeMs(600000);
+    RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
+    RODAK_CHECK(trust_test::requests.empty());
+}
+
+RODAK_TEST("Background renewal never runs without a verified token") {
+    trust_test::Reset(); trust_test::SeedBoundLegacy();
+    DeviceCloudConfigService service; Install(service);
+    trust_test::RespondBound();
+    trust_test::AdvanceTimeMs(7200000);
+    RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
+    RODAK_CHECK(trust_test::requests.empty());
+    DeviceCloudConfigService active; Activate(active);
+    active.InvalidateAccessTokenFreshness("new-token");
+    trust_test::requests.clear();
+    trust_test::AdvanceTimeMs(7200000);
+    RODAK_CHECK_FALSE(active.RenewAccessTokenIfDue());
+    RODAK_CHECK(trust_test::requests.empty());
+}
+
 RODAK_TEST("Repeated voice preparation only refreshes after the credential margin") {
     trust_test::Reset(); trust_test::SeedBoundLegacy();
     DeviceCloudConfigService service; Activate(service);

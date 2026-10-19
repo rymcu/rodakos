@@ -1611,6 +1611,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
                                 true, refresh_started_ms, token_lifetime_seconds);
                             config.aiot_token_expires_at_ms =
                                 credential_freshness_.expires_at_ms();
+                            credential_renewal_.ObserveToken(
+                                esp_timer_get_time() / 1000, config.aiot_token_expires_at_ms);
                         }
                     }
                 }
@@ -1791,6 +1793,7 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
         if (failure != nullptr) *failure = refresh_failure;
         if (config.cloud_generation == config_generation_) {
             credential_freshness_.ObserveRefresh(false, 0, 0);
+            credential_renewal_.Clear();
         }
         config.aiot_token_expires_at_ms = 0;
         return false;
@@ -1807,8 +1810,68 @@ void DeviceCloudConfigService::InvalidateAccessTokenFreshness(const std::string&
     if (fresh_access_token_ == rejected_token) {
         fresh_access_token_.clear();
         credential_freshness_.ObserveRefresh(false, 0, 0);
+        credential_renewal_.Clear();
         PublishDiagnostic(CloudDiagnosticCode::kCredentialsRejected);
     }
+}
+
+bool DeviceCloudConfigService::RenewAccessTokenIfDue() {
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        if (!credential_renewal_.Due(now_ms)) return false;
+    }
+    // 唤醒、OTA 或 MQTT 恢复正在刷新时让路；它们成功后会重新安排续期。
+    std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::try_to_lock);
+    if (!refresh_lock.owns_lock()) return false;
+    auto config = std::unique_ptr<DeviceCloudConfig>(new (std::nothrow) DeviceCloudConfig);
+    if (config == nullptr) return false;
+    {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        if (!credential_renewal_.Due(now_ms)) return false;
+        Load(*config);
+        if (config->server_trust_error || config->server_trust_pending ||
+            !config->aiot_registered || !config->aiot_activated ||
+            config->aiot_device_secret.empty() || config->aiot_pending ||
+            config->has_pairing_request || config->unbind_pending ||
+            !config->has_aiot_config || config->aiot_access_token != fresh_access_token_) {
+            credential_renewal_.Clear();
+            return false;
+        }
+    }
+    if (!IsValidSerialProvisioningBootstrapUrl(config->provisioning_url) ||
+        IsForbiddenLegacyProvisioningHost(config->provisioning_url)) {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        credential_renewal_.Clear();
+        return false;
+    }
+    ESP_LOGI(TAG, "Renewing access token before expiry");
+    std::string previous_error;
+    CloudDiagnosticState previous_diagnostic;
+    {
+        std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+        previous_error = last_error_;
+        previous_diagnostic = {diagnostic_, diagnostic_updated_at_ms_, diagnostic_revision_};
+    }
+    // 后台没有用户在等，给足两次 HTTPS 往返的时间。
+    const int64_t deadline_ms = esp_timer_get_time() / 1000 + 20000;
+    const auto allowed = [deadline_ms]() { return esp_timer_get_time() / 1000 < deadline_ms; };
+    bool credentials_rejected = false;
+    if (RefreshAiot(*config, allowed, deadline_ms, false, &credentials_rejected)) return true;
+    std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
+    if (credentials_rejected || config->cloud_generation != config_generation_) {
+        // 服务器拒绝或配置已换代：保留诊断，交给下一次前台准备处理。
+        credential_renewal_.Clear();
+        return true;
+    }
+    // 令牌仍有效，网络失败不是用户可见的错误：恢复续期前的诊断，稍后重试。
+    last_error_ = previous_error;
+    diagnostic_ = previous_diagnostic.code;
+    diagnostic_updated_at_ms_ = previous_diagnostic.updated_at_ms;
+    diagnostic_revision_ = previous_diagnostic.revision;
+    credential_renewal_.ObserveFailure(esp_timer_get_time() / 1000);
+    ESP_LOGW(TAG, "Access token renewal failed; current token stays valid until expiry");
+    return true;
 }
 
 bool DeviceCloudConfigService::IsVoiceConfigCurrent(const DeviceCloudConfig& config) const {
@@ -1936,6 +1999,7 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveSerialProvisioning(
         ++config_generation_;
         fresh_access_token_.clear();
         credential_freshness_.ObserveRefresh(false, 0, 0);
+        credential_renewal_.Clear();
         binding_proof = std::move(proof);
         last_error_.clear();
         return ProvisioningUrlSaveResult::kSaved;
@@ -2058,6 +2122,7 @@ ProvisioningUrlSaveResult DeviceCloudConfigService::SaveTrustSetup(
     ++config_generation_;
     fresh_access_token_.clear();
     credential_freshness_.ObserveRefresh(false, 0, 0);
+    credential_renewal_.Clear();
     last_error_.clear();
     return ProvisioningUrlSaveResult::kSaved;
 }
@@ -2174,6 +2239,7 @@ bool DeviceCloudConfigService::Unbind(DeviceCloudConfig& config) {
         std::lock_guard<std::recursive_mutex> lock(config_mutex_);
         ++config_generation_;
         credential_freshness_.ObserveRefresh(false, 0, 0);
+        credential_renewal_.Clear();
         Load(config);
     }
     const auto initial_action = GetDeviceUnbindRecoveryAction(

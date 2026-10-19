@@ -571,6 +571,8 @@ bool DeviceCloudConfigService::Refresh(DeviceCloudConfig& config) {
     return !hook || hook(call, config);
 }
 std::string DeviceCloudConfigService::last_error() const { return "host config unavailable"; }
+// 续期是 Cloud 翻译单元内部行为，由 mqtt_cloud_integration 编译真实实现验证。
+bool DeviceCloudConfigService::RenewAccessTokenIfDue() { return false; }
 #endif
 BatteryMonitor::~BatteryMonitor() = default;
 BatterySnapshot BatteryMonitor::Read() { return {}; }
