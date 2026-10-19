@@ -165,3 +165,80 @@ RODAK_TEST("voice conversation ignores follow-up starts outside an active conver
     RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
     RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(100 + policy.follow_up_timeout_ms()));
 }
+
+RODAK_TEST("voice reply that never sends audio after output.start ends the session once") {
+    // 6 小时浸泡第 74 轮：output.start 之后没有任何音频，也没有 output.stop。
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(1000);
+    RODAK_CHECK(policy.waiting_for_speaking_progress());
+    const int64_t deadline_ms = 1000 + policy.speaking_stall_timeout_ms();
+    RODAK_CHECK_EQ(policy.speaking_deadline_ms(), deadline_ms);
+    // 跟进窗口在回复期间不计时，所以单靠它永远不会结束会话。
+    RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(deadline_ms + 600000));
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(deadline_ms - 1));
+    RODAK_CHECK(policy.IsSpeakingStalled(deadline_ms));
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(deadline_ms + 1));
+    RODAK_CHECK_FALSE(policy.waiting_for_speaking_progress());
+}
+
+RODAK_TEST("voice reply audio keeps a long reply alive and a stall mid-reply still ends it") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(0);
+    // 60 ms 一帧连续 5 分钟：每帧都刷新期限，总长不受限制。
+    int64_t now_ms = 0;
+    for (int frame = 0; frame < 5000; ++frame) {
+        now_ms += 60;
+        policy.OnSpeakingAudio(now_ms);
+        RODAK_CHECK_FALSE(policy.IsSpeakingStalled(now_ms));
+    }
+    RODAK_CHECK_EQ(policy.speaking_deadline_ms(), now_ms + policy.speaking_stall_timeout_ms());
+    // 音频在回复中途停住：从最后一帧起算。
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(now_ms + policy.speaking_stall_timeout_ms() - 1));
+    RODAK_CHECK(policy.IsSpeakingStalled(now_ms + policy.speaking_stall_timeout_ms()));
+}
+
+RODAK_TEST("voice reply stop clears the stall deadline and starts the follow-up window") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(1000);
+    policy.OnSpeakingAudio(1500);
+    RODAK_CHECK_EQ(policy.OnSpeakingStopped(2000), VoiceConversationAction::kContinue);
+    RODAK_CHECK_FALSE(policy.waiting_for_speaking_progress());
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(2000 + 10 * policy.speaking_stall_timeout_ms()));
+    RODAK_CHECK(policy.waiting_for_follow_up());
+    RODAK_CHECK(policy.IsFollowUpTimedOut(2000 + policy.follow_up_timeout_ms()));
+}
+
+RODAK_TEST("voice reply each output.start rearms the stall deadline for the next sentence") {
+    // Rodak 流式回复逐句发 output.start，整轮结束才发一次 output.stop。
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(0);
+    policy.OnSpeakingAudio(5000);
+    policy.OnSpeakingStarted(19000);
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(25000));
+    RODAK_CHECK_EQ(policy.speaking_deadline_ms(), 19000 + policy.speaking_stall_timeout_ms());
+}
+
+RODAK_TEST("voice reply audio without output.start and after a finished session never arms a stall") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingAudio(100);
+    RODAK_CHECK_FALSE(policy.waiting_for_speaking_progress());
+    policy.OnSpeakingStarted(0);
+    RODAK_CHECK(policy.IsSpeakingStalled(policy.speaking_stall_timeout_ms()));
+    policy.OnSpeakingStarted(100000);
+    policy.OnSpeakingAudio(100000);
+    RODAK_CHECK_FALSE(policy.waiting_for_speaking_progress());
+    policy.Reset();
+    policy.OnSpeakingStarted(200000);
+    RODAK_CHECK(policy.waiting_for_speaking_progress());
+    policy.Reset();
+    RODAK_CHECK_FALSE(policy.waiting_for_speaking_progress());
+}
+
+RODAK_TEST("voice reply stall deadline saturates at the clock limit") {
+    VoiceConversationPolicy policy;
+    constexpr int64_t max_ms = std::numeric_limits<int64_t>::max();
+    policy.OnSpeakingStarted(max_ms - 10);
+    RODAK_CHECK_EQ(policy.speaking_deadline_ms(), max_ms);
+    RODAK_CHECK_FALSE(policy.IsSpeakingStalled(max_ms - 1));
+    RODAK_CHECK(policy.IsSpeakingStalled(max_ms));
+}

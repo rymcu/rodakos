@@ -229,6 +229,10 @@ The follow-up window is 30 seconds and is refreshed when capture restarts or
 fresh speech begins. An initial connection or first-turn failure, a terminal transport error,
 connection/listening watchdog, explicit `session.end`, or follow-up timeout closes the session and
 re-arms local wake monitoring. A watchdog must not cut off audio that is already draining.
+The device also ends the session when a reply stalls: no binary audio frame and no `output.stop`
+for 20 s after `output.start` or after the previous reply frame. The server must keep a reply's
+frames less than 20 s apart, or send `output.stop`. This watchdog fires only after local playback
+has gone quiet, so it never cuts off draining audio.
 
 An interaction is established only after `session.ready`, `wake.detected`, and its first
 `input.start` have all succeeded; `session.open` is a prerequisite of `session.ready`. A failure

@@ -187,6 +187,25 @@ a terminal error, a connection/listening watchdog, or Rodak's explicit `session.
 ends the session and restores local wake monitoring. Active TTS playback is not
 terminated by that watchdog.
 
+A reply can also stop without ending. In the six-hour soak, Rodak once sent `output.start` and then
+no audio and no `output.stop`. The follow-up window does not run while a reply is active, so the
+device stayed in that session for 17 min 45 s and rejected the next five wakes. The reply-stall
+watchdog now covers this. `output.start` and every reply audio frame set a deadline 20 s ahead.
+`output.stop` clears it. If the deadline passes, the device logs `Reply stalled` and ends the
+session like a follow-up timeout. It measures the gap between frames, not the reply length: a
+reply of any length that keeps sending frames never trips it, and a reply that stops mid-way trips
+it 20 s after its last frame. Rodak's own turn timeout is 120 s. The timing is in
+`main/phone_os/voice_conversation_policy.h`.
+
+Hardware check: Rodak was started with `RODAK_VOICE_FAULT_STALL_AFTER_OUTPUT_START=1`, which sends
+the first `output.start` of a session and then withholds its audio and `output.stop`. The device
+logged `Reply stalled` 20.0 s after `output.start`, closed the WebSocket, re-armed wake monitoring
+within 0.7 s, and the next wake reached `session.ready`. With the switch off, 16 spoken sessions with
+TTS replies (53–274 packets, 4.6–19.1 s of playback) all finished, and the watchdog never fired.
+Evidence: `.codex-temp/gain-host/stall-check.log` (SHA-256
+`23afdc0b88bb6f9d5dd37478e449e63cd9a26ce211e05587bab8e86c6b8e4613`) and `reply-check.log`
+(`2dba1d4485f6557c5a273ee67844090dc3d0e6f1e19b1c1eef9ab23abe7a0973`).
+
 ## Reconnect Policy
 
 An initial interaction becomes established only after `session.ready`, `wake.detected`, and the first

@@ -803,6 +803,7 @@ stayed open for 17 min 45 s, and the device stayed in the session. While a sessi
 session itself holds internal RAM, so the largest block was 2,176 B during this time. Every one of
 the 184 sessions showed 2,048–2,432 B while active. The next WiFi switch broke the WebSocket. The
 session then closed normally, and memory returned to 24,983 B free with an 8,192 B largest block. The
-device has no timeout for a session that stops receiving audio after `output.start`; this is open.
+device had no timeout for a session that stops receiving audio after `output.start`; the reply-stall
+watchdog in `docs/voice-assistant.md` now ends such a session after 20 s.
 Serial SHA-256 `e87508c9ad70ec57aeb808597a4da765baf56146ced222f948b148cf17e265ea`; evidence is in
 `.codex-temp/gain-host/soak-6h.log` and `soak-6h.csv`.

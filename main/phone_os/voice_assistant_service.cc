@@ -996,6 +996,7 @@ void VoiceAssistantService::IoTask() {
         bool should_interrupt = false;
         bool should_check_reconnect = false;
         bool follow_up_timed_out = false;
+        bool speaking_stalled = false;
         bool should_rearm_follow_up = false;
         uint32_t completed_turns = 0;
         uint32_t reconnect_interaction_generation = 0;
@@ -1013,6 +1014,7 @@ void VoiceAssistantService::IoTask() {
         } else if (running && transport_active_) {
             const int64_t now_ms = esp_timer_get_time() / 1000;
             follow_up_timed_out = conversation_policy_.IsFollowUpTimedOut(now_ms);
+            speaking_stalled = !follow_up_timed_out && conversation_policy_.IsSpeakingStalled(now_ms);
             completed_turns = conversation_policy_.completed_turns();
             should_rearm_follow_up = !follow_up_timed_out &&
                                      follow_up_rearm_pending_ &&
@@ -1050,6 +1052,13 @@ void VoiceAssistantService::IoTask() {
             ESP_LOGI(TAG,
                      "Follow-up window timed out after %u completed turn(s)",
                      static_cast<unsigned>(completed_turns));
+            StopInteraction();
+            continue;
+        }
+        if (speaking_stalled) {
+            // 服务器发了 output.start 却不再发音频或 output.stop：不等它，结束会话并恢复唤醒。
+            ESP_LOGW(TAG, "Reply stalled: no audio for %lld ms after output.start; ending session",
+                     static_cast<long long>(VoiceConversationPolicy::speaking_stall_timeout_ms()));
             StopInteraction();
             continue;
         }
@@ -1162,7 +1171,7 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                 xSemaphoreGive(mutex_);
                 break;
             }
-            conversation_policy_.OnSpeakingStarted();
+            conversation_policy_.OnSpeakingStarted(esp_timer_get_time() / 1000);
             playback_audio_events_ = 0;
             playback_decoded_frames_ = 0;
             playback_decoded_pcm_bytes_ = 0;
@@ -1182,6 +1191,7 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                                  speaking_interrupted_ || phase_ != VoiceAssistantPhase::kSpeaking;
             if (!discard) {
                 conversation_policy_.OnSpeakingStarted();
+                conversation_policy_.OnSpeakingAudio(esp_timer_get_time() / 1000);
             }
             xSemaphoreGive(mutex_);
             if (discard) {
