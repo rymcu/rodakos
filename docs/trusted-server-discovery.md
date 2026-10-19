@@ -748,3 +748,29 @@ genuine server stayed at the same address; it is not a new-server-IP or
 single-interface roaming test. The failed candidate was unreachable, not a
 wrong-certificate listener. IPv6, credential/expiry/replay variants, full audio and
 OTA/Appearance transfers still require their own evidence.
+
+### MQTT client replacement and voice internal memory
+
+After a WiFi switch, the authenticated route migration replaces the MQTT client. On firmware
+`0.1.2-dev.1` before the fix, one switch from the hotspot back to the router (generation 1 → 3)
+changed the largest free internal block from 11,264 B to 5,888 B. It stayed at that size: the
+last voice wake before the fix, about 5.3 hours later, logged `internal_largest=5888`, failed
+`Error create websocket task` (`required_internal_stack=6144`) and showed "Device memory low".
+The heap map placed the replacement 6 KiB task stack inside the former 11.7 KiB free region and
+left the retired span split. `docs/dependency-maintenance.md` describes the cause and the
+`esp_mqtt` task-storage overlay.
+
+Hardware check of the fix (main app SHA-256
+`c90f7b283324a10636d57f8a9c2a5bb524a854df116f171ee16ad93cd17ad8e6`, NVS kept): after reset
+and 150 s idle, six switches between the hotspot and the router each replaced the client
+(generations 1 → 13). After each switch, a heap map and a silent voice wake were taken:
+
+| Switch | Largest internal block | Largest at WebSocket start | Wake |
+|---|---|---|---|
+| Before switches | 11,264 B | — | — |
+| 1–6 | 10,752–11,264 B | 10,240 B | 6/6 ready |
+
+No panic, `Device memory low`, task-creation or stack-size errors occurred. Serial SHA-256
+`4f80319393aa99d2f9d18c664b49034b9abd5786bc47ff0be289aaea8faaf6cc`; evidence is in
+`.codex-temp/gain-host/wifi-cycle-fixed.log`. This covers six replacements in about 13
+minutes. A multi-hour soak with replacements and TTS replies is still open.

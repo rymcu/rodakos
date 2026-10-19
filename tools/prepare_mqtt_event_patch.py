@@ -48,6 +48,66 @@ def replace_function(source: str, first: str, following: str, patch: str) -> str
     return source[:start] + read_lf(PATCH_DIR / patch).decode().rstrip() + "\n\n" + source[end:]
 
 
+def apply_task_storage(source: str) -> str:
+    """每个客户端只有一个任务栈：最先预留、最后释放。"""
+    source = replace_once(source,
+        "static esp_err_t send_disconnect_msg(esp_mqtt_client_handle_t client);\n",
+        "static esp_err_t send_disconnect_msg(esp_mqtt_client_handle_t client);\n"
+        "static void esp_mqtt_task(void *pv);\n\n"
+        + read_lf(PATCH_DIR / "task_storage.c").decode().rstrip() + "\n")
+    source = replace_once(source,
+        "    ESP_MEM_CHECK(TAG, client, return NULL);\n"
+        "    if (!create_client_data(client)) {\n",
+        "    ESP_MEM_CHECK(TAG, client, return NULL);\n"
+        "    if (config == NULL ||\n"
+        "        !rodak_mqtt_reserve_task_storage(client, config->task.stack_size)) {\n"
+        "        goto _mqtt_init_failed;\n    }\n"
+        "    if (!create_client_data(client)) {\n")
+    # destroy 先删除任务再释放它可能访问的对象；任务存储最后释放，下一个客户端复用同一位置。
+    # 初始化失败的客户端也会走 destroy，此时这些指针为 NULL。
+    source = replace_once(source,
+        "    if (client->run) {\n        esp_mqtt_client_stop(client);\n    }\n"
+        "    esp_mqtt_destroy_config(client);\n",
+        "    if (client->run) {\n        esp_mqtt_client_stop(client);\n    }\n"
+        "    if (!rodak_mqtt_delete_parked_task(client)) {\n"
+        '        ESP_LOGE(TAG, "Client cannot be destroyed from MQTT task");\n'
+        "        return ESP_FAIL;\n    }\n"
+        "    esp_mqtt_destroy_config(client);\n")
+    source = replace_once(source, "    free(client->event.error_handle);\n    free(client);\n",
+        "    free(client->event.error_handle);\n"
+        "    heap_caps_free(client->rodak_task_buffer);\n"
+        "    heap_caps_free(client->rodak_task_stack);\n"
+        "    free(client);\n")
+    # start 在创建任务前置 run、清 STOPPED_BIT；任务不能再做一遍，否则会覆盖首次运行前到达的 stop。
+    source = replace_once(source,
+        "    outbox_tick_t msg_tick = 0;\n    client->run = true;\n\n"
+        "    client->state = MQTT_STATE_INIT;\n"
+        "    xEventGroupClearBits(client->status_bits, STOPPED_BIT);\n"
+        "    while (client->run) {\n",
+        "    outbox_tick_t msg_tick = 0;\n\n"
+        "    MQTT_API_LOCK(client);\n"
+        "    if (client->run) {\n        client->state = MQTT_STATE_INIT;\n    }\n"
+        "    MQTT_API_UNLOCK(client);\n"
+        "    while (client->run) {\n")
+    source = replace_once(source,
+        "    xEventGroupSetBits(client->status_bits, STOPPED_BIT);\n\n    vTaskDelete(NULL);\n}\n",
+        "    xEventGroupSetBits(client->status_bits, STOPPED_BIT);\n\n"
+        "    /* 下一次 start 或 destroy 会先删除本任务，再复用或释放其静态存储。 */\n"
+        "    vTaskSuspend(NULL);\n}\n")
+    start = ("    esp_err_t err = ESP_OK;\n#if MQTT_CORE_SELECTION_ENABLED\n"
+             '    ESP_LOGD(TAG, "Core selection enabled on %u", MQTT_TASK_CORE);\n'
+             '    if (xTaskCreatePinnedToCore(esp_mqtt_task, "mqtt_task", client->config->task_stack, '
+             "client, client->config->task_prio, &client->task_handle, MQTT_TASK_CORE) != pdTRUE) {\n"
+             '        ESP_LOGE(TAG, "Error create mqtt task");\n'
+             "        err = ESP_FAIL;\n    }\n#else\n"
+             '    ESP_LOGD(TAG, "Core selection disabled");\n'
+             '    if (xTaskCreate(esp_mqtt_task, "mqtt_task", client->config->task_stack, client, '
+             "client->config->task_prio, &client->task_handle) != pdTRUE) {\n"
+             '        ESP_LOGE(TAG, "Error create mqtt task");\n'
+             "        err = ESP_FAIL;\n    }\n#endif\n")
+    return replace_once(source, start, "    esp_err_t err = rodak_mqtt_create_task(client);\n")
+
+
 def write_if_changed(path: Path, text: str) -> bool:
     content = text.encode("utf-8")
     if path.exists() and path.read_bytes() == content:
@@ -124,11 +184,17 @@ def prepare(component_dir: Path, lock_file: Path, project_manifest: Path,
         "// if supporting multiple queued events, we keep track of them\n"
         "                                      // using atomic variable, so need to make sure it won't get allocated in PSRAM",
         "// Retain upstream internal-memory placement for larger event queues")
+    source = apply_task_storage(source)
     header = replace_once(reviewed["lib/include/mqtt_client_priv.h"],
         '#include "freertos/event_groups.h"\n',
         '#include "freertos/event_groups.h"\n#include "freertos/queue.h"\n')
     header = replace_once(header, "    SemaphoreHandle_t  api_lock;\n",
         "    QueueHandle_t      rodak_custom_events;\n    SemaphoreHandle_t  api_lock;\n")
+    header = replace_once(header, "    TaskHandle_t       task_handle;\n",
+        "    TaskHandle_t       task_handle;\n"
+        "    StackType_t       *rodak_task_stack;\n"
+        "    StaticTask_t      *rodak_task_buffer;\n"
+        "    int                rodak_task_stack_size;\n")
     header = replace_once(header,
         "#if MQTT_EVENT_QUEUE_SIZE > 1\n    atomic_int         queued_events;\n#endif\n", "")
     # Validate everything before replacing either output.

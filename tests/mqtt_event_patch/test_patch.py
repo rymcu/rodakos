@@ -111,6 +111,41 @@ class MqttPatchTests(unittest.TestCase):
         self.assertIn('#error "Rodak MQTT event overlay requires API locks"', source)
         self.assertNotIn("queued_events", source)
 
+    def test_reserves_task_storage_first_and_releases_it_after_deleting_the_parked_task(self):
+        self.prepare()
+        source = (self.output / "mqtt_client.c").read_text()
+        header = (self.output / "mqtt_client_priv.h").read_text()
+        init = source[source.index("esp_mqtt_client_handle_t esp_mqtt_client_init("):
+                      source.index("esp_err_t esp_mqtt_client_destroy(")]
+        destroy = source[source.index("esp_err_t esp_mqtt_client_destroy("):
+                         source.index("static char *create_string(const char *ptr, int len)\n{")]
+        task = source[source.index("static void esp_mqtt_task(void *pv)\n{"):
+                      source.index("esp_err_t esp_mqtt_client_start(")]
+        start = source[source.index("esp_err_t esp_mqtt_client_start("):
+                       source.index("esp_err_t esp_mqtt_client_disconnect(")]
+        create = source[source.index("static esp_err_t rodak_mqtt_create_task("):
+                        source.index("static int esp_mqtt_handle_transport_read_error(")]
+        # 任务栈是客户端结构体之后的第一块内部分配。
+        self.assertLess(init.index("rodak_mqtt_reserve_task_storage(client"),
+                        init.index("create_client_data(client)"))
+        # destroy 先删除停住的任务再释放其他对象，栈最后释放。
+        self.assertLess(destroy.index("rodak_mqtt_delete_parked_task(client)"),
+                        destroy.index("esp_mqtt_destroy_config(client);"))
+        self.assertGreater(destroy.index("heap_caps_free(client->rodak_task_stack);"),
+                           destroy.index("vSemaphoreDelete(client->api_lock);"))
+        self.assertLess(destroy.index("heap_caps_free(client->rodak_task_stack);"),
+                        destroy.index("free(client);"))
+        # 任务退出时挂起而不是自删除，也不自己重新置 run。
+        self.assertIn("vTaskSuspend(NULL);", task)
+        self.assertNotIn("vTaskDelete(NULL);", source)
+        self.assertNotIn("client->run = true;", task)
+        self.assertNotIn("xEventGroupClearBits(client->status_bits, STOPPED_BIT);", task)
+        self.assertIn("rodak_mqtt_create_task(client)", start)
+        self.assertNotIn("xTaskCreatePinnedToCore(", source)
+        self.assertNotIn("xTaskCreate(", source)
+        self.assertLess(create.index("client->run = true;"), create.index("xTaskCreateStatic"))
+        self.assertIn("StackType_t       *rodak_task_stack;", header)
+
 
 if __name__ == "__main__":
     unittest.main()

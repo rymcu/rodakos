@@ -14,6 +14,7 @@ set(mqtt_patch_inputs
     "${mqtt_patch_dir}/provenance.json"
     "${mqtt_patch_dir}/custom_dispatch.c"
     "${mqtt_patch_dir}/run_event_loop.c"
+    "${mqtt_patch_dir}/task_storage.c"
     "${PROJECT_DIR}/dependencies.lock"
     "${PROJECT_DIR}/main/idf_component.yml"
     "${mqtt_component_dir}/idf_component.yml"

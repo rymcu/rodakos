@@ -200,7 +200,8 @@ network delivery, allocation failures or device hardware into guaranteed outcome
 The independent `tests/mqtt_event_patch` target compiles native/custom dispatch and event-pump
 functions extracted from the generated SDK copy. Seven scenarios include the upstream failure
 control, split queues, nested disconnect and allocation-failure retry; FreeRTOS and event-loop
-facilities are fakes. Eight Python checks verify source drift rejection and generation. The
+facilities are fakes. Nine Python checks verify source drift rejection, generation and the task
+storage hooks. The
 service-level fake remains in `tests/mqtt_volume_service`; full SDK compilation is a firmware
 build check, not a host network test.
 
@@ -218,6 +219,33 @@ The release host script also runs this target with sanitizers and the Python che
 Linux-visible `RODAKOS_IDF_PATH` (or `IDF_PATH`) when invoking that script in WSL; it refuses an
 unavailable source tree instead of skipping the new gate. Retain the source pin when upgrading
 MQTT or ESP-IDF, review event-loop semantics again, and rerun these checks plus a firmware build.
+
+### Task stack placement
+
+Upstream `esp_mqtt_client_start` creates the 6 KiB task stack dynamically and the task deletes
+itself, so the idle task frees that stack later. On a WiFi route change RodakOS replaces the
+client. The replacement is created before the idle task runs. Its stack therefore goes into the
+largest free internal block while the retired stack is still allocated. The freed span stays
+split by long-lived neighbours. One such replacement left the largest internal block at 5,888 B.
+The voice WebSocket task needs 6,144 B, so every later wake failed with "Device memory low".
+
+`patches/esp_mqtt/1.0.0/task_storage.c` changes the task lifecycle:
+
+- `esp_mqtt_client_init` allocates the task stack and TCB first, directly after the client
+  struct. Destroy frees them last, so the replacement allocates from the retired span.
+- The task is static. On exit it suspends itself. Start or destroy deletes it from another task,
+  and only then reuses or frees its storage. The idle task never frees this stack.
+- Start sets `run` and clears `STOPPED_BIT` before it creates the task, so a stop or destroy
+  before the task first runs is not lost. Start refuses while the old task has not stopped.
+- Destroy from the MQTT task itself returns `ESP_FAIL` and frees nothing.
+- A stack size larger than the reserved stack is rejected.
+
+`tests/mqtt_event_patch/task_storage_layout_test.cc` replays six replacements on the unmodified
+ESP-IDF 6.0.2 TLSF heap (`multi_heap.c`, `tlsf.c`) with the client allocation sizes from the
+firmware heap trace. The upstream order is the negative control: the largest block drops from
+11,776 B to 6,144 B. With reserved storage the stack returns to the same address every time and
+the largest block stays at 11,776 B. The Python checks verify the lifecycle hook order in the
+generated source. Device evidence is recorded in `docs/trusted-server-discovery.md`.
 
 ## WebSocket redirects
 
