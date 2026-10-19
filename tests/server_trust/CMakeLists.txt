@@ -22,5 +22,6 @@ target_include_directories(server_trust_tests BEFORE PRIVATE
 target_compile_definitions(server_trust_tests PRIVATE TEST_CA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test-ca.pem")
 target_compile_features(server_trust_tests PRIVATE cxx_std_20)
 target_compile_options(server_trust_tests PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(server_trust_tests PRIVATE "${MBEDX509_LIBRARY}" "${MBEDCRYPTO_LIBRARY}")
+find_package(Threads REQUIRED)
+target_link_libraries(server_trust_tests PRIVATE "${MBEDX509_LIBRARY}" "${MBEDCRYPTO_LIBRARY}" Threads::Threads)
 add_test(NAME server_trust COMMAND server_trust_tests)

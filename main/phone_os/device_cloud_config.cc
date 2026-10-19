@@ -1731,12 +1731,24 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
         return esp_timer_get_time() / 1000 < deadline_ms &&
                (!can_continue || can_continue());
     };
+    // 等锁时别的刷新（后台续期、MQTT 恢复、另一次唤醒）正在进行，它结束时会写入自己的诊断。
+    // 等锁耗尽预算只说明本次没轮上，不是凭据故障：调用方得到失败，共享诊断不改写。
+    bool waited_for_refresh = false;
+    const auto reject_budget = [&]() {
+        const bool cancelled = can_continue && !can_continue();
+        if (failure != nullptr) {
+            *failure = cancelled ? CloudDiagnosticCode::kCancelled : CloudDiagnosticCode::kRefreshFailed;
+        }
+        if (!waited_for_refresh) {
+            reject("Rodak credential preparation cancelled or timed out",
+                   cancelled ? CloudDiagnosticCode::kCancelled : CloudDiagnosticCode::kRefreshFailed);
+        }
+    };
     std::unique_lock<std::mutex> refresh_lock(refresh_mutex_, std::defer_lock);
     while (!refresh_lock.try_lock()) {
+        waited_for_refresh = true;
         if (!allowed()) {
-            reject("Rodak credential preparation cancelled or timed out",
-                     can_continue && !can_continue() ? CloudDiagnosticCode::kCancelled
-                                                     : CloudDiagnosticCode::kRefreshFailed);
+            reject_budget();
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -1745,10 +1757,19 @@ bool DeviceCloudConfigService::PrepareVoiceConfig(
         std::lock_guard<std::recursive_mutex> config_lock(config_mutex_);
         Load(config);
         config_admitted = true;
+        // 持锁的那次刷新刚换好令牌：直接使用，不因预算在等锁中用尽而作废。
+        if (waited_for_refresh && config.has_aiot_config &&
+            config.aiot_access_token == fresh_access_token_ &&
+            !credential_freshness_.NeedsRefresh(esp_timer_get_time() / 1000) &&
+            !config.server_trust_error && !config.server_trust_pending &&
+            config.aiot_registered && config.aiot_activated && !config.aiot_device_secret.empty() &&
+            !config.aiot_pending && !config.has_pairing_request && !config.unbind_pending &&
+            (!can_continue || can_continue())) {
+            ObserveDiagnosticConfig(config);
+            return true;
+        }
         if (!allowed()) {
-            reject("Rodak credential preparation cancelled or timed out",
-                   can_continue && !can_continue() ? CloudDiagnosticCode::kCancelled
-                                                   : CloudDiagnosticCode::kRefreshFailed);
+            reject_budget();
             config.aiot_token_expires_at_ms = 0;
             return false;
         }

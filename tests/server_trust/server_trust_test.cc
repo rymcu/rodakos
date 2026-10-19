@@ -5,6 +5,10 @@
 
 #include <cJSON.h>
 
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
 using rodakos::DeviceCloudConfig;
 using rodakos::DeviceCloudConfigService;
 using rodakos::ProvisioningUrlSaveResult;
@@ -835,6 +839,83 @@ RODAK_TEST("Background renewal stops on credential rejection and leaves it for t
     trust_test::AdvanceTimeMs(600000);
     RODAK_CHECK_FALSE(service.RenewAccessTokenIfDue());
     RODAK_CHECK(trust_test::requests.empty());
+}
+
+RODAK_TEST("A preparation that waited out a renewal never publishes a false refresh failure") {
+    using rodakos::CloudDiagnosticCode;
+    // 设备上 Appearance 每 5 s 准备一次凭据。续期持有刷新锁约 3.7 s，在 Appearance 的
+    // 3 s 预算用尽前后释放；Appearance 拿到锁时预算已耗尽。renewal_ok：续期换好了令牌；
+    // 否则续期失败且令牌已进入唤醒刷新余量，Appearance 只能放弃。
+    for (const bool renewal_ok : {true, false}) {
+        trust_test::Reset(); trust_test::SeedBoundLegacy();
+        DeviceCloudConfigService service; Activate(service);
+        RespondVoice();
+        service.InvalidateAccessTokenFreshness("new-token");
+        DeviceCloudConfig config;
+        RODAK_CHECK(service.PrepareVoiceConfig(config));
+        if (renewal_ok) {
+            trust_test::AdvanceTimeMs(3300000);
+            RespondRotatedToken("renewed-while-appearance-waits");
+        } else {
+            trust_test::AdvanceTimeMs(3580000);
+            trust_test::replies.clear();
+        }
+        // 两个线程严格交接，任一时刻只有一个线程访问替身与时钟。
+        std::mutex gate;
+        std::condition_variable changed;
+        int stage = 0;  // 1 续期持锁停在 HTTP；2 放行续期；3 续期已返回
+        CloudDiagnosticCode after_renewal = CloudDiagnosticCode::kUnconfigured;
+        std::string error_after_renewal;
+        trust_test::on_http_open = [&](const std::string&) {
+            std::unique_lock<std::mutex> lock(gate);
+            if (stage != 0) return;
+            stage = 1;
+            changed.notify_all();
+            changed.wait(lock, [&] { return stage == 2; });
+        };
+        std::thread renewal([&] {
+            RODAK_CHECK(service.RenewAccessTokenIfDue());
+            const auto diagnostic = service.diagnostic();
+            const auto error = service.last_error();
+            std::lock_guard<std::mutex> lock(gate);
+            after_renewal = diagnostic;
+            error_after_renewal = error;
+            stage = 3;
+            changed.notify_all();
+        });
+        {
+            std::unique_lock<std::mutex> lock(gate);
+            changed.wait(lock, [&] { return stage == 1; });
+        }
+        bool released = false;
+        const auto release_near_deadline = [&] {
+            if (released) return true;
+            released = true;
+            std::unique_lock<std::mutex> lock(gate);
+            trust_test::AdvanceTimeMs(3000);
+            stage = 2;
+            changed.notify_all();
+            changed.wait(lock, [&] { return stage == 3; });
+            return true;
+        };
+        DeviceCloudConfig waiter;
+        CloudDiagnosticCode waiter_failure = CloudDiagnosticCode::kReady;
+        const bool prepared = service.PrepareVoiceConfig(waiter, release_near_deadline, &waiter_failure);
+        renewal.join();
+        trust_test::on_http_open = {};
+        RODAK_CHECK(released);
+        RODAK_CHECK_EQ(prepared, renewal_ok);
+        if (renewal_ok) {
+            RODAK_CHECK_EQ(waiter.aiot_access_token, "renewed-while-appearance-waits");
+        } else {
+            RODAK_CHECK_EQ(waiter_failure, CloudDiagnosticCode::kRefreshFailed);
+        }
+        // 共享诊断与错误属于持锁的续期，等锁的一方不能改写。
+        RODAK_CHECK(service.diagnostic() != CloudDiagnosticCode::kRefreshFailed);
+        RODAK_CHECK_EQ(service.diagnostic(), after_renewal);
+        RODAK_CHECK_EQ(service.last_error(), error_after_renewal);
+        RODAK_CHECK(service.last_error().empty());
+    }
 }
 
 RODAK_TEST("Background renewal never runs without a verified token") {

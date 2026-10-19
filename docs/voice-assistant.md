@@ -44,6 +44,12 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
   renewal and keeps its diagnosis for the next wake. Rodak issues the renewed token with the same
   token version, so a session that uses the previous token is not revoked. The renewal timing is in
   `main/phone_os/cloud_credential_renewal.h`.
+- A preparation can wait for the refresh lock while another refresh holds it. Appearance, for
+  example, prepares credentials every 5 s, and a background renewal holds the lock for about 3.7 s
+  on a hotspot. A preparation that waited for the lock does not write the shared diagnosis or error
+  when its budget runs out; the refresh that held the lock writes its own. If that refresh left a
+  fresh token, the preparation uses it even though its budget is spent. Otherwise it fails for its
+  caller only. A preparation that did not wait for the lock still reports its own timeout.
 
 ## Device Cloud Diagnosis and Recovery
 
