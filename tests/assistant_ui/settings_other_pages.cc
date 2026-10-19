@@ -18,3 +18,7 @@ void SettingsWebFilesPage::Hide() {}
 void SettingsWebFilesPage::Show() {}
 void SettingsWebFilesPage::Update() {}
 void SettingsWebFilesPage::Reset() {}
+// 首次接入页与服务属于 lan_onboarding；Device Cloud 页只读 Available() 决定是否显示入口。
+void SettingsApp::ShowLanOnboarding() {}
+#include "phone_os/lan_onboarding_service.h"
+bool rodakos::LanOnboardingService::Available() { return false; }
