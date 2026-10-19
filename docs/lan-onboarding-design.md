@@ -1,6 +1,6 @@
 # 无 USB 局域网首次接入设计
 
-状态：第 1–3 步已完成，2026-10-18 实机验收通过（见文末“实机验收”），含热点网络首次接入与换网找回；伪造响应者、过期与取消场景尚未实机验证。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
+状态：第 1–3 步已完成，2026-10-18 实机验收通过（见文末“实机验收”），含热点网络首次接入与换网找回；A/B/C 伪造响应者场景已于 2026-10-20 在 COM3 实机验收。码输错、过期与用户取消仍属于另一组未完成的实机验收项。本文扩展 [可信服务器发现](trusted-server-discovery.md)，先读那一页；
 设备认领规则见 Rodak 仓库 `docs/device-binding-authentication.md`。
 
 ## 目标
@@ -377,5 +377,21 @@ Rodak（Node crypto）与本仓库主机测试（mbedTLS PSA）各自独立重�
 切换 Wi-Fi 使用 release-test 串口钩子 `RODAK_RELEASE_TEST_V1 wifi_switch <ssid> <password>`，
 行为与设置页选择网络相同。
 
-尚未实机验证：同网段伪造 `_rodak._tcp` 响应者、码输错与过期、用户取消。首次接入使用 `skip_cert_common_name_check`，esp-tls 每次请求会打印一条
-警告，这是有意为之（身份由证书绑定 HMAC 认证）。
+### 2026-10-20 伪造响应者 A/B/C 实机验收
+
+设备为 `44:1b:f6:c3:b4:30`（COM3），刷入 `20261019-205100` release-test 包并擦除 NVS，
+重新通过串口配置 `ronger6` 后取得 `192.168.88.17`。伪造响应者使用
+`tools/lan_onboarding/forged-responder.ts`，监听 `192.168.88.26:9444`；伪造证书 SPKI 为
+`2a03c36cb3fe80cbe1079a41aa498f697e212ce946f42fddd2cb4e1aab1f2924`。日志只保留阶段、状态、
+SPKI 和脱敏设备标识，没有记录配对码、令牌或凭据。
+
+| 场景 | 操作 | 固件结果 | 旁证 |
+| --- | --- | --- | --- |
+| A：广播真 id、伪造证书 | mDNS TXT 使用真实 server id，HTTPS 使用伪造 SPKI；设备实际请求伪造端 `/api/v1/app/health` | `phase=7`，`服务器证书与广播不一致，已停止连接` | 伪造端记录 `/app/health`，未创建 binding request |
+| B：完整冒充、猜码 | 伪造端接受申请，以猜测码 `000000` 生成 SRP challenge | `phase=7`，`配对码不正确，请重新生成`；向伪造端发送 `abort=proof_mismatch` | 伪造端记录 `challenge_issued` 和 `trust_result=proof_mismatch` |
+| C：TLS 中间人转发 | 伪造证书终止 TLS，HTTPS 请求和响应原样转发到真实 Rodak；在 Rodak 输入设备显示的配对码 | `phase=7`，`服务器身份校验失败，可能存在中间人，已停止`；向真实服务发送 `abort=binding_mismatch` | 真实 Rodak 申请最终为 `revoked`，伪造端记录 `/trust` 转发 200 |
+
+三项均未出现 `First setup pinned Rodak server`、`confirmed` 或新的 `server_trust` 写入。A/B/C
+验证了固件拒绝路径；码输错、申请过期和用户取消仍未完成独立的实机验收。首次接入使用
+`skip_cert_common_name_check`，esp-tls 每次请求会打印一条警告，这是有意为之（身份由证书绑定
+HMAC 认证）。
