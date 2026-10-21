@@ -212,7 +212,7 @@ speaker behavior and correlated device effect receipts remain outside these host
 Source baseline: `a141297` plus the voice-volume MCP integration. The production service installs
 the handler, advertises MCP, retains ready-adjacent requests in its bounded queue and routes
 initialized calls through the atomic output service. The detailed
-[volume contract](voice-volume-mcp.md) defines the three tools, correlation, deduplication and
+[volume contract](archive/2026-10-21-voice-volume-mcp.md) (removed 2026-10-21) defined the three tools, correlation, deduplication and
 `rodakos.volume-receipt.v1` software evidence.
 
 - App-model: **248/248** in Debug and ASan/UBSan with leak detection. This includes sixteen

@@ -685,7 +685,6 @@ bool ParseRealtimeVoiceAudioFrame(const uint8_t* data,
 }
 
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
-                                                 bool supports_mcp,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation) {
     // Generation zero is reserved for the not-established state.  Emitting a
@@ -719,7 +718,8 @@ std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& 
     cJSON_AddStringToObject(root, "preferredVadStrategy",
                             preferred_vad_strategy.c_str());
     cJSON* features = cJSON_CreateObject();
-    cJSON_AddBoolToObject(features, "mcp", supports_mcp);
+    // 设备控制统一经 MQTT shadow 由 Rodak 下发；固件不提供 MCP 工具，显式宣告不支持。
+    cJSON_AddBoolToObject(features, "mcp", false);
     // canonical gateway 会把该能力转发给现有 runtime adapter；统一使用
     // device_vad_epoch，避免设备 VAD 被静默降级为纯服务端 VAD。
     cJSON_AddNumberToObject(features, "device_vad_epoch",

@@ -28,7 +28,6 @@ add_executable(rodakos_voice_volume_service_tests
     test_main.cc
     "${APP_MODEL}/third_party/cjson/cJSON.c"
     "${VOICE_ASSISTANT_SOURCE}"
-    "${MAIN}/phone_os/voice_volume_mcp.cc"
     "${MAIN}/phone_os/voice_assistant_reconnect_coordinator.cc"
     "${MAIN}/phone_os/voice_assistant_transport.cc"
     "${MAIN}/phone_os/voice_conversation_policy.cc"

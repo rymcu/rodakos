@@ -12,7 +12,6 @@
 #include <esp_websocket_client.h>
 
 #include <string>
-#include <atomic>
 
 namespace rodakos {
 
@@ -44,7 +43,6 @@ public:
                     uint32_t playback_epoch = 0) override;
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
-    void SetMcpEndpointAvailable(bool available) override { mcp_endpoint_available_.store(available); }
 
     const char* name() const override { return "rodak-realtime-voice"; }
     std::string last_error() const override;
@@ -114,7 +112,6 @@ private:
         .transport_generation = 0,
     };
     VoiceInboundHandler inbound_handler_;
-    std::atomic<bool> mcp_endpoint_available_{false};
     std::vector<uint8_t> inbound_frame_;
     uint8_t inbound_opcode_ = 0;
     size_t inbound_frame_offset_ = 0;

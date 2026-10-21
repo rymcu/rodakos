@@ -59,7 +59,6 @@ set(SOURCES
     "phone_os/voice_pcm_assembler.cc"
     "phone_os/voice_assistant_reconnect_coordinator.cc"
     "phone_os/voice_assistant_service.cc"
-    "phone_os/voice_volume_mcp.cc"
     "phone_os/mqtt_volume_effect.cc"
     "phone_os/mqtt_command_ledger.cc"
     "phone_os/remote_input_controller.cc"

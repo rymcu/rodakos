@@ -1,9 +1,12 @@
 # MQTT volume effects and software receipts
 
 The MQTT `volume.set` path supports a versioned, correlated software result in addition to
-ordinary desired/reported shadow state. It uses the same atomic `AudioOutputService::ApplyVolume`
-as [voice MCP](voice-volume-mcp.md), with MQTT-specific ordering, identity and replay boundaries.
-This protocol does not add a `volume.set` command on `commands/+` or relative volume in shadow.
+ordinary desired/reported shadow state. It is the only firmware volume-control path for Rodak's
+models: the session-scoped voice MCP tools were removed on 2026-10-21
+([historical contract](archive/2026-10-21-voice-volume-mcp.md)). It calls the atomic
+`AudioOutputService::ApplyVolume`, with MQTT-specific ordering, identity and replay boundaries.
+This protocol does not add a `volume.set` command on `commands/+` or relative volume in shadow;
+Rodak computes relative requests from reported volume and sends an absolute `volume.set`.
 
 ## Single-dispatch request
 
@@ -75,10 +78,14 @@ retain. Ordinary shadow reports remain ordinary state and never contain or imply
 }
 ```
 
-`receipt` is the original atomic result: closed-codec configuration is `deferred`, an accepted
-open-codec API call is `codec-applied`, and a failed codec call is `rejected` / `unverified` with
-inner `errorCode: "codec-volume-rejected"`. Failure retains the prior configured volume and
-revision; it does not claim that physical hardware was restored.
+`receipt` (`rodakos.volume-receipt.v1`) is the original atomic result: closed-codec
+configuration is `deferred`, an accepted open-codec API call is `codec-applied`, and a failed
+codec call is `rejected` / `unverified` with inner `errorCode: "codec-volume-rejected"`. Failure
+retains the prior configured volume and revision; it does not claim that physical hardware was
+restored. Every accepted operation, including a same-value write, advances the output-local
+configuration revision; it is volatile and unrelated to MQTT shadow versions. All receipts say
+`persistence: "volatile"` and `physicalVerified: false`: `codec-applied` means the codec API
+accepted the write, not I2C readback or measured loudness.
 
 Protocol/lifecycle rejection uses exactly one outer `errorCode` instead of `receipt`:
 `stale-shadow`, `effect-conflict`, `effect-capacity`, `invalid-request` or `outcome-unknown`.

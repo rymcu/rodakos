@@ -81,10 +81,10 @@ RODAK_TEST("canonical realtime voice session open rejects an unestablished gener
     rodakos::RealtimeVoiceDescriptor descriptor;
     descriptor.endpoint = "wss://voice.example.test/realtime";
     RODAK_CHECK(rodakos::BuildRealtimeVoiceSessionOpenMessage(
-                    descriptor, false, false, 1)
+                    descriptor, false, 1)
                     .find("\"generation\":1") != std::string::npos);
     RODAK_CHECK(rodakos::BuildRealtimeVoiceSessionOpenMessage(
-                    descriptor, false, false, 0)
+                    descriptor, false, 0)
                     .empty());
 }
 
@@ -373,7 +373,7 @@ RODAK_TEST("canonical realtime voice descriptor negotiates VAD strategies") {
     RODAK_CHECK_EQ(descriptor.vad_strategies.size(), static_cast<size_t>(3));
     RODAK_CHECK_EQ(descriptor.preferred_vad_strategy, "device-authoritative");
     const std::string open = rodakos::BuildRealtimeVoiceSessionOpenMessage(
-        descriptor, false, true, 9);
+        descriptor, true, 9);
     RODAK_CHECK(open.find("vadStrategies") != std::string::npos);
     RODAK_CHECK(open.find("preferredVadStrategy") != std::string::npos);
 }
@@ -419,8 +419,10 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
           "events":["session.open"]
         })",
         descriptor, error));
-    const std::string open = rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, true, 7);
+    const std::string open = rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7);
     RODAK_CHECK(open.find("session.open") != std::string::npos);
+    // 设备控制统一走 MQTT；固件始终宣告不支持 MCP，Rodak 不会建立设备 MCP 会话。
+    RODAK_CHECK(open.find("\"mcp\":false") != std::string::npos);
     RODAK_CHECK(open.find("device_vad_epoch") != std::string::npos);
     RODAK_CHECK(open.find("vadEpoch") == std::string::npos);
     RODAK_CHECK(open.find("hello") == std::string::npos);

@@ -1323,8 +1323,7 @@ std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage(uint32_t genera
 #else
         false;
 #endif
-    return BuildRealtimeVoiceSessionOpenMessage(descriptor, mcp_endpoint_available_.load(),
-                                                supports_device_vad_epoch,
+    return BuildRealtimeVoiceSessionOpenMessage(descriptor, supports_device_vad_epoch,
                                                 generation);
 }
 

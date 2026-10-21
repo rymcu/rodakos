@@ -1,7 +1,13 @@
 # Voice volume MCP and software receipts
 
+> **Removed on 2026-10-21.** Firmware no longer ships `VoiceVolumeMcp`; `session.open` always
+> advertises `features.mcp: false` and inbound `mcp` events are discarded. Rodak exposes volume
+> and light control to its models through built-in tools that dispatch
+> [MQTT volume effects](../mqtt-volume-effects.md) and [MQTT light effects](../mqtt-light-effects.md).
+> This page is the historical contract of the removed session-scoped tools.
+
 Implemented on 2026-10-06 over the canonical
-[realtime voice contract](rodak-realtime-voice-contract-v1.md). The production path is
+[realtime voice contract](../rodak-realtime-voice-contract-v1.md). The production path is
 `RodakRealtimeVoiceTransport` → `VoiceAssistantService` inbound queue / I/O task →
 `VoiceVolumeMcp` → `AudioOutputService::ApplyVolume` → `AudioCodecOutput`.
 
@@ -100,7 +106,7 @@ an independent cached volume back over it.
 All receipts say `persistence: "volatile"` and `physicalVerified: false`. `codec-applied` means
 the codec API accepted the write, not I2C register readback or measured speaker loudness. Failure
 does not prove that hardware retained or returned to its previous physical state. The
-[checked codec overlay](dependency-maintenance.md) propagates driver errors but does not add
+[checked codec overlay](../dependency-maintenance.md) propagates driver errors but does not add
 physical measurement.
 
 ## Retry and lifecycle boundary
@@ -122,7 +128,7 @@ This is session-scoped duplicate suppression. It does not promise exactly-once e
 reconnects/reboots or recovery after a response is lost at the connection boundary.
 
 Plain MQTT desired/reported volume retains its configuration-only evidence boundary. A separate
-[MQTT effect contract](mqtt-volume-effects.md) now correlates single-dispatch volume writes on
+[MQTT effect contract](../mqtt-volume-effects.md) now correlates single-dispatch volume writes on
 `effects/receipt`; it does not upgrade ordinary shadow reports into execution evidence.
 
 ## Desktop manual entry
@@ -167,8 +173,8 @@ queue and reconnect coordinator. Its ten cases drive public startup and installe
 callbacks through the production canonical-envelope parser and response builder. They retain
 separate delayed-callback tests for the service's own stale-generation guard. Task scheduling,
 WebSocket I/O, recorder, focus, Opus and codec facilities are faked.
-See its [host workflow](../tests/voice_volume_service/README.md) and dated
-[release evidence](ota-release-readiness.md#2026-10-06-voice-volume-mcp-validation).
+See its [host workflow](../../tests/voice_volume_service/README.md) and dated
+[release evidence](../ota-release-readiness.md#2026-10-06-voice-volume-mcp-validation).
 
 These host checks do not establish hardware transport timing, NVS persistence, audible output,
 physical rollback or release readiness.

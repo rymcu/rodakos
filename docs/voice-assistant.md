@@ -163,11 +163,11 @@ buffered at 64 KiB). See the canonical
 [voice contract](rodak-realtime-voice-contract-v1.md) for event schemas,
 generation/session/epoch gates, MCP, error handling, and the complete RAV1 layout.
 
-The installed volume dispatcher enables `features.mcp` and exposes absolute/up/down tools after
-MCP `initialize`. Early MCP messages near ready are queued until startup or reconnect commits.
-Calls use atomic shared output configuration and return a versioned software receipt; Stop and
-new transport generations clear the deduplication scope. See
-[voice volume MCP](voice-volume-mcp.md) for strict arguments, correlation and evidence limits.
+The firmware ships no MCP tools: `session.open` always advertises `features.mcp: false`, and
+inbound `mcp` events are discarded without a response or side effect. Device control for Rodak's
+models goes through MQTT shadow effects ([volume](mqtt-volume-effects.md),
+[light](mqtt-light-effects.md)); the removed session-scoped volume tools are kept as a
+[historical contract](archive/2026-10-21-voice-volume-mcp.md).
 
 VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`.
 When the server selects `server-authoritative`, the device keeps streaming audio
@@ -307,8 +307,8 @@ Before hardware testing:
 3. `build/rodakos.bin` fits `ota_0`; do not use the Recovery size warning as the main-image target.
 4. `flash_and_test.ps1 -Port COM3 -VerifyOnly` confirms the installed partition table and immutable
    Recovery hash before any write.
-5. Run app-model tests for the realtime contract, reconnect coordinator, audio stack and MCP
-   dispatcher. The separate `tests/voice_volume_service` target instantiates production
+5. Run app-model tests for the realtime contract, reconnect coordinator and audio stack.
+   The separate `tests/voice_volume_service` target instantiates production
    `VoiceAssistantService` and exercises its I/O task, queue, startup/Stop and reconnect boundaries.
    Real FreeRTOS/WebSocket timing, DNS/HTTP cancellation, decoder/audio behavior and hardware
    volume application still require firmware and device verification.

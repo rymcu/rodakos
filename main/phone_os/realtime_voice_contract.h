@@ -113,7 +113,6 @@ bool ParseRealtimeVoiceDescriptor(const cJSON* value,
                                   std::string& error);
 
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
-                                                 bool supports_mcp,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation);
 
