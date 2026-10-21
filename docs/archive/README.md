@@ -7,6 +7,7 @@ These snapshots are not current implementation requirements or current build evi
 | --- | --- | --- |
 | [2026-10-03 roadmap](2026-10-03-roadmap.md) | Milestone 0–7 plan before the 2026-10-06 cleanup | [Roadmap](../roadmap.md), [OTA release readiness](../ota-release-readiness.md) |
 | [2026-10-14 roadmap](2026-10-14-roadmap.md) | Candidate-by-candidate status narrative for packages 006–106 before the 2026-10-14 cleanup | [Roadmap](../roadmap.md), [OTA release readiness](../ota-release-readiness.md) |
+| [2026-10-21 voice volume MCP](2026-10-21-voice-volume-mcp.md) | Contract of the session-scoped `self.audio_speaker.*` MCP tools removed on 2026-10-21 | [MQTT volume effects](../mqtt-volume-effects.md) |
 
 Architecture, protocol contracts, Home design, and dated hardware verification documents stay
 active references outside this directory. Remove a completed milestone from the active task list

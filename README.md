@@ -204,7 +204,7 @@ Features and their verification boundaries:
 
 - Voice: [assistant](docs/voice-assistant.md), [AEC and barge-in](docs/voice-aec-integration.md),
   [identity and wake word](docs/voice-identity-wake-word.md),
-  [volume MCP](docs/voice-volume-mcp.md), [task retirement](docs/voice-task-retirement.md)
+  [task retirement](docs/voice-task-retirement.md)
 - MQTT effects: [volume](docs/mqtt-volume-effects.md), [light](docs/mqtt-light-effects.md)
 - Media: [music playback](docs/music-playback.md), [Photos/Files browsing](docs/media-browsing.md),
   [media save](docs/media-save.md)

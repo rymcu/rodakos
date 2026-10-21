@@ -114,7 +114,7 @@ implementation, injecting failures at the lower-level driver callbacks. See
 [dependency maintenance](dependency-maintenance.md) for source identity and build integration,
 and [local audio validation](ota-release-readiness.md#2026-10-06-local-audio-volume-validation)
 for the earlier service fixture's results and hardware limits. Current wire behavior and
-software-receipt boundaries live in [voice volume MCP](voice-volume-mcp.md).
+software-receipt boundaries live in [MQTT volume effects](mqtt-volume-effects.md).
 
 `tests/home_ui/` complements the model suite by compiling the production `HomeApp`, Home
 model/store, Registry, `PhoneUi`, layout, theme, components, `BootAnimation`, appearance metadata

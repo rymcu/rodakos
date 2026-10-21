@@ -1,7 +1,7 @@
 # Voice volume service host tests
 
 This target compiles the production `VoiceAssistantService`, its real inbound queue / I/O loop,
-MCP dispatcher, reconnect coordinator and output/codec adapter. It drives `StartInteraction`,
+reconnect coordinator and output/codec adapter. It drives `StartInteraction`,
 `StopInteraction` and the transport's installed inbound callback. It does not copy lifecycle
 guards or add a test-only production friend.
 
@@ -34,13 +34,18 @@ The task runtime links `tests/task_retirement`: the complete pinned ESP-IDF 6.0.
 creation/deletion chain and production retirement registry, with host scheduler/allocator/core fakes.
 The old no-op self-delete headers have been removed. Other host fakes supply mutexes, a silent recorder,
 transport callbacks and response capture, audio focus, Opus and board/codec APIs. Tests can park
-the worker at a fake scheduler delay to place a request in the real queue before Stop. They also
-inject initialize synchronously from channel opening to exercise the actual startup window.
-Normal MCP inputs are wrapped in canonical `{event, sessionId, payload}` messages, decoded by
-production `ParseRealtimeVoiceMcpInbound` with a real session gate, then delivered through the
-installed service callback. Responses pass through production `BuildRealtimeVoiceMcpMessage`.
-The roundtrip assertions preserve numeric/string RPC IDs, effect metadata and receipts; separate
-delayed-callback cases still exercise the service guard after transport extraction.
+the worker at a fake scheduler delay to place a request in the real queue before Stop.
+
+## 2026-10-21 MCP removal
+
+The firmware no longer ships MCP tools. One case wraps `initialize` and `tools/call` in canonical
+`{event, sessionId, payload}` messages, decodes them with production `ParseRealtimeVoiceMcpInbound`
+and a real session gate, delivers them through the installed callback during channel opening and
+while listening, then ends the session. It asserts no MCP response, unchanged volume and no codec
+write. Replacing the discard branch with a reply makes the case fail. The ten former dispatcher
+cases (handshake, ledger, reconnect scope, queue pressure, envelope roundtrips) were removed with
+the dispatcher; their contract is in the
+[historical volume MCP page](../../docs/archive/2026-10-21-voice-volume-mcp.md).
 
 ```powershell
 wsl -d Debian -- bash -lc '
@@ -61,20 +66,18 @@ For ASan/UBSan, use a separate build directory and add these configure arguments
 ```
 
 Run its test executable with `ASAN_OPTIONS=detect_leaks=1`. CTest has a 30-second timeout so a
-lifecycle deadlock fails the run. Cases cover startup initialization, handshake rejection,
-repeat calls, stale generations, Stop cancellation, startup cancellation, reconnect scope and
-early initialization, bounded queue pressure, canonical envelope rejection and response roundtrips.
-Cloud diagnosis cases additionally verify fixed credential/network/capability messages, no
+lifecycle deadlock fails the run. Cloud diagnosis cases additionally verify fixed credential/network/capability messages, no
 WebSocket on failed preparation, recorder cleanup, successful later wake, and Stop during a
 preparation without publishing its late failure into the next interaction.
 
 Passing this target establishes software lifecycle behavior with controlled host dependencies.
 It does not validate real FreeRTOS scheduling, WebSocket close latency, I2C, ADC/DAC, or audible
-speaker output. Wire details are in [the volume contract](../../docs/voice-volume-mcp.md).
+speaker output. Volume wire details are in [MQTT volume effects](../../docs/mqtt-volume-effects.md).
 
 ## 031 assistant I/O retirement
 
-24 cases retain the original 12 service/envelope regressions and add 12 retirement cases:
+The retirement work added 12 cases (the 12 service/envelope regressions it kept were later
+reduced by the 2026-10-21 MCP removal):
 no IDF exit cleanup-task allocation; task scheduling before publication; Stop after the native
 handle clears but before the complete body returns; failed replacement preserving the prior
 ticket; autonomous session-end reaping; concurrent Stops/Pump; Deinit then Init/Start;

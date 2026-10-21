@@ -360,9 +360,10 @@ restoration. A single desired publication may carry top-level
 `_meta['rodak/deviceEffect']` with `rodak.mqtt-volume-effect.v1` correlation. Its result is
 published separately on `devices/{deviceKey}/effects/receipt`, never inside reported shadow.
 See [MQTT volume effects](mqtt-volume-effects.md) for strict validation, scope and replay rules.
-The separate voice MCP path returns
-[`rodakos.volume-receipt.v1`](voice-volume-mcp.md), with optional effect correlation and an
-output-local configuration revision; that contract does not upgrade MQTT shadow evidence.
+The inner receipt is `rodakos.volume-receipt.v1` with an output-local configuration revision;
+it does not upgrade ordinary shadow reports into execution evidence. The former session-scoped
+voice MCP volume path was removed on 2026-10-21
+([historical contract](archive/2026-10-21-voice-volume-mcp.md)).
 `voice_identity` has its own revision/status semantics below and must not be generalized
 into a volume receipt.
 
