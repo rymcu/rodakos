@@ -81,6 +81,7 @@ CONFIG_MQTT_REPORT_DELETED_MESSAGES=y
 # Always-on local custom wake phrase: "ni hao da ke" / "你好达克".
 # MultiNet is packed into the main application image by main/CMakeLists.txt;
 # the immutable Recovery partition table therefore remains unchanged.
+# MultiNet5 measured better than MultiNet7 for this phrase; see docs/voice-wake-evaluation.md.
 CONFIG_MODEL_IN_FLASH=y
 # CONFIG_SR_MN_CN_NONE is not set
 CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y

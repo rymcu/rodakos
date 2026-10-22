@@ -189,8 +189,10 @@ host fake 不执行闭源 DSP、FreeRTOS 真调度、物理 I2S 或声学处理�
 
 ## 033 MultiNet 命令表所有权
 
-当前嵌入模型仅有 `mn5q8_cn`。固定 ESP-SR 2.2.2 的 ESP32-S3 `libmultinet.a` 中，
-`multinet5_quantized8.c.obj` 接口表的 create/destroy 槽分别指向 `model_init` / `model_destroy`。
+已核验 `mn5q8_cn` 与 `mn7_cn`。固定 ESP-SR 2.2.2 的 ESP32-S3 `libmultinet.a` 中，
+`multinet5_quantized8.c.obj` 接口表的 create/destroy 槽分别指向 `model_init` / `model_destroy`；
+`multinet7_quantized.c.obj` 的 create 槽为 `model_init`，它调用 `model_create`，后者调用
+`esp_mn_commands_alloc`，destroy 同样经 `model_destroy` 调用 `esp_mn_commands_free`。
 create 正常返回之前内部调用 `esp_mn_commands_alloc`；destroy 内部调用
 `esp_mn_commands_free`，真实命令表的 free 无条件先 clear，再将全局 root 和模型关联置空。
 因此前端只持有模型，不能额外 alloc/free 命令表，也不能通过交换 free/destroy 顺序修复。

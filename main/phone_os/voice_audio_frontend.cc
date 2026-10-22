@@ -46,6 +46,17 @@ constexpr int kDetectionDurationMs = 3000;
 // with a distinctive command and the existing single-command gate so distant
 // speech can reach MultiNet without turning arbitrary audio into a wake.
 constexpr float kDetectionThreshold = 0.14F;
+// MultiNet reports a match after the phrase ends; keep feeding so a late result is counted.
+constexpr size_t kWakeEvaluationTailMs = 1500;
+// MultiNet times out kDetectionDurationMs after clean() and drops what it buffered, so a phrase
+// that straddles that boundary is lost (measured: 1/9 matches when speech began 2 s into the
+// window, 9/9 at 0 s and 1 s). Restarting the window during silence keeps every phrase onset
+// within the first second. The silence run must exceed a pause inside the wake phrase.
+constexpr size_t kWakeRealignAfterMs = 1000;
+constexpr size_t kWakeRealignSilenceMs = 400;
+constexpr int64_t kWakeSilenceRatio = 3;
+constexpr int64_t kWakeMinNoiseEnergy = 16;
+constexpr size_t kSamplesPerMs = kSampleRate / 1000;
 constexpr size_t kConversationReadSamples = 320;
 constexpr size_t kMaxQueuedFrames = 80;
 constexpr TickType_t kIdleDelay = pdMS_TO_TICKS(20);
@@ -285,12 +296,14 @@ bool VoiceAudioFrontend::StartListening(
     std::function<void(const std::string&)> on_wake_word) {
     if (lifecycle_mutex_ == nullptr) return false;
     LifecycleLock lifecycle(lifecycle_mutex_);
+    // Finishing an evaluation can release a model whose command did not restore; Init()
+    // must run after that so it rebuilds the model before listening resumes.
+    ClearDiagnosticAudio();
     if (!Init()) {
         return false;
     }
 
     Stop();
-    ClearDiagnosticAudio();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     ++wake_generation_;
     on_wake_word_ = std::move(on_wake_word);
@@ -298,7 +311,7 @@ bool VoiceAudioFrontend::StartListening(
     frames_.clear();
     conversation_assembler_.Reset();
     if (multinet_ != nullptr && multinet_data_ != nullptr) {
-        multinet_->clean(multinet_data_);
+        CleanWakeWindowLocked();
     }
     const bool task_started = EnsureCaptureTaskLocked();
     xSemaphoreGive(mutex_);
@@ -331,6 +344,7 @@ void VoiceAudioFrontend::StopListening() {
         return;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    FinishWakeEvaluationLocked("stopped");
     ++wake_generation_;
     if (mode_ == Mode::kWakeOnly) {
         mode_ = Mode::kIdle;
@@ -353,6 +367,7 @@ bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
     if (mutex_ == nullptr) return false;
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    FinishWakeEvaluationLocked("identity_changed");
     if (multinet_data_ == nullptr || multinet_ == nullptr) {
         wake_identity_ = normalized;
         wake_model_ready_ = false;
@@ -360,10 +375,7 @@ bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
         return true;
     }
 
-    const bool updated = esp_mn_commands_clear() == ESP_OK &&
-                         esp_mn_commands_add(1, normalized.wake_command.c_str()) == ESP_OK &&
-                         esp_mn_commands_update() == nullptr;
-    if (!updated) {
+    if (!ApplyWakeCommandLocked(normalized.wake_command)) {
         // A failed update may have partially changed the command graph. Do not
         // treat the old model as usable; release it and require an explicit
         // Configure/Init rebuild before listening or detection can resume.
@@ -522,6 +534,7 @@ bool VoiceAudioFrontend::ReadAecDiagnosticCaptureChunk(uint8_t channel, size_t o
 void VoiceAudioFrontend::ClearDiagnosticAudio() {
     if (mutex_ == nullptr) return;
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (wake_evaluation_active_) FinishWakeEvaluationLocked("cancelled");
     heap_caps_free(diagnostic_audio_);
     diagnostic_audio_ = nullptr;
     diagnostic_audio_samples_ = 0;
@@ -537,7 +550,7 @@ bool VoiceAudioFrontend::ArmDiagnosticAudio() {
     const auto capture_state = aec_diagnostic_capture_.GetStatus().state;
     const bool ready = capture_state != VoiceAecDiagnosticCapture::State::kArmed &&
                        capture_state != VoiceAecDiagnosticCapture::State::kCapturing &&
-                       mode_ == Mode::kWakeOnly &&
+                       mode_ == Mode::kWakeOnly && !wake_evaluation_active_ &&
                        diagnostic_audio_samples_ == diagnostic_audio_loaded_;
     if (ready) {
         diagnostic_audio_position_ = 0;
@@ -546,6 +559,170 @@ bool VoiceAudioFrontend::ArmDiagnosticAudio() {
     xSemaphoreGive(mutex_);
     if (!ready) ESP_LOGW(TAG, "USB simulated wake rejected: not listening or incomplete audio");
     return ready;
+}
+
+bool VoiceAudioFrontend::StartWakeEvaluation(const std::string& arguments) {
+    if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    const size_t first = arguments.find(' ');
+    const size_t second = first == std::string::npos ? first : arguments.find(' ', first + 1);
+    size_t threshold_permille = 0;
+    size_t lead_ms = 0;
+    if (first == std::string::npos ||
+        !ParseDiagnosticCount(arguments.substr(0, first), threshold_permille) ||
+        !ParseDiagnosticCount(arguments.substr(first + 1, second == std::string::npos
+                                                              ? std::string::npos
+                                                              : second - first - 1),
+                              lead_ms) ||
+        threshold_permille == 0 || threshold_permille > 999 ||
+        lead_ms > static_cast<size_t>(kDetectionDurationMs)) {
+        ESP_LOGW(TAG, "Wake evaluation rejected: invalid arguments");
+        return false;
+    }
+    const std::string command =
+        second == std::string::npos ? std::string() : arguments.substr(second + 1);
+    if (command.size() > 128) {
+        ESP_LOGW(TAG, "Wake evaluation rejected: command too long");
+        return false;
+    }
+    LifecycleLock lifecycle(lifecycle_mutex_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool ready = initialized_ && !deinitializing_ && mode_ == Mode::kWakeOnly &&
+                       wake_model_ready_ && multinet_ != nullptr && multinet_data_ != nullptr &&
+                       !wake_evaluation_active_ && !diagnostic_audio_active_ &&
+                       !wake_notification_pending_ &&
+                       diagnostic_audio_ != nullptr && diagnostic_audio_samples_ > 0 &&
+                       diagnostic_audio_samples_ == diagnostic_audio_loaded_;
+    if (!ready) {
+        xSemaphoreGive(mutex_);
+        ESP_LOGW(TAG, "Wake evaluation rejected: not listening or incomplete audio");
+        return false;
+    }
+    const bool override_command = !command.empty() && command != wake_identity_.wake_command;
+    wake_evaluation_active_ = true;
+    wake_evaluation_command_override_ = override_command;
+    wake_evaluation_threshold_permille_ = static_cast<unsigned>(threshold_permille);
+    wake_evaluation_lead_samples_ = lead_ms * (kSampleRate / 1000);
+    wake_evaluation_fed_samples_ = 0;
+    wake_evaluation_detections_ = 0;
+    wake_evaluation_timeouts_ = 0;
+    wake_evaluation_dither_ = 0x2545F491U;
+    if (override_command && !ApplyWakeCommandLocked(command)) {
+        FinishWakeEvaluationLocked("rejected_command");
+        xSemaphoreGive(mutex_);
+        return false;
+    }
+    multinet_->set_det_threshold(multinet_data_, static_cast<float>(threshold_permille) / 1000.0F);
+    CleanWakeWindowLocked();
+    wake_noise_energy_q8_ = 0;
+    wake_realignments_ = 0;
+    diagnostic_audio_position_ = 0;
+    diagnostic_audio_active_ = true;
+    ESP_LOGI(TAG, "Wake evaluation started: threshold_permille=%u lead_ms=%u audio_ms=%u command=%s",
+             static_cast<unsigned>(threshold_permille), static_cast<unsigned>(lead_ms),
+             static_cast<unsigned>(diagnostic_audio_samples_ / (kSampleRate / 1000)),
+             override_command ? command.c_str() : wake_identity_.wake_command.c_str());
+    xSemaphoreGive(mutex_);
+    return true;
+}
+
+void VoiceAudioFrontend::CleanWakeWindowLocked() {
+    multinet_->clean(multinet_data_);
+    wake_window_samples_ = 0;
+    wake_silent_samples_ = 0;
+}
+
+void VoiceAudioFrontend::TrackWakeWindowLocked(const std::vector<int16_t>& samples,
+                                               esp_mn_state_t state) {
+    if (state != ESP_MN_STATE_DETECTING) {
+        CleanWakeWindowLocked();
+        return;
+    }
+    int64_t energy = 0;
+    for (const int16_t sample : samples) energy += static_cast<int64_t>(sample) * sample;
+    energy /= static_cast<int64_t>(std::max<size_t>(1, samples.size()));
+    energy = std::max(energy, kWakeMinNoiseEnergy);
+    // The floor drops to quiet chunks at once and rises over seconds: gaps between syllables
+    // keep it low during speech, while a fan or other steady noise still becomes the floor.
+    // Q8 keeps the slow rise from truncating to zero when the floor is only a few LSB.
+    const int64_t energy_q8 = energy << 8;
+    if (wake_noise_energy_q8_ == 0 || energy_q8 < wake_noise_energy_q8_) {
+        wake_noise_energy_q8_ = energy_q8;
+    } else {
+        wake_noise_energy_q8_ += (energy_q8 - wake_noise_energy_q8_ + 255) / 256;
+    }
+    wake_window_samples_ += samples.size();
+    const bool silent = energy_q8 <= wake_noise_energy_q8_ * kWakeSilenceRatio;
+    wake_silent_samples_ = silent ? wake_silent_samples_ + samples.size() : 0;
+    if (wake_window_samples_ >= kWakeRealignAfterMs * kSamplesPerMs &&
+        wake_silent_samples_ >= kWakeRealignSilenceMs * kSamplesPerMs) {
+        ++wake_realignments_;
+        CleanWakeWindowLocked();
+    }
+}
+
+bool VoiceAudioFrontend::ApplyWakeCommandLocked(const std::string& command) {
+    return esp_mn_commands_clear() == ESP_OK &&
+           esp_mn_commands_add(1, command.c_str()) == ESP_OK &&
+           esp_mn_commands_update() == nullptr;
+}
+
+void VoiceAudioFrontend::RecordWakeEvaluationLocked(esp_mn_state_t state) {
+    const unsigned at_ms =
+        static_cast<unsigned>(wake_evaluation_fed_samples_ / (kSampleRate / 1000));
+    if (state == ESP_MN_STATE_TIMEOUT) {
+        ++wake_evaluation_timeouts_;
+        ESP_LOGI(TAG, "Wake evaluation timeout: at_ms=%u", at_ms);
+        return;
+    }
+    if (state != ESP_MN_STATE_DETECTED) return;
+    esp_mn_results_t* results = multinet_->get_results(multinet_data_);
+    bool matched = false;
+    float probability = 0.0F;
+    if (results != nullptr) {
+        for (int i = 0; i < results->num; ++i) {
+            if (results->command_id[i] == 1) {
+                matched = true;
+                probability = std::max(probability, results->prob[i]);
+            }
+        }
+    }
+    if (matched) ++wake_evaluation_detections_;
+    ESP_LOGI(TAG, "Wake evaluation detected: at_ms=%u matched=%d prob=%.3f text=%s", at_ms,
+             matched ? 1 : 0, static_cast<double>(probability),
+             results != nullptr ? results->string : "");
+}
+
+void VoiceAudioFrontend::FinishWakeEvaluationLocked(const char* reason) {
+    if (!wake_evaluation_active_) return;
+    wake_evaluation_active_ = false;
+    diagnostic_audio_active_ = false;
+    diagnostic_audio_position_ = 0;
+    bool restored = true;
+    // The evaluation's dither and clips do not describe the room; relearn the floor.
+    wake_noise_energy_q8_ = 0;
+    if (multinet_ != nullptr && multinet_data_ != nullptr) {
+        multinet_->set_det_threshold(multinet_data_, kDetectionThreshold);
+        CleanWakeWindowLocked();
+        if (wake_evaluation_command_override_) {
+            restored = ApplyWakeCommandLocked(wake_identity_.wake_command);
+        }
+    }
+    wake_evaluation_command_override_ = false;
+    ESP_LOGI(TAG, "Wake evaluation finished: reason=%s threshold_permille=%u fed_ms=%u detections=%u timeouts=%u realignments=%u restored=%d",
+             reason, wake_evaluation_threshold_permille_,
+             static_cast<unsigned>(wake_evaluation_fed_samples_ / (kSampleRate / 1000)),
+             static_cast<unsigned>(wake_evaluation_detections_),
+             static_cast<unsigned>(wake_evaluation_timeouts_),
+             static_cast<unsigned>(wake_realignments_), restored ? 1 : 0);
+    if (!restored) {
+        // A failed graph update leaves no trustworthy command. Going idle makes the wake
+        // supervisor re-arm, and that rebuilds the model from the active identity.
+        ReleaseWakeModelLocked();
+        ++wake_generation_;
+        if (mode_ == Mode::kWakeOnly) mode_ = Mode::kIdle;
+        on_wake_word_ = {};
+        SetErrorLocked("Wake evaluation could not restore the wake command");
+    }
 }
 
 bool VoiceAudioFrontend::ReplayDiagnosticAudio() {
@@ -742,8 +919,8 @@ bool VoiceAudioFrontend::InitModelLocked() {
         SetErrorLocked("Chinese MultiNet model unavailable");
         return fail();
     }
-    // ESP-SR 2.2.2 的 mn5q8_cn create/destroy 拥有全局命令表；新模型需重新核验合同。
-    if (std::strcmp(model_name, "mn5q8_cn") != 0) {
+    // ESP-SR 2.2.2 的 mn5q8_cn 与 mn7_cn create/destroy 拥有全局命令表；新模型需重新核验合同。
+    if (std::strcmp(model_name, "mn5q8_cn") != 0 && std::strcmp(model_name, "mn7_cn") != 0) {
         SetErrorLocked("Unsupported MultiNet command ownership contract");
         return fail();
     }
@@ -1608,13 +1785,31 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
         xSemaphoreGive(mutex_);
         return;
     }
-    const esp_mn_state_t state = multinet_->detect(multinet_data_, samples.data());
-    if (state == ESP_MN_STATE_TIMEOUT) {
-        multinet_->clean(multinet_data_);
+    if (wake_evaluation_active_) {
+        const size_t lead = wake_evaluation_lead_samples_;
+        for (auto& sample : samples) {
+            const size_t position = wake_evaluation_fed_samples_++;
+            if (position >= lead && position - lead < diagnostic_audio_samples_) {
+                sample = diagnostic_audio_[position - lead];
+            } else {
+                // Digital silence is not a microphone signal; keep a few LSBs of noise.
+                wake_evaluation_dither_ = wake_evaluation_dither_ * 1664525U + 1013904223U;
+                sample = static_cast<int16_t>(static_cast<int32_t>(wake_evaluation_dither_ >> 28) - 8);
+            }
+        }
+        const esp_mn_state_t evaluation_state = multinet_->detect(multinet_data_, samples.data());
+        RecordWakeEvaluationLocked(evaluation_state);
+        TrackWakeWindowLocked(samples, evaluation_state);
+        if (wake_evaluation_fed_samples_ >=
+            lead + diagnostic_audio_samples_ + kWakeEvaluationTailMs * (kSampleRate / 1000)) {
+            FinishWakeEvaluationLocked("complete");
+        }
         xSemaphoreGive(mutex_);
         return;
     }
+    const esp_mn_state_t state = multinet_->detect(multinet_data_, samples.data());
     if (state != ESP_MN_STATE_DETECTED) {
+        TrackWakeWindowLocked(samples, state);
         xSemaphoreGive(mutex_);
         return;
     }
@@ -1629,7 +1824,7 @@ void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint3
             }
         }
     }
-    multinet_->clean(multinet_data_);
+    CleanWakeWindowLocked();
     if (!detected) {
         xSemaphoreGive(mutex_);
         return;

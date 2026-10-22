@@ -11,4 +11,11 @@ config USE_SERVER_AEC
     default n
     depends on !USE_DEVICE_AEC
 
+config RODAKOS_WAKE_CHIME
+    bool "Play a short chime when the wake word is accepted"
+    default y
+    help
+        Confirms a local wake immediately, before the cloud session is ready.
+        The chime overlaps WebSocket setup instead of adding to it.
+
 endmenu

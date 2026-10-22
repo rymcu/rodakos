@@ -111,6 +111,18 @@ RODAK_TEST("MultiNet no returned model means no caller registry cleanup") {
     RODAK_CHECK(RegistryMatchesModel());
 }
 
+RODAK_TEST("MultiNet audited mn7_cn keeps sole registry ownership") {
+    Reset();
+    AudioCodecInput input;
+    VoiceAudioFrontend frontend(input);
+    SetSelectedModel("mn7_cn");
+    RODAK_CHECK(frontend.Init());
+    RODAK_CHECK(RegistryMatchesModel());
+    frontend.Deinit();
+    RODAK_CHECK_EQ(ModelDestroyCount(), 1U);
+    RODAK_CHECK_FALSE(RegistryPresent());
+}
+
 RODAK_TEST("MultiNet unaudited model is rejected before create") {
     Reset();
     AudioCodecInput input;

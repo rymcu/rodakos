@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace rodakos_test::voice_frontend {
 struct CommandRegistryStats {
@@ -29,6 +30,11 @@ bool LastDetectionRan();
 size_t ModelCreateCount();
 size_t ModelDestroyCount();
 const std::string& RegisteredCommand();
+void SetDetectionState(esp_mn_state_t state);
+void SetDetectionProbability(float value);
+float DetectionThreshold();
+size_t CleanCount();
+std::vector<int16_t> LastDetectSamples();
 void SupplyAudioReads(size_t count);
 void BlockAudioReadAt(size_t call);
 bool WaitAudioReadBlocked();

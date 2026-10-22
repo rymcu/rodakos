@@ -5,6 +5,7 @@
 #include "phone_os/realtime_voice_contract.h"
 
 #include <algorithm>
+#include <cmath>
 #include <inttypes.h>
 #include <utility>
 #include <vector>
@@ -96,6 +97,28 @@ constexpr TickType_t kIoIdleDelay = 1;
 constexpr int64_t kPlaybackDrainMarginUs = 20 * 1000;
 constexpr int64_t kMaxPlaybackDrainUs = 2 * 1000 * 1000;
 constexpr int64_t kFollowUpControlGraceUs = 100 * 1000;
+constexpr uint32_t kChimeSampleRate = 16000;
+
+// Two rising 60 ms tones (E6 then A6) with 8 ms fades so the speaker does not click.
+std::vector<int16_t> WakeChimePcm() {
+    constexpr float kTones[] = {1318.5F, 1760.0F};
+    constexpr size_t kToneSamples = kChimeSampleRate * 60 / 1000;
+    constexpr size_t kFadeSamples = kChimeSampleRate * 8 / 1000;
+    constexpr float kAmplitude = 0.25F * 32767.0F;
+    constexpr float kTwoPi = 6.28318530718F;
+    std::vector<int16_t> pcm;
+    pcm.reserve(kToneSamples * 2);
+    for (const float tone : kTones) {
+        const float step = kTwoPi * tone / static_cast<float>(kChimeSampleRate);
+        for (size_t i = 0; i < kToneSamples; ++i) {
+            const size_t edge = std::min(i, kToneSamples - 1 - i);
+            const float envelope =
+                edge < kFadeSamples ? static_cast<float>(edge) / kFadeSamples : 1.0F;
+            pcm.push_back(static_cast<int16_t>(kAmplitude * envelope * std::sin(step * i)));
+        }
+    }
+    return pcm;
+}
 
 class ScopeExit {
 public:
@@ -413,6 +436,11 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
         recorder_.Stop();
         return false;
     }
+#if CONFIG_RODAKOS_WAKE_CHIME
+    if (trigger == VoiceAssistantTrigger::kWakeWord) {
+        PlayWakeChime();
+    }
+#endif
 
     uint32_t opened_transport_generation = 0;
     if (!OpenTransportForInteraction(
@@ -1684,6 +1712,34 @@ bool VoiceAssistantService::SendNextAudioFrame() {
         HandleTransportFailure(transport_.last_failure());
     }
     return true;
+}
+
+void VoiceAssistantService::PlayWakeChime() {
+    // The DAC write blocks until I2S DMA accepts the frames (about 120 ms), which overlaps
+    // WebSocket setup. The recorder keeps the chime in its pre-roll, where AEC removes it
+    // from the uplink. Closing afterwards lets TTS open the codec at its negotiated rate.
+    static const std::vector<int16_t> chime = WakeChimePcm();
+    const int64_t started_us = esp_timer_get_time();
+    if (!audio_output_.OpenForOwner(kFocusOwner, kChimeSampleRate, 1, 16)) {
+        ESP_LOGW(TAG, "Wake chime skipped: audio output unavailable");
+        return;
+    }
+    const bool written = audio_output_.WriteForOwner(
+        kFocusOwner, chime.data(), static_cast<int>(chime.size() * sizeof(int16_t)));
+    // Closing disables I2S at once; let the frames still queued in DMA play out first.
+    const int64_t chime_us =
+        static_cast<int64_t>(chime.size()) * 1000000 / kChimeSampleRate + kPlaybackDrainMarginUs;
+    const int64_t remaining_us = started_us + chime_us - esp_timer_get_time();
+    if (written && remaining_us > 0) {
+        vTaskDelay(pdMS_TO_TICKS((remaining_us + 999) / 1000));
+    }
+    audio_output_.CloseForOwner(kFocusOwner);
+    if (!written) {
+        ESP_LOGW(TAG, "Wake chime write failed");
+        return;
+    }
+    ESP_LOGI(TAG, "Wake chime played: elapsed_ms=%d",
+             static_cast<int>((esp_timer_get_time() - started_us) / 1000));
 }
 
 void VoiceAssistantService::StopRecorderForPlayback() {

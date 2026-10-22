@@ -47,6 +47,11 @@ public:
     bool QueueDiagnosticCommand(std::function<void()> command);
     bool LoadDiagnosticAudio(const std::string& command);
     bool ArmDiagnosticAudio();
+    // Arguments `<threshold_permille> <lead_ms>[ <pinyin command>]`: feeds lead_ms of low
+    // dither and then the loaded diagnostic audio to the wake recognizer in place of the
+    // microphone, logging every match with its probability. No session opens; threshold
+    // and command are restored when the audio is exhausted or listening stops.
+    bool StartWakeEvaluation(const std::string& arguments);
     bool ReplayDiagnosticAudio();
     void ClearDiagnosticAudio();
     bool ArmAecDiagnosticCapture(uint32_t duration_ms = 6000);
@@ -83,6 +88,11 @@ private:
     void AfeFetchTask();
     void InvalidateAfeContinuityLocked();
     void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation);
+    void CleanWakeWindowLocked();
+    void TrackWakeWindowLocked(const std::vector<int16_t>& samples, esp_mn_state_t state);
+    bool ApplyWakeCommandLocked(const std::string& command);
+    void RecordWakeEvaluationLocked(esp_mn_state_t state);
+    void FinishWakeEvaluationLocked(const char* reason);
     void ProcessConversationSamples(const int16_t* samples, size_t count, uint32_t generation,
                                     bool vad_valid, bool vad_speech);
     void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
@@ -108,6 +118,14 @@ private:
     size_t diagnostic_audio_loaded_ = 0;
     size_t diagnostic_audio_position_ = 0;
     bool diagnostic_audio_active_ = false;
+    bool wake_evaluation_active_ = false;
+    bool wake_evaluation_command_override_ = false;
+    unsigned wake_evaluation_threshold_permille_ = 0;
+    size_t wake_evaluation_lead_samples_ = 0;
+    size_t wake_evaluation_fed_samples_ = 0;
+    uint32_t wake_evaluation_dither_ = 0;
+    size_t wake_evaluation_detections_ = 0;
+    size_t wake_evaluation_timeouts_ = 0;
     std::string pending_wake_word_;
     uint32_t pending_wake_generation_ = 0;
     bool initialized_ = false;
@@ -123,6 +141,10 @@ private:
     model_iface_data_t* multinet_data_ = nullptr;
     bool wake_model_ready_ = false;
     size_t wake_chunk_samples_ = 0;
+    size_t wake_window_samples_ = 0;
+    size_t wake_silent_samples_ = 0;
+    int64_t wake_noise_energy_q8_ = 0;
+    uint32_t wake_realignments_ = 0;
     uint32_t wake_generation_ = 0;
     std::string last_error_;
     VoiceIdentityConfig wake_identity_ = DefaultVoiceIdentityConfig();

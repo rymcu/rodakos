@@ -64,6 +64,10 @@ add_executable(rodakos_voice_audio_frontend_identity_tests
     "${RODAKOS_ROOT}/main/phone_os/voice_identity.cc"
     "${RODAKOS_ROOT}/main/phone_os/voice_pcm_assembler.cc"
     "${RODAKOS_ROOT}/main/phone_os/voice_aec_diagnostic_capture.cc")
+if(NOT RODAK_FRONTEND_NEGATIVE_CHILD)
+    # Frozen negative-control frontends predate the wake evaluation API.
+    target_sources(rodakos_voice_audio_frontend_identity_tests PRIVATE wake_evaluation_test.cc)
+endif()
 if(RODAK_FRONTEND_OBSERVATION_TESTS)
     target_sources(rodakos_voice_audio_frontend_identity_tests PRIVATE afe_observation_test.cc)
     # Internal gate/snapshot probes only; production TU and header tokens remain unchanged.

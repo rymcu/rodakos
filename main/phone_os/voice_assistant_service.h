@@ -93,6 +93,7 @@ private:
     bool BeginFollowUpTurn();
     bool HasTerminalInboundEventLocked() const;
     void StopRecorderForPlayback();
+    void PlayWakeChime();
     void RecordPlaybackFrame(int frame_duration_ms);
     void DrainPlayback();
     void DiscardPendingRecorderFrames();

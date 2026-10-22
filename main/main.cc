@@ -675,6 +675,12 @@ extern "C" void app_main(void) {
                 ESP_LOGI(TAG, "USB diagnostic injection disabled; using physical microphones");
                 return true;
             }
+            if (command.rfind("wake_eval ", 0) == 0) {
+                // A command override rebuilds the MultiNet graph; keep that off the serial task.
+                return voice_audio_frontend.QueueDiagnosticCommand([arguments = command.substr(10)]() {
+                    voice_audio_frontend.StartWakeEvaluation(arguments);
+                });
+            }
             if (command == "wake") {
                 return voice_audio_frontend.QueueDiagnosticCommand([]() {
                     if (voice_assistant_service.GetPhaseSnapshot() ==
