@@ -13,7 +13,8 @@ recognizer in place of the microphone, after `lead_ms` of low dither. Every matc
 MultiNet probability. No voice session opens. The threshold and command are restored when the clip
 and a 1.5 s tail have been fed, or when listening stops. A command that cannot be restored releases
 the model, and the next re-arm rebuilds it from the active identity before it listens again.
-Clips must be 16 kHz PCM16; the tool does not resample.
+Clips must be 16 kHz PCM16; the tool does not resample. A leading `+` sends the clip through the
+wake frontend, and `~<db>~` mixes in the live microphone (see below).
 
 `tools/run_wake_eval.py` uploads each `pos_*` / `neg_*` WAV clip and sweeps thresholds and lead
 times. The lead time moves the phrase onset inside MultiNet's detection window. The evaluator
@@ -80,9 +81,8 @@ Attenuating the clips shows where recall drops off. Clip peaks start near −3 d
 | −36 dB | −42 to −39 dBFS | 15/18 |
 | −42 dB | −48 to −45 dBFS | 8/18 |
 
-Recall falls once speech peaks are below about −40 dBFS. The real microphone level at distance
-has not been measured, so this does not yet show whether gain or AGC in front of MultiNet would help
-in a room. Measure the wake-path PCM peak at 1, 3 and 5 m before choosing either.
+Recall falls once speech peaks are below about −40 dBFS. The [wake frontend](#wake-frontend-aec-and-agc)
+moves that edge down by a few dB.
 
 ### Model: MultiNet5 vs MultiNet7
 
@@ -98,11 +98,67 @@ frontend accepts both models because their command-table ownership was verified 
 [frontend identity tests](../tests/voice_audio_frontend_identity/README.md)), so a later model change
 is a configuration change plus this evaluation.
 
+### Wake frontend: AEC and AGC
+
+`VoiceWakeFrontend` runs ESP-SR echo cancellation and WebRTC gain control on the capture task, in
+front of MultiNet. It is synchronous: no extra task, ring buffer or AFE output contract. The
+conversation AFE is unchanged.
+
+- **AEC** (`afe_aec_create("MR", 4, AFE_TYPE_SR, AFE_MODE_LOW_COST)`) uses the selected microphone
+  and the ES8311 loopback in TDM slot 1. Wake capture now opens the ADC with the conversation's
+  10 dB reference gain so the loopback is usable. AEC takes about 20% of one core, so it runs only
+  while the loopback carries playback (mean square above 1024, about −60 dBFS) and for 1 s after.
+  Otherwise the microphone passes straight through. A failed AEC frame passes the microphone
+  through too, so the timeline is never broken.
+- **AGC** (`esp_agc_open(AGC_MODE_2)`, 9 dB compression gain, −3 dBFS target, limiter on) runs on
+  every 10 ms block and costs about 1% of one core.
+- `CONFIG_RODAKOS_WAKE_AEC` and `CONFIG_RODAKOS_WAKE_AGC` switch each stage off; a stage that fails
+  to create is skipped and logged, not fatal.
+
+`wake_eval +...` sends a clip through this frontend. `wake_echo <seconds> <attenuation_db>` plays
+speech-band noise through the speaker; it fails if the speaker is already owned, and a real wake
+stops it before the assistant asks for audio focus. `~<db>~` (−30 to +24 dB) adds the live
+microphone, which picks up that echo, to the injected clip.
+`run_wake_eval.py --frontend --echo-db N --echo-gain-db G` drives both and restarts the echo for
+every clip.
+
+Each `wake_eval +` trial recreates AEC and AGC, so no gain or filter state carries over from the
+previous clip. Runs made before that reset read higher (15/18 at −42 dB, 4/30 near misses); the
+figures below are from the final build.
+
+| Measurement | Raw path | Through the frontend |
+| --- | --- | --- |
+| CPU, idle (no playback) | — | 1.1–1.3% of one core |
+| CPU, while playing | — | 19.9–20.7% of one core |
+| Echo reduced, real speaker echo at −6 dBFS playback | — | 18.0–20.2 dB |
+| Recall, full-level clip | 18/18 | 18/18 |
+| Recall, clip at −36 dB (peaks −42 to −39 dBFS) | 15/18 | 18/18 |
+| Recall, clip at −42 dB (peaks −48 to −45 dBFS) | 8/18 | 12/18 |
+| Near-miss false accepts, full level | 6/30 | 6/30 |
+
+With `wake_echo` playing (restarted for each clip) and the live microphone, which carries the real
+speaker echo, mixed into each clip at 0 dB:
+
+| Playback level | Raw path | Through the frontend |
+| --- | --- | --- |
+| −6 dBFS | 6/18 | 16/18 |
+| −12 dBFS, onsets 0/1 s | 18/18 | 14/18 |
+| −12 dBFS, onsets 0/0.5/1.5/2 s (earlier build) | 24/36 | 28/36 |
+
+At loud playback the frontend restores most wakes. At moderate playback it is mixed: worse at
+onsets 0/1 s, better across more onsets, equal overall (42/54 each). Most remaining misses in both paths start 2 s
+into the window: continuous, modulated playback never looks like 400 ms of silence, so the window
+cannot realign and the phrase can straddle MultiNet's timeout again. Playback that is music rather
+than this synthetic noise has pauses and has not been measured. Running AEC during playback was not
+checked for effects on music decoding or UI timing.
+
+An earlier echo test added the loopback signal itself to the injected clip. AEC cannot remove that,
+because it is not an acoustic echo, and its in/out ratio stayed near 0 dB. Those runs are not used
+here. `AFE_MODE_HIGH_PERF` was also tried for the wake AEC and recalled no better (12/18 against
+13/18), so the low-cost mode stays.
+
 ## Not done yet
 
-- **AFE in front of the wake recognizer.** The wake path still feeds MultiNet raw microphone PCM.
-  AEC would let the device wake while it plays music, and AGC could help distant speech. Both cost
-  continuous CPU and need the room-level measurements above first.
 - **A trained WakeNet model** for 你好达克 through Espressif's TTS training service (esp-sr issue
   #88). This is the long-term option with the best published far-field figures. It fixes the wake
   phrase in the model, so Rodak identity changes would still need MultiNet.

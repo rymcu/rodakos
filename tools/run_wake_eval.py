@@ -27,7 +27,8 @@ PREFIX = "RODAK_VOICE_TEST_V1 "
 RESULT_PREFIX = "RODAK_VOICE_TEST_RESULT "
 FINISHED = re.compile(
     r"Wake evaluation finished: reason=(\w+) threshold_permille=(\d+) fed_ms=(\d+) "
-    r"detections=(\d+) timeouts=(\d+)(?: realignments=\d+)? restored=(\d)")
+    r"detections=(\d+) timeouts=(\d+)(?: realignments=\d+)?(?: aec_frames=\d+)?(?: aec_bypassed=\d+)?"
+    r"(?: aec_in_out_db=-?[0-9.]+)?(?: frontend_cpu_pct=[0-9.]+)? restored=(\d)")
 DETECTED = re.compile(r"Wake evaluation detected: at_ms=(\d+) matched=(\d) prob=([0-9.]+)")
 TIMEOUT = re.compile(r"Wake evaluation timeout: at_ms=(\d+)")
 
@@ -101,8 +102,9 @@ class Device:
         for offset in range(0, len(pcm), 512):
             self.command(f"audio_chunk {offset // 2} {pcm[offset:offset + 512].hex()}")
 
-    def evaluate(self, threshold, lead_ms, wake_command, timeout):
-        arguments = f"{threshold} {lead_ms}" + (f" {wake_command}" if wake_command else "")
+    def evaluate(self, threshold, lead_ms, wake_command, timeout, frontend=False, echo_gain_db=None):
+        prefix = ("+" if frontend else "") + (f"~{echo_gain_db}~" if echo_gain_db is not None else "")
+        arguments = prefix + f"{threshold} {lead_ms}" + (f" {wake_command}" if wake_command else "")
         # The evaluation runs on a higher-priority task and may log before the reply prints.
         early = []
         self.command("wake_eval " + arguments, early=early)
@@ -172,6 +174,14 @@ def main():
     parser.add_argument("--leads", default="0,750,1500,2250", help="comma-separated lead-in ms")
     parser.add_argument("--gain-db", type=float, default=0.0, help="level change before upload")
     parser.add_argument("--match", default="", help="only clips whose name matches this regex")
+    parser.add_argument("--frontend", action="store_true",
+                        help="feed clips through the wake AEC/AGC frontend before MultiNet")
+    parser.add_argument("--echo-db", type=int, default=None,
+                        help="play speech-band interference this many dB below full scale "
+                             "through the speaker for the whole run")
+    parser.add_argument("--echo-gain-db", type=int, default=0,
+                        help="add the live microphone, which picks up the speaker echo, to the "
+                             "injected clip at this gain")
     args = parser.parse_args()
     thresholds = [int(value) for value in args.thresholds.split(",") if value]
     leads = [int(value) for value in args.leads.split(",") if value]
@@ -179,6 +189,8 @@ def main():
         parser.error("thresholds must be 1-999 permille and leads 0-3000 ms")
     if args.command and not re.fullmatch(r"[a-z]+( [a-z]+){0,15}", args.command):
         parser.error("command must be lowercase space-separated pinyin")
+    if args.echo_db is not None and not (0 <= args.echo_db <= 60 and -30 <= args.echo_gain_db <= 24):
+        parser.error("echo-db must be 0-60 and echo-gain-db -30..24")
     clips = sorted(path for path in args.clips.glob("*.wav")
                    if path.name.startswith(("pos_", "neg_")) and re.search(args.match, path.name))
     if not clips:
@@ -199,12 +211,20 @@ def main():
             for index, clip in enumerate(clips):
                 samples = load_clip(clip, args.gain_db)
                 device.upload(samples)
+                if args.echo_db is not None:
+                    # Restart per clip: the device caps one echo at 600 s, and a refused
+                    # start (speaker busy) must fail the run instead of measuring no echo.
+                    device.command("wake_echo 0 0")
+                    time.sleep(0.6)
+                    device.command(f"wake_echo 600 {args.echo_db}")
                 clip_ms = len(samples) * 1000 // SAMPLE_RATE
                 label = clip.name.split("__", 1)[0]
                 for threshold in thresholds:
                     for lead in leads:
                         timeout = (lead + clip_ms + 1500) / 1000 * 3 + 10
-                        detections, timeouts = device.evaluate(threshold, lead, args.command, timeout)
+                        detections, timeouts = device.evaluate(
+                            threshold, lead, args.command, timeout, args.frontend,
+                            args.echo_gain_db if args.echo_db is not None else None)
                         rows.append({"clip": clip.name, "label": label, "threshold": threshold,
                                      "lead_ms": lead, "clip_ms": clip_ms,
                                      "peak_dbfs": round(peak_dbfs(samples), 1),
@@ -223,8 +243,15 @@ def main():
                 pass
             raise
         finally:
+            if args.echo_db is not None:
+                try:
+                    device.command("wake_echo 0 0")
+                except Exception:
+                    pass
             port.close()
     report = {"command": args.command or "(active identity)", "gain_db": args.gain_db,
+              "frontend": args.frontend, "echo_db": args.echo_db,
+              "echo_gain_db": args.echo_gain_db if args.echo_db is not None else None,
               "thresholds": thresholds, "leads_ms": leads, "acoustic_path": False,
               "summary": summarize(rows, thresholds), "rows": rows}
     summary_path = args.log.with_suffix(".summary.json")

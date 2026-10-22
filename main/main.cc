@@ -31,6 +31,7 @@
 #include "phone_os/display_service.h"
 #include "phone_os/webrtc_display_service.h"
 #include "phone_os/voice_audio_frontend.h"
+#include "phone_os/voice_wake_echo_diagnostic.h"
 #include "phone_os/voice_aec_diagnostic_console.h"
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
@@ -681,6 +682,9 @@ extern "C" void app_main(void) {
                     voice_audio_frontend.StartWakeEvaluation(arguments);
                 });
             }
+            if (command.rfind("wake_echo ", 0) == 0) {
+                return rodakos::StartWakeEchoDiagnostic(audio_output_service, command.substr(10));
+            }
             if (command == "wake") {
                 return voice_audio_frontend.QueueDiagnosticCommand([]() {
                     if (voice_assistant_service.GetPhaseSnapshot() ==
@@ -716,6 +720,8 @@ extern "C" void app_main(void) {
     // While Camera streams, the largest internal block is about 1.6 KB, too small for the
     // voice WebSocket task. Voice takes priority, so a new session stops the remote stream.
     voice_assistant_service.SetBeforeTransportCallback([]() {
+        // Diagnostic echo holds the speaker without focus; a real session takes it back.
+        rodakos::StopWakeEchoDiagnostic(audio_output_service);
         if (!web_rtc_camera_service.IsRunning()) return;
         ESP_LOGW(TAG, "Stopping remote Camera stream for voice: internal_free=%u internal_largest=%u",
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),

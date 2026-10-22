@@ -18,10 +18,12 @@ physical microphones as follows:
 The conversation frontend reads the four-channel stream from `AudioCodecInput`,
 selects the active microphone and retains the loopback reference as `M/R`, then
 passes it to ESP-SR AFE with `AEC_MODE_VOIP_HIGH_PERF` and WebRTC VAD
-(`VAD_MODE_0`). Wake and Recorder use their own input ownership and the default
-uniform gain profile. Conversation capture uses
-`InputGainProfile::kAecReference10Db`, keeping microphones at 30 dB while
-requesting 10 dB (9 dB after ES7210 quantization) for the reference channel.
+(`VAD_MODE_0`). Recorder uses its own input ownership and the default uniform
+gain profile. Conversation capture uses `InputGainProfile::kAecReference10Db`,
+keeping microphones at 30 dB while requesting 10 dB (9 dB after ES7210
+quantization) for the reference channel. Wake monitoring uses the same profile
+when its own echo canceller is enabled; it is a separate synchronous ESP-SR AEC
+in front of MultiNet, described in [wake word evaluation](voice-wake-evaluation.md#wake-frontend-aec-and-agc).
 
 Fetched PCM, including silence, is the continuous Opus uplink source. Frames
 carry sample-weighted VAD metadata and a sample-clock timestamp. The service

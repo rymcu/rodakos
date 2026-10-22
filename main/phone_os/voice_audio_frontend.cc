@@ -7,6 +7,9 @@
 #endif
 
 #include <algorithm>
+#include <climits>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <utility>
 
@@ -278,6 +281,8 @@ void VoiceAudioFrontend::Deinit() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     input_open_ = false;
     ReleaseModelLocked();
+    wake_frontend_.Stop();
+    wake_chunk_buffer_.clear();
     initialized_ = false;
     xSemaphoreGive(mutex_);
     xSemaphoreGiveRecursive(lifecycle_mutex_);
@@ -313,6 +318,7 @@ bool VoiceAudioFrontend::StartListening(
     if (multinet_ != nullptr && multinet_data_ != nullptr) {
         CleanWakeWindowLocked();
     }
+    StartWakeFrontendLocked();
     const bool task_started = EnsureCaptureTaskLocked();
     xSemaphoreGive(mutex_);
 
@@ -350,8 +356,29 @@ void VoiceAudioFrontend::StopListening() {
         mode_ = Mode::kIdle;
     }
     on_wake_word_ = {};
+    wake_frontend_.Stop();
+    wake_chunk_buffer_.clear();
     xSemaphoreGive(mutex_);
     input_.CloseForOwner(kWakeAudioInputOwner);
+}
+
+void VoiceAudioFrontend::StartWakeFrontendLocked() {
+    wake_chunk_buffer_.clear();
+#if defined(CONFIG_RODAKOS_WAKE_AEC) || defined(CONFIG_RODAKOS_WAKE_AGC)
+#if defined(CONFIG_RODAKOS_WAKE_AEC)
+    constexpr bool kWakeAec = true;
+#else
+    constexpr bool kWakeAec = false;
+#endif
+#if defined(CONFIG_RODAKOS_WAKE_AGC)
+    constexpr bool kWakeAgc = true;
+#else
+    constexpr bool kWakeAgc = false;
+#endif
+    wake_frontend_.Start(kWakeAec, kWakeAgc);
+#else
+    wake_frontend_.Stop();
+#endif
 }
 
 bool VoiceAudioFrontend::ConfigureWakeWord(const VoiceIdentityConfig& config) {
@@ -561,8 +588,36 @@ bool VoiceAudioFrontend::ArmDiagnosticAudio() {
     return ready;
 }
 
-bool VoiceAudioFrontend::StartWakeEvaluation(const std::string& arguments) {
+bool VoiceAudioFrontend::StartWakeEvaluation(const std::string& raw_arguments) {
     if (mutex_ == nullptr || lifecycle_mutex_ == nullptr) return false;
+    // A leading '+' routes the clip through the wake AEC/AGC frontend instead of straight
+    // to MultiNet, so the same clips measure both paths. A following `~<db>~` adds the live
+    // microphone to the injected clip at that gain, so the real speaker echo picked up while
+    // `wake_echo` plays reaches both paths.
+    std::string arguments = raw_arguments;
+    const bool through_frontend = !arguments.empty() && arguments.front() == '+';
+    if (through_frontend) arguments.erase(0, 1);
+    bool mix_echo = false;
+    int echo_gain_db = 0;
+    if (!arguments.empty() && arguments.front() == '~') {
+        const size_t close = arguments.find('~', 1);
+        const std::string gain = close == std::string::npos ? std::string() : arguments.substr(1, close - 1);
+        const bool negative = !gain.empty() && gain.front() == '-';
+        size_t magnitude = 0;
+        if (close == std::string::npos ||
+            !ParseDiagnosticCount(negative ? gain.substr(1) : gain, magnitude) || magnitude > 30) {
+            ESP_LOGW(TAG, "Wake evaluation rejected: invalid echo gain");
+            return false;
+        }
+        mix_echo = true;
+        echo_gain_db = negative ? -static_cast<int>(magnitude) : static_cast<int>(magnitude);
+        // Above +24 dB the Q12 factor exceeds what the int16 echo mix was sized for.
+        if (echo_gain_db > 24) {
+            ESP_LOGW(TAG, "Wake evaluation rejected: echo gain above 24 dB");
+            return false;
+        }
+        arguments.erase(0, close + 1);
+    }
     const size_t first = arguments.find(' ');
     const size_t second = first == std::string::npos ? first : arguments.find(' ', first + 1);
     size_t threshold_permille = 0;
@@ -592,13 +647,21 @@ bool VoiceAudioFrontend::StartWakeEvaluation(const std::string& arguments) {
                        !wake_notification_pending_ &&
                        diagnostic_audio_ != nullptr && diagnostic_audio_samples_ > 0 &&
                        diagnostic_audio_samples_ == diagnostic_audio_loaded_;
-    if (!ready) {
+    if (!ready || (through_frontend && !wake_frontend_.IsActive())) {
         xSemaphoreGive(mutex_);
-        ESP_LOGW(TAG, "Wake evaluation rejected: not listening or incomplete audio");
+        ESP_LOGW(TAG, "Wake evaluation rejected: not listening, incomplete audio or no frontend");
         return false;
     }
     const bool override_command = !command.empty() && command != wake_identity_.wake_command;
     wake_evaluation_active_ = true;
+    ++wake_evaluation_epoch_;
+    wake_evaluation_frontend_ = through_frontend;
+    wake_evaluation_echo_q12_ =
+        mix_echo ? static_cast<int32_t>(std::lround(4096.0 * std::pow(10.0, echo_gain_db / 20.0))) : 0;
+    // Recreate both stages so the AGC gain and AEC filter do not carry over from earlier
+    // clips or the room; each trial then starts from the same state.
+    if (through_frontend) wake_frontend_.Start(wake_frontend_.aec_active(), wake_frontend_.agc_active());
+    wake_chunk_buffer_.clear();
     wake_evaluation_command_override_ = override_command;
     wake_evaluation_threshold_permille_ = static_cast<unsigned>(threshold_permille);
     wake_evaluation_lead_samples_ = lead_ms * (kSampleRate / 1000);
@@ -617,9 +680,10 @@ bool VoiceAudioFrontend::StartWakeEvaluation(const std::string& arguments) {
     wake_realignments_ = 0;
     diagnostic_audio_position_ = 0;
     diagnostic_audio_active_ = true;
-    ESP_LOGI(TAG, "Wake evaluation started: threshold_permille=%u lead_ms=%u audio_ms=%u command=%s",
+    ESP_LOGI(TAG, "Wake evaluation started: threshold_permille=%u lead_ms=%u audio_ms=%u frontend=%d echo_db=%s%d command=%s",
              static_cast<unsigned>(threshold_permille), static_cast<unsigned>(lead_ms),
              static_cast<unsigned>(diagnostic_audio_samples_ / (kSampleRate / 1000)),
+             through_frontend ? 1 : 0, mix_echo ? "" : "off/", echo_gain_db,
              override_command ? command.c_str() : wake_identity_.wake_command.c_str());
     xSemaphoreGive(mutex_);
     return true;
@@ -666,6 +730,20 @@ bool VoiceAudioFrontend::ApplyWakeCommandLocked(const std::string& command) {
            esp_mn_commands_update() == nullptr;
 }
 
+void VoiceAudioFrontend::ReplaceWithEvaluationAudioLocked(std::vector<int16_t>& samples) {
+    const size_t lead = wake_evaluation_lead_samples_;
+    for (auto& sample : samples) {
+        const size_t position = wake_evaluation_fed_samples_++;
+        if (position >= lead && position - lead < diagnostic_audio_samples_) {
+            sample = diagnostic_audio_[position - lead];
+        } else {
+            // Digital silence is not a microphone signal; keep a few LSBs of noise.
+            wake_evaluation_dither_ = wake_evaluation_dither_ * 1664525U + 1013904223U;
+            sample = static_cast<int16_t>(static_cast<int32_t>(wake_evaluation_dither_ >> 28) - 8);
+        }
+    }
+}
+
 void VoiceAudioFrontend::RecordWakeEvaluationLocked(esp_mn_state_t state) {
     const unsigned at_ms =
         static_cast<unsigned>(wake_evaluation_fed_samples_ / (kSampleRate / 1000));
@@ -695,6 +773,9 @@ void VoiceAudioFrontend::RecordWakeEvaluationLocked(esp_mn_state_t state) {
 void VoiceAudioFrontend::FinishWakeEvaluationLocked(const char* reason) {
     if (!wake_evaluation_active_) return;
     wake_evaluation_active_ = false;
+    ++wake_evaluation_epoch_;
+    wake_evaluation_frontend_ = false;
+    wake_evaluation_echo_q12_ = 0;
     diagnostic_audio_active_ = false;
     diagnostic_audio_position_ = 0;
     bool restored = true;
@@ -708,12 +789,28 @@ void VoiceAudioFrontend::FinishWakeEvaluationLocked(const char* reason) {
         }
     }
     wake_evaluation_command_override_ = false;
-    ESP_LOGI(TAG, "Wake evaluation finished: reason=%s threshold_permille=%u fed_ms=%u detections=%u timeouts=%u realignments=%u restored=%d",
+    const auto frontend_stats = wake_frontend_.stats();
+    const double erle_db = frontend_stats.aec_out_energy > 0
+        ? 10.0 * std::log10(static_cast<double>(frontend_stats.aec_in_energy) /
+                            static_cast<double>(frontend_stats.aec_out_energy))
+        : 0.0;
+    // Share of one core spent in AEC/AGC relative to the audio it processed.
+    const double frontend_cpu_pct = frontend_stats.processed_samples > 0
+        ? 100.0 * static_cast<double>(frontend_stats.process_us) /
+              (static_cast<double>(frontend_stats.processed_samples) * 1e6 / kSampleRate)
+        : 0.0;
+    ESP_LOGI(TAG, "Wake evaluation finished: reason=%s threshold_permille=%u fed_ms=%u detections=%u timeouts=%u realignments=%u aec_frames=%u aec_bypassed=%u aec_in_out_db=%.1f frontend_cpu_pct=%.1f restored=%d",
              reason, wake_evaluation_threshold_permille_,
              static_cast<unsigned>(wake_evaluation_fed_samples_ / (kSampleRate / 1000)),
              static_cast<unsigned>(wake_evaluation_detections_),
              static_cast<unsigned>(wake_evaluation_timeouts_),
-             static_cast<unsigned>(wake_realignments_), restored ? 1 : 0);
+             static_cast<unsigned>(wake_realignments_),
+             static_cast<unsigned>(frontend_stats.aec_frames),
+             static_cast<unsigned>(frontend_stats.bypassed_frames), erle_db, frontend_cpu_pct,
+             restored ? 1 : 0);
+    // Drop processed evaluation samples still waiting for a MultiNet chunk.
+    wake_frontend_.Reset();
+    wake_chunk_buffer_.clear();
     if (!restored) {
         // A failed graph update leaves no trustworthy command. Going idle makes the wake
         // supervisor re-arm, and that rebuilds the model from the active identity.
@@ -1136,6 +1233,8 @@ bool VoiceAudioFrontend::EnsureInputForMode(Mode mode) {
         xSemaphoreGive(mutex_);
         return false;
     }
+    // Wake AEC needs the loopback at the conversation reference gain, not microphone gain.
+    const bool reference_gain = mode == Mode::kConversation || wake_frontend_.aec_active();
     const bool opened = input_.OpenForOwner(owner,
                                              priority,
                                              kSampleRate,
@@ -1143,7 +1242,7 @@ bool VoiceAudioFrontend::EnsureInputForMode(Mode mode) {
                                              kBitsPerSample,
                                              kInputGain,
                                              kInputChannelMask,
-                                             mode == Mode::kConversation
+                                             reference_gain
                                                  ? AudioCodecInput::InputGainProfile::kAecReference10Db
                                                  : AudioCodecInput::InputGainProfile::kUniform);
     input_open_ = opened;
@@ -1360,7 +1459,7 @@ void VoiceAudioFrontend::CaptureTask() {
             afe_producer_diagnostics_.Publish(AfeProducerStage::kBetweenReads, generation, read_epoch,
                 read_sequence, esp_timer_get_time(), static_cast<int32_t>(afe_feed_buffer.size() / 2));
         } else if (mode == Mode::kWakeOnly) {
-            ProcessWakeSamples(selected_samples, wake_generation);
+            FeedWakeSamples(samples, selected_samples, wake_generation);
         }
         // Keep IDLE0 watchdog serviceable when the codec returns short/empty blocks.
         vTaskDelay(1);
@@ -1778,30 +1877,82 @@ void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
     }
 }
 
+void VoiceAudioFrontend::FeedWakeSamples(const std::vector<int16_t>& tdm,
+                                         std::vector<int16_t>& selected, uint32_t generation) {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    // Blocks carry the evaluation epoch they were produced in, so a chunk built before an
+    // evaluation starts or stops is dropped instead of reaching the fresh MultiNet window.
+    const uint32_t epoch = wake_evaluation_epoch_;
+    const size_t chunk = wake_chunk_samples_;
+    const bool has_reference = tdm.size() >= selected.size() * kInputChannels;
+    const bool filtered = wake_frontend_.IsActive() &&
+                          (!wake_evaluation_active_ || wake_evaluation_frontend_) &&
+                          generation == wake_generation_ && chunk > 0 && has_reference;
+    const bool inject = wake_evaluation_active_ && generation == wake_generation_ &&
+                        wake_model_ready_ && (filtered || wake_evaluation_echo_q12_ != 0);
+    if (inject) {
+        // Injected audio replaces the microphone before AEC/AGC. With `wake_echo` playing,
+        // the live microphone, which carries the real speaker echo, is added back so both
+        // paths face the same acoustic echo the AEC adapts to.
+        const std::vector<int16_t> live =
+            wake_evaluation_echo_q12_ != 0 ? selected : std::vector<int16_t>();
+        ReplaceWithEvaluationAudioLocked(selected);
+        for (size_t i = 0; i < live.size(); ++i) {
+            const int64_t echo = (static_cast<int64_t>(live[i]) * wake_evaluation_echo_q12_) >> 12;
+            selected[i] = static_cast<int16_t>(
+                std::clamp<int64_t>(selected[i] + echo, INT16_MIN, INT16_MAX));
+        }
+    }
+    if (filtered) {
+        // TDM slot 1 is the ES8311 loopback (MIC3), the AEC reference.
+        wake_frontend_.Process(selected.data(), 1, tdm.data() + 1, kInputChannels,
+                               selected.size(), wake_frontend_output_);
+        wake_chunk_buffer_.insert(wake_chunk_buffer_.end(), wake_frontend_output_.begin(),
+                                  wake_frontend_output_.end());
+    }
+    xSemaphoreGive(mutex_);
+    if (!filtered) {
+        ProcessWakeSamples(selected, generation, epoch, inject);
+        return;
+    }
+    while (true) {
+        std::vector<int16_t> block;
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (wake_chunk_buffer_.size() >= chunk) {
+            block.assign(wake_chunk_buffer_.begin(),
+                         wake_chunk_buffer_.begin() + static_cast<std::ptrdiff_t>(chunk));
+            wake_chunk_buffer_.erase(wake_chunk_buffer_.begin(),
+                                     wake_chunk_buffer_.begin() + static_cast<std::ptrdiff_t>(chunk));
+        }
+        xSemaphoreGive(mutex_);
+        if (block.empty()) return;
+        ProcessWakeSamples(block, generation, epoch, inject);
+    }
+}
+
 void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
+    const uint32_t epoch = wake_evaluation_epoch_;
+    xSemaphoreGive(mutex_);
+    ProcessWakeSamples(samples, generation, epoch, false);
+}
+
+void VoiceAudioFrontend::ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation,
+                                            uint32_t epoch, bool injected) {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
     if (mode_ != Mode::kWakeOnly || generation != wake_generation_ ||
+        epoch != wake_evaluation_epoch_ ||
         !wake_model_ready_ || multinet_ == nullptr || multinet_data_ == nullptr) {
         xSemaphoreGive(mutex_);
         return;
     }
     if (wake_evaluation_active_) {
-        const size_t lead = wake_evaluation_lead_samples_;
-        for (auto& sample : samples) {
-            const size_t position = wake_evaluation_fed_samples_++;
-            if (position >= lead && position - lead < diagnostic_audio_samples_) {
-                sample = diagnostic_audio_[position - lead];
-            } else {
-                // Digital silence is not a microphone signal; keep a few LSBs of noise.
-                wake_evaluation_dither_ = wake_evaluation_dither_ * 1664525U + 1013904223U;
-                sample = static_cast<int16_t>(static_cast<int32_t>(wake_evaluation_dither_ >> 28) - 8);
-            }
-        }
+        if (!injected) ReplaceWithEvaluationAudioLocked(samples);
         const esp_mn_state_t evaluation_state = multinet_->detect(multinet_data_, samples.data());
         RecordWakeEvaluationLocked(evaluation_state);
         TrackWakeWindowLocked(samples, evaluation_state);
-        if (wake_evaluation_fed_samples_ >=
-            lead + diagnostic_audio_samples_ + kWakeEvaluationTailMs * (kSampleRate / 1000)) {
+        if (wake_evaluation_fed_samples_ >= wake_evaluation_lead_samples_ +
+                diagnostic_audio_samples_ + kWakeEvaluationTailMs * (kSampleRate / 1000)) {
             FinishWakeEvaluationLocked("complete");
         }
         xSemaphoreGive(mutex_);

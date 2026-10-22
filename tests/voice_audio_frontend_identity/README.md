@@ -187,6 +187,15 @@ Capture 固定帧 176→240B，Fetch 112→368B；gap/producer 日志 helper 分
 短临界区成本，不能称“仅告警时有开销”。正式包仍须独立核对最终 ELF 与设备窗口。
 host fake 不执行闭源 DSP、FreeRTOS 真调度、物理 I2S 或声学处理，不给出 034 真机根因。
 
+## 唤醒前端 AEC/AGC
+
+`wake_frontend_test.cc` 直接编译生产 `VoiceWakeFrontend`。`wake_frontend_runtime.cc` 只替代闭源
+ESP-SR AEC 与 WebRTC AGC：保留 AEC 按 chunk 交织 `[mic, ref]` 输入、AGC 只接受 10 ms 的帧合同，
+AEC 替身输出 `mic - ref` 以便断言使用了哪一路参考。用例覆盖 TDM slot 1 参考、跨读取的余量拼接、
+无参考时 AGC 不误用回采、仅在回采有播放时运行 AEC 并保留 1 s 尾音、AEC 失败帧透传原始麦克风、
+任一级创建失败时跳过并释放。替身不证明真实回声消除量或增益曲线；设备测量见
+[唤醒评测](../../docs/voice-wake-evaluation.md)。负对照冻结的旧前端不引用该类，仍链接同一源文件。
+
 ## 033 MultiNet 命令表所有权
 
 已核验 `mn5q8_cn` 与 `mn7_cn`。固定 ESP-SR 2.2.2 的 ESP32-S3 `libmultinet.a` 中，

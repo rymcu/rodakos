@@ -167,6 +167,19 @@ RODAK_TEST("Wake evaluation command override is restored when listening stops") 
     RODAK_CHECK(fixture.frontend.wake_model_ready_);
 }
 
+RODAK_TEST("A chunk built before an evaluation started is not fed to its window") {
+    Fixture fixture;
+    RODAK_CHECK(fixture.Listen());
+    RODAK_CHECK(fixture.Load(kChunk, 1234));
+    const uint32_t stale_epoch = fixture.frontend.wake_evaluation_epoch_;
+    RODAK_CHECK(fixture.frontend.StartWakeEvaluation("140 0"));
+    std::vector<int16_t> stale(kChunk, 999);
+    fixture.frontend.ProcessWakeSamples(stale, fixture.frontend.wake_generation_, stale_epoch, false);
+    RODAK_CHECK_EQ(fixture.frontend.wake_evaluation_fed_samples_, 0U);
+    fixture.Feed(1);
+    RODAK_CHECK_EQ(LastDetectSamples().front(), 1234);
+}
+
 RODAK_TEST("Wake evaluation rejects bad arguments and incomplete or busy state") {
     Fixture fixture;
     RODAK_CHECK(fixture.Listen());
@@ -174,7 +187,8 @@ RODAK_TEST("Wake evaluation rejects bad arguments and incomplete or busy state")
     RODAK_CHECK(fixture.frontend.LoadDiagnosticAudio("audio_begin 10"));
     RODAK_CHECK_FALSE(fixture.frontend.StartWakeEvaluation("140 0"));
     RODAK_CHECK(fixture.Load(kChunk, 1));
-    for (const char* bad : {"", "140", "0 0", "1000 0", "140 3001", "x 0", "140 -1"}) {
+    for (const char* bad : {"", "140", "0 0", "1000 0", "140 3001", "x 0", "140 -1",
+                            "~25~140 0", "~31~140 0", "~-31~140 0", "~6140 0", "+140 0"}) {
         RODAK_CHECK_FALSE(fixture.frontend.StartWakeEvaluation(bad));
     }
     RODAK_CHECK_FALSE(fixture.frontend.StartWakeEvaluation("140 0 " + std::string(129, 'a')));

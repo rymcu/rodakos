@@ -94,6 +94,18 @@ class EvaluateTest(unittest.TestCase):
             with tempfile.TemporaryFile() as log, self.assertRaises(RuntimeError):
                 tool.Device(port, log).evaluate(140, 0, "", 5)
 
+    def test_frontend_and_echo_prefixes_and_extended_finish_line(self):
+        port = FakePort({"wake_eval": [
+            f'{tool.RESULT_PREFIX}{{"ok":true,"command":"wake_eval"}}',
+            "I (1) VoiceAudioFrontend: Wake evaluation finished: reason=complete threshold_permille=140 "
+            "fed_ms=3008 detections=0 timeouts=0 realignments=0 aec_frames=94 aec_bypassed=0 "
+            "aec_in_out_db=-1.6 frontend_cpu_pct=20.1 restored=1",
+        ]})
+        with tempfile.TemporaryFile() as log:
+            result = tool.Device(port, log).evaluate(140, 0, "", 5, frontend=True, echo_gain_db=-6)
+        self.assertEqual(port.written[-1], tool.PREFIX + "wake_eval +~-6~140 0")
+        self.assertEqual(result, ([], []))
+
     def test_device_rejection_is_reported(self):
         port = FakePort({"wake_eval": [
             f'{tool.RESULT_PREFIX}{{"ok":true,"command":"wake_eval"}}',

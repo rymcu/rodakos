@@ -6,6 +6,7 @@
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/task-retirement.h"
 #include "phone_os/voice_afe_observation.h"
+#include "phone_os/voice_wake_frontend.h"
 
 #include <cstdint>
 #include <deque>
@@ -87,10 +88,17 @@ private:
     void StopAfe();
     void AfeFetchTask();
     void InvalidateAfeContinuityLocked();
+    void FeedWakeSamples(const std::vector<int16_t>& tdm, std::vector<int16_t>& selected,
+                         uint32_t generation);
     void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation);
+    // `injected` means FeedWakeSamples already replaced the microphone with the clip.
+    void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation, uint32_t epoch,
+                            bool injected);
+    void StartWakeFrontendLocked();
     void CleanWakeWindowLocked();
     void TrackWakeWindowLocked(const std::vector<int16_t>& samples, esp_mn_state_t state);
     bool ApplyWakeCommandLocked(const std::string& command);
+    void ReplaceWithEvaluationAudioLocked(std::vector<int16_t>& samples);
     void RecordWakeEvaluationLocked(esp_mn_state_t state);
     void FinishWakeEvaluationLocked(const char* reason);
     void ProcessConversationSamples(const int16_t* samples, size_t count, uint32_t generation,
@@ -120,6 +128,12 @@ private:
     bool diagnostic_audio_active_ = false;
     bool wake_evaluation_active_ = false;
     bool wake_evaluation_command_override_ = false;
+    // Set when the evaluation feeds the clip through the wake AEC/AGC frontend.
+    bool wake_evaluation_frontend_ = false;
+    // Gain of the live microphone added to the injected clip, Q12; 0 disables the echo mix.
+    int32_t wake_evaluation_echo_q12_ = 0;
+    // Advances whenever an evaluation starts or finishes.
+    uint32_t wake_evaluation_epoch_ = 0;
     unsigned wake_evaluation_threshold_permille_ = 0;
     size_t wake_evaluation_lead_samples_ = 0;
     size_t wake_evaluation_fed_samples_ = 0;
@@ -141,6 +155,9 @@ private:
     model_iface_data_t* multinet_data_ = nullptr;
     bool wake_model_ready_ = false;
     size_t wake_chunk_samples_ = 0;
+    VoiceWakeFrontend wake_frontend_;
+    std::vector<int16_t> wake_frontend_output_;
+    std::vector<int16_t> wake_chunk_buffer_;
     size_t wake_window_samples_ = 0;
     size_t wake_silent_samples_ = 0;
     int64_t wake_noise_energy_q8_ = 0;
