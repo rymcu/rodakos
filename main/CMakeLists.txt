@@ -67,6 +67,7 @@ set(SOURCES
     "phone_os/mqtt_light_effect.cc"
     "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_barge_in_policy.cc"
+    "phone_os/voice_playback_queue.cc"
     "phone_os/voice_assistant_transport.cc"
     "phone_os/voice_recorder_service.cc"
     "phone_os/voice_wake_settings.cc"

@@ -13,6 +13,7 @@ add_executable(rodakos_app_model_tests
     wol_test.cc
     voice_conversation_policy_test.cc
     voice_barge_in_policy_test.cc
+    voice_playback_queue_test.cc
     voice_pcm_assembler_test.cc
     pcm_level_meter_test.cc
     voice_aec_diagnostic_capture_test.cc
@@ -45,6 +46,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/wake_on_lan_packet.cc
     ../../main/phone_os/voice_conversation_policy.cc
     ../../main/phone_os/voice_barge_in_policy.cc
+    ../../main/phone_os/voice_playback_queue.cc
     ../../main/phone_os/voice_pcm_assembler.cc
     ../../main/phone_os/voice_aec_diagnostic_capture.cc
     ../../main/phone_os/voice_wake_settings.cc

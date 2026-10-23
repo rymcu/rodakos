@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 using esp_codec_dev_handle_t = void*;
@@ -25,6 +26,8 @@ inline int deinitializations = 0;
 inline int handle = 0;
 inline esp_codec_dev_sample_info_t format{};
 inline std::vector<int16_t> written;
+// Called before each write is recorded; lets a test block the speaker mid-reply.
+inline std::function<void()> on_write;
 
 inline void Reset() {
     fail_volume_write = false;
@@ -37,6 +40,7 @@ inline void Reset() {
     deinitializations = 0;
     format = {};
     written.clear();
+    on_write = {};
 }
 }  // namespace fake_codec
 
@@ -58,6 +62,7 @@ inline int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t, int volume) {
     return ESP_CODEC_DEV_OK;
 }
 inline int esp_codec_dev_write(esp_codec_dev_handle_t, void* data, int bytes) {
+    if (fake_codec::on_write) fake_codec::on_write();
     if (!fake_codec::open) return -1;
     const auto* samples = static_cast<const int16_t*>(data);
     fake_codec::written.insert(fake_codec::written.end(), samples, samples + bytes / sizeof(int16_t));

@@ -8,6 +8,7 @@
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_conversation_policy.h"
 #include "phone_os/voice_barge_in_policy.h"
+#include "phone_os/voice_playback_queue.h"
 #include "phone_os/voice_recorder_service.h"
 
 #include <cstdint>
@@ -83,6 +84,11 @@ private:
     static void IoTaskEntry(void* arg);
     bool StartIoTask();
     void IoTask();
+    static void PlaybackTaskEntry(void* arg);
+    bool StartPlaybackTask();
+    void PlaybackTask();
+    void ClearPlaybackLocked();
+    void WaitForPlaybackIdle();
     void HandleInbound(VoiceInboundEvent&& event);
     void ProcessInbound(VoiceInboundEvent&& event);
     void HandleTransportFailure(VoiceTransportFailure failure);
@@ -109,6 +115,17 @@ private:
     TaskRetirementTicket io_retirement_;
     TaskHandle_t io_task_ = nullptr;
     bool io_running_ = false;
+    // Speaker writes block on codec DMA for about one frame each. They run on their own
+    // task so the I/O task keeps the microphone uplink and barge-in detection real-time.
+    TaskRetirementOwner playback_retirement_owner_;
+    TaskRetirementTicket playback_retirement_;
+    TaskHandle_t playback_task_ = nullptr;
+    bool playback_running_ = false;
+    bool playback_writing_ = false;
+    bool playback_end_pending_ = false;
+    bool playback_failed_ = false;
+    uint32_t playback_clear_generation_ = 0;
+    VoicePlaybackQueue playback_queue_;
     int64_t playback_deadline_us_ = 0;
     int64_t follow_up_rearm_not_before_us_ = 0;
     std::deque<VoiceInboundEvent> inbound_events_;
