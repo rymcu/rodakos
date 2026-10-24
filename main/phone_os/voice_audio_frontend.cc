@@ -1461,8 +1461,12 @@ void VoiceAudioFrontend::CaptureTask() {
         } else if (mode == Mode::kWakeOnly) {
             FeedWakeSamples(samples, selected_samples, wake_generation);
         }
-        // Keep IDLE0 watchdog serviceable when the codec returns short/empty blocks.
-        vTaskDelay(1);
+        // No sleep after a successful read. At 100 Hz vTaskDelay(1) is a whole 10 ms tick; with
+        // AEC working during playback, read + feed + sleep took about 22 ms per 20 ms block, so
+        // the 90 ms I2S RX ring overflowed and about 10% of microphone audio was lost. The
+        // sample-counted frame clock then fell seconds behind and barge-in rejected every frame
+        // as stale. A successful read blocks on DMA once the loop has caught up, which already
+        // lets IDLE0 run; failed reads and idle mode still sleep above.
     }
 
     input_.CloseForOwner(kWakeAudioInputOwner);
