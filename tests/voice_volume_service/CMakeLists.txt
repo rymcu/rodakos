@@ -32,6 +32,7 @@ add_executable(rodakos_voice_volume_service_tests
     "${MAIN}/phone_os/voice_assistant_transport.cc"
     "${MAIN}/phone_os/voice_conversation_policy.cc"
     "${MAIN}/phone_os/voice_barge_in_policy.cc"
+    "${MAIN}/phone_os/voice_playback_queue.cc"
     "${MAIN}/phone_os/realtime_voice_contract.cc"
     "${MAIN}/phone_os/realtime_voice_reconnect_policy.cc"
     "${MAIN}/phone_os/audio_output_service.cc"

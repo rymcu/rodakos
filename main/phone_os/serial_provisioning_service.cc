@@ -610,12 +610,16 @@ bool SerialProvisioningService::HandleLine(const std::string& line) {
         const bool aec_command = command == "aec_status" || command == "aec_stop" ||
                                  command == "aec_clear" || command.rfind("aec_arm ", 0) == 0 ||
                                  command.rfind("aec_read ", 0) == 0;
-        const bool valid = aec_command || command == "wake" || command == "stop" || command == "audio_replay" ||
-                           command == "audio_live" ||
+        const bool wake_eval = command.rfind("wake_eval ", 0) == 0;
+        const bool wake_echo = command.rfind("wake_echo ", 0) == 0;
+        const bool valid = aec_command || wake_eval || wake_echo || command == "wake" || command == "stop" ||
+                           command == "audio_replay" || command == "audio_live" ||
                            command == "audio_clear" || command.rfind("audio_begin ", 0) == 0 ||
                            command.rfind("audio_chunk ", 0) == 0;
         const bool queued = valid && voice_test_callback_ && voice_test_callback_(command);
-        const char* verb = !valid ? "invalid" : aec_command ? "aec" : command == "wake" ? "wake" :
+        const char* verb = !valid ? "invalid" : aec_command ? "aec" : wake_eval ? "wake_eval" :
+                           wake_echo ? "wake_echo" :
+                           command == "wake" ? "wake" :
                            command == "stop" ? "stop" : command == "audio_replay" ? "audio_replay" :
                            command == "audio_live" ? "audio_live" :
                            command == "audio_clear" ? "audio_clear" :

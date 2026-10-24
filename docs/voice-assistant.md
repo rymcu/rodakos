@@ -252,6 +252,8 @@ RodakOS uses:
 - `espressif/esp-sr` 2.2.2
 - Chinese MultiNet5 quant8
 - custom command `ni hao da ke`, displayed and sent as `你好达克`
+- a detection window that restarts during silence, echo cancellation while the speaker plays,
+  gain control, and a wake chime; see [wake word evaluation](voice-wake-evaluation.md)
 - `78/esp-opus-encoder` 2.4.1
 
 The Recovery partition table is immutable and has no model partition. During the build,

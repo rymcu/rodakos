@@ -971,6 +971,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # RodakOS voice processing
 #
 CONFIG_USE_DEVICE_AEC=y
+# default:
+CONFIG_RODAKOS_WAKE_AEC=y
+# default:
+CONFIG_RODAKOS_WAKE_AGC=y
+# default:
+CONFIG_RODAKOS_WAKE_CHIME=y
 # end of RodakOS voice processing
 
 #

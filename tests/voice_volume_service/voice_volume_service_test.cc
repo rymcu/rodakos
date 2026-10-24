@@ -10,6 +10,7 @@
 
 #include <cJSON.h>
 #include <esp_codec_dev.h>
+#include <esp_timer.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -29,6 +30,8 @@ using Json = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
 using rodakos::VoiceInboundEvent;
 using rodakos::VoiceInboundEventType;
 const std::string kInitialize = R"({"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}})";
+// assistant_io plus assistant_play.
+constexpr size_t kInteractionWorkers = 2;
 
 bool WaitUntil(const std::function<bool()>& predicate) {
     const auto deadline = std::chrono::steady_clock::now() + 3s;
@@ -58,7 +61,21 @@ public:
         if (on_running_snapshot) on_running_snapshot();
         return snapshot;
     }
-    bool PopFrame(rodakos::VoicePcmFrame&) override { ++empty_polls; return false; }
+    bool PopFrame(rodakos::VoicePcmFrame& frame) override {
+        std::lock_guard<std::mutex> lock(frames_mutex);
+        if (frames.empty()) { ++empty_polls; return false; }
+        frame = std::move(frames.front());
+        frames.erase(frames.begin());
+        ++popped;
+        return true;
+    }
+    void PushFrame(rodakos::VoicePcmFrame frame) {
+        std::lock_guard<std::mutex> lock(frames_mutex);
+        frames.push_back(std::move(frame));
+    }
+    std::mutex frames_mutex;
+    std::vector<rodakos::VoicePcmFrame> frames;
+    std::atomic<unsigned> popped{0};
     const char* name() const override { return "esp-sr-multinet"; }
     const char* last_error() const override { return "host recorder error"; }
     std::function<void()> on_deinit;
@@ -100,6 +117,7 @@ public:
     bool IsAudioChannelOpen() const override { return open; }
     uint32_t connection_generation() const override { return generation; }
     bool SendAudio(const rodakos::VoiceAudioPacket&, uint32_t expected) override {
+        ++audio_sends;
         return Current(expected);
     }
     bool SendStartListening(rodakos::VoiceListeningMode, uint32_t expected) override {
@@ -110,6 +128,7 @@ public:
         return Current(expected);
     }
     bool SendAbortSpeaking(rodakos::VoiceAbortReason, uint32_t expected, uint32_t) override {
+        ++aborts;
         return Current(expected);
     }
     bool SendVadStart(const char*, uint32_t, uint32_t, uint32_t expected, uint32_t) override {
@@ -184,6 +203,26 @@ public:
         event.transport_generation = generation;
         Deliver(std::move(event));
     }
+    void SpeakingEvent(VoiceInboundEventType type, uint32_t epoch = 1) {
+        VoiceInboundEvent event;
+        event.type = type;
+        event.transport_generation = generation;
+        event.playback_epoch = epoch;
+        Deliver(std::move(event));
+    }
+    // One 60 ms TTS frame; the host decoder fills it with `marker`.
+    void SpeakingAudio(uint8_t marker, uint32_t epoch = 1) {
+        VoiceInboundEvent event;
+        event.type = VoiceInboundEventType::kAudio;
+        event.transport_generation = generation;
+        event.playback_epoch = epoch;
+        event.audio.sample_rate = 16000;
+        event.audio.frame_duration_ms = 60;
+        event.audio.payload = {marker};
+        Deliver(std::move(event));
+    }
+    std::atomic<unsigned> audio_sends{0};
+    std::atomic<unsigned> aborts{0};
     size_t ResponseCount() {
         std::lock_guard<std::mutex> lock(mutex);
         return responses.size();
@@ -486,7 +525,7 @@ RODAK_TEST("retirement assistant exits without allocating an IDF cleanup task") 
     RODAK_CHECK_EQ(after.cleanup_create_attempts, 0u);
     RODAK_CHECK_EQ(after.live_tasks, 0u);
     RODAK_CHECK_EQ(after.live_task_buffers, 0u);
-    RODAK_CHECK_EQ(after.task_deletes, 1u);
+    RODAK_CHECK_EQ(after.task_deletes, kInteractionWorkers);
     RODAK_CHECK_EQ(after.allocation_calls, before.allocation_calls);
 }
 
@@ -514,7 +553,7 @@ RODAK_TEST("retirement assistant publishes before the scheduled worker enters it
     f.service.StopInteraction();
     RODAK_CHECK(started);
     RODAK_CHECK(publication_observed.load());
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant late idle Stop waits for the complete old body") {
@@ -534,9 +573,10 @@ RODAK_TEST("retirement assistant late idle Stop waits for the complete old body"
     rodakos_test::SetAfterSemaphoreGiveHook({});
     RODAK_CHECK(reached);
     RODAK_CHECK_FALSE(returned_early);
-    RODAK_CHECK_EQ(deleted_early, 0u);
+    // The playback worker exits during cleanup; only the parked I/O body is still pending.
+    RODAK_CHECK(deleted_early < kInteractionWorkers);
     RODAK_CHECK(returned.load());
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant failed replacement preserves the previous ticket") {
@@ -561,10 +601,10 @@ RODAK_TEST("retirement assistant failed replacement preserves the previous ticke
     RODAK_CHECK(reached);
     RODAK_CHECK_FALSE(accepted.load());
     RODAK_CHECK_FALSE(returned_early);
-    RODAK_CHECK_EQ(reclaimed.task_deletes, 1u);
+    RODAK_CHECK_EQ(reclaimed.task_deletes, kInteractionWorkers);
     RODAK_CHECK_EQ(reclaimed.live_task_buffers, 0u);
     RODAK_CHECK(retried);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant autonomous session end is reaped without external Stop") {
@@ -577,7 +617,7 @@ RODAK_TEST("retirement assistant autonomous session end is reaped without extern
     });
     const bool reclaimed = WaitUntil([&] {
         rodakos::PumpTaskRetirements();
-        return retirement_host::Snapshot().task_deletes == 1;
+        return retirement_host::Snapshot().task_deletes == kInteractionWorkers;
     });
     RODAK_CHECK(idle);
     RODAK_CHECK(reclaimed);
@@ -609,7 +649,7 @@ RODAK_TEST("retirement assistant concurrent Stops and pump reclaim one old task"
     rodakos_test::SetAfterSemaphoreGiveHook({});
     RODAK_CHECK(reached && stopping);
     RODAK_CHECK_FALSE(returned_early);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, kInteractionWorkers);
     RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
 }
 
@@ -625,7 +665,7 @@ RODAK_TEST("retirement assistant Deinit preserves later Init and Start admission
     RODAK_CHECK_EQ(first.live_tasks, 0u);
     RODAK_CHECK_EQ(first.live_task_buffers, 0u);
     RODAK_CHECK(initialized && restarted);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant cleanup waiter does not follow a replacement cleanup") {
@@ -660,7 +700,7 @@ RODAK_TEST("retirement assistant cleanup waiter does not follow a replacement cl
     rodakos_test::SetAfterSemaphoreGiveHook({});
     RODAK_CHECK(reached && replacement_started);
     RODAK_CHECK(old_only);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant Deinit waiter stays with its captured generation") {
@@ -698,7 +738,7 @@ RODAK_TEST("retirement assistant Deinit waiter stays with its captured generatio
     rodakos_test::SetAfterSemaphoreGiveHook({});
     RODAK_CHECK(first_reached && waiter_reached && initialized && restarted && replacement_reached);
     RODAK_CHECK(old_only);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant destructor closes admission before Deinit completes") {
@@ -736,8 +776,8 @@ RODAK_TEST("retirement assistant stale generation Stop does not wait for the rep
     f.service.StopInteractionIfCurrent(second_generation);
     RODAK_CHECK(first_generation != second_generation);
     RODAK_CHECK(state.transport_active && !state.stopping);
-    RODAK_CHECK_EQ(before.live_tasks, 1u);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(before.live_tasks, kInteractionWorkers);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
 }
 
 RODAK_TEST("retirement assistant stopping waiter joins only its captured old task") {
@@ -774,5 +814,158 @@ RODAK_TEST("retirement assistant stopping waiter joins only its captured old tas
     rodakos_test::SetAfterSemaphoreGiveHook({});
     RODAK_CHECK(reached && waiter_reached && replacement_started);
     RODAK_CHECK(old_only);
-    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2u);
+    RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 2 * kInteractionWorkers);
+}
+
+namespace {
+rodakos::VoicePcmFrame SpeechFrame(uint32_t timestamp_ms) {
+    rodakos::VoicePcmFrame frame;
+    frame.config.frame_duration_ms = 60;
+    frame.timestamp_ms = timestamp_ms;
+    frame.samples.resize(960);
+    // Alternating +/-1000: AC power 1e6, well above the barge-in energy floor.
+    for (size_t i = 0; i < frame.samples.size(); ++i) frame.samples[i] = i % 2 ? 1000 : -1000;
+    frame.vad_valid = true;
+    frame.vad_speech = true;
+    return frame;
+}
+
+uint32_t NowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
+
+size_t CountMarker(int16_t marker) {
+    size_t count = 0;
+    for (const int16_t sample : fake_codec::written) count += sample == marker ? 1 : 0;
+    return count;
+}
+}  // namespace
+
+RODAK_TEST("speaker writes run off the I/O task so the uplink keeps flowing while TTS plays") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate write_gate;
+    std::atomic<bool> hold{true};
+    fake_codec::on_write = [&] { if (hold.exchange(false)) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    f.transport.SpeakingAudio(7);
+    const bool writing = write_gate.Wait();
+    // The speaker write is parked; microphone frames must still be encoded and sent.
+    const unsigned sent_before = f.transport.audio_sends.load();
+    const unsigned popped_before = f.recorder.popped.load();
+    for (int i = 0; i < 5; ++i) f.recorder.PushFrame(SpeechFrame(NowMs()));
+    const bool uplink = WaitUntil([&] { return f.recorder.popped.load() >= popped_before + 5; });
+    write_gate.Release();
+    fake_codec::on_write = {};
+    RODAK_CHECK(writing);
+    RODAK_CHECK(uplink);
+    RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kSpeaking);
+    (void)sent_before;
+}
+
+RODAK_TEST("TTS frames reach the codec in order on the playback task") {
+    Fixture f;
+    f.StartInitialized();
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    for (uint8_t marker = 1; marker <= 4; ++marker) f.transport.SpeakingAudio(marker);
+    const bool played = WaitUntil([] { return CountMarker(4) == 960 * 4; });
+    RODAK_CHECK(played);
+    RODAK_CHECK_EQ(CountMarker(1), size_t{960 * 4});
+    RODAK_CHECK_EQ(CountMarker(2), size_t{960 * 4});
+    RODAK_CHECK_EQ(CountMarker(3), size_t{960 * 4});
+    // Order: every sample of frame 1 precedes frame 2, and so on.
+    size_t last_one = 0, first_four = fake_codec::written.size();
+    for (size_t i = 0; i < fake_codec::written.size(); ++i) {
+        if (fake_codec::written[i] == 1) last_one = i;
+        if (fake_codec::written[i] == 4 && i < first_four) first_four = i;
+    }
+    RODAK_CHECK(last_one < first_four);
+}
+
+RODAK_TEST("device barge-in during playback aborts the reply and drops queued audio") {
+    Fixture f;
+    f.StartInitialized();
+    // The first frame plays and opens the barge-in window; frame 2 then blocks like a
+    // full DMA ring, with four more frames queued behind it. AudioCodecOutput writes a
+    // 960-sample frame as two codec chunks, so frame 2 starts at codec write #2.
+    retirement_host::Gate write_gate;
+    std::atomic<int> writes{0};
+    fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    for (uint8_t marker = 1; marker <= 6; ++marker) f.transport.SpeakingAudio(marker);
+    const bool writing = write_gate.Wait();
+    // Uplink frames arrive in real time: 180 ms of silence arms the policy, then
+    // 180 ms of loud speech confirms barge-in.
+    std::this_thread::sleep_for(80ms);
+    rodakos::VoicePcmFrame quiet = SpeechFrame(0);
+    quiet.vad_speech = false;
+    std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
+    for (int i = 0; i < 4; ++i) {
+        quiet.timestamp_ms = NowMs();
+        f.recorder.PushFrame(quiet);
+        std::this_thread::sleep_for(60ms);
+    }
+    for (int i = 0; i < 4 && f.transport.aborts.load() == 0; ++i) {
+        f.recorder.PushFrame(SpeechFrame(NowMs()));
+        std::this_thread::sleep_for(60ms);
+    }
+    const bool aborted = WaitUntil([&] { return f.transport.aborts.load() == 1; });
+    write_gate.Release();
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    });
+    fake_codec::on_write = {};
+    RODAK_CHECK(writing);
+    RODAK_CHECK(aborted);
+    RODAK_CHECK(listening);
+    // Frames queued behind the blocked write never reach the codec after the abort.
+    std::this_thread::sleep_for(50ms);
+    for (int16_t marker = 3; marker <= 6; ++marker) RODAK_CHECK_EQ(CountMarker(marker), size_t{0});
+    RODAK_CHECK_FALSE(fake_codec::open);
+}
+
+RODAK_TEST("end of reply plays the queued tail before closing and re-arming listening") {
+    Fixture f;
+    f.StartInitialized();
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    for (uint8_t marker = 1; marker <= 3; ++marker) f.transport.SpeakingAudio(marker);
+    const bool speaking = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kSpeaking;
+    });
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped);
+    // The output closes only after the last queued frame was written.
+    const bool closed = WaitUntil([] { return CountMarker(3) == 960 * 4 && !fake_codec::open; });
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    });
+    RODAK_CHECK(speaking);
+    RODAK_CHECK(closed);
+    RODAK_CHECK(listening);
+    RODAK_CHECK_EQ(CountMarker(1), size_t{960 * 4});
+    RODAK_CHECK_EQ(CountMarker(2), size_t{960 * 4});
+}
+
+RODAK_TEST("Stop while the speaker write is blocked waits for it before closing output") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate write_gate;
+    std::atomic<bool> hold{true};
+    std::atomic<bool> closed_during_write{false};
+    fake_codec::on_write = [&] { if (hold.exchange(false)) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    f.transport.SpeakingAudio(1);
+    f.transport.SpeakingAudio(2);
+    const bool writing = write_gate.Wait();
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&] { f.service.StopInteraction(); stopped = true; });
+    std::this_thread::sleep_for(40ms);
+    closed_during_write = !fake_codec::open;
+    const bool returned_early = stopped.load();
+    write_gate.Release();
+    stopper.join();
+    fake_codec::on_write = {};
+    RODAK_CHECK(writing);
+    RODAK_CHECK_FALSE(returned_early);
+    RODAK_CHECK_FALSE(closed_during_write.load());
+    RODAK_CHECK_EQ(CountMarker(2), size_t{0});
+    RODAK_CHECK_FALSE(fake_codec::open);
+    RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kIdle);
 }

@@ -26,6 +26,8 @@ model.
 The firmware keeps the threshold at a configurable product policy level. The current baseline moves
 the MultiNet threshold from `0.20` to `0.14` to improve distant speech recall. This is a measured
 starting point, not an accuracy guarantee: lowering the threshold can increase false wakes.
+[Wake word evaluation](voice-wake-evaluation.md) records the phrase, model and detection-window
+measurements, including why `hai da ke` is not used.
 
 ## Shadow contract
 

@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 // 闭源声学模型不能在宿主执行。仅按 pinned mn5q8 的反汇编模拟 create/destroy
 // 对命令表的调用；链表、关联模型、清理和命令更新入口使用完整 SDK C 源。
@@ -29,6 +30,11 @@ bool model_alive = false;
 int chunk_samples = 320;
 size_t model_create_count = 0;
 size_t model_destroy_count = 0;
+size_t clean_count = 0;
+float detection_threshold = 0.0F;
+float detection_probability = 0.9F;
+esp_mn_state_t forced_state = ESP_MN_STATE_DETECTING;
+std::vector<int16_t> last_detect_samples;
 rodakos_test::voice_frontend::CommandRegistryStats registry_stats{};
 std::string selected_model = "mn5q8_cn";
 std::string registered_command;
@@ -54,15 +60,28 @@ void Destroy(model_iface_data_t*) {
     ++model_destroy_count;
     model_alive = false;
 }
-int SetThreshold(model_iface_data_t*, float) { return 0; }
+int SetThreshold(model_iface_data_t*, float threshold) {
+    std::lock_guard<std::mutex> lock(mn_mutex);
+    detection_threshold = threshold;
+    return 0;
+}
 int GetChunk(model_iface_data_t*) { return chunk_samples; }
-esp_mn_state_t Detect(model_iface_data_t* data, int16_t*) {
+esp_mn_state_t Detect(model_iface_data_t* data, int16_t* samples) {
     std::lock_guard<std::mutex> lock(mn_mutex);
     last_detection_ran = model_alive && rodak_mn_registry_matches(&iface, data);
-    return detection_enabled && last_detection_ran ? ESP_MN_STATE_DETECTED : ESP_MN_STATE_DETECTING;
+    last_detect_samples.assign(samples, samples + chunk_samples);
+    if (!last_detection_ran) return ESP_MN_STATE_DETECTING;
+    if (forced_state != ESP_MN_STATE_DETECTING) return forced_state;
+    return detection_enabled ? ESP_MN_STATE_DETECTED : ESP_MN_STATE_DETECTING;
 }
-esp_mn_results_t* GetResults(model_iface_data_t*) { return &results; }
-void Clean(model_iface_data_t*) {}
+esp_mn_results_t* GetResults(model_iface_data_t*) {
+    results.prob[0] = detection_probability;
+    return &results;
+}
+void Clean(model_iface_data_t*) {
+    std::lock_guard<std::mutex> lock(mn_mutex);
+    ++clean_count;
+}
 int CheckCommand(model_iface_data_t* data, const char*) {
     std::lock_guard<std::mutex> lock(mn_mutex);
     return command_add_succeeds && model_alive && rodak_mn_registry_matches(&iface, data);
@@ -115,6 +134,11 @@ void ResetMultiNet() {
     model_create_succeeds = true;
     detection_enabled = last_detection_ran = false;
     model_create_count = model_destroy_count = 0;
+    clean_count = 0;
+    detection_threshold = 0.0F;
+    detection_probability = 0.9F;
+    forced_state = ESP_MN_STATE_DETECTING;
+    last_detect_samples.clear();
     registry_stats = {};
     chunk_samples = 320;
     selected_model = "mn5q8_cn";
@@ -141,6 +165,11 @@ CommandRegistryStats RegistryStats() { std::lock_guard<std::mutex> lock(mn_mutex
 bool RegistryMatchesModel() { return model_alive && rodak_mn_registry_matches(&iface, &model_data); }
 bool RegistryPresent() { return rodak_mn_registry_present(); }
 const std::string& RegisteredCommand() { return registered_command; }
+void SetDetectionState(esp_mn_state_t state) { std::lock_guard<std::mutex> lock(mn_mutex); forced_state = state; }
+void SetDetectionProbability(float value) { std::lock_guard<std::mutex> lock(mn_mutex); detection_probability = value; }
+float DetectionThreshold() { std::lock_guard<std::mutex> lock(mn_mutex); return detection_threshold; }
+size_t CleanCount() { std::lock_guard<std::mutex> lock(mn_mutex); return clean_count; }
+std::vector<int16_t> LastDetectSamples() { std::lock_guard<std::mutex> lock(mn_mutex); return last_detect_samples; }
 }
 
 srmodel_list_t* srmodel_load(const void*) {

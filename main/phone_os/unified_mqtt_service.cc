@@ -160,7 +160,11 @@ cJSON* BuildVoiceIdentityReport(const VoiceWakeState& state) {
     cJSON_AddBoolToObject(report, "activeConfirmed", state.voice_identity_active_confirmed);
     cJSON_AddStringToObject(report, "status", state.voice_identity_status.c_str());
     cJSON_AddStringToObject(report, "runtime", state.runtime_name.c_str());
+#if CONFIG_SR_MN_CN_MULTINET7_QUANT
+    cJSON_AddStringToObject(report, "model", "multinet7_cn");
+#else
     cJSON_AddStringToObject(report, "model", "multinet5q8_cn");
+#endif
     if (!state.voice_identity_error.empty())
         cJSON_AddStringToObject(report, "error", state.voice_identity_error.c_str());
     return report;
