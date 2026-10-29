@@ -112,9 +112,11 @@ bool ParseRealtimeVoiceDescriptor(const cJSON* value,
                                   RealtimeVoiceDescriptor& descriptor,
                                   std::string& error);
 
+// announce_seq 非零时打开服务端发起播报的只放音会话（features.announce + announceSeq）。
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
-                                                 uint32_t generation);
+                                                 uint32_t generation,
+                                                 uint32_t announce_seq = 0);
 
 bool IsRealtimeVoiceVadStrategy(const std::string& value);
 bool IsSupportedRealtimeVoiceFrameDuration(int frame_duration_ms);

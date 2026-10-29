@@ -125,6 +125,8 @@ public:
         return !can_continue || can_continue();
     }
     virtual bool OpenAudioChannel(VoiceOpenGuard can_continue = {}) = 0;
+    // 下一次 OpenAudioChannel 打开服务端发起播报的只放音会话；0 表示普通会话。
+    virtual void SetSessionAnnounce(uint32_t announce_seq) { (void)announce_seq; }
     virtual void CloseAudioChannel() = 0;
     virtual void WaitForAudioChannelClosed() = 0;
     virtual bool IsAudioChannelOpen() const = 0;

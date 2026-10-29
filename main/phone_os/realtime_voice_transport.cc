@@ -1279,6 +1279,13 @@ bool RodakRealtimeVoiceTransport::SendText(const std::string& text,
     return true;
 }
 
+void RodakRealtimeVoiceTransport::SetSessionAnnounce(uint32_t announce_seq) {
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    session_announce_seq_ = announce_seq;
+    xSemaphoreGive(mutex_);
+}
+
 bool RodakRealtimeVoiceTransport::SendSessionOpen(uint32_t generation) {
     return SendText(BuildSessionOpenMessage(generation), generation, {}, false);
 }
@@ -1323,8 +1330,14 @@ std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage(uint32_t genera
 #else
         false;
 #endif
+    uint32_t announce_seq = 0;
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        announce_seq = session_announce_seq_;
+        xSemaphoreGive(mutex_);
+    }
     return BuildRealtimeVoiceSessionOpenMessage(descriptor, supports_device_vad_epoch,
-                                                generation);
+                                                generation, announce_seq);
 }
 
 void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
