@@ -2182,6 +2182,23 @@ void UnifiedMqttService::HandleCommand(const std::string& command_no,
         // operation. Finish its own peer before the next command can start one.
         CleanupRevokedStreamsLocked();
         operation_lock.unlock();
+    } else if (command == "voice.announce") {
+        // realtime voice §8.2：命令只带序号，正文经随后建立的语音会话下发。
+        handled = true;
+        const cJSON* seq_json = cJSON_GetObjectItemCaseSensitive(request, "announceSeq");
+        const cJSON* priority_json = cJSON_GetObjectItemCaseSensitive(request, "priority");
+        const bool urgent = cJSON_IsString(priority_json) && priority_json->valuestring != nullptr &&
+                            std::strcmp(priority_json->valuestring, "urgent") == 0;
+        if (!cJSON_IsNumber(seq_json) || seq_json->valuedouble < 1 ||
+            seq_json->valuedouble > 4294967295.0 ||
+            seq_json->valuedouble != static_cast<double>(static_cast<uint32_t>(seq_json->valuedouble))) {
+            error_code = "invalid_payload";
+        } else if (!voice_announce_handler_) {
+            error_code = "voice_unavailable";
+        } else {
+            error_code = voice_announce_handler_(static_cast<uint32_t>(seq_json->valuedouble), urgent);
+            success = error_code.empty();
+        }
     } else if (command == "ping" || IsPingCommand(payload)) {
         handled = true;
         success = true;

@@ -358,6 +358,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     }
     trigger_ = trigger;
     last_wake_word_ = wake_word;
+    announce_ = false;
     playback_deadline_us_ = 0;
     playback_failed_ = false;
     ClearPlaybackLocked();
@@ -511,6 +512,150 @@ void VoiceAssistantService::StopInteractionIfCurrent(uint32_t generation) {
     FinishInteraction(VoiceAssistantPhase::kIdle, "Ready", generation);
 }
 
+bool VoiceAssistantService::IsIdleForAnnounce() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool idle = !deinitializing_ && !stopping_ && !start_in_progress_ &&
+                      !focus_active_ && !transport_active_ && io_task_ == nullptr &&
+                      playback_task_ == nullptr &&
+                      (phase_ == VoiceAssistantPhase::kIdle || phase_ == VoiceAssistantPhase::kError);
+    xSemaphoreGive(mutex_);
+    return idle;
+}
+
+bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
+    if (mutex_ == nullptr || announce_seq == 0) {
+        return false;
+    }
+    const TaskHandle_t start_task = xTaskGetCurrentTaskHandle();
+    uint32_t interaction_generation = 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    // 和 StartInteraction 一样按需初始化：开机后还没唤醒过也能播报。
+    if (!deinitializing_ && !initialized_ && !io_retirement_owner_.IsClosed()) {
+        recorder_.Init();
+        initialized_ = true;
+        phase_ = VoiceAssistantPhase::kIdle;
+        message_ = "Ready";
+    }
+    const bool idle = !io_retirement_owner_.IsClosed() && initialized_ && !deinitializing_ &&
+                      !stopping_ && !start_in_progress_ && !focus_active_ &&
+                      !transport_active_ && io_task_ == nullptr && playback_task_ == nullptr &&
+                      (phase_ == VoiceAssistantPhase::kIdle || phase_ == VoiceAssistantPhase::kError);
+    if (idle) {
+        start_in_progress_ = true;
+        start_task_ = start_task;
+        trigger_ = VoiceAssistantTrigger::kRemote;
+        last_wake_word_.clear();
+        announce_ = true;
+        playback_deadline_us_ = 0;
+        playback_failed_ = false;
+        ClearPlaybackLocked();
+        follow_up_rearm_pending_ = false;
+        speaking_interrupted_ = false;
+        follow_up_rearm_not_before_us_ = 0;
+        conversation_policy_.Reset();
+        barge_in_policy_.Reset();
+        vad_end_policy_.Reset();
+        vad_end_sequence_ = 0;
+        vad_end_epoch_ = 0;
+        playback_vad_started_ = false;
+        interrupt_onset_ms_ = 0;
+        interrupt_manual_ = false;
+        reconnect_pending_ = false;
+        playback_epoch_policy_.Reset();
+        interaction_generation = NextRealtimeVoiceGeneration(interaction_generation_);
+        interaction_generation_ = interaction_generation;
+        SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
+        diagnostic_ = CloudDiagnosticCode::kRefreshing;
+    }
+    xSemaphoreGive(mutex_);
+    if (!idle) {
+        return false;
+    }
+    ScopeExit complete_start([this, start_task]() {
+        CompleteStartAttempt(start_task);
+    });
+
+    if (before_transport_callback_) {
+        before_transport_callback_();
+        if (!IsInteractionCurrent(interaction_generation)) {
+            return false;
+        }
+    }
+    if (!transport_.PrepareInteraction([this, interaction_generation]() {
+            return IsInteractionCurrent(interaction_generation);
+        })) {
+        FinishTransportFailure(transport_.last_failure(), interaction_generation);
+        return false;
+    }
+    if (!IsInteractionCurrent(interaction_generation)) {
+        return false;
+    }
+    if (!StartIoTask() || !StartPlaybackTask()) {
+        FinishInteraction(
+            VoiceAssistantPhase::kError, "Assistant audio task unavailable", interaction_generation);
+        return false;
+    }
+
+    AudioFocusRequest request;
+    request.owner = kFocusOwner;
+    request.gain = AudioFocusGain::kExclusive;
+    request.resume_on_release = true;
+    request.release_playback_hardware = true;
+    uint32_t token = 0;
+    if (!audio_focus_.RequestFocus(request, token)) {
+        FinishInteraction(
+            VoiceAssistantPhase::kError, "Audio focus unavailable", interaction_generation);
+        return false;
+    }
+    bool focus_accepted = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (interaction_generation_ == interaction_generation && initialized_ && !deinitializing_ &&
+        !stopping_ && phase_ == VoiceAssistantPhase::kConnecting) {
+        focus_active_ = true;
+        focus_token_ = token;
+        focus_accepted = true;
+    }
+    xSemaphoreGive(mutex_);
+    if (!focus_accepted) {
+        audio_focus_.ReleaseFocus(token);
+        return false;
+    }
+
+    // 序号只用于这一次 session.open：打开后立刻清掉，之后的普通会话不会带上。
+    transport_.SetSessionAnnounce(announce_seq);
+    uint32_t opened_transport_generation = 0;
+    const bool opened = OpenTransportForInteraction(
+        VoiceAssistantTrigger::kRemote, "", interaction_generation, opened_transport_generation);
+    transport_.SetSessionAnnounce(0);
+    if (!opened) {
+        FinishTransportFailure(transport_.last_failure(), interaction_generation);
+        return false;
+    }
+
+    bool committed = false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (interaction_generation_ == interaction_generation && !stopping_ && focus_active_ &&
+        transport_generation_ == opened_transport_generation) {
+        // 直接进入 Speaking：服务端紧接着下发 output.start；唤醒词据此打断播报。
+        SetPhaseLocked(VoiceAssistantPhase::kSpeaking, "Announcing");
+        // Speaking 阶段唤醒看门狗不计时：先挂上回复停滞计时，服务端迟迟不说也会结束会话。
+        conversation_policy_.OnSpeakingStarted(esp_timer_get_time() / 1000);
+        transport_active_ = true;
+        committed = true;
+    }
+    xSemaphoreGive(mutex_);
+    if (!committed) {
+        FinishInteraction(VoiceAssistantPhase::kIdle, "Ready", interaction_generation);
+        return false;
+    }
+    ESP_LOGI(TAG, "Announce session started: seq=%" PRIu32 " focus_token=%" PRIu32,
+             announce_seq, token);
+    return true;
+}
+
 bool VoiceAssistantService::InterruptSpeaking() {
     if (mutex_ == nullptr) {
         return false;
@@ -542,8 +687,15 @@ void VoiceAssistantService::ProcessInterrupt() {
     onset_ms = interrupt_onset_ms_;
     playback_epoch = playback_epoch_policy_.current_epoch();
     manual = interrupt_manual_;
+    const bool announce = announce_;
     xSemaphoreGive(mutex_);
     if (!active) {
+        return;
+    }
+    if (announce) {
+        // 播报会话没有对话可接：打断就是结束播报。
+        ESP_LOGI(TAG, "Announce interrupted; ending session");
+        StopInteraction();
         return;
     }
 
@@ -775,8 +927,9 @@ void VoiceAssistantService::FinishInteraction(VoiceAssistantPhase final_phase,
     diagnostic_revision_ = NextCloudDiagnosticRevision();
     token = focus_token_;
     should_release = focus_active_;
-    should_stop_transport = transport_active_;
+    should_stop_transport = transport_active_ && !announce_;
     should_stop_recorder = recorder_active_;
+    announce_ = false;
     transport_generation = transport_generation_;
     called_from_io_task = io_task_ != nullptr && io_task_ == current_task;
     called_from_start_task = start_in_progress_ && start_task_ == current_task;
@@ -1128,7 +1281,7 @@ void VoiceAssistantService::PlaybackTask() {
                 playback_deadline_us_ = 0;
                 close = true;
                 if (!stopping_ && phase_ == VoiceAssistantPhase::kSpeaking &&
-                    !speaking_interrupted_) {
+                    !speaking_interrupted_ && !announce_) {
                     follow_up_rearm_pending_ = true;
                     follow_up_rearm_not_before_us_ =
                         esp_timer_get_time() + kFollowUpControlGraceUs;
@@ -1542,6 +1695,14 @@ void VoiceAssistantService::HandleTransportFailure(VoiceTransportFailure failure
     }
     if (failure.message.empty()) {
         failure.message = "Voice transport failed";
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool announce = announce_;
+    xSemaphoreGive(mutex_);
+    if (announce) {
+        // 重连会打开普通会话；播报没送达由服务端留到下次会话。
+        FinishTransportFailure(failure, interaction_generation);
+        return;
     }
 
     const VoiceAssistantReconnectResult result = reconnect_coordinator_.HandleFailure(

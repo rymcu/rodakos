@@ -49,6 +49,11 @@ public:
                           uint32_t* started_generation = nullptr);
     void StopInteraction();
     void StopInteractionIfCurrent(uint32_t generation);
+    // 服务端发起播报（rodak-realtime-voice §8.2）：只放音会话，不开麦、不发 input.start，
+    // 服务端说完发 session.end 即结束。空闲才接受；会阻塞到会话建立，勿在 MQTT 线程调用。
+    bool StartAnnounce(uint32_t announce_seq);
+    // 空闲、可以马上开一个播报会话（只是快照，StartAnnounce 仍会复核）。
+    bool IsIdleForAnnounce();
 
     // Queue confirmed user speech for the I/O task; true means accepted, not sent.
     bool InterruptSpeaking();
@@ -141,6 +146,8 @@ private:
     bool interrupt_pending_ = false;
     bool interrupt_manual_ = false;
     bool stopping_ = false;
+    // 当前交互是服务端发起的只放音播报：不录音、不续轮、断线不重连。
+    bool announce_ = false;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;
     bool reconnect_pending_ = false;
