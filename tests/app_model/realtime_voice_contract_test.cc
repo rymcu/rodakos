@@ -421,6 +421,18 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
         descriptor, error));
     const std::string open = rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7);
     RODAK_CHECK(open.find("session.open") != std::string::npos);
+    // 普通会话不带播报字段；服务端发起播报的只放音会话带 announce + announceSeq。
+    RODAK_CHECK(open.find("announce") == std::string::npos);
+    const std::string announce =
+        rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7, 42);
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> announce_root(
+        cJSON_Parse(announce.c_str()), cJSON_Delete);
+    const cJSON* features = cJSON_GetObjectItemCaseSensitive(announce_root.get(), "features");
+    RODAK_CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(features, "announce")));
+    const cJSON* announce_seq = cJSON_GetObjectItemCaseSensitive(features, "announceSeq");
+    RODAK_CHECK(cJSON_IsNumber(announce_seq));
+    RODAK_CHECK_EQ(static_cast<int>(announce_seq->valuedouble), 42);
+    RODAK_CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(features, "mcp")));
     // 设备控制统一走 MQTT；固件始终宣告不支持 MCP，Rodak 不会建立设备 MCP 会话。
     RODAK_CHECK(open.find("\"mcp\":false") != std::string::npos);
     RODAK_CHECK(open.find("device_vad_epoch") != std::string::npos);

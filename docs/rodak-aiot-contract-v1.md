@@ -192,7 +192,18 @@ The command surface accepts `ping` as a raw string, JSON string, or
 `devices/{deviceKey}/commands/{commandNo}/ack`. It also supports
 `camera.stream.start/stop/signal` and `display.stream.start/stop/signal`, with a
 required `sessionId`, mutually exclusive camera/display sessions and SDP/ICE
-signaling; see [WebRTC peer integration](esp-peer-integration.md). Unsupported
+signaling; see [WebRTC peer integration](esp-peer-integration.md).
+
+`voice.announce` (`{"command":"voice.announce","announceSeq":N,"priority":"normal"|"urgent"}`)
+asks the device to open a playback-only realtime voice session for a server-initiated
+announcement (Rodak `docs/rodak-realtime-voice-protocol-v1.md` §8.2). The command carries no
+text. The device accepts only when the assistant is idle and, unless `priority` is `urgent`,
+no music is playing; it then queues the session open off the MQTT thread and acknowledges
+`{"status":"ok"}`. That session sends `session.open` with `features.announce: true` and the
+same `announceSeq`, never opens the microphone or sends `input.start`, and closes on the
+server's `session.end`; a wake word during playback ends it. A busy device returns `busy`, a
+missing or non-integer `announceSeq` returns `invalid_payload`, and a build without a voice
+handler returns `voice_unavailable`. Unsupported
 commands return an `unsupported_command` error status. There is currently no
 `volume.set` command handler on this acknowledgement channel.
 

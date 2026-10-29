@@ -660,6 +660,21 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
     unified_mqtt_service.SetVoiceWakeService(&voice_wake_service);
+    // 服务端发起播报：不打断正在进行的交互；放音乐时只有 urgent 才插播（焦点会暂停并恢复音乐）。
+    // 会话建立要等网络，放到 wake_notify 任务上做，MQTT 线程只排队。
+    unified_mqtt_service.SetVoiceAnnounceHandler([](uint32_t announce_seq, bool urgent) -> std::string {
+        if (!voice_assistant_service.IsIdleForAnnounce()) return "busy";
+        if (!urgent &&
+            music_player_service.GetState().audio.status == rodakos::AudioPlaybackStatus::kPlaying) {
+            return "busy";
+        }
+        const bool queued = voice_audio_frontend.QueueDiagnosticCommand([announce_seq]() {
+            if (!voice_assistant_service.StartAnnounce(announce_seq)) {
+                ESP_LOGW(TAG, "Announce session did not start: seq=%" PRIu32, announce_seq);
+            }
+        });
+        return queued ? std::string() : std::string("busy");
+    });
     static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
     static rodakos::SerialProvisioningService serial_provisioning_service(
         wifi, device_cloud_config_service,

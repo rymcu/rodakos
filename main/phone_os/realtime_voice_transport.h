@@ -23,6 +23,7 @@ public:
     bool Start() override;
     bool PrepareInteraction(VoiceOpenGuard can_continue = {}) override;
     bool OpenAudioChannel(VoiceOpenGuard can_continue = {}) override;
+    void SetSessionAnnounce(uint32_t announce_seq) override;
     void CloseAudioChannel() override;
     void WaitForAudioChannelClosed() override;
     bool IsAudioChannelOpen() const override;
@@ -97,6 +98,7 @@ private:
     bool config_prepared_ = false;
     std::string headers_;
     std::string connect_uri_;
+    uint32_t session_announce_seq_ = 0;
     std::string authorization_header_;
     std::string protocol_version_header_;
     std::string device_id_header_;

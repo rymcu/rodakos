@@ -686,7 +686,8 @@ bool ParseRealtimeVoiceAudioFrame(const uint8_t* data,
 
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
-                                                 uint32_t generation) {
+                                                 uint32_t generation,
+                                                 uint32_t announce_seq) {
     // Generation zero is reserved for the not-established state.  Emitting a
     // session.open frame with zero would let a peer associate the handshake
     // with an invalid/stale transport lifecycle, so fail closed at the
@@ -724,6 +725,11 @@ std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& 
     // device_vad_epoch，避免设备 VAD 被静默降级为纯服务端 VAD。
     cJSON_AddNumberToObject(features, "device_vad_epoch",
                             supports_device_vad_epoch ? 1 : 0);
+    if (announce_seq != 0) {
+        // 服务端发起播报：只放音，不开麦；序号对应 MQTT voice.announce 命令里的 announceSeq。
+        cJSON_AddBoolToObject(features, "announce", true);
+        cJSON_AddNumberToObject(features, "announceSeq", announce_seq);
+    }
     cJSON_AddItemToObject(root, "features", features);
     AddAudio(root, "uplink", descriptor.uplink_sample_rate_hz, descriptor.uplink_channels,
              descriptor.uplink_frame_duration_ms);

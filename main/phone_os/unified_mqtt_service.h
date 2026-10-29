@@ -42,6 +42,9 @@ public:
     using DisplayControlReply = std::function<void(bool accepted, const char* reason)>;
     using DisplayControlCallback = std::function<void(const StreamLeasePtr& lease,
         const std::string& payload, DisplayControlReply reply)>;
+    // 服务端发起播报（voice.announce）：接受时返回空串，否则返回 ACK 的 errorCode（如 busy）。
+    // 只做判断与排队，不在 MQTT 线程上建立语音会话。
+    using VoiceAnnounceHandler = std::function<std::string(uint32_t announce_seq, bool urgent)>;
     UnifiedMqttService(DeviceCloudConfigService& config_service,
                        OtaUpdateService& ota_update,
                        AudioOutputService* audio_output,
@@ -73,6 +76,9 @@ public:
         display_control_callback_ = std::move(callback);
     }
     void StopWebRtcDisplayStream();
+    void SetVoiceAnnounceHandler(VoiceAnnounceHandler handler) {
+        voice_announce_handler_ = std::move(handler);
+    }
     void SetAppearanceService(AppearanceService* appearance);
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
@@ -202,6 +208,7 @@ private:
     std::atomic<bool> appearance_report_pending_{false};
     std::string deferred_ota_payload_;
     DisplayControlCallback display_control_callback_;
+    VoiceAnnounceHandler voice_announce_handler_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     uint32_t mqtt_sdk_stack_min_free_ = UINT32_MAX;
