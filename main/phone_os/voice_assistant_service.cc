@@ -529,6 +529,12 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     if (mutex_ == nullptr || announce_seq == 0) {
         return false;
     }
+    const auto log_announce_failure = [announce_seq](const char* stage,
+                                                     const VoiceTransportFailure& failure) {
+        ESP_LOGW(TAG, "Announce session failed: seq=%" PRIu32 " stage=%s kind=%d code=%s message=%s",
+                 announce_seq, stage != nullptr ? stage : "unknown",
+                 static_cast<int>(failure.kind), failure.code.c_str(), failure.message.c_str());
+    };
     const TaskHandle_t start_task = xTaskGetCurrentTaskHandle();
     uint32_t interaction_generation = 0;
     xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -587,13 +593,16 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     if (!transport_.PrepareInteraction([this, interaction_generation]() {
             return IsInteractionCurrent(interaction_generation);
         })) {
-        FinishTransportFailure(transport_.last_failure(), interaction_generation);
+        const auto failure = transport_.last_failure();
+        log_announce_failure("prepare", failure);
+        FinishTransportFailure(failure, interaction_generation);
         return false;
     }
     if (!IsInteractionCurrent(interaction_generation)) {
         return false;
     }
     if (!StartIoTask() || !StartPlaybackTask()) {
+        ESP_LOGW(TAG, "Announce session failed: seq=%" PRIu32 " stage=audio_tasks", announce_seq);
         FinishInteraction(
             VoiceAssistantPhase::kError, "Assistant audio task unavailable", interaction_generation);
         return false;
@@ -606,6 +615,7 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     request.release_playback_hardware = true;
     uint32_t token = 0;
     if (!audio_focus_.RequestFocus(request, token)) {
+        ESP_LOGW(TAG, "Announce session failed: seq=%" PRIu32 " stage=audio_focus", announce_seq);
         FinishInteraction(
             VoiceAssistantPhase::kError, "Audio focus unavailable", interaction_generation);
         return false;
@@ -620,6 +630,7 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     }
     xSemaphoreGive(mutex_);
     if (!focus_accepted) {
+        ESP_LOGW(TAG, "Announce session failed: seq=%" PRIu32 " stage=focus_commit", announce_seq);
         audio_focus_.ReleaseFocus(token);
         return false;
     }
@@ -631,7 +642,9 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
         VoiceAssistantTrigger::kRemote, "", interaction_generation, opened_transport_generation);
     transport_.SetSessionAnnounce(0);
     if (!opened) {
-        FinishTransportFailure(transport_.last_failure(), interaction_generation);
+        const auto failure = transport_.last_failure();
+        log_announce_failure("open", failure);
+        FinishTransportFailure(failure, interaction_generation);
         return false;
     }
 
@@ -648,6 +661,7 @@ bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     }
     xSemaphoreGive(mutex_);
     if (!committed) {
+        ESP_LOGW(TAG, "Announce session failed: seq=%" PRIu32 " stage=commit", announce_seq);
         FinishInteraction(VoiceAssistantPhase::kIdle, "Ready", interaction_generation);
         return false;
     }

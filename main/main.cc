@@ -663,16 +663,25 @@ extern "C" void app_main(void) {
     // 服务端发起播报：不打断正在进行的交互；放音乐时只有 urgent 才插播（焦点会暂停并恢复音乐）。
     // 会话建立要等网络，放到 wake_notify 任务上做，MQTT 线程只排队。
     unified_mqtt_service.SetVoiceAnnounceHandler([](uint32_t announce_seq, bool urgent) -> std::string {
-        if (!voice_assistant_service.IsIdleForAnnounce()) return "busy";
+        ESP_LOGI(TAG, "voice.announce accepted by MQTT handler: seq=%" PRIu32 " urgent=%d",
+                 announce_seq, urgent ? 1 : 0);
+        if (!voice_assistant_service.IsIdleForAnnounce()) {
+            ESP_LOGW(TAG, "voice.announce rejected: assistant is busy seq=%" PRIu32, announce_seq);
+            return "busy";
+        }
         if (!urgent &&
             music_player_service.GetState().audio.status == rodakos::AudioPlaybackStatus::kPlaying) {
+            ESP_LOGW(TAG, "voice.announce rejected: music is playing seq=%" PRIu32, announce_seq);
             return "busy";
         }
         const bool queued = voice_audio_frontend.QueueDiagnosticCommand([announce_seq]() {
+            ESP_LOGI(TAG, "voice.announce command dequeued: seq=%" PRIu32, announce_seq);
             if (!voice_assistant_service.StartAnnounce(announce_seq)) {
                 ESP_LOGW(TAG, "Announce session did not start: seq=%" PRIu32, announce_seq);
             }
         });
+        ESP_LOGI(TAG, "voice.announce queue result: seq=%" PRIu32 " queued=%d",
+                 announce_seq, queued ? 1 : 0);
         return queued ? std::string() : std::string("busy");
     });
     static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
