@@ -90,7 +90,8 @@ list.
 ## 2. WebSocket connection and generations
 
 RodakOS opens the endpoint only after local MultiNet detects the configured wake
-word. Idle wake monitoring never keeps a cloud WebSocket open. The connection
+word, or after it accepts an MQTT `voice.announce` command for a playback-only session (§8).
+Idle wake monitoring never keeps a cloud WebSocket open. The connection
 uses the AIoT access token and sends these headers:
 
 ```text
@@ -130,6 +131,11 @@ error and cannot reset the session's playback or audio counters.
   "downlink": {"codec":"opus","sampleRateHz":24000,"channels":1,"frameDurationMs":60}
 }
 ```
+
+`features` in `session.open` is a flag object whose values are only booleans or numbers. It is
+distinct from the descriptor's string-array `features`. A server-initiated announce session
+also carries `"announce": true` and `"announceSeq": <N>` (see §8). Ordinary wake sessions omit
+both keys.
 
 `session.ready` must include `event`, `protocol`, `protocolVersion`, matching
 `generation`, `transport: "websocket"`, a non-empty `sessionId`, and a
@@ -171,6 +177,10 @@ means no more audio for that utterance; the device drains the local TTS tail
 before sending the next `input.start`. A user saying “再见” is an application
 action that causes the server to send `session.end`; `goodbye` is not a wire
 event in this contract.
+
+`session.end.reason` is informational. The device handles every reason as an ordinary session
+end and re-arms local wake. Rodak currently sends these reasons: `shutdown`,
+`wake-arbitration-lost` (§6), `announce-finished` and `announce-expired` (§8).
 
 An MCP `payload` must be a JSON object. Scalar and array payloads are rejected.
 Outer control JSON is bounded to twelve nesting levels before parsing. The transport still
@@ -252,6 +262,19 @@ closes only the decoder, and rejects late audio until the next `output.start`.
 Manual wake interruption uses `reason: "wake-word"` and follows with a new
 `input.start` on the same session.
 
+### Multi-device wake arbitration (server side)
+
+When several devices on one Rodak server report `wake.detected` within 1.5 s, the server treats
+them as one wake. The server answers only the first device. Each losing device receives `session.end`
+with `reason: "wake-arbitration-lost"`, and then the server closes that connection. RodakOS needs
+no special handling: this is an ordinary session end that re-arms local wake.
+
+The server also records each device's in-flight reply text. When a recognition result strongly
+overlaps another device's playback during the capture window, the server discards it as echo.
+This uses the server's `echoSuppression` switch and threshold. Barge-in probes compare against
+this device's playback and other devices' playback. Full-turn recognition compares only against
+other devices. This is server-side behavior, and the device wire format does not change.
+
 ## 7. Security and compatibility
 
 AIoT provisioning is the authority for the endpoint and access token. The
@@ -264,12 +287,68 @@ The canonical runtime must keep its own protocol-neutral session controller and
 gate. The historical `xiaozhiSessionMachine` is for the legacy adapter only and
 must not be reused by the Rodak realtime path.
 
-## 8. Verification anchors
+## 8. Server-initiated announce
+
+The voice WebSocket is closed while the device is idle, so the server cannot speak on it
+directly. For proactive announcements such as household alerts or due reminders, Rodak uses
+this sequence (Rodak `docs/rodak-realtime-voice-protocol-v1.md` §8.2):
+
+```text
+MQTT voice.announce {announceSeq, priority} → device ACK ok | busy
+→ connect → session.open {features.announce: true, announceSeq}
+→ session.ready → output.start + RAV1 audio → output.stop
+→ session.end (announce-finished)
+```
+
+1. Rodak sends the MQTT command `voice.announce` with `announceSeq` and `priority`. The command
+   does not carry the spoken text. The text travels only in the authenticated voice session.
+   Command validation, the busy rules, and ACK semantics are in the
+   [AIoT contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+2. The device opens a normal connection with the regular headers. Its single `session.open`
+   carries `features.announce: true` and the same `announceSeq`. The sequence is bound to that one
+   `session.open`. The device clears the sequence immediately after that message. Later
+   sessions never carry it.
+3. An announce session is playback-only. The device does not open the microphone, and it does
+   not send `wake.detected`, `input.start`, `vad`, or uplink audio. After `session.ready`, the
+   device goes straight to the speaking phase and waits for `output.start`.
+4. Playback follows the normal `output.start` / RAV1 / `output.stop` rules, including the
+   generation, session, epoch, and sequence gates in §5. After the reply drains, the device does
+   not open a follow-up turn.
+5. `session.end` ends the session. Rodak sends `announce-finished` after the audio. If the
+   `announceSeq` is unknown or older than the 30-second registration window, Rodak sends
+   `announce-expired` immediately and no audio.
+
+Device-side termination and failure rules:
+
+- A local wake word or manual interrupt during an announce ends the session immediately. The
+  device does not send `playback.abort` and does not turn the announce into a conversation. The
+  device closes the WebSocket without sending `input.stop`. Rodak's protocol also allows
+  `playback.abort` followed by a normal interaction, but RodakOS does not use that option.
+- The 20 s reply-stall watchdog from §6 starts when the session commits, before `output.start`
+  arrives. If the server stays silent for 20 s, the device ends the announce. If `output.stop`
+  arrives but `session.end` does not, the 30-second follow-up timeout closes the session.
+- An announce session never reconnects. Any transport failure ends it, because a retry would
+  open an ordinary session without the announce flag. Rodak decides whether to re-queue the
+  notice.
+- Every announce takes exclusive audio focus. If an urgent announce starts while local music
+  plays, the focus pauses the music. The music resumes when the announce releases focus.
+
+Rodak creates no user turn for an announce session and writes no conversation history. On Rodak,
+an `announceSeq` is a short-lived claim. Rodak never replays it after a server restart or a
+device reconnect. A retried notice gets a new sequence. Rodak's `played` status means only that a
+non-empty audio downlink completed in software on the original authenticated connection. It is
+not evidence that the speaker produced sound.
+
+## 9. Verification anchors
 
 Host coverage is limited to pure contract and coordinator behavior.
 `tests/app_model/realtime_voice_contract_test.cc` covers descriptor validation,
 VAD negotiation, RAV1 parsing, MCP/error validation, generation isolation,
-playback epochs, monotonic sequences, and bounded reconnect policy.
+playback epochs, monotonic sequences, bounded reconnect policy, and the `session.open`
+announce flags. The test checks that the flags appear only with a non-zero `announceSeq` and that
+`features.mcp` stays `false`. The announce state machine in `VoiceAssistantService` has no host
+test. Its playback-only start, no follow-up, no reconnect, and wake-word termination need device
+validation.
 `tests/app_model/voice_assistant_reconnect_coordinator_test.cc` exercises recovery
 ordering, generation gates, backoff, and cancellation through a fake transport.
 Neither target instantiates `VoiceAssistantService` or the ESP/FreeRTOS transport;

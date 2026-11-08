@@ -161,6 +161,10 @@ reused as the controlled HTTP bearer credential for OTA. The firmware connects
 after WiFi has an address, publishes telemetry and reported shadow state, and
 subscribes to desired shadow, OTA notification, command, and PC status topics.
 
+`pc_status` is an optional server-to-device stream. Since 2026-10-26, Rodak does not sample or
+publish PC status itself. The topic stays subscribable. It only carries data that Rodak forwards
+from a separate host collector. Firmware must treat a silent `pc_status` topic as normal.
+
 ## 5. Shadow state and device properties
 
 Device-to-server topics:
@@ -196,15 +200,37 @@ signaling; see [WebRTC peer integration](esp-peer-integration.md).
 
 `voice.announce` (`{"command":"voice.announce","announceSeq":N,"priority":"normal"|"urgent"}`)
 asks the device to open a playback-only realtime voice session for a server-initiated
-announcement (Rodak `docs/rodak-realtime-voice-protocol-v1.md` §8.2). The command carries no
-text. The device accepts only when the assistant is idle and, unless `priority` is `urgent`,
-no music is playing; it then queues the session open off the MQTT thread and acknowledges
-`{"status":"ok"}`. That session sends `session.open` with `features.announce: true` and the
-same `announceSeq`, never opens the microphone or sends `input.start`, and closes on the
-server's `session.end`; a wake word during playback ends it. A busy device returns `busy`, a
-missing or non-integer `announceSeq` returns `invalid_payload`, and a build without a voice
-handler returns `voice_unavailable`. Unsupported
-commands return an `unsupported_command` error status. There is currently no
+announcement.
+[Realtime voice §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce) specifies
+the wire session (Rodak `docs/rodak-realtime-voice-protocol-v1.md` §8.2). The command carries no
+text. The server sends the spoken content only inside the authenticated voice session.
+
+- `announceSeq` must be a JSON integer in `1..4294967295`. Any other value returns
+  `invalid_payload`. Payload validation runs before the handler check, so a valid command on a
+  build without a voice handler returns `voice_unavailable`.
+- The device matches `priority` exactly. Only `"urgent"` is urgent. Any other value, or no
+  value, means `normal`.
+- The device accepts the command only when the voice assistant is idle. Idle means that no
+  interaction, start, audio focus, transport, or audio task is in progress.
+- For a `normal` announce, local music must also be stopped. An urgent announce can start while
+  music plays. Its exclusive audio focus pauses the music, and the music resumes afterwards.
+- On acceptance, the MQTT thread only queues the session open on the voice frontend's command
+  task and acknowledges `{"status":"ok"}`. A full queue or a busy assistant returns
+  `{"status":"error","errorCode":"busy"}`.
+- `ok` means accepted and queued, not played. If the session open fails later, the device logs
+  the failed stage (`prepare`, `audio_tasks`, `audio_focus`, `focus_commit`, `open`, `commit`).
+  The device sends no second ACK. Rodak's 30-second registration expiry covers this case.
+
+`announceSeq` is a short-lived claim number. It is valid only within the 30-second registration
+window of the Rodak process that issued it. It is not a durable command identity. Rodak marks
+unfinished persisted `voice.announce` records as failed. Rodak never replays the same sequence
+after a server restart, HTTP pull, or device reconnect. Rodak registers a retried notice with a
+new `announceSeq`.
+
+On the device, the ordinary 64-command ledger below still applies. An identical redelivery of
+the same command number replays the original ACK and does not queue a second session.
+
+Unsupported commands return an `unsupported_command` error status. There is currently no
 `volume.set` command handler on this acknowledgement channel.
 
 ### Command results and replay boundary
@@ -385,7 +411,10 @@ select the first light; correlated `light.patch` requires a reported, real light
 nonempty enabled/brightness/color fields. `LightService` merges and applies under one lock and
 commits accepted configuration/revision only on driver success. Failure retains prior values and
 reports `available=false`, numeric `last_error`, and `application: unverified`; it cannot guarantee
-physical rollback after a partial LED driver write.
+physical rollback after a partial LED driver write. Each reported light object carries `id`,
+`available`, `last_error`, `configurationRevision`, `application`, `enabled`, `brightness` and
+`color`. Since 2026-11-05, Rodak's `rymcu-bigsmart` product thing model declares the same
+fields. Rodak therefore does not treat these values as unknown properties.
 
 `rodak.mqtt-light-effect.v1` publication metadata and `rodakos.mqtt-light-result.v1` results use the
 same desired and independent effects/receipt topics as volume. The metadata schema selects only
@@ -461,7 +490,11 @@ rollback, and journal schema remain firmware facts documented in
 
 - RodakOS host tests: `device_pairing_protocol_test.cc`,
   `device_pairing_policy_test.cc`, `mqtt_credential_refresh_policy_test.cc`,
-  `voice_identity_test.cc`, and `realtime_voice_contract_test.cc`.
+  `voice_identity_test.cc`, and `realtime_voice_contract_test.cc` (including the
+  `features.announce`/`announceSeq` session-open shape).
+- Rodak announce gates: `tests/main-integration/voice-announce.test.ts` and
+  `proactive-voice.test.ts`. The firmware `voice.announce` command path and announce session
+  have no host test. They need device validation.
 - Device workflow: `serial-provisioning.md` and the Recovery-safe
   `flash_and_test.ps1` path.
 - Rodak server gates: device pairing, token refresh, MQTT/OTA, shadow, and
