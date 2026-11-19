@@ -19,16 +19,21 @@ LVGL and Espressif Board Manager.
   at boot.
 - **IO10 key**: a single click toggles Control Center, a double click opens Smart, and a long
   press locks the device. Custom bindings in NVS replace these defaults.
-- **Voice**: local MultiNet wake word, `rodak-realtime-voice/v1` sessions over pinned WSS, AEC and
-  barge-in, volume MCP tools with software receipts, versioned voice identity. See
-  [voice assistant](docs/voice-assistant.md).
+- **Voice**: local MultiNet wake word with a wake-time echo canceller, gain control and a wake
+  chime, `rodak-realtime-voice/v1` sessions over pinned WSS, AEC and barge-in, a separate
+  playback task for replies, server-initiated playback-only announcements (`voice.announce`) and
+  versioned voice identity. The firmware registers no MCP tools. Rodak controls volume and light
+  through MQTT effects. See [voice assistant](docs/voice-assistant.md).
 - **Rodak cloud**: MQTT provisioning and same-authority credential refresh, shadow and
   telemetry, correlated volume and light effects, command results bound to their original
   connection, and Camera/Display WebRTC peers with MQTT signaling. See the
   [AIoT contract](docs/rodak-aiot-contract-v1.md).
-- **Trusted server**: a server identity installed over USB pins HTTPS, MQTTS and WSS to a stable
-  `.local` name. The firmware authenticates each DNS-SD candidate before it promotes a route. See
-  [trusted server discovery](docs/trusted-server-discovery.md).
+- **Trusted server**: a server identity pins HTTPS, MQTTS and WSS to a stable `.local` name. USB
+  installs this identity, or a first setup over the LAN installs it with a 6-digit code that the
+  device shows on its screen (SRP6a). The firmware authenticates each DNS-SD candidate before it
+  promotes a route. The device registers its own `rodakos-xxxxxx` mDNS and DHCP host name. See
+  [trusted server discovery](docs/trusted-server-discovery.md) and
+  [LAN first setup](docs/lan-onboarding-design.md).
 - **OTA**: immutable Recovery, isolated A/B OTA journal, SD-staged updates into one 13.3125 MiB
   `ota_0` slot, per-task RSA-2048 manifests and offline production signing. See
   [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md).
@@ -194,9 +199,12 @@ Design and contracts:
   [production signing](docs/production-signing.md)
 - [Serial provisioning](docs/serial-provisioning.md),
   [trusted server and LAN discovery](docs/trusted-server-discovery.md),
+  [LAN first setup without USB](docs/lan-onboarding-design.md),
   [MQTT credential refresh](docs/mqtt-credential-refresh.md)
 - [Home layout and folder design](docs/home-layout-design.md),
+  [icon visual refresh](docs/icon-visual-refresh.md),
   [appearance customization](docs/appearance-customization.md),
+  [theme store design](docs/theme-store-design.md),
   [OpenOS comparison](docs/openos-comparison.md)
 - [Dependency maintenance](docs/dependency-maintenance.md)
 
@@ -204,6 +212,7 @@ Features and their verification boundaries:
 
 - Voice: [assistant](docs/voice-assistant.md), [AEC and barge-in](docs/voice-aec-integration.md),
   [identity and wake word](docs/voice-identity-wake-word.md),
+  [wake word evaluation](docs/voice-wake-evaluation.md),
   [task retirement](docs/voice-task-retirement.md)
 - MQTT effects: [volume](docs/mqtt-volume-effects.md), [light](docs/mqtt-light-effects.md)
 - Media: [music playback](docs/music-playback.md), [Photos/Files browsing](docs/media-browsing.md),

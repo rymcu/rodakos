@@ -4,7 +4,7 @@ RodakOS provides a multi-turn voice assistant backed by Rodak. The device perfor
 monitoring for **"你好达克"** and opens the cloud voice session only after a successful local
 detection. One wake continues across replies on the same WebSocket until `session.end`, 30 seconds of
 follow-up silence, or a terminal failure ends the session. A retryable failure in an established
-interaction is recovered with bounded backoff; idle standby never keeps a cloud voice session open.
+interaction recovers with bounded backoff. Idle standby never keeps a cloud voice session open.
 The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md).
 
 ## Product Boundaries
@@ -14,16 +14,17 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
 - Rodak owns ASR, intent/agent execution, LLM generation, TTS, conversation state, and audit data.
 - Idle wake monitoring is local. It must not keep a WebSocket, ASR stream, or cloud session alive.
 - The Assistant app is a configuration and status surface. It is not a Talk/Stop interaction page.
-- A missing `voice_wake/enabled` preference is initialized to enabled and committed to NVS. A
+- If the `voice_wake/enabled` preference is missing, the device sets it to enabled and commits it
+  to NVS. A
   subsequent explicit disable remains authoritative across app launches and device restarts.
-- Device Cloud, provisioning, WiFi, MQTT, and OTA remain system services consumed by the assistant;
+- Device Cloud, provisioning, WiFi, MQTT, and OTA remain system services consumed by the assistant.
   the assistant does not duplicate their configuration or lifecycle.
 - Wake handling uses the canonical `realtimeVoice` descriptor and the AIoT device token from
   Device Cloud. After microphone capture starts, a new wake verifies token freshness on the existing
   internal-stack wake worker and refreshes expired or unverified credentials with the paired device
-  secret. A valid token is reused until shortly before its advertised `expiresIn`; monotonic expiry
+  secret. A valid token is reused until shortly before its advertised `expiresIn`. Monotonic expiry
   is kept only in RAM, so a reboot requires verification again. This does not create a new pairing.
-  Reconnect uses the prepared RAM snapshot without NVS access; an expired snapshot ends that
+  Reconnect uses the prepared RAM snapshot without NVS access. An expired snapshot ends that
   interaction, and the next wake refreshes credentials. HTTP authentication rejection is not retried.
   MQTT also refreshes once before its first connection after boot so cached broker addresses can
   follow the configured bootstrap server. A transient bootstrap failure retains the cached fallback.
@@ -47,7 +48,7 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
 - A preparation can wait for the refresh lock while another refresh holds it. Appearance, for
   example, prepares credentials every 5 s, and a background renewal holds the lock for about 3.7 s
   on a hotspot. A preparation that waited for the lock does not write the shared diagnosis or error
-  when its budget runs out; the refresh that held the lock writes its own. If that refresh left a
+  when its budget runs out. The refresh that held the lock writes its own. If that refresh left a
   fresh token, the preparation uses it even though its budget is spent. Otherwise it fails for its
   caller only. A preparation that did not wait for the lock still reports its own timeout.
 
@@ -56,15 +57,15 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
 The Assistant status distinguishes an unconfigured binding, rejected credentials, credentials that
 need refresh, a failed refresh, an unreachable server, unavailable voice capability, invalid
 server trust, and low device memory. Low device memory means the voice WebSocket client or its task
-could not be allocated, before any network I/O; it is not a server or credential fault. `DeviceCloudConfigService` holds the current typed diagnosis in RAM; UI polling does
+could not be allocated, before any network I/O. It is not a server or credential fault. `DeviceCloudConfigService` holds the current typed diagnosis in RAM. UI polling does
 not read NVS or parse certificates. Refresh failures remain visible across ordinary configuration
 reads, while a later successful refresh replaces them. Superseded configuration requests cannot
 publish a diagnosis for the new configuration. A shared RAM revision orders cloud and voice
-diagnoses even within one millisecond; refresh, rejection and expiry each advance it. Diagnostic
-messages and recovery hints are fixed text; server error bodies, tokens and device secrets are
+diagnoses even within one millisecond. Refresh, rejection and expiry each advance it. Diagnostic
+messages and recovery hints are fixed text. Server error bodies, tokens and device secrets are
 not displayed or included in failure logs.
 
-An idle or failed Assistant shows **Ready** only when the selected diagnosis is ready;
+An idle or failed Assistant shows **Ready** only when the selected diagnosis is ready.
 credential preparation shows **Preparing**, and a remaining diagnosis shows **Needs attention**.
 Connecting, listening and speaking keep their actual interaction phase. These labels do not change
 the local wake switch or start a voice session. When wake is disabled and the inactive Assistant's
@@ -74,7 +75,7 @@ priority over this disabled guidance.
 
 The bottom **Settings > Device Cloud** control opens the existing Settings app. Select its
 **连接与云服务** page to retry or repair provisioning. This is a two-step route, not a new provisioning
-surface. A bound device keeps its binding when its token or voice capability needs attention; the
+surface. A bound device keeps its binding when its token or voice capability needs attention. The
 page exposes **重试连接** separately from the existing confirmed-unbind action. Rejected
 credentials on an already bound legacy server are also retried without creating a new pairing
 request. Initial enrollment still uses the existing explicit pairing flow. Missing voice
@@ -82,16 +83,16 @@ capability does not invalidate working MQTT credentials or the shared credential
 by Appearance. A later successful cloud refresh clears the Assistant's stale error presentation.
 
 Settings keeps task-start and completion-delivery failures in its own UI state. **Refresh could
-not start** means that no refresh worker started; **Refresh result unavailable** means the worker's
+not start** means that no refresh worker started. **Refresh result unavailable** means the worker's
 result could not be delivered to the page, even if the cloud operation itself succeeded. Fixed
 guidance and an enabled retry control remain visible across page navigation and theme rebuilding,
 until another explicit retry is admitted. These failures stop automatic pairing polling and do not
 overwrite the shared cloud diagnosis or clear the binding. They do not establish that concurrent
-display, voice and TLS resource pressure has been resolved; that remains a separate hardware gate
+display, voice and TLS resource pressure has been resolved. That remains a separate hardware gate
 under [RodakOS #28](https://github.com/rymcu/rodakos/issues/28).
 
 Opening these pages does not open a voice WebSocket. Local wake still owns voice startup and
-cooperative cancellation; disabling wake or stopping a preparation cannot publish its late result
+cooperative cancellation. Disabling wake or stopping a preparation cannot publish its late result
 into a later interaction. The three-second preparation budget is cooperative, not a hard interrupt
 of an active DNS/HTTP library call.
 
@@ -143,7 +144,7 @@ conversation priority. A failed initial open rolls the frontend back to idle ins
 outside a valid session.
 
 Assistant playback requests exclusive focus. Active music reaches a confirmed pause boundary and
-releases the DAC; after TTS drains, music reopens its original format and resumes from its retained
+releases the DAC. After TTS drains, music reopens its original format and resumes from its retained
 decode position. Recorder and camera requests intentionally keep their existing non-resuming focus
 policy.
 
@@ -156,17 +157,16 @@ quiet TTS source (low RMS) apart from a low device volume when a reply is hard t
 The device uses `rodak-realtime-voice/v1` over the endpoint supplied by the AIoT
 descriptor. It sends `session.open`, validates one matching `session.ready`, then
 sends `wake.detected` and `input.start` before uploading RAV1-wrapped Opus. The
-uplink is fixed at 16 kHz mono/60 ms; downlink format is negotiated. Audio and
-control messages use the descriptor's negotiated limits (defaults 8 KiB and
-64 KiB; audio payloads are capped at 64 KiB and inbound text is currently
-buffered at 64 KiB). See the canonical
+uplink is fixed at 16 kHz mono/60 ms. The device and server negotiate the downlink format. Audio
+and control messages use the descriptor's negotiated limits, with defaults of 8 KiB and 64 KiB.
+The device caps audio payloads at 64 KiB and currently buffers inbound text at 64 KiB. See the canonical
 [voice contract](rodak-realtime-voice-contract-v1.md) for event schemas,
 generation/session/epoch gates, MCP, error handling, and the complete RAV1 layout.
 
 The firmware ships no MCP tools: `session.open` always advertises `features.mcp: false`, and
-inbound `mcp` events are discarded without a response or side effect. Device control for Rodak's
+the device discards inbound `mcp` events without a response or side effect. Device control for Rodak's
 models goes through MQTT shadow effects ([volume](mqtt-volume-effects.md),
-[light](mqtt-light-effects.md)); the removed session-scoped volume tools are kept as a
+[light](mqtt-light-effects.md)). The archive keeps the removed session-scoped volume tools as a
 [historical contract](archive/2026-10-21-voice-volume-mcp.md).
 
 VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`.
@@ -176,10 +176,29 @@ when server-side boundaries do not arrive.
 
 Each later non-terminal reply starts another `input.start` on the same session
 without repeating `wake.detected`. `output.start` marks a playback epoch and
-binary Opus frames are decoded and queued to the DAC. `output.stop` drains the
+the device decodes binary Opus frames and queues them for the DAC. `output.stop` drains the
 estimated playback tail before the next turn. Capture remains available during
-TTS so the AEC/VAD frontend can detect barge-in; `StopRecorderForPlayback()` is
+TTS so the AEC/VAD frontend can detect barge-in. `StopRecorderForPlayback()` is
 intentionally a no-op in the current service.
+
+Reply playback runs on its own task. The `assistant_io` task decodes each TTS frame and puts it in
+`VoicePlaybackQueue`. The queue holds at most 50 frames (about 3 s). The `assistant_play` task
+(core 1, priority 5, 6 KiB PSRAM stack) takes frames from the queue and writes them to the codec.
+It opens the output at the decoded sample rate of the first frame. Before this change, one 60 ms
+cycle of the I/O task included a blocking speaker write (about 43 ms) and the uplink encode (about
+14 ms). The uplink frames then fell behind the 300 ms freshness window of the barge-in check. A
+barge-in clears the queue, waits for the frame in progress, and then closes the output. After
+`output.stop`, the playback task plays the queued tail, closes the output and re-arms the
+follow-up window. Session end, reconnect and cleanup clear the queue and join the playback task
+before they close the output and release audio focus. A failed speaker write ends the session
+through the I/O task.
+
+The MQTT command `voice.announce` starts a playback-only session for a server-initiated
+announcement. The device does not open the microphone and does not start a follow-up turn. It
+does not reconnect. A local wake word ends the announcement. See
+[realtime voice §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce) for the
+sequence and the [AIoT contract](rodak-aiot-contract-v1.md) for the command and its `busy` rules.
+The announce state machine has no host test and no recorded hardware run.
 
 The follow-up window is 30 seconds and is re-armed when capture restarts. A new
 `output.start` proves the next turn progressed and clears that deadline. Silence,
@@ -209,9 +228,9 @@ Evidence: `.codex-temp/gain-host/stall-check.log` (SHA-256
 ## Reconnect Policy
 
 An initial interaction becomes established only after `session.ready`, `wake.detected`, and the first
-`input.start` all succeed; `session.open` is a prerequisite of `session.ready`. A failure before that
+`input.start` all succeed. `session.open` is a prerequisite of `session.ready`. A failure before that
 point ends the wake interaction. Once those commands complete, a retryable failure remains eligible
-for reconnect even when the first `output.start` has not arrived; the device does not create a cloud
+for reconnect even when the first `output.start` has not arrived. The device does not create a cloud
 connection while idle.
 
 For an established interaction, the I/O task retries network disconnects, server `retryable: true`,
@@ -222,15 +241,15 @@ The policy permits three attempts with exponential backoff starting at 250 ms an
 
 Within one transport generation, the first transport failure or terminal result wins. Once an
 inbound `session.end`, WebSocket close, server error, or protocol error is accepted, later outbound
-failures cannot replace it; outbound calls return success when they observe that already-latched
+failures cannot replace it. Outbound calls return success when they observe that already-latched
 inbound result. If a retryable local send failure is accepted first, it remains authoritative and
 the service follows the bounded reconnect path.
 
 Each retry closes and waits for the previous transport, opens a new connection, receives
 `session.ready`, restores `wake.detected`, and starts realtime input. Only after that sequence is the
 new transport active. The temporary generation binding used while restoring commands only queues
-new-generation callbacks; it cannot deliver audio or TTS before the retry commits. Recorder frames,
-queued inbound events, playback state, and the Opus decoder are discarded at the recovery boundary so
+new-generation callbacks. It cannot deliver audio or TTS before the retry commits. Recorder frames,
+queued inbound events, playback state, and the Opus decoder are discarded at the recovery boundary, so
 audio from the old session never crosses into the new one. Stop and deinitialization close the
 transport before waiting for the I/O task, which releases a blocked open attempt.
 
@@ -238,12 +257,12 @@ The service also exposes a speaking-time interruption path for an AEC/VAD fronte
 barge-in sends `playback.abort` with `reason: "vad_detected"` on the existing session, closes local TTS output, and
 discards late audio until the next `output.start`. The wake service routes this detection to the
 existing interaction instead of opening a second session. This remains gated by validated echo
-cancellation or voice activity detection; the built-in wake runtime still runs only in normal
+cancellation or voice activity detection. The built-in wake runtime still runs only in normal
 listening mode.
 
 The recorder starts before cloud setup and retains the newest 80 frames (about 4.8 seconds) so speech
 that follows the wake phrase can survive normal DNS/TLS/WebSocket setup latency. If setup exceeds the
-buffer, the oldest frames are discarded.
+buffer, the recorder discards the oldest frames.
 
 ## Local Model Packaging
 
@@ -253,18 +272,18 @@ RodakOS uses:
 - Chinese MultiNet5 quant8
 - custom command `ni hao da ke`, displayed and sent as `你好达克`
 - a detection window that restarts during silence, echo cancellation while the speaker plays,
-  gain control, and a wake chime; see [wake word evaluation](voice-wake-evaluation.md)
+  gain control, and a wake chime. See [wake word evaluation](voice-wake-evaluation.md)
 - `78/esp-opus-encoder` 2.4.1
 
 The Recovery partition table is immutable and has no model partition. During the build,
-ESP-SR's `movemodel.py` generates `build/srmodels/srmodels.bin`; CMake embeds it in
+ESP-SR's `movemodel.py` generates `build/srmodels/srmodels.bin`. CMake embeds it in
 `rodakos.bin` as `_binary_rodakos_voice_models_start/end`. Model scripts and model data are explicit
 build dependencies, so component updates regenerate the bundle.
 
 ESP-SR 2.2.x still requests the ESP-IDF 5 component name `json`. The local `components/json/` shim
 maps that name to IDF 6's managed `espressif__cjson` without editing `managed_components/`.
 Its prebuilt FST library also references newlib's legacy `_ctype_` byte table. On IDF 6, the project
-defines that link symbol as picolibc's equivalent `_ctype_b + 127`; this is a link-time alias, not a
+defines that link symbol as picolibc's equivalent `_ctype_b + 127`. This is a link-time alias, not a
 runtime pointer object. ESP-DSP 1.6.0 receives `<cmath>` through a target-local compile option for
 the GCC 15 transition. Both compatibility fixes stay in `main/CMakeLists.txt`.
 
@@ -306,7 +325,7 @@ Before hardware testing:
 1. `idf.py build` succeeds with ESP-IDF 6.0.2.
 2. `build/srmodels/srmodels.bin` exists and the ELF contains
    `_binary_rodakos_voice_models_start/end`.
-3. `build/rodakos.bin` fits `ota_0`; do not use the Recovery size warning as the main-image target.
+3. `build/rodakos.bin` fits `ota_0`. Do not use the Recovery size warning as the main-image target.
 4. `flash_and_test.ps1 -Port COM3 -VerifyOnly` confirms the installed partition table and immutable
    Recovery hash before any write.
 5. Run app-model tests for the realtime contract, reconnect coordinator and audio stack.
@@ -317,33 +336,33 @@ Before hardware testing:
 
 On hardware, verify:
 
-- idle startup has no realtime voice WebSocket connection;
-- enabling the switch loads MultiNet and opens the ADC locally;
-- one utterance of "你好达克" creates exactly one wake-triggered session;
-- `session.open`, `session.ready`, `wake.detected`, and `input.start` appear only after the local match;
+- idle startup has no realtime voice WebSocket connection.
+- enabling the switch loads MultiNet and opens the ADC locally.
+- one utterance of "你好达克" creates exactly one wake-triggered session.
+- `session.open`, `session.ready`, `wake.detected`, and `input.start` appear only after the local match.
 - at least six consecutive questions work without repeating the wake phrase and retain one WebSocket and
-  session id, with one new `input.start` after each non-terminal `output.stop`;
-- Rodak receives valid Opus and returns audible TTS without a clipped final syllable;
-- no intermediate turn releases focus, closes the WebSocket, or re-arms MultiNet;
+  session id, with one new `input.start` after each non-terminal `output.stop`.
+- Rodak receives valid Opus and returns audible TTS without a clipped final syllable.
+- no intermediate turn releases focus, closes the WebSocket, or re-arms MultiNet.
 - saying "再见" produces `output.stop`, then `session.end` and normal close `1000`, one cleanup, no
-  `audio_channel_closed` reconnect, and local wake re-arm;
-- 30 seconds of follow-up silence closes the session safely after any completed reply;
+  `audio_channel_closed` reconnect, and local wake re-arm.
+- 30 seconds of follow-up silence closes the session safely after any completed reply.
 - a forced network loss during an established interaction, including before its first `output.start`,
   retries at the bounded backoff, restores `session.ready`, `wake.detected`, and `input.start` in
-  that order, and never replays pre-failure microphone or TTS data;
+  that order, and never replays pre-failure microphone or TTS data.
 - server `retryable: false`, close `1000`/`1002`/`4001`, explicit stop, and deinitialization do not
-  retry, while close `1011`/`1012`/`1013` retries only after the interaction is established;
-- music pauses and resumes, while Recorder can temporarily preempt wake monitoring;
+  retry, while close `1011`/`1012`/`1013` retries only after the interaction is established.
+- music pauses and resumes, while Recorder can temporarily preempt wake monitoring.
 - disabling wake monitoring closes the ADC owner and does not reconnect to the cloud.
 
 Normal refresh must write only `otadata` and `ota_0` after `-VerifyOnly` passes. Never erase or
 overwrite NVS, Recovery, the partition table, or the OTA journal during routine assistant testing.
 
-The synthetic USB helper `tools/run_serial_voice_test.py` owns its serial port; do not run it
+The synthetic USB helper `tools/run_serial_voice_test.py` owns its serial port. Do not run it
 alongside another capture or monitor. `--cycles` validates each upload/wake window separately:
 session identity, matching focus token, non-empty playback, successful transport cleanup,
 interaction stop and wake rearm must belong to that cycle. Barge-in interruption, AFE confirmation
 and VAD-end counts must also match `--interruptions` in each cycle. Extra evidence in an earlier
 cycle cannot compensate for a later failure. `--turns` retains its separate same-session trace
-contract. The host validator runs with `python -m unittest discover -s tests/voice_serial_tool -v`;
+contract. The host validator runs with `python -m unittest discover -s tests/voice_serial_tool -v`.
 passing it establishes software evidence handling, not physical/acoustic acceptance.

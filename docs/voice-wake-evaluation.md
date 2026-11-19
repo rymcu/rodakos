@@ -9,11 +9,11 @@ wake phrase, MultiNet model and detection window. The identity contract and shad
 The USB serial console accepts `RODAK_VOICE_TEST_V1 wake_eval <threshold_permille>
 <lead_ms>[ <pinyin command>]`, next to the existing `wake` and `audio_*` voice diagnostics. It is
 accepted only while wake monitoring is idle. It replays the uploaded diagnostic audio into the idle wake
-recognizer in place of the microphone, after `lead_ms` of low dither. Every match is logged with its
-MultiNet probability. No voice session opens. The threshold and command are restored when the clip
-and a 1.5 s tail have been fed, or when listening stops. A command that cannot be restored releases
+recognizer in place of the microphone, after `lead_ms` of low dither. The device logs every match with its
+MultiNet probability. No voice session opens. The device restores the threshold and command after it feeds the
+clip and a 1.5 s tail, or when listening stops. A command that cannot be restored releases
 the model, and the next re-arm rebuilds it from the active identity before it listens again.
-Clips must be 16 kHz PCM16; the tool does not resample. A leading `+` sends the clip through the
+Clips must be 16 kHz PCM16. The tool does not resample. A leading `+` sends the clip through the
 wake frontend, and `~<db>~` mixes in the live microphone (see below).
 
 `tools/run_wake_eval.py` uploads each `pos_*` / `neg_*` WAV clip and sweeps thresholds and lead
@@ -25,13 +25,13 @@ python tools\run_wake_eval.py --port COM3 --clips <dir> --log <file> --match '^p
   --thresholds 100,140,200 --leads 0,1000,2000 [--command "hai da ke"] [--gain-db -30]
 ```
 
-The clip set is synthesized with the three Windows OneCore zh-CN voices (Huihui, Kangkang,
+The clips are TTS output from the three Windows OneCore zh-CN voices (Huihui, Kangkang,
 Yaoyao) at speaking rates 0.8, 1.0 and 1.3. Negatives are near-miss phrases: 你好, 你好大哥,
 你好打卡, 嗨大哥, 海达科技, 还打开吗, 大客户, 孩子大了, 打开空调 and 今天天气怎么样.
 
 **Limits.** The injected signal skips the room, microphone, ES7210 gain and microphone selection,
 and TTS speech is cleaner than real speech. These results compare phrases, models and window
-handling on equal terms; they do not measure far-field recall or false accepts per hour. The
+handling on equal terms. They do not measure far-field recall or false accepts per hour. The
 acoustic gates in [Rodak identity and wake word](voice-identity-wake-word.md#validation-gates)
 remain open.
 
@@ -47,7 +47,7 @@ All results below were measured on 2026-10-22/23 on one BigSmart board, with a d
 | `ni hao da ke` | 9/9, 9/9, 1/9 | 你好大哥 3/3 (0.53–0.84), 你好打卡 3/3 (0.22–0.50) |
 | `hai da ke` | 9/9, 9/9, 1/9 | 嗨大哥 3/3 (0.41–0.61), **海达科技 3/3 (0.98–0.99)** |
 
-Thresholds 0.10, 0.14 and 0.20 gave the same recall within one trial; matched probabilities on
+Thresholds 0.10, 0.14 and 0.20 gave the same recall within one trial. Matched probabilities on
 correct phrases were mostly above 0.9.
 
 The two phrases have the same recall on clean speech. `hai da ke` is worse on false accepts: a
@@ -70,7 +70,7 @@ resets it so its test signal is not mistaken for the room.
 With realignment, `ni hao da ke` matched 54/54 trials with onsets of 0, 0.5, 1, 1.5, 2 and 2.5 s,
 and 36/36 (onsets 0, 1, 2 and 2.5 s) on the final build. The near-miss false accepts stayed at 6/30
 (你好大哥 and 你好打卡 only), so realignment did not add false wakes on this set. The device then sat
-idle in a quiet room for about 45 minutes without a wake; that is not a false-accept rate.
+idle in a quiet room for about 45 minutes without a wake. That is not a false-accept rate.
 
 Attenuating the clips shows where recall drops off. Clip peaks start near −3 dBFS:
 
@@ -112,18 +112,18 @@ conversation AFE is unchanged.
   through too, so the timeline is never broken.
 - **AGC** (`esp_agc_open(AGC_MODE_2)`, 9 dB compression gain, −3 dBFS target, limiter on) runs on
   every 10 ms block and costs about 1% of one core.
-- `CONFIG_RODAKOS_WAKE_AEC` and `CONFIG_RODAKOS_WAKE_AGC` switch each stage off; a stage that fails
+- `CONFIG_RODAKOS_WAKE_AEC` and `CONFIG_RODAKOS_WAKE_AGC` switch each stage off. A stage that fails
   to create is skipped and logged, not fatal.
 
 `wake_eval +...` sends a clip through this frontend. `wake_echo <seconds> <attenuation_db>` plays
-speech-band noise through the speaker; it fails if the speaker is already owned, and a real wake
+speech-band noise through the speaker. It fails if the speaker is already owned, and a real wake
 stops it before the assistant asks for audio focus. `~<db>~` (−30 to +24 dB) adds the live
 microphone, which picks up that echo, to the injected clip.
 `run_wake_eval.py --frontend --echo-db N --echo-gain-db G` drives both and restarts the echo for
 every clip.
 
 Each `wake_eval +` trial recreates AEC and AGC, so no gain or filter state carries over from the
-previous clip. Runs made before that reset read higher (15/18 at −42 dB, 4/30 near misses); the
+previous clip. Runs made before that reset read higher (15/18 at −42 dB, 4/30 near misses). The
 figures below are from the final build.
 
 | Measurement | Raw path | Through the frontend |

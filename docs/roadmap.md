@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated 2026-10-14. This page lists the current baseline and the open work.
+Updated 2026-11-19. This page lists the current baseline and the open work.
 [OTA release readiness](ota-release-readiness.md) and the feature documents linked below keep
 the dated candidate evidence (packages, hashes, serial windows). The
 [documentation archive](archive/README.md) keeps earlier versions of this page.
@@ -48,14 +48,27 @@ gates are local tests, local builds, package verification and recorded device wi
   (085, 094). This is also true for the first voice session after Camera (106).
 - **Camera and voice**: Camera-time SRTP no longer uses internal DMA bounce buffers (104). A voice
   session stops the remote Camera stream before it opens its WebSocket (105).
-- **Networking**: USB-installed server trust with pinned HTTPS/MQTTS/WSS, bounded DNS-SD route
-  verification, same-authority MQTT client replacement and connection-epoch result isolation
-  ([trusted server discovery](trusted-server-discovery.md), [credential refresh](mqtt-credential-refresh.md)).
+- **Networking**: server trust with pinned HTTPS/MQTTS/WSS, installed over USB or by a first
+  setup over the LAN with an on-screen 6-digit SRP6a code. Bounded DNS-SD route verification,
+  same-authority MQTT client replacement, connection-epoch result isolation, background token
+  renewal before expiry, and a device mDNS/DHCP host name
+  ([trusted server discovery](trusted-server-discovery.md), [LAN first setup](lan-onboarding-design.md),
+  [credential refresh](mqtt-credential-refresh.md)). LAN first setup passes on hardware on a
+  hotspot, after a Wi-Fi change, and against forged responders A/B/C (2026-10-18/20).
 - **Apps and Shell**: static registry, Shell-owned Lock Screen and Control Center, exact-ID Home
   layout with folders, and widgets kept only for the active page and its neighbors
-  ([Home layout](home-layout-design.md)).
-- **Voice**: local MultiNet wake, `rodak-realtime-voice/v1`, volume MCP tools with software receipts,
-  versioned voice identity ([voice assistant](voice-assistant.md)).
+  ([Home layout](home-layout-design.md)). Home icons use category gradients and Ionicons line
+  icons ([icon visual refresh](icon-visual-refresh.md)). The Themes app holds color presets,
+  appearance package status and publisher trust ([theme store design](theme-store-design.md)).
+- **Voice**: local MultiNet wake with a wake-time AEC, AGC, a detection window that restarts in
+  silence and a wake chime ([wake word evaluation](voice-wake-evaluation.md)).
+  `rodak-realtime-voice/v1` sessions with a separate `assistant_play` playback task, a 20 s
+  reply-stall watchdog and versioned voice identity ([voice assistant](voice-assistant.md)). The
+  firmware registers no MCP tools. Rodak controls volume and light through MQTT effects.
+- **Server-initiated announce**: MQTT `voice.announce` opens a playback-only voice session
+  ([voice contract §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce)). The
+  source implements this path. It has no host test for the service state machine and no recorded
+  hardware run.
 
 ## Open work
 
@@ -68,7 +81,9 @@ gates are local tests, local builds, package verification and recorded device wi
 | Camera image | Physical color, exposure and optics with a test chart. Camera supply rails. | [Camera diagnostics](camera-teardown-diagnostics.md) |
 | Trusted server recovery | New-address and single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, damaged/missing trust recovery | [Trusted server discovery](trusted-server-discovery.md), [#33](https://github.com/rymcu/rodakos/issues/33) |
 | Home and Shell | Physical swipes, Arrange, page restoration, readability, three-page turnover with the 25-app test flavor | [Home validation](home-layout-design.md#validation-boundary), [#27](https://github.com/rymcu/rodakos/issues/27) |
-| Voice | Music/Recorder coexistence, repeated-wake suppression, TTS tail, acoustic AEC/barge-in, false accept/reject, long-duration measurements | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md), [#23](https://github.com/rymcu/rodakos/issues/23) |
+| Voice | Music/Recorder coexistence, repeated-wake suppression, TTS tail, acoustic AEC/barge-in, false accept/reject, long-duration measurements. Device-side barge-in does not trigger yet: after AEC/NS, most speech frames are below the -42 dBFS energy gate | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md), [wake evaluation](voice-wake-evaluation.md#not-done-yet), [#23](https://github.com/rymcu/rodakos/issues/23) |
+| Server-initiated announce | Host test for the `VoiceAssistantService` announce state machine. Device runs for playback-only start, no follow-up, no reconnect, wake-word termination, `busy` ACK and urgent announce during music | [Voice contract §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce), [AIoT contract](rodak-aiot-contract-v1.md) |
+| LAN first setup | Hardware runs for a wrong code, an expired request and a user cancel | [LAN first setup](lan-onboarding-design.md) |
 | Cloud diagnosis | Real credential expiry/revocation, DNS/HTTP cancellation latency, device typography and touch | [Cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery), [#24](https://github.com/rymcu/rodakos/issues/24) |
 | Voice identity | NVS power-cut/reboot, clock sync, model recovery under pressure, multi-speaker and two-device isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio and light | Codec start/stop failure recovery, audible output, RGB driver failures and physical light output | [MQTT volume effects](mqtt-volume-effects.md), [MQTT light effects](mqtt-light-effects.md) |

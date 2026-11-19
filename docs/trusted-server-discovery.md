@@ -2,7 +2,7 @@
 
 The trusted LAN transport starts from the serial-binding baseline `7101282`.
 It keeps one Rodak authority across changing laptop addresses. USB establishes the
-trust anchor; mDNS supplies routing candidates; TLS authenticates every credential
+trust anchor. mDNS supplies routing candidates. TLS authenticates every credential
 destination. A MAC address, cleartext server ID, or signed HTTP nonce alone is not
 server authentication for transmitting the device secret.
 
@@ -24,7 +24,7 @@ must observe `server_trust:1` before sending this optional object in its ordinar
 ```
 
 The complete frame retains its 2048-byte limit. The certificate is bounded to
-1536 bytes; the other fields and JSON escaping must also fit the complete frame.
+1536 bytes. The other fields and JSON escaping must also fit the complete frame.
 The firmware parses one certificate, verifies its public-key digest, and requires
 the exact deterministic TLS name. The private key never leaves Rodak.
 
@@ -37,16 +37,16 @@ The USB HMAC challenge remains independent device-to-desktop binding evidence.
 The first USB installation explicitly trusts the operator-selected workspace. It
 does not cryptographically prove which server previously operated an unauthenticated
 HTTP endpoint. An existing bound device tests its existing secret only through this
-newly pinned TLS channel; rejected authentication never starts a replacement pairing.
+newly pinned TLS channel. Rejected authentication never starts a replacement pairing.
 
 ## Persistence and recovery
 
 `device_cloud/server_auth` is one bounded, versioned JSON record with `active` and
-`pending` endpoints. Version 3 stores their common trust object once at the root;
-each endpoint retains the canonical URL, `requires_bound_identity`, and the
+`pending` endpoints. Version 3 stores their common trust object once at the root.
+Each endpoint retains the canonical URL, `requires_bound_identity`, and the
 authenticated numeric `connect_address` route. An empty route uses normal resolution.
-Readers still accept version 1 and 2 records, including their per-endpoint trust;
-successful writes use version 3. Encoding rejects different active/pending pins
+Readers still accept version 1 and 2 records, including their per-endpoint trust.
+Successful writes use version 3. Encoding rejects different active/pending pins
 before sharing the trust. Output is limited to 3999 bytes, plus NVS's terminating
 NUL, and the complete new value must fit before the old value is replaced.
 The USB trust frame remains version 1. The existing secret and
@@ -59,7 +59,7 @@ valid secure transport descriptor are required before promotion. Fresh devices m
 complete the existing owner-confirmed pairing flow on the pinned candidate. The
 guarded credential transaction writes its pending barrier, MQTT/voice caches, the
 new authority record, and finally the completed identity. MQTT caches carry a
-server-ID/URL/route key; mismatched or partially committed caches cannot become usable.
+server-ID/URL/route key. Mismatched or partially committed caches cannot become usable.
 Authentication failures and exhausted discovery attempts retain the last authority.
 Persistence failures restore the previous record and caches where possible and
 report uncertainty when rollback cannot be established.
@@ -67,13 +67,13 @@ report uncertainty when rollback cannot be established.
 Once version 2 is written, package `20261007-010516` (006) and earlier version-1-only
 readers fail closed on this record. Once version 3 is written, version-2-only 007/008
 readers also fail closed. They are not supported network-recovery rollbacks.
-Keep NVS and the immutable Recovery; repair and rebuild from a source that reads
+Keep NVS and the immutable Recovery. Repair and rebuild from a source that reads
 the stored version, then use the normal preserved-NVS refresh workflow. Erasing
 NVS to force compatibility discards the binding and is not part of this migration.
 
 `device_cloud/server_pinned` is committed before the first authority record. Once
 set, a missing, malformed, oversized, or unreadable authority fails closed instead
-of selecting legacy HTTP. Required bound-identity reads are also strict; missing
+of selecting legacy HTTP. Required bound-identity reads are also strict. Missing
 secrets or failed NVS reads cannot generate a replacement device identity.
 
 Interrupted serial provisioning still clears WiFi to prevent mixed old/new onboarding
@@ -95,15 +95,15 @@ query `_rodak._tcp` through the pinned `espressif/mdns` 1.14.0 component.
 The mDNS service starts with the WiFi adapter and stays up for the rest of uptime. Before the
 first connection it sets the STA DHCP hostname and registers the same mDNS host,
 `rodakos-<last three STA MAC bytes>.local`, with instance name `RodakOS`. The responder follows
-STA `GOT_IP`/`LOST_IP`; discovery queries reuse the same instance. Its task stack and records are
+STA `GOT_IP`/`LOST_IP`. Discovery queries reuse the same instance. Its task stack and records are
 allocated from PSRAM (`CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM`, `CONFIG_MDNS_MEMORY_ALLOC_SPIRAM`),
 so keeping it resident does not take about 5 KB of internal RAM needed by WebRTC/TLS. A failed
-mDNS start only logs a warning; WiFi and the stored route continue to work. The device hostname
+mDNS start only logs a warning. WiFi and the stored route continue to work. The device hostname
 is not part of server trust and does not authenticate anything.
 The query has a 1500 ms timeout and at most
 eight results. Only records with the expected hostname, exactly one `v=1`, and exactly
 one matching full `id` contribute address/port candidates. Up to eight addresses
-per result are inspected; at most six distinct address/port combinations are tried,
+per result are inspected. At most six distinct address/port combinations are tried,
 each with a six-second shared bootstrap/token deadline. This bounds candidate HTTP
 attempts to 36 seconds, in addition to the initial attempt and discovery query.
 IPv4 and non-scoped IPv6 addresses are supported. Unspecified, loopback, multicast,
@@ -123,11 +123,11 @@ stale requests and commits. Unconfirmed pairing is not moved by discovery.
 
 | Channel | Pinned transport requirements |
 | --- | --- |
-| Bootstrap, token, pairing and unbind | HTTPS, installed certificate, fixed expected TLS name; redirects disabled |
-| MQTT | `unifiedMqtt.transport: "mqtts"`, broker host equal to `tls_name`, validated port; same TLS trust anchor/name |
-| Voice | WSS on the HTTPS origin; same certificate/name before the Bearer handshake |
-| OTA API, ticket, manifest, artifact and result | HTTPS on the current logical origin; no cross-origin artifact or Bearer forwarding |
-| Appearance API and artifact | HTTPS on the current logical origin; existing publisher trust remains a separate gate |
+| Bootstrap, token, pairing and unbind | HTTPS, installed certificate, fixed expected TLS name. Redirects disabled |
+| MQTT | `unifiedMqtt.transport: "mqtts"`, broker host equal to `tls_name`, validated port. Same TLS trust anchor/name |
+| Voice | WSS on the HTTPS origin. Same certificate/name before the Bearer handshake |
+| OTA API, ticket, manifest, artifact and result | HTTPS on the current logical origin. No cross-origin artifact or Bearer forwarding |
+| Appearance API and artifact | HTTPS on the current logical origin. Existing publisher trust remains a separate gate |
 
 The default secure ports are HTTPS/WSS 9443 and MQTTS 8883. Ports come from the
 authenticated descriptor after discovery. In pin mode, the public CA bundle and
@@ -136,41 +136,41 @@ and TLS-name storage outlives each asynchronous client and its reconnects.
 
 The authenticated route is reused by bootstrap/token, MQTTS, WSS, OTA and Appearance,
 including client recreation and reboot. Stored capability URLs and origin checks
-remain logical URLs; only the connection URI contains the numeric address. HTTP
+remain logical URLs. Only the connection URI contains the numeric address. HTTP
 requests replace their single `Host` header with the logical hostname and port.
 The current ESP WebSocket transport generates its wire `Host` from the numeric
 connection URI. Fixed TLS SNI/name and the pin still authenticate Rodak, but this
-does not support arbitrary virtual-host routing; its non-scoped IPv6 wire Host is
+does not support arbitrary virtual-host routing. Its non-scoped IPv6 wire Host is
 also a compatibility boundary. No second `Host` header is appended. This boundary
 is accepted only for the private Rodak service and is not general WSS authority
 compatibility. The checked WebSocket overlay rejects redirects before another
-handshake; it must ship with numeric routing.
+handshake. It must ship with numeric routing.
 
 MQTT route changes revoke the old connection epoch and SDK state. Since 2026-10-09,
 a changed STA IP/netmask/gateway schedules authenticated discovery even while the
 old client still appears connected. A verified numeric-route-only change under the
-same pinned authority can replace the SDK client without a device restart; broker
+same pinned authority can replace the SDK client without a device restart. Broker
 ports, topics, binding or trust changes retain the existing restart isolation.
 Network generations prevent an older HTTP/SDK candidate from consuming a later
 GOT_IP event. See [credential refresh](mqtt-credential-refresh.md) for the exact
-scope and software evidence; this addition still needs a fresh device window.
+scope and software evidence. This addition still needs a fresh device window.
 Separately, once the current explicit WiFi
 Connect generation has obtained an IP, the adapter keeps retrying after AP loss
 with a capped backoff and a 20-second connection deadline. Credentials that have
 never connected in this generation still use the finite initial-attempt policy.
 Explicit disconnect, new configuration and shutdown cancel the previous retry
-generation. The timer daemon only posts retry events; driver calls remain
+generation. The timer daemon only posts retry events. Driver calls remain
 serialized by the API mutex. Late STA/IP events must match the current AP/netif state.
 
 This firmware's `CONFIG_MBEDTLS_HAVE_TIME_DATE` remains disabled. It authenticates
-the pinned key and expected TLS name; it does not claim certificate-expiry validation
+the pinned key and expected TLS name. It does not claim certificate-expiry validation
 from a trusted wall clock. Secure Boot, Flash Encryption, production certificate
 rotation/revocation, and recovery from deliberately replaced trust storage require
 their own policies and are not implied by LAN discovery.
 
 Appearance trust binds publisher key and exact origin. The first HTTP-to-HTTPS
 upgrade requires physical publisher confirmation for the new origin. Ordinary IP
-changes retain the logical origin; an HTTPS port change remains an origin change.
+changes retain the logical origin. An HTTPS port change remains an origin change.
 The network migration never rewrites or grants publisher trust.
 
 ## Validation
@@ -186,10 +186,10 @@ downgrade rejection, same-port address failover, route persistence/reboot, v1/v2
 records, compact shared-trust migration with bounded writes, conflicting pins and
 ambiguous fields, fixed Host/SNI with numeric dialing, bounded address filtering and USB
 refresh serialization. The MQTT targets additionally verify numeric route client
-recreation and restart isolation outside the pinned GOT_IP exception; voice-identity integration remains
+recreation and restart isolation outside the pinned GOT_IP exception. Voice-identity integration remains
 green with the route source linked. The production WiFi adapter has 22 Debug and
 ASan/UBSan/leak host cases covering retry/cancellation/deadline and stale events.
-HTTP, mDNS and NVS are injected host boundaries; this suite does not implement a
+HTTP, mDNS and NVS are injected host boundaries. This suite does not implement a
 real TLS handshake or prove physical flash power-loss behavior.
 
 `tests/server_trust_nvs_storage` additionally compiles the production authority
@@ -200,8 +200,8 @@ They reproduce an old-format write failing despite aggregate free space, verify
 the previous authority and unrelated sentry remain intact, then write the compact
 record successfully on the identical layout. Thirty pending/active cycles exercise
 60 updates, readback/reload and actual SDK garbage collection. SDK source drift is
-rejected before building. These tests establish the storage regression and repair;
-they do not retrospectively identify 007's unlogged hardware error or establish
+rejected before building. These tests establish the storage regression and repair.
+They do not retrospectively identify 007's unlogged hardware error or establish
 physical power-cut behavior.
 
 The numeric-route, redirect and continued WiFi-recovery changes are host-verified.
@@ -224,7 +224,7 @@ after asynchronous setup returns. The release host runner includes both `server_
 and `serial_provisioning`. Build/package and COM3 evidence must identify the resulting
 signed firmware. Package 006 passed the bounded COM3 gate for trusted USB refresh,
 authenticated MQTT/telemetry and bidirectional SRV port recovery, as recorded below.
-Later 006 subnet/WSS observations are linked above; 007 failure, 008 diagnosis and
+Later 006 subnet/WSS observations are linked above. 007 failure, 008 diagnosis and
 009's compact-record build are recorded separately below. Extended resource-pressure
 soak, broader candidate/roaming failures and physical trust/power-loss recovery
 remain separate gates. Earlier hotspot/serial evidence cannot close them.
@@ -234,10 +234,10 @@ remain separate gates. Earlier hotspot/serial evidence cannot close them.
 Package `20261007-000651` was built from the uncommitted trusted-server changes on
 `7101282`, using ESP-IDF 6.0.2 and `ninja -C build -j2`. The first unrestricted
 parallel build encountered a GCC internal compiler error in the unchanged ESP-DSP
-convolution source; the low-concurrency build and final incremental build completed.
+convolution source. The low-concurrency build and final incremental build completed.
 The signed bundle reuses immutable Recovery from `20260930-231358` and preserves
-the existing partition layout and OTA public key. This record is build evidence;
-it does not assert that the package has been flashed or network-tested.
+the existing partition layout and OTA public key. This record is build evidence.
+It does not assert that the package has been flashed or network-tested.
 
 | Artifact | Identity |
 | --- | --- |
@@ -251,8 +251,8 @@ it does not assert that the package has been flashed or network-tested.
 
 The bundle verifies the main image against `ota_0` (49% free) and the immutable
 Recovery against its factory partition (87% free). The generic root-build warning
-that the main image exceeds the Recovery partition is not a valid flash target;
-use only the supported signed-bundle preservation workflow.
+that the main image exceeds the Recovery partition is not a valid flash target.
+Use only the supported signed-bundle preservation workflow.
 
 ### First hardware attempt: failed acceptance
 
@@ -260,7 +260,7 @@ The `20261007-000651` attempt accepted trusted USB configuration on COM3 and bri
 reconnected with the existing binding and token version 4, but it repeatedly panicked
 after connecting. The first log includes `LoadProhibited`, an interrupt watchdog,
 and explicit `main` and `serial_prov` stack-overflow reports. These resets invalidate
-that run's network acceptance; the old script's `ROUND_VERIFIED` output must not be
+that run's network acceptance. The old script's `ROUND_VERIFIED` output must not be
 treated as a pass. The follow-up collector retains the complete redacted serial
 log and fails immediately on a panic/overflow.
 
@@ -268,7 +268,7 @@ Evidence is retained in Rodak's `.codex-temp/trusted-network-hardware.log`,
 `trusted-network-hardware-repro.log`, and `trusted-serial-live.log`. The original ELF
 is `build/logs/trusted-network-first.elf`, SHA-256
 `660f38d631845096319a670ed14e1e36ff9dc72354ceb9bfaf75e46e43f36924`.
-The repeated serial failure resolves to FreeRTOS's stack-overflow hook; its final
+The repeated serial failure resolves to FreeRTOS's stack-overflow hook. Its final
 NVS frame already has a corrupted stack pointer and is not a reliable faulting call.
 
 Inspection found `app_main` polling `AppearanceService::OnNetworkReady` every five
@@ -281,7 +281,7 @@ stack and likewise exhausted its margin.
 
 The repair moves the Appearance notification's cloud snapshot to temporary heap
 storage and budgets 8192 bytes for both main and serial provisioning. Every NVS trust
-read still performs the same certificate/public-key validation; no trust cache or
+read still performs the same certificate/public-key validation. No trust cache or
 validation bypass is introduced. Main reports stack minimum/internal heap every
 30 seconds, and serial provisioning reports them after each request. These stack
 budgets reserve 8704 additional internal bytes in total. The replacement signed
@@ -294,18 +294,18 @@ power-loss recovery remain separate open gates.
 Replacement package `20261007-002717` uses signing task `trusted-server-stack-002`
 and passed the full ESP-IDF 6.0.2 `ninja -C build -j2` build and the preserved-Recovery
 bundle checks. Its main image is 7,079,472 bytes, SHA-256
-`4cb272857b9acd664e2c59d8850af1c4aeaa65bef81c729490a8c091e4c976b9`;
-the merged image SHA-256 is
+`4cb272857b9acd664e2c59d8850af1c4aeaa65bef81c729490a8c091e4c976b9`.
+The merged image SHA-256 is
 `7445542f2b4d18de4439661512f963fad2ad81bc827a173d60c482dee6f617fe`.
 It retains version `0.1.2-dev.1`, the same immutable Recovery, development signing,
 the production app set, and disabled Home/fault-injection test modes.
 
 The new `sdkconfig` SHA-256 is
-`767b0e9a2a238a7e0557937c4b44ddaa940bcb5c1cab4775af37950b27f17077`;
-the dependency-lock hash is unchanged. Generated `sdkconfig.h` confirms the main stack
+`767b0e9a2a238a7e0557937c4b44ddaa940bcb5c1cab4775af37950b27f17077`.
+The dependency-lock hash is unchanged. Generated `sdkconfig.h` confirms the main stack
 constant and its compatibility alias both resolve to 8192. Disassembly confirms
 `OnNetworkReady` now reserves 48 bytes rather than 816. The 19 trust-service tests
-remain green under ASan/UBSan with leak detection; they do not establish the ESP task
+remain green under ASan/UBSan with leak detection. They do not establish the ESP task
 stack margin. Its hardware attempt below did not pass network acceptance.
 
 ### Second hardware attempt: internal heap exhaustion
@@ -321,7 +321,7 @@ exchange therefore did not establish MQTTS or continuous shadow reporting.
 Rodak retains the complete serial evidence in
 `.codex-temp/trusted-network-hardware-serial-1791304199043.log`, with its summarized
 collector output in `trusted-network-hardware-fixed.log`. The failed run preserves
-the existing WiFi, pinned authority and device binding; neither erasing NVS nor
+the existing WiFi, pinned authority and device binding. Neither erasing NVS nor
 disabling the user's local wake listener is an acceptable repair.
 
 The next repair keeps main at 8192 bytes, reduces serial provisioning to 6144
@@ -342,15 +342,15 @@ Package `20261007-004058`, signing task `trusted-server-memory-003`, contains th
 allocation-order repair. ESP-IDF 6.0.2 completed the incremental `ninja -C build -j2`
 build, followed by signed-bundle and preserved-Recovery verification. Its main image
 is 7,080,496 bytes, SHA-256
-`294e70c650efcfe23f220cc74fcce0f5937b0f9b4f5567097db4fa95dd6814d9`;
-the merged image SHA-256 is
+`294e70c650efcfe23f220cc74fcce0f5937b0f9b4f5567097db4fa95dd6814d9`.
+The merged image SHA-256 is
 `0af84b91e1cda6a151f6b0c7a7bf74972018dc061bfe5498bd28c8d4fcc34056`.
 The SDK configuration, immutable Recovery, version and development signing flavor
 are unchanged from the stack-repair package.
 
 All three MQTT host targets passed in both Debug and ASan/UBSan builds with leak
 detection. Added cases cover failed reservation allocation, repeated unconfigured
-start/stop, concurrent start/stop, and release before SDK start; the pinned MQTTS
+start/stop, concurrent start/stop, and release before SDK start. The pinned MQTTS
 certificate/name lifetime case remains included. These tests do not reproduce
 ESP32 internal-heap fragmentation. The hardware attempt below failed, so this
 package must not be used as evidence that resource-pressure acceptance passed.
@@ -365,19 +365,19 @@ and `VoiceAudioFrontend::StartListening`. The 7168-byte reservation therefore ca
 be kept: it trades away the required wake listener's DMA budget before MQTT starts.
 
 The complete flash/boot evidence is
-`.codex-temp/trusted-network-memory-flash.log`; the matching ELF is
+`.codex-temp/trusted-network-memory-flash.log`. The matching ELF is
 `build/logs/trusted-network-memory-third.elf`, SHA-256
 `b59a78bfe19b4c61f325d598511f27557aa28460b74c2625cf773bdc219a9649`.
 The host runner rejected the run with exit code 3. Rollback to the second package
 preserved NVS and passed the Recovery/main/OTA/Home boot checks, with wake
-`listening=1`; see `.codex-temp/trusted-network-safe-rollback-flash.log`.
+`listening=1`. See `.codex-temp/trusted-network-safe-rollback-flash.log`.
 
 The reservation and its allocation-specific host fakes were removed. The
 Start/Stop lifecycle lock and final SDK start admission check remain, along with
 8192-byte main and 6144-byte serial stacks. The next run tests that smaller serial
-stack by itself; previous runs do not establish whether its 2048-byte saving is
+stack by itself. Previous runs do not establish whether its 2048-byte saving is
 sufficient for a contiguous authenticated MQTT task allocation. Codec allocation
-failure handling is being reviewed separately; reducing task memory does not by
+failure handling is being reviewed separately. Reducing task memory does not by
 itself repair an SDK path that proceeds after a failed DMA allocation.
 
 ### Serial-stack-only build
@@ -389,8 +389,8 @@ DMA failure-handling repair. The three MQTT host targets passed again after remo
 and ESP-IDF 6.0.2 incremental build and preserved-Recovery bundle verification passed.
 
 The main image is 7,079,920 bytes, SHA-256
-`dafcfb7e20a249c2731ce1aca405f49249e8e46d5e3bbd7b2db44daa107d79b7`;
-the merged image SHA-256 is
+`dafcfb7e20a249c2731ce1aca405f49249e8e46d5e3bbd7b2db44daa107d79b7`.
+The merged image SHA-256 is
 `0f95cc9cb1ec9d4c1e9e615f2fcfa08520bc1703efcb0ee42872407e3703b882`.
 Version, SDK configuration, immutable Recovery and development signing are unchanged.
 
@@ -405,7 +405,7 @@ The matching ELF is `build/logs/trusted-network-serial-fourth.elf`, SHA-256
 The next budget adjustment reduces each of the two internal RGB565 display DMA
 buffers from 40 rows to 32. With this board's configured width of 320 pixels, it
 releases 10240 persistent internal bytes (51200 to 40960). Double buffering, display
-resolution and wake functionality are retained; larger redraws may require more
+resolution and wake functionality are retained. Larger redraws may require more
 flush fragments. Startup logs expose the row count and total byte budget. The next
 hardware gate must therefore check display startup/navigation/refresh alongside
 wake listening and stable MQTTS, and include the separately reviewed codec DMA
@@ -417,13 +417,13 @@ Package `20261007-005456`, signing task `trusted-server-dma-budget-005`, combine
 32-row display buffers with the reviewed codec DMA failure-handling overlay. The
 actual ESP-IDF compile commands include both generated `esp_codec_dev.c` and
 `platform/audio_codec_data_i2s.c`. Its first compile rejected the obsolete
-`SOC_I2S_NUM` macro; the final overlay uses IDF 6's `I2S_LL_GET(INST_NUM)` and the host
+`SOC_I2S_NUM` macro. The final overlay uses IDF 6's `I2S_LL_GET(INST_NUM)` and the host
 fake was corrected to expose that same interface. The final low-concurrency build
 and signed preserved-Recovery bundle verification passed.
 
 The main image is 7,080,224 bytes, SHA-256
-`574be45b38c08026315c569809ee55a15e328c67b5ceb608f1c1205adcfc00c0`;
-the merged image SHA-256 is
+`574be45b38c08026315c569809ee55a15e328c67b5ceb608f1c1205adcfc00c0`.
+The merged image SHA-256 is
 `eaaeeed0e07cbcec0f54b80ba3f91598b2e554cfc843849d4f80401cb099fd18`.
 Its retained ELF is `build/logs/trusted-network-dma-fifth.elf`, SHA-256
 `0b342706b63b7516a9640de05f5ec95d4a7093b1b1e5936567f6677569beb683`.
@@ -433,8 +433,8 @@ The final codec overlay passed 19 Debug and ASan/UBSan/leak cases plus 15 genera
 checks. The unpatched upstream negative control failed 11 relevant cases, including
 the two I2S failures. The current MQTT lifecycle passed all three host targets under
 Debug and ASan/UBSan/leak checks after removal of the reservation. The codec fault
-latch is scoped to the physical I2S port and survives codec/data-interface recreation;
-only a reboot clears it. This prevents continuing with a damaged DMA chain but does
+latch is scoped to the physical I2S port and survives codec/data-interface recreation.
+Only a reboot clears it. This prevents continuing with a damaged DMA chain but does
 not establish stable audio under memory pressure. This package still requires its
 own display, wake and authenticated-network hardware evidence.
 
@@ -452,24 +452,24 @@ The same full log, Rodak's
 `mbedtls_ssl_setup returned -0x008D`. The final wake report's internal minimum was
 only 103 bytes, and the MQTT worker minimum reached 900 bytes. The first collector
 still emitted `HARDWARE_TRUSTED_NETWORK_GATE_PASSED` because it checked panics and
-main/serial/wake conditions but omitted crypto allocation errors; that result is
+main/serial/wake conditions but omitted crypto allocation errors. That result is
 not valid resource-stability acceptance. The revised gate must reject any such
 crypto allocation failure as well as MQTT task allocation failures.
 
 In ESP-IDF 6.0.2, `-0x008D` is `PSA_ERROR_INSUFFICIENT_MEMORY` (-141), also used for
 `MBEDTLS_ERR_SSL_ALLOC_FAILED`. SSL setup allocates I/O/handshake structures and
-initializes handshake hashes; it does not create a task, obtain randomness or
+initializes handshake hashes. It does not create a task, obtain randomness or
 allocate a key slot. I/O structures use the configured PSRAM allocator, whereas
 the accelerated PSA SHA setup explicitly allocates internal DMA contexts. The
 AES driver can also allocate a 1600-byte internal DMA bounce buffer for unaligned
-PSRAM data. The AES allocation error is directly observed; the exact failing SSL
+PSRAM data. The AES allocation error is directly observed. The exact failing SSL
 setup allocation cannot be identified from that error code alone.
 
 The next layout uses two 24-row display buffers (30720 bytes total), saving another
 10240 bytes over package 005, and increases the internal MQTT worker to 8192 bytes
 for a net 8192-byte budget gain. Main stays at 8192, serial at 6144 and the MQTTS
-SDK task at 6144. Full-screen flushes can increase from about eight to ten fragments;
-pixel payload and double buffering stay the same. Main, serial and MQTT health
+SDK task at 6144. Full-screen flushes can increase from about eight to ten fragments.
+Pixel payload and double buffering stay the same. Main, serial and MQTT health
 logs now include internal `DMA | 8BIT` free/largest blocks, and SDK callbacks report
 new minimum stack values separately from the worker. The strict gate requires no
 crypto/task allocation errors, wake listening, both port migrations and at least
@@ -480,8 +480,8 @@ crypto/task allocation errors, wake listening, both port migrations and at least
 Package `20261007-010516`, signing task `trusted-server-tls-headroom-006`, contains
 the 24-row display/8 KiB worker layout and the separate DMA/SDK-stack diagnostics.
 The main image is 7,081,040 bytes, SHA-256
-`8f2af6a9155035cc56a6c1c9c73ab5f2f5d3dbb3f93ace1867088d663fec8dfa`;
-the merged image SHA-256 is
+`8f2af6a9155035cc56a6c1c9c73ab5f2f5d3dbb3f93ace1867088d663fec8dfa`.
+The merged image SHA-256 is
 `c7581cbd35c06cc3adf41a039368a4baae500fbd63ce83cb56584d96dd2000c8`.
 The retained ELF is `build/logs/trusted-network-tls-sixth.elf`, SHA-256
 `1c40e3e46ff4e697d16ad5c65149b109b54ce66f64854601958d33b5f2a46a10`.
@@ -494,7 +494,7 @@ The bounded strict hardware gate passed for this package as recorded below.
 
 On 2026-10-07, package `20261007-010516` passed NVS-preserving COM3 boot checks and
 the strict trusted-network collector with exit code 0. The complete redacted serial
-log is Rodak's `.codex-temp/trusted-network-hardware-serial-1791307010945.log`; the
+log is Rodak's `.codex-temp/trusted-network-hardware-serial-1791307010945.log`. The
 collector transcript is `.codex-temp/trusted-network-hardware-final.log`. The run
 lasted about five minutes, including a final one-minute observation window. It is
 not the eight-hour release soak.
@@ -504,15 +504,15 @@ Device `44:1b:f6:c3:b4:30` stayed on the laptop's `RodakOS-Lab` hotspot at
 ID and token version 4 remained unchanged, with no unbind or replacement pairing.
 The gate observed new authenticated MQTT sessions, current shadow and at least two
 telemetry reports per round. HTTPS/MQTTS ports changed from 9443/8883 to 9444/8884
-and back; both routes recovered after authenticated DNS-SD candidate discovery.
+and back. Both routes recovered after authenticated DNS-SD candidate discovery.
 Recovery still includes retries against the old port and a device-owned controlled
-restart. It is not seamless live migration or proof of an actual WiFi/subnet change.
+restart. It is not a live migration without interruption, and it is not proof of an actual WiFi/subnet change.
 
 Home and local OTA boot confirmation remained healthy. Wake stayed enabled with
 `listening=1` across the reboots, which establishes an armed listener rather than
 spoken wake recognition. No panic, task-allocation error, AES allocation error,
 TLS setup `-0x008D` or TLS read/write `-0x0084` occurred in the complete run. The
-strict collector rejects these errors; it no longer accepts the fifth run's false
+strict collector rejects these errors. It no longer accepts the fifth run's false
 resource pass. Rodak reported no recent thing-model schema warnings for this device.
 
 | Measurement across the complete run | Observed minimum |
@@ -532,7 +532,7 @@ navigation/readability and animation throughput were not measured in this gate.
 WSS/voice turns, actual laptop address/network changes, multiple A/AAAA candidate
 probing, power cuts, damaged-pin physical recovery and extended soak remain separate
 open work in [the roadmap](roadmap.md). The HTTPS false-certificate result below is
-separate negative evidence; this positive gate alone does not prove it.
+separate negative evidence. This positive gate alone does not prove it.
 
 ### HTTPS wrong-certificate hardware rejection
 
@@ -540,7 +540,7 @@ The same package passed a separate COM3 negative gate with exit code 0. An HTTPS
 listener on port 9443 presented the expected TLS name using a different self-signed
 key. The device attempted a real handshake and rejected it with
 `mbedtls_ssl_handshake returned -0x2700`. The listener recorded one TLS/certificate
-failure and zero HTTP requests; neither a panic nor an allocation failure occurred.
+failure and zero HTTP requests. Neither a panic nor an allocation failure occurred.
 Restoring the genuine server recovered the original device ID, token version 4,
 bound state, MQTTS and two fresh telemetry reports without re-pairing.
 
@@ -570,7 +570,7 @@ compile commands include the generated WebSocket client and route source.
 | Immutable Recovery | Reused from `20260930-231358`; SHA-256 `ffa412ebe30c714c691bba73c8ab6e4efcaaab14fce5229f595707a8a08f75fd` |
 
 Version remains `0.1.2-dev.1`, with development signing and the production app
-flavor; Home population and release fault injection are disabled. `sdkconfig`
+flavor. Home population and release fault injection are disabled. `sdkconfig`
 SHA-256 is `767b0e9a2a238a7e0557937c4b44ddaa940bcb5c1cab4775af37950b27f17077`,
 and `dependencies.lock` remains
 `62261e93cf1d9df629c38af9ce54eae6a1b34e1318a1c8455d098059027f19b9`.
@@ -581,12 +581,12 @@ WiFi cases and WebSocket overlay checks passed their recorded host checks. This 
 build/software evidence only. Same-port multi-address recovery, preserved routes
 after reboot, real AP disappearance and the new package's resource margins still
 require their own hardware run. Once its authority v2 record is written, recover
-with a v2-capable package preserving NVS; do not use 006 as a network rollback.
+with a v2-capable package preserving NVS. Do not use 006 as a network rollback.
 
 ### Seventh hardware attempt: NVS write gate failed
 
 007 passed preserved-NVS Recovery/Home boot, but its first trusted USB refresh
-returned `nvs_state_uncertain`; it did not pass network acceptance. The failure
+returned `nvs_state_uncertain`. It did not pass network acceptance. The failure
 branch is after successful authority encoding/roundtrip validation, during NVS
 pin/authority persistence. A protected read-only snapshot showed an intact v2
 active authority with an empty route, so v1-to-v2 migration had already succeeded.
@@ -594,7 +594,7 @@ The existing device ID and server token version 4 remained unchanged.
 
 The snapshot's active record was 994 bytes. Adding the pending endpoint duplicated
 the certificate, producing a 1946-byte v2 record needing 62 contiguous NVS entries.
-The active page had 43 tail entries; after GC the best page was exactly at the
+The active page had 43 tail entries. After GC the best page was exactly at the
 62-entry boundary. This post-rollback snapshot alone cannot identify the failing
 API/error: an in-memory run of the actual IDF NVS implementation could write that
 candidate successfully. Separate synthetic pressure reproduced
@@ -604,7 +604,7 @@ hardware error code. The host map fake had not modeled this single-page restrict
 
 Evidence is Rodak's `.codex-temp/trusted-network-seventh-hardware.log` and
 `.codex-temp/trusted-network-hardware-serial-1791310298167.log`. The device's original
-NVS backup stays private; no credential values or raw partition data belong in Git.
+NVS backup stays private. No credential values or raw partition data belong in Git.
 
 ### NVS diagnostic build
 
@@ -615,17 +615,17 @@ size-read result and NVS entry statistics. It does not log values or change the
 storage/identity policy. The build itself is not a repair or hardware evidence.
 
 ESP-IDF 6.0.2 and signed preserved-Recovery packaging passed. Main is 7,094,080 bytes,
-SHA-256 `05865dc206b40474d4c380bc7d4f3e1acc7c4f31653596024caa80f889964618`;
-merged SHA-256 is `61fec43fc33726f7227ef4031710a2a831ef6d786305b13bd2b1a03558e0af1a`.
+SHA-256 `05865dc206b40474d4c380bc7d4f3e1acc7c4f31653596024caa80f889964618`.
+Merged SHA-256 is `61fec43fc33726f7227ef4031710a2a831ef6d786305b13bd2b1a03558e0af1a`.
 The retained ELF is `build/logs/trusted-network-nvs-eighth.elf`, SHA-256
 `640748619c9690391510e4430132c17861af83a76ec9b5f750d9f36307493c30`.
 Immutable Recovery, SDK configuration, dependencies, version and development signing
-are unchanged; the production app flavor still disables fault/Home test injection.
+are unchanged. The production app flavor still disables fault/Home test injection.
 
 ### Eighth hardware attempt: bounded gate passed
 
 The 008 collector completed with exit code 0. Two trusted USB requests returned
-`not_needed`; the original device ID, token version 4 and bound state remained.
+`not_needed`. The original device ID, token version 4 and bound state remained.
 HTTPS/MQTTS recovered through 9443/8883 → 9444/8884 → original ports, followed by
 a 60-second observation window. Wake remained healthy, fresh telemetry resumed,
 no allocation error occurred and the device had no recent thing-model warnings.
@@ -644,7 +644,7 @@ reproduced contiguous-page weakness, or establish the compact-v3 hardware gate.
 Package `20261007-023218`, task `trusted-server-compact-authority-009`, was built
 from source `2af9ce5afd8652b97e8aafa644506b6a58bf4e0b`. ESP-IDF 6.0.2 and signed
 preserved-Recovery bundle checks passed. Only the separately owned host CI workflow
-and its documentation were uncommitted at packaging; firmware inputs matched that
+and its documentation were uncommitted at packaging. Firmware inputs matched that
 source commit. Full metadata is retained in `build/logs/trusted-network-compact-ninth.json`.
 
 | Artifact | Identity |
@@ -702,7 +702,7 @@ all DHCP failures, server-address migration or long-duration recovery behavior.
 ### Ninth-package WSS silence and resource boundary
 
 The 009 WSS collector completed with exit code 0 after two real WSS sessions using
-synthetic silence. Each reached ready/input and an explicit stop; MQTT remained
+synthetic silence. Each reached ready/input and an explicit stop. MQTT remained
 connected. After both sessions the collector observed healthy wake monitoring,
 two fresh telemetry reports and `fault=false`.
 
@@ -744,7 +744,7 @@ and `.codex-temp/trusted-multia-serial-1791312183343.log`.
 
 This establishes independent attempts for two addresses sharing one hostname and
 SRV port, followed by persistent route reuse across restart by MQTTS and WSS. The
-genuine server stayed at the same address; it is not a new-server-IP or
+genuine server stayed at the same address. It is not a new-server-IP or
 single-interface roaming test. The failed candidate was unreachable, not a
 wrong-certificate listener. IPv6, credential/expiry/replay variants, full audio and
 OTA/Appearance transfers still require their own evidence.
@@ -771,7 +771,7 @@ and 150 s idle, six switches between the hotspot and the router each replaced th
 | 1–6 | 10,752–11,264 B | 10,240 B | 6/6 ready |
 
 No panic, `Device memory low`, task-creation or stack-size errors occurred. Serial SHA-256
-`4f80319393aa99d2f9d18c664b49034b9abd5786bc47ff0be289aaea8faaf6cc`; evidence is in
+`4f80319393aa99d2f9d18c664b49034b9abd5786bc47ff0be289aaea8faaf6cc`. Evidence is in
 `.codex-temp/gain-host/wifi-cycle-fixed.log`. This covers six replacements in about 13
 minutes.
 
@@ -803,7 +803,7 @@ stayed open for 17 min 45 s, and the device stayed in the session. While a sessi
 session itself holds internal RAM, so the largest block was 2,176 B during this time. Every one of
 the 184 sessions showed 2,048–2,432 B while active. The next WiFi switch broke the WebSocket. The
 session then closed normally, and memory returned to 24,983 B free with an 8,192 B largest block. The
-device had no timeout for a session that stops receiving audio after `output.start`; the reply-stall
+device had no timeout for a session that stops receiving audio after `output.start`. The reply-stall
 watchdog in `docs/voice-assistant.md` now ends such a session after 20 s.
-Serial SHA-256 `e87508c9ad70ec57aeb808597a4da765baf56146ced222f948b148cf17e265ea`; evidence is in
+Serial SHA-256 `e87508c9ad70ec57aeb808597a4da765baf56146ced222f948b148cf17e265ea`. Evidence is in
 `.codex-temp/gain-host/soak-6h.log` and `soak-6h.csv`.

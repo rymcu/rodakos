@@ -71,7 +71,7 @@ server to distinguish RodakOS from legacy hardware:
 
 The create response must provide `requestId`, `requestToken`, `pairingCode`,
 and an expiry. Status responses may use camelCase or snake_case aliases and
-must provide a non-empty status; confirmed responses additionally provide the
+must provide a non-empty status. Confirmed responses additionally provide the
 access token and MQTT configuration.
 
 Status values are normalized case-insensitively. `expired`, `rejected`, and
@@ -98,16 +98,16 @@ flow.
 AIoT identity, access token, realtime voice descriptor, and unified MQTT values
 are committed transactionally. Before a candidate token/configuration is
 written, RodakOS persists a pending marker. A reset while that marker is set
-must not expose the candidate as usable; the next boot retries or clears it
+must not expose the candidate as usable. The next boot retries or clears it
 according to the binding status. A failed commit restores the previous complete
 snapshot. Passwords, access tokens, request tokens, and device secrets never
 appear in ordinary logs, serial replies, or shadow payloads.
 
 Changing the serial provisioning URL clears cached AIoT, MQTT, and realtime
 voice state before the next bootstrap in legacy mode. Trusted USB provisioning stages
-the endpoint and certificate as a candidate; only authenticated completion promotes it.
+the endpoint and certificate as a candidate. Only authenticated completion promotes it.
 Serial provisioning supplies WiFi, the bootstrap URL and an optional explicit server
-trust anchor; it never supplies MQTT or voice credentials. See
+trust anchor. It never supplies MQTT or voice credentials. See
 [Serial provisioning](serial-provisioning.md).
 
 The optional [trusted server transport](trusted-server-discovery.md) uses USB-installed
@@ -115,13 +115,13 @@ TLS trust, stable `.local` names and bounded DNS-SD candidate discovery. In pin 
 `unifiedMqtt.transport` is `mqtts`, broker host equals the pinned `tls_name`,
 `http_base_url` uses the current HTTPS origin, and voice uses WSS on that origin.
 The same certificate and fixed expected TLS name cover every device credential
-destination, including OTA and Appearance; public-CA fallback and redirects are disabled.
+destination, including OTA and Appearance. Public-CA fallback and redirects are disabled.
 
 Unbind is server-confirmed. After `binding/unbind` succeeds, RodakOS clears the
 access token, pairing request, MQTT values, and realtime voice descriptor. WiFi
 credentials and the provisioning URL remain so the device can be paired again.
-If the request or local cleanup fails, the state remains pending and is retried;
-the device must not claim a completed unbind prematurely.
+If the request or local cleanup fails, the state remains pending and is retried.
+The device must not claim a completed unbind prematurely.
 
 ## 4. Unified MQTT v2 payload
 
@@ -188,7 +188,7 @@ Command acknowledgement is published to the command topic with `/ack`
 appended. Telemetry reports firmware, WiFi RSSI, volume, heap/uptime/slot
 health, and valid `battery`/`charging` readings. Reported shadow includes
 firmware, volume, light, battery/charging, and `voice_identity`. A failed
-battery ADC read omits the field; it does not publish a guessed value.
+battery ADC read omits the field. It does not publish a guessed value.
 
 The command surface accepts `ping` as a raw string, JSON string, or
 `{"command":"ping"}`/`{"type":"ping"}` object. The acknowledgement is
@@ -196,7 +196,7 @@ The command surface accepts `ping` as a raw string, JSON string, or
 `devices/{deviceKey}/commands/{commandNo}/ack`. It also supports
 `camera.stream.start/stop/signal` and `display.stream.start/stop/signal`, with a
 required `sessionId`, mutually exclusive camera/display sessions and SDP/ICE
-signaling; see [WebRTC peer integration](esp-peer-integration.md).
+signaling. See [WebRTC peer integration](esp-peer-integration.md).
 
 `voice.announce` (`{"command":"voice.announce","announceSeq":N,"priority":"normal"|"urgent"}`)
 asks the device to open a playback-only realtime voice session for a server-initiated
@@ -242,7 +242,7 @@ Camera/display failures use `camera_stream_unavailable` / `display_stream_unavai
 `camera_signal_rejected` / `display_signal_rejected`. Shared validation codes are
 `invalid_payload`, `missing_session_id`, `invalid_signal` and `invalid_signal_encoding`.
 Service availability is checked before session validation. Successful stream commands return
-`result.sessionId`; start also returns `result.transport: webrtc-datachannel` and
+`result.sessionId`. Start also returns `result.transport: webrtc-datachannel` and
 `result.startCommandNo`, the original Start command number. These are ordinary
 command replies, without effect ID/hash, configuration revision, persistence or physical evidence.
 
@@ -256,34 +256,34 @@ New clients identify the instance using the original Start command number:
 
 `camera.stream.stop` uses the same fields. A successful response contains
 `result: {sessionId, startCommandNo, stopOutcome}`. `stopOutcome: stopped` means this request
-revoked the matching active instance and its native Stop returned; `already_stopped` means the
+revoked the matching active instance and its native Stop returned. `already_stopped` means the
 latest successfully started instance had already completed that cleanup in the same MQTT
 generation, connection epoch and authority. Neither outcome proves physical/DMA/idle-task
-resource return. Native joins keep their existing blocking limits; no hard timeout is promised.
+resource return. Native joins keep their existing blocking limits. No hard timeout is promised.
 
 Each stream kind retains at most one volatile completed-cleanup proof. It is created only after
 native Stop returns, for the captured owner of a successful Start. Revocation or a terminal callback
-alone is insufficient; failed/synchronously terminated starts cannot create a successful proof.
+alone is insufficient. Failed/synchronously terminated starts cannot create a successful proof.
 A replacement Start invalidates the previous proof for that stream kind, while epoch/authority
 changes clear both. Late cleanup cannot repopulate a newer scope. Unknown sessions, wrong
 `startCommandNo`, the other stream kind and stale proofs return the existing `_stream_not_found`
 error without stopping a replacement. A present `startCommandNo` must be a nonempty string of
-at most 128 bytes; invalid values return `invalid_start_command_no`. Ambiguous duplicate JSON
+at most 128 bytes. Invalid values return `invalid_start_command_no`. Ambiguous duplicate JSON
 keys or embedded JSON NULs in stream requests return `invalid_payload`.
 
 An exact Stop's cached success is replayed only while its saved generation/epoch/instance nonce
 still matches the latest completed-cleanup proof and current connection. Otherwise this delivery
-returns `_stream_not_found`; the original final ledger record is not overwritten and no native
+returns `_stream_not_found`. The original final ledger record is not overwritten and no native
 operation is repeated. Cached failures remain conservative failures, and changed raw payloads
 still produce `command_conflict`. This is a response-scope restriction for exact Stop, not a
 renewal of an old authorization.
 
 For compatibility, a Stop with no `startCommandNo` can stop the current matching `sessionId`,
 returning the actual start identity and `stopOutcome: stopped`. It does not receive the new
-`already_stopped` behavior; its existing cached-response behavior is unchanged. Such a legacy
+`already_stopped` behavior. Its existing cached-response behavior is unchanged. Such a legacy
 request cannot distinguish an old logical session from a same-named replacement. New clients
 must use a fresh Start command number for each instance and preserve it with the session.
-The existing 64-command replay window and reboot/eviction limits still apply; intentionally
+The existing 64-command replay window and reboot/eviction limits still apply. Intentionally
 reusing an evicted Start command number is not an unbounded exactly-once identity guarantee.
 
 Rodak now records native `status: error` replies as `failed`, retaining the first ACK body,
@@ -298,23 +298,23 @@ peer state or SDP/candidate data. Rodak treats these as sideband messages: forwa
 signaling does not settle the command, and later callbacks do not replace the first command result.
 For `closed`, `disconnected` and `failed`, Rodak uses the topic's command number to find a persisted
 start request, then matches its session ID, the live session's device and stream kind. Closed stops
-that preview; disconnected/failed fail it. New previews use new session IDs, so old-session events
+that preview. Disconnected/failed fail it. New previews use new session IDs, so old-session events
 cannot terminate them. The desktop session does not separately bind a unique starting command number.
 
 The firmware keeps a volatile window of the latest 64 admitted command numbers within the same
 authority. Identical raw payload bytes (SHA-256) replay the original final ACK without re-entering
-the handler; changed bytes return `command_conflict`, including JSON whitespace changes. An
-in-flight duplicate neither executes nor emits an additional result; the original request completes.
+the handler. Changed bytes return `command_conflict`, including JSON whitespace changes. An
+in-flight duplicate neither executes nor emits an additional result. The original request completes.
 Completed records are immutable. Reconnects,
-ordinary token refresh and Stop/Start on the same service object retain the window; authority
+ordinary token refresh and Stop/Start on the same service object retain the window. Authority
 replacement clears it, and old completion tickets cannot enter the new authority.
 Exact Stop successes additionally obey the completed-instance response-scope check described above.
 
 Command numbers are limited to 128 bytes and input payloads to 256 KiB. Cached reply bodies share
-a 64 KiB budget; if a body cannot be retained, its recent completed ID stays as a tombstone and
+a 64 KiB budget. If a body cannot be retained, its recent completed ID stays as a tombstone and
 replay returns `command_result_unavailable` without execution. This error does not prove that the
 original command was never applied. New admissions evict the oldest completed record by first
-admission order at capacity; cache hits do not refresh that order, and in-flight records are not
+admission order at capacity. Cache hits do not refresh that order, and in-flight records are not
 evicted. Evicted commands and device reboots have no deduplication
 guarantee. A cached start success is historical evidence and does not reopen a stopped stream.
 Other ledger rejection codes are `command_limits_exceeded`, `command_hash_failed` and
@@ -325,36 +325,36 @@ camera/display signal/state callbacks capture that original generation, epoch an
 A bounded result queue rejects stale callbacks and is cleared on epoch changes. The SDK user-event
 callback rechecks the scope and sends through direct QoS 0 publish with retain disabled, outside the
 service lock so synchronous disconnect callbacks can re-enter safely. This path does not store an
-SDK outbox item or fall back to ordinary Publish; a failed send is dropped without replay.
+SDK outbox item or fall back to ordinary Publish. A failed send is dropped without replay.
 
 The queue allows 8 entries, at most 64 KiB per payload, 128 KiB total payload and 512 bytes per
 topic. Overflow or unavailable SDK events drop results with a warning. An admitted send may still
-complete on its original SDK connection; success is not a Broker acknowledgement. These limits
+complete on its original SDK connection. Success is not a Broker acknowledgement. These limits
 do not prove that an unacknowledged command was never executed.
 
 Stream leases bind generation, epoch, a non-reused instance nonce and session ID. Start/Stop/remote
 signaling share an operation mutex. Epoch changes revoke immediately and schedule worker cleanup
-outside the MQTT mutex; SDK and peer callbacks never wait for that operation mutex. Service Stop
+outside the MQTT mutex. SDK and peer callbacks never wait for that operation mutex. Service Stop
 revokes admission before waiting for active operations. A Start that finishes after revocation
-stops its own instance; old callbacks cannot clear a replacement with the same session string.
-`command_scope_expired` reports failed admission; exhausted nonces reject with
+stops its own instance. Old callbacks cannot clear a replacement with the same session string.
+`command_scope_expired` reports failed admission. Exhausted nonces reject with
 `stream_instance_capacity_exceeded`. An action admitted before revocation may finish and is then
-cleaned up; neither this boundary nor the cache physically rolls back an already admitted action.
+cleaned up. Neither this boundary nor the cache physically rolls back an already admitted action.
 
 Signal publication requires the current active lease. Same-epoch terminal events may survive
-cleanup only while their instance nonce is still the latest for that resource; replacement drops
+cleanup only while their instance nonce is still the latest for that resource. Replacement drops
 old terminal events. Data-channel close/disconnect map to the existing `closed` / `disconnected`
 wire states.
 
 Remote input retains explicit enable/disable, sequence checks and rate limits. Text, shortcuts,
 pointers and deferred navigation carry a stream lease and a separate enable grant, checked at
-the final LVGL action. Disable/re-enable cannot revive an old grant; stale cleanup cannot release
+the final LVGL action. Disable/re-enable cannot revive an old grant. Stale cleanup cannot release
 a new owner's pointer. Controller destruction invalidates deferred navigation. Delayed control
 ACKs also retain an opaque peer-instance token, checked at the actual sender under the peer API
 lock, so sequence reuse alone cannot authorize a reply on the replacement peer.
 
 Ordinary telemetry/shadow Publish
-and effect receipt publishing retain their own SDK outbox behavior; server-side effect receipt
+and effect receipt publishing retain their own SDK outbox behavior. Server-side effect receipt
 matching to the original authenticated connection remains necessary.
 
 The independent [command host fixture](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
@@ -363,9 +363,9 @@ publications. Its host cases and Rodak's 21 cross-repository cases cover real pi
 unsupported/malformed commands, unavailable camera/display services, terminal replay behavior
 and device identity isolation. Host cases also model queued-versus-wire outbox stages, held SDK
 events, reconnects, late stream callbacks and synchronous disconnect during direct publication.
-The network SDK remains a fake; direct QoS 0 outbox semantics are separately checked against the
+The network SDK remains a fake. Direct QoS 0 outbox semantics are separately checked against the
 resolved ESP-MQTT source, whose hashes are recorded by the runner. The separate Rodak runner,
-`scripts/run-rodakos-command-conformance.mjs`, records frozen source/binary evidence; these counts
+`scripts/run-rodakos-command-conformance.mjs`, records frozen source/binary evidence. These counts
 do not extend the volume/light or MCP gate, and do not prove real WebRTC or hardware acceptance.
 
 ### Volume configuration and evidence
@@ -375,19 +375,19 @@ and clamps it to 0–100. `AudioOutputService` reports its accepted runtime
 configuration. `AudioService` and playback/UI read this shared output configuration. If an
 already open codec returns an API error when setting volume, the previous shared configuration
 is retained. Ordinary MQTT shadow reports show that retained configuration.
-With the codec closed, setting volume accepts configuration without opening it;
-the next playback open applies that configuration. If the initial volume API call
+With the codec closed, setting volume accepts configuration without opening it.
+The next playback open applies that configuration. If the initial volume API call
 fails, the open attempt is closed and its format state is cleared for retry.
 
 This is an API error boundary, not full hardware verification. RodakOS builds a
 source-verified overlay for esp_codec_dev 1.5.7 so `esp_codec_dev_set_out_vol`
 propagates the selected codec/software-volume driver's error and commits its cache
-only on success. The original managed source remains unchanged; see
+only on success. The original managed source remains unchanged. See
 [dependency maintenance](dependency-maintenance.md). Software success or a reported
 volume still does not establish I2C register application or audible speaker output.
 
 Versioned volume desired messages now use root `version`/`shadowVersion` as an ordering
-watermark; this is not the output configuration revision. Plain shadow reports still carry
+watermark. This is not the output configuration revision. Plain shadow reports still carry
 no volume `effectId`, desired applied revision or per-effect result.
 Connection establishment and unrelated state updates also publish ordinary shadow
 reports. A matching reported value, a newer server shadow version, or a successful
@@ -397,8 +397,8 @@ restoration. A single desired publication may carry top-level
 `_meta['rodak/deviceEffect']` with `rodak.mqtt-volume-effect.v1` correlation. Its result is
 published separately on `devices/{deviceKey}/effects/receipt`, never inside reported shadow.
 See [MQTT volume effects](mqtt-volume-effects.md) for strict validation, scope and replay rules.
-The inner receipt is `rodakos.volume-receipt.v1` with an output-local configuration revision;
-it does not upgrade ordinary shadow reports into execution evidence. The former session-scoped
+The inner receipt is `rodakos.volume-receipt.v1` with an output-local configuration revision.
+It does not upgrade ordinary shadow reports into execution evidence. The former session-scoped
 voice MCP volume path was removed on 2026-10-21
 ([historical contract](archive/2026-10-21-voice-volume-mcp.md)).
 `voice_identity` has its own revision/status semantics below and must not be generalized
@@ -407,10 +407,10 @@ into a volume receipt.
 ### Light configuration and evidence
 
 Desired `light` patches target discovered Board Manager RGB lights. Legacy messages without ID
-select the first light; correlated `light.patch` requires a reported, real light ID and strict
+select the first light. Correlated `light.patch` requires a reported, real light ID and strict
 nonempty enabled/brightness/color fields. `LightService` merges and applies under one lock and
 commits accepted configuration/revision only on driver success. Failure retains prior values and
-reports `available=false`, numeric `last_error`, and `application: unverified`; it cannot guarantee
+reports `available=false`, numeric `last_error`, and `application: unverified`. It cannot guarantee
 physical rollback after a partial LED driver write. Each reported light object carries `id`,
 `available`, `last_error`, `configurationRevision`, `application`, `enabled`, `brightness` and
 `color`. Since 2026-11-05, Rodak's `rymcu-bigsmart` product thing model declares the same
@@ -420,8 +420,8 @@ fields. Rodak therefore does not treat these values as unknown properties.
 same desired and independent effects/receipt topics as volume. The metadata schema selects only
 one domain, so old fields in the desired shadow cannot cause unrelated mutations. Light receipts
 include complete previous/current configuration and actual ID. Ordinary reports remain snapshots
-and never complete an effect by value comparison. The 64-result cache permits continued writes;
-version-bound IDs and an authority-wide monotonic watermark prevent re-execution after eviction.
+and never complete an effect by value comparison. The 64-result cache permits continued writes.
+Version-bound IDs and an authority-wide monotonic watermark prevent re-execution after eviction.
 See [MQTT light effects](mqtt-light-effects.md) for the full wire and cancellation contract.
 
 This is the native RGB light capability, not LCD backlight or a brightness MCP tool. Voice identity,
@@ -452,7 +452,7 @@ expiry does not lower the watermark or allow an old request to reactivate. Same-
 conflicts are rejected. A bounded schema-1 NVS record holds the complete persistent/active/accepted
 snapshot, and uncertain writes or failed runtime recovery stop identity-driven wake listening.
 `pending`, `pending_clock` and `recovery_failed` do not claim an active confirmed identity. State
-changes are reported proactively; acoustic recognition and physical NVS power-loss acceptance remain
+changes are reported proactively. Acoustic recognition and physical NVS power-loss acceptance remain
 separate. See [identity persistence and recovery](voice-identity-wake-word.md).
 
 ## 6. Realtime voice handoff
@@ -483,7 +483,7 @@ rollback, and journal schema remain firmware facts documented in
 - Voice identity policy: `VoiceWakeService` through the shadow contract.
 - Realtime voice transport: `RodakRealtimeVoiceTransport` under the separate
   `rodak-realtime-voice/v1` contract.
-- XiaoZhi compatibility: Rodak server adapter only; it is not a RodakOS wire or
+- XiaoZhi compatibility: Rodak server adapter only. It is not a RodakOS wire or
   credential path.
 
 ## 9. Verification anchors
@@ -501,7 +501,7 @@ rollback, and journal schema remain firmware facts documented in
   hardware gate suites in the Rodak repository.
 - Ordinary commands: independent `tests/mqtt_volume_service/mqtt_command_service_test.cc`
   and the command CLI, plus Rodak `tests/main-integration/command-ack-gateway.test.ts`.
-  The service host target now includes 55 command cases plus 31 effect cases; its Debug and
+  The service host target now includes 55 command cases plus 31 effect cases. Its Debug and
   ASan/UBSan/leak runs pass. Input-controller validation uses production code and real host LVGL
   in `tests/remote_input`. Use the separate frozen-input runner and current
   [build evidence](ota-release-readiness.md) for exact source identity and scope. No serial, flash,

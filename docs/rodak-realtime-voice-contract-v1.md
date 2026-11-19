@@ -58,12 +58,12 @@ An installed [server trust pin](trusted-server-discovery.md) further requires WS
 the current pinned HTTPS origin and the fixed expected TLS name before transmitting
 the device Bearer token. This runtime restriction is stronger than the legacy parser's
 scheme compatibility described below.
-The endpoint must be `ws://` or `wss://` with an authority and path; query,
-fragment, userinfo, and legacy XiaoZhi/WebSocket paths are rejected.
+The endpoint must be `ws://` or `wss://` with an authority and path. The device rejects query,
+fragment, userinfo, and legacy XiaoZhi/WebSocket paths.
 
 Uplink is fixed at Opus, 16 kHz, mono, 60 ms. Downlink is Opus, mono, one of
 8/12/16/24/48 kHz, with a 5/10/20/40/60 ms frame duration. The negotiated
-`maxAudioFrameBytes` is at most 64 KiB and applies to the Opus payload;
+`maxAudioFrameBytes` is at most 64 KiB and applies to the Opus payload.
 `maxControlBytes` is at most 256 KiB. The current defaults are 8 KiB and 64 KiB.
 The firmware's WebSocket frame accumulator currently caps inbound text at 64 KiB,
 even when a descriptor advertises a larger control limit. An RAV1 binary message
@@ -102,19 +102,19 @@ Client-Id: <persisted RodakOS client UUID>
 ```
 
 If the configured token already contains an auth scheme, the transport uses it
-as supplied. Generation `0` is reserved for “not established”; every connection
+as supplied. Generation `0` is reserved for “not established”. Every connection
 generation starts at a non-zero value and wraps `UINT32_MAX` to `1`.
 
 The device also owns an interaction generation and a reconnect-policy generation. The interaction
 generation identifies one local wake lifecycle. The policy generation is the currently committed
-transport generation that failed; a successful retry receives a different transport generation. A
+transport generation that failed. A successful retry receives a different transport generation. A
 callback or failure for any other generation is stale and must be dropped. During command restoration,
-the new generation may be temporarily bound only to queue its callbacks; it is not active until the
+the new generation may be temporarily bound only to queue its callbacks. It is not active until the
 full restore sequence commits.
 
 The client sends one `session.open` per connection generation. The server must
-answer one matching `session.ready`; a duplicate or delayed ready event is an
-error and cannot reset the session's playback or audio counters.
+answer one matching `session.ready`. A duplicate or delayed ready event is an
+error. It cannot reset the session's playback or audio counters.
 
 `session.open` has this shape (the `features` object reflects device support):
 
@@ -159,7 +159,7 @@ the handshake carry the negotiated `sessionId`.
 | device → server | `wake.detected` | `sessionId`, `text` (configured wake phrase) |
 | device → server | `input.start` | `sessionId`, optional `mode`: `auto-stop`, `manual-stop`, or `realtime` |
 | device → server | `input.stop` | `sessionId` |
-| device → server | `playback.abort` | `sessionId`, `reason`: `user`, `wake-word`, or `vad_detected`; optional `playbackEpoch` |
+| device → server | `playback.abort` | `sessionId`, `reason`: `user`, `wake-word`, or `vad_detected`, and an optional `playbackEpoch` |
 | device → server | `vad` | `sessionId`, `state` (`start`/`end`), `source`, positive `sequence`, `triggerMs`, optional epoch |
 | device → server | `mcp` | `sessionId`, object `payload` |
 | server → device | `output.start` | `sessionId`, optional `text` and `playbackEpoch` |
@@ -170,12 +170,12 @@ the handshake carry the negotiated `sessionId`.
 
 The initial wake turn is `wake.detected` followed by
 `input.start` with `mode: "realtime"`. Later turns reuse the same session and
-send another `input.start`; they do not repeat `wake.detected`.
+send another `input.start`. They do not repeat `wake.detected`.
 
 After `output.start`, the device decodes binary Opus frames. `output.stop`
-means no more audio for that utterance; the device drains the local TTS tail
+means no more audio for that utterance. The device drains the local TTS tail
 before sending the next `input.start`. A user saying “再见” is an application
-action that causes the server to send `session.end`; `goodbye` is not a wire
+action that causes the server to send `session.end`. `goodbye` is not a wire
 event in this contract.
 
 `session.end.reason` is informational. The device handles every reason as an ordinary session
@@ -212,16 +212,16 @@ wrapped in a JSON envelope.
 
 The transport gates every result by four pieces of state:
 
-- connection `generation` must match the current WebSocket;
-- `sessionId` must match the current negotiated session;
+- connection `generation` must match the current WebSocket.
+- `sessionId` must match the current negotiated session.
 - `playbackEpoch` must increase for each explicit `output.start` and match its
-  corresponding stop;
+  corresponding stop.
 - RAV1 audio sequence must be strictly greater than the previous sequence.
 
 Before an epoch is negotiated, zero may be omitted for compatibility. Once an
 explicit epoch is observed, an epoch-less delayed `output.start` is rejected.
 Late output, audio, errors, and lifecycle callbacks from an older generation
-must be dropped; they must never reopen playback, replace the session, or start
+must be dropped. They must never reopen playback, replace the session, or start
 a second WebSocket.
 
 ## 6. Device voice policy
@@ -244,7 +244,7 @@ frames less than 20 s apart, or send `output.stop`. This watchdog fires only aft
 has gone quiet, so it never cuts off draining audio.
 
 An interaction is established only after `session.ready`, `wake.detected`, and its first
-`input.start` have all succeeded; `session.open` is a prerequisite of `session.ready`. A failure
+`input.start` have all succeeded. `session.open` is a prerequisite of `session.ready`. A failure
 before that point is an initial-setup failure and ends the wake interaction. Once established, a
 retryable failure remains eligible for reconnect even before the first `output.start` arrives. The
 service retries only retryable transport failures: network loss, connect/session-ready timeout, send
@@ -252,7 +252,7 @@ failure, WebSocket `1011`, `1012`, or `1013`, or a server `error` with `retryabl
 retry configuration or authentication errors, protocol errors, WebSocket `1002` or `4001`,
 `session.end`, user stop, or deinitialization. Retry timing is bounded to three attempts with
 exponential backoff from 250 ms to 8 s. Each attempt performs
-`close/wait → session.open/session.ready → wake.detected → input.start`; only a completed sequence
+`close/wait → session.open/session.ready → wake.detected → input.start`. Only a completed sequence
 commits the new active generation. Old recorder frames, inbound callbacks, playback state, and decoder
 state are discarded at the recovery boundary.
 
@@ -351,8 +351,8 @@ test. Its playback-only start, no follow-up, no reconnect, and wake-word termina
 validation.
 `tests/app_model/voice_assistant_reconnect_coordinator_test.cc` exercises recovery
 ordering, generation gates, backoff, and cancellation through a fake transport.
-Neither target instantiates `VoiceAssistantService` or the ESP/FreeRTOS transport;
-they do not validate production Stop/Deinit cancellation, release of a blocked
+Neither target instantiates `VoiceAssistantService` or the ESP/FreeRTOS transport.
+They do not validate production Stop/Deinit cancellation, release of a blocked
 open attempt, or decoder reset at the recovery boundary. Those behaviors require
 firmware and hardware validation. Product behavior and hardware gates are documented
 in [Voice assistant integration](voice-assistant.md) and

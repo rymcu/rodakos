@@ -11,8 +11,8 @@ messages and stale-result rules are defined in the
 The BigSmart ES7210 exposes four 16 kHz TDM slots. The board wiring maps the
 physical microphones as follows:
 
-- physical `MIC1` is `ADC_MIC2P/N`;
-- physical `MIC2` is `ADC_MIC1P/N`;
+- physical `MIC1` is `ADC_MIC2P/N`.
+- physical `MIC2` is `ADC_MIC1P/N`.
 - `MIC3` is the ES8311 speaker loopback and is the AEC reference.
 
 The conversation frontend reads the four-channel stream from `AudioCodecInput`,
@@ -22,7 +22,7 @@ passes it to ESP-SR AFE with `AEC_MODE_VOIP_HIGH_PERF` and WebRTC VAD
 gain profile. Conversation capture uses `InputGainProfile::kAecReference10Db`,
 keeping microphones at 30 dB while requesting 10 dB (9 dB after ES7210
 quantization) for the reference channel. Wake monitoring uses the same profile
-when its own echo canceller is enabled; it is a separate synchronous ESP-SR AEC
+when its own echo canceller is enabled. It is a separate synchronous ESP-SR AEC
 in front of MultiNet, described in [wake word evaluation](voice-wake-evaluation.md#wake-frontend-aec-and-agc).
 
 Fetched PCM, including silence, is the continuous Opus uplink source. Frames
@@ -42,12 +42,12 @@ window.
 When the policy confirms speech, the service:
 
 1. sends `vad` with `state: "start"`, source `esp-sr`, a positive sequence, and
-   the current playback epoch when the negotiated strategy permits device VAD;
+   the current playback epoch when the negotiated strategy permits device VAD.
 2. sends `playback.abort` with `reason: "vad_detected"` on the same session and
-   epoch;
+   epoch.
 3. closes the local decoder and DAC output, while retaining the WebSocket,
-   recorder, AFE, and Opus uplink;
-4. rejects late TTS frames until the next `output.start`; and
+   recorder, AFE, and Opus uplink.
+4. rejects late TTS frames until the next `output.start`.
 5. sends one matching `vad` `state: "end"` after 180 ms of fresh silence.
 
 The tagged interruption does not call the local wake service and does not open a
@@ -62,6 +62,14 @@ correlate VAD and playback epochs. If the server selects
 device VAD control events. `hybrid-fallback` permits device boundaries when
 server-side boundaries do not arrive.
 
+Status (2026-10-24, COM3): the uplink no longer falls behind during playback. Two causes were
+fixed. Reply playback moved to its own task, and the capture loop no longer sleeps one tick after
+each full read. Before the second fix, the I2S RX ring overflowed and the uplink frame age reached
+about 4.7 s after 70 s of playback. The frame age now stays at 0 ms. Server-side barge-in works.
+Device-side barge-in still does not trigger: after AEC/NS, most speech frames during playback are
+below the -42 dBFS energy gate, so the policy seldom gets three frames in sequence. This threshold
+needs a separate adjustment.
+
 ## Audio ownership and memory
 
 The assistant owns the ADC with priority 30 through
@@ -73,12 +81,12 @@ reply is playing.
 AFE capture/fetch work and the cleanup path use PSRAM where the ESP-SR and
 WebSocket components permit it. Provisioning and wake notification keep their
 internal stacks because they access NVS. The MQTT worker reserves a separate
-8 KiB internal stack; its resource notes are in
+8 KiB internal stack. Its resource notes are in
 [MQTT worker resources](mqtt-ota-sd-recovery.md#mqtt-worker-resources).
 
 The wake-to-cloud recorder retains the newest 80 frames, about 4.8 seconds at
-60 ms per frame. If DNS/TLS/WebSocket setup exceeds that window, the oldest
-frames are discarded.
+60 ms per frame. If DNS/TLS/WebSocket setup exceeds that window, the recorder
+discards the oldest frames.
 
 ## USB diagnostics
 
@@ -94,7 +102,7 @@ audio_clear
 ```
 
 The fixture stores input in PSRAM, accepts at most 256 samples per sequential
-upload chunk, and is limited to ten seconds. It replaces only microphone input;
+upload chunk, and is limited to ten seconds. It replaces only microphone input.
 the electrical reference remains connected. It verifies transport, lifecycle,
 playback gating, repeated cleanup, and Rodak event correlation. It cannot prove
 real-person wake accuracy, echo attenuation, double-talk performance, or room
@@ -135,11 +143,11 @@ Host tests cover barge-in timing, VAD end ownership, playback epochs, stale
 audio rejection, PCM continuity across AFE fetch timeouts, and cleanup. The
 hardware gate must additionally demonstrate:
 
-- no false interruption during controlled silent playback;
-- correct microphone/reference gain and no reference clipping;
-- complete speech capture after a barge-in, including the spoken tail;
-- repeated same-session interruptions without a second WebSocket or reset;
-- recovery to local wake monitoring after `session.end`, timeout, or error; and
+- no false interruption during controlled silent playback.
+- correct microphone/reference gain and no reference clipping.
+- complete speech capture after a barge-in, including the spoken tail.
+- repeated same-session interruptions without a second WebSocket or reset.
+- recovery to local wake monitoring after `session.end`, timeout, or error.
 - a controlled real-person test with silence, speech overlap, fan/noise, and
   reverberation.
 

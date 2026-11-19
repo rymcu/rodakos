@@ -18,7 +18,7 @@ Activate the project-local script once per PowerShell session:
 . .\activate_idf.ps1 -List           # show what's installed
 ```
 
-The activator scans `C:\esp\<vX.Y.Z>\esp-idf\`, reads `C:\Espressif\tools\eim_idf.json`, and falls back to `$env:IDF_PATH`. It selects tool versions from the chosen IDF's `tools/tools.json`. After activation, `idf.py` is on PATH and `$env:IDF_PATH` is set, so the project scripts (`build_rodakos.ps1`, `flash_and_test.ps1`, etc.) work directly without the official Microsoft `*PowerShell_profile.ps1`.
+The activator scans `C:\esp\<vX.Y.Z>\esp-idf\`, reads `C:\Espressif\tools\eim_idf.json`, and falls back to `$env:IDF_PATH`. It selects tool versions from the chosen IDF's `tools/tools.json`. After activation, `idf.py` is on PATH and the activator has set `$env:IDF_PATH`. The project scripts (`build_rodakos.ps1`, `flash_and_test.ps1`, etc.) then work directly without the official Microsoft `*PowerShell_profile.ps1`.
 
 Verify the environment:
 
@@ -29,12 +29,13 @@ idf.py --version
 
 The project manifest pins the resolved direct component versions and the observed Board Manager
 button/camera drift points. Keep `dependencies.lock` under review as the authoritative complete
-resolved graph; dependency upgrades must be explicit rather than a side effect of board generation.
+resolved graph. Make dependency upgrades explicitly. A dependency upgrade must not be a side effect
+of board generation.
 The root CMake build also generates the pinned codec volume correction automatically after
-resolution. It validates source provenance and refuses unreviewed dependency drift; do not patch
+resolution. It validates source provenance and refuses unreviewed dependency drift. Do not patch
 `managed_components/` manually. See [dependency maintenance](dependency-maintenance.md).
 The MQTT event-queue correction uses the same checked build-copy approach, including ESP-IDF
-event-source verification. Unknown source drift fails configuration; do not bypass the check.
+event-source verification. Unknown source drift fails configuration. Do not bypass the check.
 
 ## First Build Or Board Regeneration
 
@@ -52,11 +53,11 @@ The script:
 4. Verifies the generated component and builds the project.
 
 Board generation reads `components/rodakos_hal_boards/boards/rymcu/rymcu_bigsmart/`. This
-RodakOS-owned component retains the BigSmart YAML, board defaults, setup hooks and PCA9557 driver;
+RodakOS-owned component retains the BigSmart YAML, board defaults, setup hooks and PCA9557 driver.
 Board Manager and the runtime adapters remain in use. After the component migration, regenerate
 the gitignored board component before building so its CMake and manifest use the current paths.
-Only BigSmart is supported by this build entry; adding a directory for another board does not
-enable or validate that target.
+This build entry supports only BigSmart. A new directory for another board does not enable or
+validate that target.
 
 Manual equivalent:
 
@@ -101,7 +102,7 @@ For the production root, the private key stays on an offline host: package with
 `-OfflineSigning` and the public key only, then sign and attach as described in
 [production signing](production-signing.md).
 
-Use `-DevelopmentPackage` for isolated test keys; flashing those packages additionally requires
+Use `-DevelopmentPackage` for isolated test keys. To flash those packages, you must also give
 `-AllowDevelopmentPackage`. Neither switch bypasses signature or Recovery trust-anchor checks.
 The main application and Recovery both receive the public key through CMake. `-SkipBuild` still
 checks the compiled fingerprints and refuses mismatched or unconfigured images. The manifest
@@ -188,7 +189,7 @@ For automated validation without an interactive monitor:
 .\flash_and_test.ps1 -Port COM3 -NoMonitor
 ```
 
-`-CaptureSeconds` changes the first-boot timeout; its default is 45 seconds.
+`-CaptureSeconds` changes the first-boot timeout. Its default is 45 seconds.
 
 Choose another port:
 
@@ -239,11 +240,11 @@ After a successful build:
 - `build\rodakos.elf`
 
 Historical signed device package `20261001-234748` contains a 6,897,584-byte main image
-(about 6.58 MiB); see [appearance verification](appearance-verification.md). Current source,
-package identities and deployment evidence are recorded in
-[OTA release readiness](ota-release-readiness.md). A later local build has its own size/hash
-and does not replace an earlier device observation. The main `ota_0` partition is 13.3125 MiB;
-the independently built Recovery must fit its 2.5 MiB factory partition.
+(about 6.58 MiB). See [appearance verification](appearance-verification.md). [OTA release
+readiness](ota-release-readiness.md) records the current source, package identities and
+deployment evidence. A later local build has its own size/hash
+and does not replace an earlier device observation. The main `ota_0` partition is 13.3125 MiB.
+The independently built Recovery must fit its 2.5 MiB factory partition.
 
 ## Direct Esptool Flash
 
