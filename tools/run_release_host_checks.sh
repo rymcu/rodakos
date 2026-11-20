@@ -31,6 +31,7 @@ for rodak_suite in app_model home_ui assistant_ui ota_security codec_volume mqtt
     cmake --build "$rodak_target" -j 6 >>"$rodak_checks/$rodak_suite.log" 2>&1
     ASAN_OPTIONS=detect_leaks=1 ctest --test-dir "$rodak_target" --output-on-failure
 done
+python3 "$rodak_root/tools/check_ui_glyphs.py"
 python3 -m unittest discover -s "$rodak_root/tests/ota_security" -p 'test_*.py'
 python3 -m unittest discover -s "$rodak_root/tests/codec_volume" -p 'test_*.py'
 python3 -m unittest discover -s "$rodak_root/tests/mqtt_event_patch" -p 'test_*.py'
