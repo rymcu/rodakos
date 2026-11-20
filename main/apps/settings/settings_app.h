@@ -93,6 +93,7 @@ private:
     void UpdateButtonBindingsPage();
     void ShowButtonActionDialog(const rodakos::ButtonBinding& binding);
     void CloseButtonActionDialog();
+    void ResetButtonBinding(const rodakos::ButtonBinding& binding);
     void SaveButtonBindingAction(const rodakos::ButtonBinding& binding,
                                  const rodakos::ButtonAction& action);
     void CreateDeviceCloudPage();
