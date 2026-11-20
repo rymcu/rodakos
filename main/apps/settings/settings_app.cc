@@ -1,4 +1,5 @@
 #include "apps/settings/settings_app.h"
+#include "phone_os/time_service.h"
 #include "apps/settings/settings_app_internal.h"
 
 #include "phone_os/phone_app_context.h"
@@ -143,6 +144,11 @@ void SettingsApp::DestroyUi() {
         lv_timer_delete(time_sync_timer_);
         time_sync_timer_ = nullptr;
     }
+    if (datetime_clock_timer_ != nullptr) {
+        lv_timer_delete(datetime_clock_timer_);
+        datetime_clock_timer_ = nullptr;
+    }
+    CloseDateTimePicker();
     if (cloud_pairing_timer_ != nullptr) {
         lv_timer_delete(cloud_pairing_timer_);
         cloud_pairing_timer_ = nullptr;
@@ -180,6 +186,12 @@ void SettingsApp::ResetUiPointers() {
     ntp_dialog_ = nullptr;
     ntp_textarea_ = nullptr;
     time_sync_status_label_ = nullptr;
+    time_sync_button_ = nullptr;
+    datetime_clock_label_ = nullptr;
+    datetime_date_label_ = nullptr;
+    datetime_picker_ = nullptr;
+    ntp_error_label_ = nullptr;
+    datetime_clock_timer_ = nullptr;
     time_sync_timer_ = nullptr;
     time_sync_in_progress_ = false;
     time_sync_poll_count_ = 0;
@@ -304,8 +316,10 @@ void SettingsApp::ShowPage(SettingsPage page) {
 
         case SettingsPage::kDateTime:
             if (datetime_body_ == nullptr) {
+                datetime_server_cache_ = TimeServiceLoadNtpServer();
                 CreateDateTimePage();
             }
+            UpdateDateTimePage();
             lv_obj_clear_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
                 lv_label_set_text(header_title_label_, "日期与时间");
@@ -383,6 +397,23 @@ bool SettingsApp::OnBackRequested() {
     }
     if (lan_onboarding_overlay_ != nullptr) {
         CloseLanOnboarding();
+        return true;
+    }
+    // Full-screen layers close first, so back never leaves one on top of another page.
+    if (datetime_picker_ != nullptr) {
+        CloseDateTimePicker();
+        return true;
+    }
+    if (ntp_dialog_ != nullptr) {
+        CloseNtpServerDialog();
+        return true;
+    }
+    if (password_dialog_ != nullptr) {
+        ClosePasswordDialog();
+        return true;
+    }
+    if (wifi_forget_dialog_ != nullptr) {
+        CloseForgetWiFiDialog();
         return true;
     }
     NavigateBack();

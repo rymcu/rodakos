@@ -10,6 +10,7 @@
 #include <ctime>
 #include <limits>
 #include <sys/time.h>
+#include <atomic>
 
 namespace {
 constexpr const char* TAG = "TimeService";
@@ -42,10 +43,14 @@ const RodakNtpServer kNtpServers[] = {
     {"Custom", ""},
 };
 
+// Written from the SNTP callback, read from the UI; a 64-bit atomic keeps it tear-free.
+std::atomic<int64_t> g_last_sync_epoch{0};
+
 void TimeSyncNotificationCallback(struct timeval* tv) {
     if (tv == nullptr) {
         return;
     }
+    g_last_sync_epoch.store(static_cast<int64_t>(tv->tv_sec));
     ESP_LOGI(TAG, "SNTP sync completed, epoch=%lld",
              static_cast<long long>(tv->tv_sec));
 }
@@ -107,14 +112,17 @@ std::string TimeServiceLoadNtpServer() {
 
 bool TimeServiceSaveTimeZone(const std::string& tz) {
     Settings settings(kClockNamespace, true);
-    settings.SetString(kTimeZoneKey, tz);
-    return true;
+    return settings.SetString(kTimeZoneKey, tz) && settings.Commit();
 }
 
 bool TimeServiceSaveNtpServer(const std::string& server) {
+    if (server.empty()) return false;
     Settings settings(kClockNamespace, true);
-    settings.SetString(kNtpServerKey, server);
-    return true;
+    return settings.SetString(kNtpServerKey, server) && settings.Commit();
+}
+
+int64_t TimeServiceLastSyncEpoch() {
+    return g_last_sync_epoch.load();
 }
 
 void TimeServiceApplyTimeZone(const std::string& tz) {
