@@ -25,7 +25,14 @@ public:
     FileSystemType GetFileSystemType() const override { return FileSystemType::FATFS; }
     MediumType GetMediumType() const override { return MediumType::SDCard; }
     bool GetCapacity(Capacity&) override { return true; }
-    bool ListDirectory(const std::string&, std::vector<rodakos::FileEntry>& entries) override { entries.clear(); return true; }
+    bool ListDirectory(const std::string& path, std::vector<rodakos::FileEntry>& entries) override {
+        entries.clear();
+        std::error_code ec;
+        for (const auto& item : std::filesystem::directory_iterator(root + path, ec)) {
+            entries.push_back({item.path().filename().string(), path, item.is_directory(), 0, 0});
+        }
+        return true;
+    }
     bool ReadFile(const std::string&, std::vector<uint8_t>&) override { return false; }
     bool WriteFile(const std::string&, const std::vector<uint8_t>&, bool) override { return false; }
     bool WriteNewFile(const std::string&, const std::vector<uint8_t>&) override { return false; }
@@ -292,4 +299,45 @@ RODAK_TEST("web access index serves the embedded login page without its NUL term
     RODAK_CHECK(req.response_body.find("X-Access-Code") != std::string::npos);
     RODAK_CHECK(req.response_body.find('\0') == std::string::npos);
     RODAK_CHECK(req.response_body.rfind("</html>") != std::string::npos);
+}
+
+RODAK_TEST("web files hides system folders from the root listing") {
+    AccessFixture f;
+    std::filesystem::create_directories(f.files.root + "/rodak-ota");
+    std::filesystem::create_directories(f.files.root + "/rodakos/appearance");
+    std::filesystem::create_directories(f.files.root + "/System Volume Information");
+    const auto req = f.List(f.service.guard_.code());
+    RODAK_CHECK(req.response_status.empty());
+    RODAK_CHECK(req.response_body.find("\"Music\"") != std::string::npos);
+    RODAK_CHECK(req.response_body.find("rodak-ota") == std::string::npos);
+    RODAK_CHECK(req.response_body.find("\"rodakos\"") == std::string::npos);
+    RODAK_CHECK(req.response_body.find("System Volume") == std::string::npos);
+}
+
+RODAK_TEST("web files refuses every operation inside a system folder") {
+    AccessFixture f;
+    std::filesystem::create_directories(f.files.root + "/rodak-ota");
+    std::ofstream(f.files.root + "/rodak-ota/pending.bin") << "x";
+    const std::string code = f.service.guard_.code();
+    auto call = [&](esp_err_t (*handler)(httpd_req_t*), const std::string& query) {
+        httpd_req_t req;
+        req.user_ctx = &f.service;
+        req.query = query;
+        req.request_headers["X-Access-Code"] = code;
+        handler(&req);
+        return req.response_status;
+    };
+    using S = rodakos::WebFileSystemService;
+    const std::string forbidden = "403 Forbidden";
+    RODAK_CHECK_EQ(call(S::ListHandler, "path=%2Frodak-ota"), forbidden);
+    RODAK_CHECK_EQ(call(S::ListHandler, "path=%2FRODAKOS%2Fappearance"), forbidden);
+    RODAK_CHECK_EQ(call(S::DeleteHandler, "path=%2Frodak-ota"), forbidden);
+    RODAK_CHECK_EQ(call(S::DeleteHandler, "path=%2Frodak-ota%2Fpending.bin"), forbidden);
+    RODAK_CHECK_EQ(call(S::RenameHandler, "from=%2Frodak-ota&to=%2Fold"), forbidden);
+    RODAK_CHECK_EQ(call(S::RenameHandler, "from=%2FMusic&to=%2Frodakos"), forbidden);
+    RODAK_CHECK_EQ(call(S::MkdirHandler, "path=%2Frodakos"), forbidden);
+    RODAK_CHECK_EQ(call(S::TicketHandler, "path=%2Frodak-ota%2Fpending.bin"), forbidden);
+    RODAK_CHECK(std::filesystem::exists(f.files.root + "/rodak-ota/pending.bin"));
+    // A user folder whose name only starts with a system name is still allowed.
+    RODAK_CHECK(call(S::MkdirHandler, "path=%2Frodakos-backup").empty());
 }
