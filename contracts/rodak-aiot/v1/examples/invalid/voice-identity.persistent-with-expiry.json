@@ -1,0 +1,8 @@
+{
+  "name": "罗达克",
+  "wakeWord": "你好达克",
+  "wakeCommand": "ni hao da ke",
+  "mode": "persistent",
+  "revision": 1,
+  "expiresAtMs": 1795250000000
+}

@@ -1,0 +1,12 @@
+{
+  "command": "display.stream.signal",
+  "sessionId": "8a1f5c2e-7b3d-4e6f-9a0b-1c2d3e4f5a6b",
+  "type": "sdp",
+  "data": "dj0wDQo=",
+  "_meta": {
+    "rodak/videoSignal": {
+      "schema": "rodak.videoSignal.v1",
+      "dispatchId": "0f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a"
+    }
+  }
+}

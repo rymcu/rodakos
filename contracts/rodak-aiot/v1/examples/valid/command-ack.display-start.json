@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "result": {
+    "sessionId": "8a1f5c2e-7b3d-4e6f-9a0b-1c2d3e4f5a6b",
+    "transport": "webrtc-datachannel",
+    "startCommandNo": "rodak-video-start-5e1f0c9a7b3d4e2f8a6b1c0d9e8f7a6b"
+  }
+}

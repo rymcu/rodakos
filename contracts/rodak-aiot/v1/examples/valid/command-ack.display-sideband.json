@@ -1,0 +1,10 @@
+{
+  "status": "ok",
+  "result": {
+    "displayStream": {
+      "sessionId": "8a1f5c2e-7b3d-4e6f-9a0b-1c2d3e4f5a6b",
+      "event": "state",
+      "state": "connected"
+    }
+  }
+}

@@ -381,7 +381,7 @@ Do not bypass the check or edit the managed source. A successful return still do
 I2C write or audible output. Check codec/I2C logs and playback on hardware before
 claiming that result. An ordinary MQTT shadow report has no volume effect ID or applied desired
 revision and cannot acknowledge a specific Agent Runtime effect. See the
-[shadow contract](docs/rodak-aiot-contract-v1.md#volume-configuration-and-evidence).
+[shadow contract](docs/aiot-implementation-notes.md#volume-configuration-and-evidence).
 
 ## USB Disk Mode
 

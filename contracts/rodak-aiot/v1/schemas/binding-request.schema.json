@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/binding-request.schema.json",
+  "title": "POST /binding/request body",
+  "description": "Rodak takes the first non-null alias (deviceKey??deviceCode, productKey??credentialKey, deviceSecret??credentialSecret??secret), converts it to a string and trims it, so a blank canonical value hides a set alias. Different values in deviceKey/deviceCode or productKey/credentialKey give 400; for the secret the first present field simply wins. productKey must be rymcu-bigsmart . A trust-setup request must not carry a secret, and must not have a 'secret' key at all. At confirmation Rodak also reads product_key, application, board, deviceName, firmwareVersion and hardwareVersion for the device record.",
+  "type": "object",
+  "x-selectedSecret": [
+    "deviceSecret",
+    "credentialSecret",
+    "secret"
+  ],
+  "x-maxUtf16Units": {
+    "deviceKey": 128,
+    "deviceCode": 128
+  },
+  "x-maxUtf16UnitsAfterTrim": true,
+  "required": [
+    "deviceKey",
+    "productKey"
+  ],
+  "properties": {
+    "deviceKey": {
+      "type": "string",
+      "x-nonblankAfterTrim": true,
+      "x-noControlAfterTrim": true,
+      "description": "Raw request value. Rodak trims it, then requires 1-128 UTF-16 units without C0 or DEL."
+    },
+    "deviceCode": {
+      "type": "string",
+      "x-nonblankAfterTrim": true,
+      "x-noControlAfterTrim": true,
+      "description": "Raw request value. Rodak trims it, then requires 1-128 UTF-16 units without C0 or DEL."
+    },
+    "productKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "credentialKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "deviceSecret": {
+      "type": "string"
+    },
+    "credentialSecret": {
+      "type": "string"
+    },
+    "secret": {
+      "type": "string"
+    },
+    "trustSetup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "srpSalt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "srpB": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seenSpki": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "version",
+        "srpSalt",
+        "srpB",
+        "seenSpki"
+      ]
+    },
+    "protocol": {
+      "const": "rodak-aiot"
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "product_key": {
+      "const": "rymcu-bigsmart"
+    },
+    "deviceName": {
+      "type": "string"
+    },
+    "clientId": {
+      "type": "string"
+    },
+    "firmwareVersion": {
+      "type": "string"
+    },
+    "hardwareVersion": {
+      "type": "string"
+    },
+    "application": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "productKey": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "description": "Manual pairing: no trustSetup; the selected secret must be nonblank (x-selectedSecret).",
+      "not": {
+        "required": [
+          "trustSetup"
+        ]
+      },
+      "anyOf": [
+        {
+          "required": [
+            "deviceSecret"
+          ]
+        },
+        {
+          "required": [
+            "credentialSecret"
+          ]
+        },
+        {
+          "required": [
+            "secret"
+          ]
+        }
+      ]
+    },
+    {
+      "description": "LAN trust setup (HTTPS listener only): no secret key; the selected secret must be empty.",
+      "required": [
+        "trustSetup"
+      ],
+      "not": {
+        "required": [
+          "secret"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "protocol_version": 2,
+  "broker_address": "rodak.local",
+  "broker_port": 1883,
+  "username": "aa:bb:cc:dd:ee:ff",
+  "password": "eyJhbGciOiJIUzI1NiJ9.eyJkaWQiOiI2ZjFjMmI5YS0zZDRlLTRmNWEtOGI3Yy05ZDBlMWYyYTNiNGMiLCJkayI6ImFhOmJiOmNjOmRkOmVlOmZmIiwicGsiOiJyeW1jdS1iaWdzbWFydCIsInR2IjozLCJleHAiOjE3OTUyNDgwNzJ9.bKjuOT1ME8ZBq6JA1evG98Yqw8ebLkvWmPV4YQgvxHE",
+  "http_base_url": "http://rodak.local:9080",
+  "http_bearer_token": "eyJhbGciOiJIUzI1NiJ9.eyJkaWQiOiI2ZjFjMmI5YS0zZDRlLTRmNWEtOGI3Yy05ZDBlMWYyYTNiNGMiLCJkayI6ImFhOmJiOmNjOmRkOmVlOmZmIiwicGsiOiJyeW1jdS1iaWdzbWFydCIsInR2IjozLCJleHAiOjE3OTUyNDgwNzJ9.bKjuOT1ME8ZBq6JA1evG98Yqw8ebLkvWmPV4YQgvxHE",
+  "keepalive": 240,
+  "device_key": "aa:bb:cc:dd:ee:ff",
+  "home_enabled": 0,
+  "topics": {
+    "telemetry": "devices/11:22:33:44:55:66/telemetry",
+    "shadow_report": "devices/aa:bb:cc:dd:ee:ff/shadow/report",
+    "shadow_desired": "devices/aa:bb:cc:dd:ee:ff/shadow/desired",
+    "ota_notify": "devices/aa:bb:cc:dd:ee:ff/ota/notify",
+    "ota_progress": "devices/aa:bb:cc:dd:ee:ff/ota/progress",
+    "commands": "devices/aa:bb:cc:dd:ee:ff/commands/+",
+    "pc_status": "devices/aa:bb:cc:dd:ee:ff/pc_status",
+    "home_prefix": "rymcu/home/v1"
+  }
+}

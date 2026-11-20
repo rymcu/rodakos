@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/token-refresh-request.schema.json",
+  "title": "POST /auth/token body",
+  "description": "Rodak takes the first nonblank string per group, in the order credentialKey, productKey / deviceCode, deviceKey / credentialSecret, deviceSecret, secret, devicePassword, and ignores protocol . Errors: 400 missing/invalid, 404 unknown device, 403 product/secret mismatch, inactive, or BigSmart device not paired. Never 401.",
+  "type": "object",
+  "properties": {
+    "protocol": {
+      "const": "rodak-aiot"
+    },
+    "productKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "credentialKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "deviceCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "credentialSecret": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "deviceSecret": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "secret": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "devicePassword": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  },
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "required": [
+            "productKey"
+          ]
+        },
+        {
+          "required": [
+            "credentialKey"
+          ]
+        }
+      ]
+    },
+    {
+      "anyOf": [
+        {
+          "required": [
+            "deviceKey"
+          ]
+        },
+        {
+          "required": [
+            "deviceCode"
+          ]
+        }
+      ]
+    },
+    {
+      "anyOf": [
+        {
+          "required": [
+            "credentialSecret"
+          ]
+        },
+        {
+          "required": [
+            "deviceSecret"
+          ]
+        },
+        {
+          "required": [
+            "secret"
+          ]
+        },
+        {
+          "required": [
+            "devicePassword"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 2,
+  "manifestVersion": 2,
+  "fileName": "rodakos.bin",
+  "taskNo": "ota_1795161672345_9f3a1c2e",
+  "packageCode": "rodakos",
+  "version": "1.4.0",
+  "fileSize": 31744,
+  "checksumType": "sha256",
+  "checksumValue": "ae2787aff71dd2437477887f4010b680498cf807704a9b7e911d660db959b6ac",
+  "url": "http://rodak.local:9080/api/v1/ota/artifacts/ota_1795161672345_9f3a1c2e?ticketId=d2c7f0a1-6b3e-4c59-9a81-0e4f5d6c7b8a",
+  "signatureType": "rsa2048-sha256",
+  "signatureValue": "0d7dd8096e730e48046548a4cb844431e0f5dd41c6b5b678917c10ec5f22268f1a8b740ddae04c09d2ddac7f19a1c73c715a31cab5f5350f757647e4d89c5aaa690fd513d22a490dc9fe2bab82f950792730614fc3261f2db6f8d67661c9aebef3fd047c6747872336b5340db3aebced5a08950753852fd0f7d11db7071e27d66272a4e1ee6f0b271b1f58f0fe020992b95d2491ae292865f5983793700892786ce39efa31ff32747007c631231501a2802a481ba7673406b7ba12ff38725562ddea438249279eb78514503c78e31690fd9d8c2022e24a4c7b4483d9c7ed402fc5bc22f19b2552cd341f47069d6c02c4d77f9e294ccb47ad8ed35448410fdd0e",
+  "signingKeyId": "5c98271df58612eff9b5b0323fd97a928a542f7c972b9eb9d30df9da8e86eb38"
+}

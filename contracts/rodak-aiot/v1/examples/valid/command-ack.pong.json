@@ -1,0 +1,7 @@
+{
+  "status": "ok",
+  "result": {
+    "pong": true,
+    "firmware": "1.4.0"
+  }
+}

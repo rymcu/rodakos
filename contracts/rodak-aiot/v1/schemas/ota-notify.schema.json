@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/ota-notify.schema.json",
+  "title": "devices/{k}/ota/notify",
+  "description": "The ota/notify payload. Campaign tasks carry campaignId and releaseId together; standalone tasks carry neither. packageCode and toVersion may be empty if the package was saved that way. A manifestVersion 2 task without its per-task signature is not notified; legacy tasks are. On ota/notify subscribe Rodak re-notifies only the latest active task. An authorized voice skill can also publish arbitrary payloads on device topics through the generic MQTT publishing path (current device topics except shadow/desired); this schema covers the OTA service only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "taskNo",
+    "packageCode",
+    "toVersion"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": 2
+    },
+    "taskNo": {
+      "type": "string",
+      "pattern": "^ota_[0-9]{13}_[0-9a-f]{8}$",
+      "description": "OTA task number: ota_<epoch-ms>_<8 hex>."
+    },
+    "packageCode": {
+      "type": "string"
+    },
+    "fromVersion": {
+      "type": "string"
+    },
+    "toVersion": {
+      "type": "string"
+    },
+    "campaignId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv4 from randomUUID()."
+    },
+    "releaseId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv4 from randomUUID()."
+    }
+  },
+  "dependentRequired": {
+    "campaignId": [
+      "releaseId"
+    ],
+    "releaseId": [
+      "campaignId"
+    ]
+  }
+}

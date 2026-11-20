@@ -1,0 +1,6 @@
+{
+  "success": false,
+  "detail": "OTA signature verification failed",
+  "errorCode": "SIGNATURE_INVALID",
+  "errorMessage": "OTA signature verification failed"
+}

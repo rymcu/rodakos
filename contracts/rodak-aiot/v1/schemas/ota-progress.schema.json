@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/ota-progress.schema.json",
+  "title": "devices/{k}/ota/progress",
+  "description": "RodakOS emission profile; the invalid fixture is a RodakOS-profile negative. Rodak requires a nonblank taskNo of an owned task, coerces progressPercent with Number() (non-finite -> 0, no range clamp), keeps stepCode only as a trimmed nonblank string, drops detail on MQTT, and ignores protocolVersion. Progress never completes a task; only the HTTP result does.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "taskNo",
+    "progressPercent",
+    "stepCode"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": 2
+    },
+    "taskNo": {
+      "type": "string",
+      "pattern": "^ota_[0-9]{13}_[0-9a-f]{8}$",
+      "description": "OTA task number: ota_<epoch-ms>_<8 hex>."
+    },
+    "progressPercent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "stepCode": {
+      "enum": [
+        "check",
+        "prepare",
+        "download",
+        "staged",
+        "success",
+        "failed",
+        "result_rejected"
+      ]
+    },
+    "detail": {
+      "type": "string"
+    }
+  }
+}

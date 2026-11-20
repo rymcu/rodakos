@@ -1,0 +1,44 @@
+{
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "shadowVersion": 42,
+  "version": 42,
+  "desired": {
+    "voice_identity": {
+      "name": "小达",
+      "wakeWord": "你好小达",
+      "wakeCommand": "ni hao xiao da",
+      "mode": "temporary",
+      "revision": 2,
+      "expiresAtMs": 1795250000000
+    }
+  },
+  "reported": {
+    "firmware": "1.4.0",
+    "volume": 60,
+    "battery": 87,
+    "charging": true
+  },
+  "state": {
+    "desired": {
+      "voice_identity": {
+        "name": "小达",
+        "wakeWord": "你好小达",
+        "wakeCommand": "ni hao xiao da",
+        "mode": "temporary",
+        "revision": 2,
+        "expiresAtMs": 1795250000000
+      }
+    },
+    "reported": {
+      "firmware": "1.4.0",
+      "volume": 60,
+      "battery": 87,
+      "charging": true
+    }
+  },
+  "_meta": {
+    "rodak/shadowWrite": {
+      "dispatchId": "d0e1f2a3-b4c5-4d6e-9f7a-8b9c0d1e2f3a"
+    }
+  }
+}

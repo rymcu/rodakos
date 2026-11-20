@@ -1,66 +1,181 @@
 # Rodak AIoT v1 Cross-Repository Contract
 
 > Contract: `rodak-aiot/v1`
-> Canonical server implementation: Rodak `src/main/server/`
+> Canonical server: Rodak
 > Firmware implementation: RodakOS `main/phone_os/`
+> Machine-readable form: [`contracts/rodak-aiot/v1/`](../contracts/rodak-aiot/v1/README.md)
+> Source of truth: the Rodak server's behavior. When this document and the server disagree, this
+> document is fixed.
 
-This document is the normative contract for device identity, owner binding,
-credentials, unified MQTT, shadow state, and OTA coordination. The realtime
-voice wire contract is separate: see [Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md).
-XiaoZhi compatibility is a Rodak server adapter and is outside this contract.
+This document is the normative contract for device identity, owner binding, credentials,
+unified MQTT, shadow state and OTA coordination. The keywords MUST, MUST NOT, SHOULD and MAY
+are used as in RFC 2119. Text marked *Informative* describes the current implementation and
+is not a requirement on the other side.
 
-## 1. Identity
+The realtime voice wire contract is separate: see
+[Rodak realtime voice v1](rodak-realtime-voice-contract-v1.md). XiaoZhi compatibility is outside
+this contract. Rodak currently has no XiaoZhi adapter.
+
+## 0. Reading guide
+
+| You are | Read | Then, if needed |
+| --- | --- | --- |
+| Implementing or changing the Rodak server side | §2, §4, §5, §7, §8, §9, §12 | [Command semantics](mqtt-command-semantics.md) |
+| Building a device or simulator | §2–§9 | [Command semantics](mqtt-command-semantics.md), [Implementation notes](aiot-implementation-notes.md) |
+| Maintaining RodakOS firmware | All | [Implementation notes](aiot-implementation-notes.md) |
+| Checking a payload | §14 | `contracts/rodak-aiot/v1/schemas/` |
+
+Detail is split into three layers:
+
+| Document | Content |
+| --- | --- |
+| This contract | What each side MUST send and accept. |
+| [MQTT command semantics](mqtt-command-semantics.md) | Replay ledger, exact stream Stop, stream leases, result queue limits. |
+| [AIoT implementation notes](aiot-implementation-notes.md) | Firmware internals: volume/light/voice-identity evidence, codec overlay, test evidence. |
+
+## 1. Overview and terms
+
+```mermaid
+flowchart LR
+  subgraph Device[RodakOS device]
+    DCC[DeviceCloudConfigService]
+    UMS[UnifiedMqttService]
+    OTA[OtaUpdateService]
+  end
+  subgraph Rodak[Rodak server]
+    HTTP[HTTP API /api/v1/aiot]
+    MQ[MQTT broker]
+    DESK[Desktop owner UI]
+  end
+  DCC -- bootstrap, binding, token --> HTTP
+  DESK -- owner confirms pairing code (desktop IPC) --> Rodak
+  UMS <-- telemetry, shadow, commands --> MQ
+  OTA -- manifest, ticket, result --> HTTP
+  MQ -- ota/notify --> OTA
+```
+
+| Term | Meaning |
+| --- | --- |
+| Device key | Stable device identity. Default: lowercase WiFi STA MAC, `aa:bb:cc:dd:ee:ff`. |
+| Device secret | RodakOS: 32 random bytes as 64 lowercase hex. Sent as `deviceSecret` and `credentialSecret`. Rodak stores only its hash. Pairing accepts any nonempty trimmed string; token refresh limits it to 512 characters without control characters. |
+| Request ID | 32 lowercase hex characters, issued by Rodak. |
+| Request token | 32 random bytes as base64url (43 characters). Bearer for binding status polls and `/trust`. Trust setup replaces it once. |
+| Access token | HS256 JWT with header `{"alg":"HS256"}`, claims `tv` and `exp`, plus a compact subset of `did`, `dk`, `pk` (§4.4). Used as MQTT password, HTTP bearer (OTA, unbind) and realtime voice bearer. |
+| Envelope | Rodak HTTP response wrapper `{"code","message","data"}`. See §4.1. |
+| Legacy mode | No installed server trust pin. Plain HTTP/MQTT is allowed. |
+| Pin mode | A server trust anchor and fixed TLS name `rodak-<16 hex>.local`, installed over USB or by LAN trust setup. See [trusted server discovery](trusted-server-discovery.md), [LAN onboarding](lan-onboarding-design.md). |
+| Authority | One server identity (origin + trust) that issued the current credentials. Replacing it clears device-side command state. |
+| Board Manager | The Espressif board abstraction. Its board name `rymcu_bigsmart` is not the cloud product key. |
+
+## 2. Onboarding sequence
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as RodakOS
+  participant S as Rodak HTTP
+  participant O as Owner (Rodak desktop)
+  participant B as Rodak MQTT
+  D->>S: GET /bootstrap
+  S-->>D: module, protocol, productKey, mqttPort, realtimeVoice
+  Note over D: generate + persist device secret (if absent)
+  D->>S: POST /binding/request (identity, secret)
+  S-->>D: requestId, requestToken, 8-digit pairingCode, expiresAt (+10 min), pollIntervalSeconds=2
+  D->>D: show pairingCode on screen
+  loop every pollIntervalSeconds
+    D->>S: GET /binding/requests/{id}/status (Bearer requestToken)
+    S-->>D: status=pending
+  end
+  O->>O: owner enters pairingCode in Rodak desktop (IPC, not HTTP)
+  D->>S: GET /binding/requests/{id}/status
+  S-->>D: status=confirmed + token response (accessToken, unifiedMqtt, mqttConnectInfo, realtimeVoice)
+  Note over D: pending marker -> commit token + MQTT + voice as one snapshot
+  D->>B: CONNECT (username=deviceKey, password=accessToken)
+  D->>B: SUBSCRIBE shadow/desired, ota/notify, commands/+, pc_status
+  D->>B: PUBLISH telemetry, shadow/report
+```
+
+A bound device with an expired token skips steps 3–9 and calls `POST /auth/token` (§4.4).
+
+LAN trust setup (HTTPS listener, no USB) replaces the pairing code with an SRP exchange:
+`binding/request` carries `trustSetup`, the status goes `pending → awaiting-device`, the device
+posts its proof to `binding/requests/{id}/trust`, and the sealed reply carries the server trust and
+a new request token. The confirmed poll then continues as above. See
+[LAN onboarding](lan-onboarding-design.md).
+
+## 3. Identity
 
 | Field | Value |
 | --- | --- |
 | `protocol` | `rodak-aiot` |
-| protocol version | `1` |
-| product key | `rymcu-bigsmart` |
-| board discriminator | `rymcu_bigsmart` (Board Manager only) |
-| device key | Stable device identity, derived from the WiFi MAC by default |
-| binding status | `unbound`, `pending`, or `bound` |
+| `protocolVersion` | `1` |
+| `productKey` | `rymcu-bigsmart` |
+| Board discriminator | `rymcu_bigsmart` in `board.type`. Rodak also reads `board.board_manager_type` and `board.name`. |
+| `application.name` | `rodakos` |
 
-The cloud product key is deliberately different from the Board Manager board
-name. RodakOS sends the canonical AIoT identity and rejects a bootstrap that
-identifies another product, protocol, or module. It does not read legacy
-XiaoZhi bootstrap fields, WebSocket credentials, or legacy NVS namespaces.
+- RodakOS MUST reject a bootstrap whose `module` is present and not `aiot`, whose `protocol` is
+  present and not `rodak-aiot`, whose `productKey` is present and not `rymcu-bigsmart`, or whose
+  `protocolVersion` is present and not `1`.
+- RodakOS MUST NOT read legacy XiaoZhi bootstrap fields, WebSocket credentials or legacy NVS
+  namespaces.
 
-## 2. Bootstrap and owner binding
+## 4. HTTP API
 
-Paths are relative to the configured server origin:
+All paths are relative to the configured server origin. The device derives the origin from the
+provisioned bootstrap URL.
 
-```text
-GET  /api/v1/aiot/devices/bootstrap
-POST /api/v1/aiot/devices/binding/request
-GET  /api/v1/aiot/devices/binding/requests/{requestId}/status
-POST /api/v1/aiot/devices/auth/token
-POST /api/v1/aiot/devices/binding/unbind
+Operations that RodakOS uses:
+
+| Method and path | Auth | Request | Success `data` |
+| --- | --- | --- | --- |
+| `GET /api/v1/aiot/devices/bootstrap` | none | – | [bootstrap](../contracts/rodak-aiot/v1/schemas/bootstrap.schema.json) |
+| `POST /api/v1/aiot/devices/binding/request` | none | [binding-request](../contracts/rodak-aiot/v1/schemas/binding-request.schema.json) | [binding-request-created](../contracts/rodak-aiot/v1/schemas/binding-request-created.schema.json) |
+| `GET /api/v1/aiot/devices/binding/requests/{requestId}/status` | Bearer request token | – | [binding-status](../contracts/rodak-aiot/v1/schemas/binding-status.schema.json) |
+| `POST /api/v1/aiot/devices/binding/requests/{requestId}/trust` | Bearer request token, HTTPS only | SRP proof | `{status: confirmed, sealed}` or `{status: revoked}` |
+| `POST /api/v1/aiot/devices/auth/token` | none (secret in body) | [token-refresh-request](../contracts/rodak-aiot/v1/schemas/token-refresh-request.schema.json) | [token-response](../contracts/rodak-aiot/v1/schemas/token-response.schema.json) |
+| `POST /api/v1/aiot/devices/binding/unbind` | Bearer access token | ignored | [unbind-response](../contracts/rodak-aiot/v1/schemas/unbind-response.schema.json) |
+| OTA operations | Bearer access token | §12 | §12 |
+
+Rodak also serves HTTP fallbacks that RodakOS does not use, all with the access token:
+`POST /heartbeat`, `POST /telemetry`, `POST /shadow/report`, `GET /shadow/desired`,
+`GET /commands/pull`, `POST /commands/{commandNo}/ack`, `POST /api/v1/ota/tasks/{taskNo}/progress`.
+Appearance has its own routes under `/api/v1/aiot/appearance/`, see
+[appearance customization](appearance-customization.md). All device operations except the Appearance
+routes are in [`openapi.yaml`](../contracts/rodak-aiot/v1/openapi.yaml).
+
+Rodak keeps `POST /devices/register` and `/devices/activate` as migration endpoints. For
+`rymcu-bigsmart`, register returns business 403. They are not part of this contract. A device
+MUST NOT use them.
+
+### 4.1 Response envelope
+
+```json
+{"code": 200, "message": "获取配对状态成功", "data": { }}
+{"code": 401, "message": "配对申请令牌无效", "data": null}
 ```
 
-`GET /bootstrap` is a capability and routing response. It does not authorize
-cloud access by itself. A first-time device follows this sequence:
+| Case | HTTP status | Envelope `code` | `data` |
+| --- | --- | --- | --- |
+| Success | 200 | 200 | route result |
+| Business error (every route except Appearance) | **200** | 400, 401, 403, 404, 409, 410, 413, 429, 500, 503 | `null` |
+| Appearance route error (`/api/v1/aiot/appearance/*`) | same as the code | 400–503 | `null`; an invalid artifact `Range` is HTTP 416 with an empty body |
+| Access-token pre-handler rejected (missing, invalid, revoked) | **401** | 401 | `null` |
 
-1. Generate a 32-byte random device secret (persisted as 64 hexadecimal
-   characters) before sending any binding request.
-2. Send `protocol`, `protocolVersion`, `productKey`, `deviceKey`, the device
-   secret, firmware/client identity, and the `rodakos`/`rymcu_bigsmart`
-   application and board markers to `binding/request`.
-3. Persist the returned `requestId`, request token, pairing code, expiry, and
-   status. The request token is used only for status polling.
-4. Poll `binding/requests/{requestId}/status`. `pending` keeps MQTT and voice
-   disabled. Only `confirmed` or `approved` may enable Device Cloud.
-5. On confirmation, consume the access token and `unifiedMqtt` object from the
-   status response and commit them as one pending/complete configuration.
+- A client MUST check the HTTP status and then the envelope `code`. In this document "401" means
+  either source.
+- *Informative:* RodakOS also accepts a body without an envelope and treats the root object as
+  `data`. Rodak always sends the envelope.
 
-The binding request carries the device identity and provenance used by the
-server to distinguish RodakOS from legacy hardware:
+### 4.2 Binding request
+
+The device MUST generate and persist the device secret before it sends this request.
 
 ```json
 {
   "protocol": "rodak-aiot",
   "protocolVersion": 1,
   "productKey": "rymcu-bigsmart",
-  "deviceKey": "<WiFi MAC>",
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
   "deviceSecret": "<64 hex characters>",
   "credentialSecret": "<same secret>",
   "clientId": "<persistent client UUID>",
@@ -69,440 +184,680 @@ server to distinguish RodakOS from legacy hardware:
 }
 ```
 
-The create response must provide `requestId`, `requestToken`, `pairingCode`,
-and an expiry. Status responses may use camelCase or snake_case aliases and
-must provide a non-empty status. Confirmed responses additionally provide the
-access token and MQTT configuration.
+What Rodak reads:
 
-Status values are normalized case-insensitively. `expired`, `rejected`, and
-`revoked` clear the saved request and require an explicit new pairing. Unknown
-values fail closed. HTTP 401/404/410 for a status request also invalidate the
-saved request. A response that lacks required request fields or confirmed
-credentials is rejected without partially updating the live configuration.
+| Value | Read from, first present field wins | Rule |
+| --- | --- | --- |
+| Device key | `deviceKey`, `deviceCode` | Trimmed, 1–128 UTF-16 code units, no C0 control or DEL. Keep it short plain ASCII for MQTT (§4.4). |
+| Product key | `productKey`, `credentialKey` | MUST be `rymcu-bigsmart` |
+| Secret | `deviceSecret`, `credentialSecret`, `secret` | Manual pairing: the selected secret is required and nonempty after trim; no length limit at this step. Trust setup: the selected secret (`deviceSecret ?? credentialSecret`) MUST be empty, and the `secret` key MUST be absent. A whitespace-only selected secret is rejected in trust setup. |
+| `trustSetup` | `{version: 1, srpSalt, srpB, seenSpki}` | HTTPS listener only |
 
-An already bound device with no pending request may refresh an expired access
-token through `POST /auth/token` using `protocol`, `productKey`, `deviceKey`,
-and its persisted credential secret. In legacy mode a rejected refresh clears the cached
-token and MQTT configuration and returns to the owner-binding path. With an installed
-server pin, rejection retains the existing identity and reports failure without
-automatic pairing. Routine
-token refresh does not silently create a new binding.
+"First" means the first field that is present (not `null`/absent). Rodak converts it to a string
+and trims it, so a blank `deviceKey` hides a set `deviceCode`. If both the canonical field and its
+alias are present with different values, Rodak returns 400. This applies to the device key and the
+product key only; for the secret the first present field wins.
 
-Some Rodak server deployments retain `/devices/register` and
-`/devices/activate` as compatibility or migration endpoints. They are not the
-RodakOS v1 onboarding sequence and must not be used as the device's primary
-flow.
+Rodak sets `protocol` itself. At confirmation it also reads `product_key`, `application`, `board`,
+`deviceName`, `firmwareVersion` and `hardwareVersion` to build the device record. RodakOS sends
+all of them.
 
-## 3. Transaction and persistence rules
+Errors: 400 invalid input or alias conflict; 413 if the stored request (body without secrets and
+without `trustSetup`, plus the secret hash for manual pairing) is over 64 KiB; 429 if 256 unexpired requests exist, the device already has
+3 pending requests, or the same requester sent 20 requests in its current 60-second window (a
+fixed window that starts at its first request); 503 pairing service
+not ready.
 
-AIoT identity, access token, realtime voice descriptor, and unified MQTT values
-are committed transactionally. Before a candidate token/configuration is
-written, RodakOS persists a pending marker. A reset while that marker is set
-must not expose the candidate as usable. The next boot retries or clears it
-according to the binding status. A failed commit restores the previous complete
-snapshot. Passwords, access tokens, request tokens, and device secrets never
-appear in ordinary logs, serial replies, or shadow payloads.
+The created response:
 
-Changing the serial provisioning URL clears cached AIoT, MQTT, and realtime
-voice state before the next bootstrap in legacy mode. Trusted USB provisioning stages
-the endpoint and certificate as a candidate. Only authenticated completion promotes it.
-Serial provisioning supplies WiFi, the bootstrap URL and an optional explicit server
-trust anchor. It never supplies MQTT or voice credentials. See
-[Serial provisioning](serial-provisioning.md).
+| Variant | Fields |
+| --- | --- |
+| Manual | `requestId`, `requestToken`, `pairingCode` (8 digits), `expiresAt` (ISO with milliseconds, +10 min), `status: pending`, `pollIntervalSeconds: 2` |
+| Trust setup | `requestId`, `requestToken`, `trustSetup: {required: true}`, `expiresAt` (ISO, +5 min), `status: pending`, `pollIntervalSeconds: 1` |
 
-The optional [trusted server transport](trusted-server-discovery.md) uses USB-installed
-TLS trust, stable `.local` names and bounded DNS-SD candidate discovery. In pin mode,
-`unifiedMqtt.transport` is `mqtts`, broker host equals the pinned `tls_name`,
-`http_base_url` uses the current HTTPS origin, and voice uses WSS on that origin.
-The same certificate and fixed expected TLS name cover every device credential
-destination, including OTA and Appearance. Public-CA fallback and redirects are disabled.
+The device MUST persist `requestId`, `requestToken`, `pairingCode` and `expiresAt` before it shows
+the code.
 
-Unbind is server-confirmed. After `binding/unbind` succeeds, RodakOS clears the
-access token, pairing request, MQTT values, and realtime voice descriptor. WiFi
-credentials and the provisioning URL remain so the device can be paired again.
-If the request or local cleanup fails, the state remains pending and is retried.
-The device must not claim a completed unbind prematurely.
+### 4.3 Binding status
 
-## 4. Unified MQTT v2 payload
+The device polls with `Authorization: Bearer <requestToken>`. Every status response contains
+`requestId`, `deviceKey`, `productKey`, `status`, `requestedAt` and `expiresAt`, and when known
+`deviceId`, `deviceName`, `confirmedAt` and `trustSetup`.
 
-The token/bootstrap response carries an object named `unifiedMqtt`. Firmware
-also accepts `unified_mqtt`, `mqttConnectInfo`, and the documented camelCase or
-snake_case aliases during the v1 compatibility window. The MQTT payload version
-is independent from the `rodak-aiot` protocol version:
+| `status` | Meaning | Extra fields |
+| --- | --- | --- |
+| `pending` | Waiting for the owner | – |
+| `awaiting-device` | Trust setup: the owner entered the code; the device must post its proof | `trustSetup: {srpA, srpM1, serverBind}`, base64 of 384, 64 and 32 bytes |
+| `confirmed` | Bound | The full token response (§4.4), spread over the status record. A confirmed record without `deviceId` returns the bare status record. A confirmed record whose device is no longer active or bound returns business 403. |
+| `expired` | Past `expiresAt`, and the record still exists. Returned once, then the record is deleted. Rodak also purges expired records when it creates or lists requests, so a device can get 404 without seeing `expired`. | – |
+| `revoked` | Cancelled by the owner, after 5 wrong pairing codes, by trust-setup failure, or by unbind | – |
+
+- In a `confirmed` response with credentials, `expiresAt` is the **token** expiry in Unix seconds
+  (a number), because the token response overwrites the pairing field. Otherwise (before
+  confirmation, or the bare confirmed record without `deviceId`) it is an ISO string.
+- Business 401: missing or wrong request token. Business 404: unknown request, or a request that
+  was already removed after `expired`.
+- *Informative:* RodakOS normalizes the value case-insensitively. It also treats `approved` as
+  `confirmed` and `rejected` as `revoked`. Rodak sends neither.
+
+### 4.4 Token response and refresh
+
+`POST /auth/token` lets a bound device with no pending request get a new access token:
+
+```json
+{"protocol": "rodak-aiot", "productKey": "rymcu-bigsmart",
+ "deviceKey": "aa:bb:cc:dd:ee:ff", "credentialSecret": "<64 hex characters>"}
+```
+
+Rodak reads the first nonblank string of, in this order: `credentialKey`/`productKey`,
+`deviceCode`/`deviceKey`, and `credentialSecret`/`deviceSecret`/`secret`/`devicePassword`. It
+ignores `protocol`.
+
+A token response (from `/auth/token` or a confirmed status) always contains:
+
+| Field | Value |
+| --- | --- |
+| `deviceToken`, `token`, `accessToken` | The same HS256 JWT |
+| `tokenType` | `Bearer` |
+| `expiresIn`, `tokenTtlSeconds` | Lifetime in seconds, at least 1 |
+| `expiresAt`, `expires_at` | Expiry in Unix seconds |
+| `deviceId`, `deviceKey`, `deviceCode` | Identity (`deviceCode` = `deviceKey`) |
+| `productKey`, `credentialKey` | The device's product key (`rymcu-bigsmart` for RodakOS) |
+| `activationStatus`, `activationRequired` | `1`, `false` |
+| `unifiedMqtt` | §7.1 |
+| `mqttConnectInfo` | camelCase counterpart of `unifiedMqtt` without `keepalive`, plus `endpoint`, `sslEndpoint`, `wsEndpoint`, `clientId`, `subscribeTopics`, `publishTopics`, `vendorType: rodak-local`, `authMode: device-jwt` |
+| `realtimeVoice` | §11 |
+| `mqttHost`, `mqttPort` | Pin mode only: the TLS name and the MQTTS port |
+
+*Informative:* RodakOS reads the token from `deviceToken`, `accessToken`, `token` or `mqttToken`,
+and drops a cached voice descriptor when `realtimeVoice` is absent. Rodak always sends it.
+
+Refresh errors (business codes; Rodak never sends 401 here):
+
+| Code | Cause |
+| --- | --- |
+| 400 | Missing, too long or control-character credential field |
+| 403 | Product or secret mismatch, inactive device, or a `rymcu-bigsmart` device that is not paired |
+| 404 | Unknown device |
+
+| Mode | Device behavior on rejection (403 or 404) |
+| --- | --- |
+| Legacy | Clear token and MQTT configuration. Return to owner binding (§5). |
+| Pin | Keep the identity. Report `credentials rejected`. Do not start pairing automatically. |
+
+Routine token refresh MUST NOT create a new binding silently.
+
+The access token is an HS256 JWT with header `{"alg":"HS256"}`. Its claims always include `dk`
+(device key), `tv` (token version) and `exp`; `did` (device ID) and `pk` (product key) are added
+while the encoded token still fits 255 characters. The MQTT broker compares `dk` with the MQTT
+username.
+
+### 4.5 Unbind
+
+The device sends `Authorization: Bearer <accessToken>`. Rodak ignores the body; RodakOS sends
+`{}`. Success:
+
+```json
+{"code": 200, "message": "设备已解除绑定", "data": {"deviceId": "6f1c2b9a-…", "status": "unbound"}}
+```
+
+Success deactivates the device and invalidates the token. A retry with the old token after a lost
+reply therefore gets HTTP 401, not a second success.
+
+## 5. Binding state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> unbound
+  unbound --> pending: POST binding/request OK
+  pending --> pending: status = pending
+  pending --> awaiting: status = awaiting-device (trust setup)
+  awaiting --> pending: POST /trust, sealed reply
+  pending --> bound: status = confirmed (credentials committed)
+  pending --> unbound: status = expired | revoked
+  pending --> unbound: code 401 | 404 on status poll
+  bound --> bound: auth/token OK
+  bound --> unbound: auth/token 403 | 404 (legacy mode only)
+  bound --> unbinding: user requests unbind
+  unbinding --> unbound: data.status = unbound + local cleanup
+  unbinding --> unbinding: request or cleanup failed (retry)
+```
+
+| From | Event | To | Device action |
+| --- | --- | --- | --- |
+| `pending` | `pending` | `pending` | MQTT and voice MUST stay disabled. |
+| `pending` | `confirmed` | `bound` | Commit token, MQTT and voice as one snapshot (§6.1). |
+| `pending` | `expired` or `revoked` | `unbound` | Clear the saved request. A new pairing needs an explicit user action. |
+| `pending` | status poll 401 or 404 | `unbound` | Clear the saved request. |
+| `pending` | `awaiting-device` | trust setup | Only `LanOnboardingService` handles it. The main pairing path fails closed. |
+| `pending` | unknown value | `pending` | Fail closed. Do not enable Device Cloud. |
+| `pending` | response without required fields or credentials | `pending` | Reject. Do not change the live configuration. |
+| `bound` | unbind confirmed | `unbound` | Clear token, request, MQTT and voice. Keep WiFi and provisioning URL. |
+
+*Informative:* RodakOS also clears the request on business 410. Rodak sends 410 only from `/trust`.
+
+Unbind is server-confirmed. If the request or local cleanup fails, the state stays `unbinding`
+and the device retries. The device MUST NOT report a completed unbind before both steps succeed.
+
+## 6. Credentials and transport modes
+
+### 6.1 Transaction rules
+
+- AIoT identity, access token, realtime voice descriptor and unified MQTT values MUST be committed
+  as one transaction.
+- Before the device writes a candidate, it MUST persist a pending marker. After a reset with the
+  marker set, the device MUST NOT use the candidate. The next boot retries or clears it according
+  to the binding status.
+- A failed commit MUST restore the previous complete snapshot.
+- Passwords, access tokens, request tokens and device secrets MUST NOT appear in ordinary logs,
+  serial replies or shadow payloads.
+
+### 6.2 Legacy mode and pin mode
+
+| Aspect | Legacy mode | Pin mode |
+| --- | --- | --- |
+| Trust source | Public CA or plain transport | Server certificate and TLS name `rodak-<16 hex>.local`, installed over USB or by LAN trust setup |
+| HTTP | `http` or `https` | `https` on the pinned origin only |
+| MQTT | Rodak omits `transport` | Rodak sends `transport: mqtts`; RodakOS requires it and requires broker host = pinned TLS name |
+| `http_base_url` | Any; default is the bootstrap origin | MUST have the current HTTPS origin |
+| Realtime voice | Rodak sends `ws://` (or `wss://` behind a trusted HTTPS proxy) | `wss://` on the pinned origin |
+| Redirects, public-CA fallback | Allowed by the HTTP client | Disabled |
+| OTA and Appearance downloads | Configured origin | Same certificate and TLS name |
+| Token refresh rejected | Return to binding | Keep identity, report failure |
+| Provisioning URL change | Clear AIoT, MQTT and voice before the next bootstrap | Stage endpoint and certificate as a candidate. Promote only after authenticated completion. |
+
+Serial provisioning supplies WiFi, the bootstrap URL and an optional server trust anchor. It
+never supplies MQTT or voice credentials. See [serial provisioning](serial-provisioning.md) and
+[QR provisioning](qr-provisioning.md).
+
+## 7. Unified MQTT
+
+### 7.1 `unifiedMqtt` descriptor
+
+The MQTT payload version (`protocol_version: 2`) is independent of the `rodak-aiot` protocol
+version.
 
 ```json
 {
   "protocol_version": 2,
-  "broker_address": "mqtt.example",
+  "broker_address": "rodak.local",
   "broker_port": 1883,
-  "username": "device",
+  "username": "aa:bb:cc:dd:ee:ff",
   "password": "<access token>",
   "keepalive": 240,
-  "device_key": "<stable device key>",
-  "http_base_url": "https://api.example",
+  "device_key": "aa:bb:cc:dd:ee:ff",
+  "http_base_url": "http://rodak.local:8080",
   "http_bearer_token": "<access token>",
-  "home_enabled": false,
+  "home_enabled": 0,
   "topics": {
-    "telemetry": "devices/<deviceKey>/telemetry",
-    "shadow_report": "devices/<deviceKey>/shadow/report",
-    "shadow_desired": "devices/<deviceKey>/shadow/desired",
-    "ota_notify": "devices/<deviceKey>/ota/notify",
-    "ota_progress": "devices/<deviceKey>/ota/progress",
-    "commands": "devices/<deviceKey>/commands/+",
-    "pc_status": "devices/<deviceKey>/pc_status",
-    "home_prefix": "devices/<deviceKey>/home/"
+    "telemetry": "devices/aa:bb:cc:dd:ee:ff/telemetry",
+    "shadow_report": "devices/aa:bb:cc:dd:ee:ff/shadow/report",
+    "shadow_desired": "devices/aa:bb:cc:dd:ee:ff/shadow/desired",
+    "ota_notify": "devices/aa:bb:cc:dd:ee:ff/ota/notify",
+    "ota_progress": "devices/aa:bb:cc:dd:ee:ff/ota/progress",
+    "commands": "devices/aa:bb:cc:dd:ee:ff/commands/+",
+    "pc_status": "devices/aa:bb:cc:dd:ee:ff/pc_status",
+    "home_prefix": "rymcu/home/v1"
   }
 }
 ```
 
-The server should provide complete topic strings. RodakOS derives the
-`devices/{deviceKey}/...` form only when a topic is absent. The access token is
-reused as the controlled HTTP bearer credential for OTA. The firmware connects
-after WiFi has an address, publishes telemetry and reported shadow state, and
-subscribes to desired shadow, OTA notification, command, and PC status topics.
+Rodak always sends every field above:
 
-`pc_status` is an optional server-to-device stream. Since 2026-10-26, Rodak does not sample or
-publish PC status itself. The topic stays subscribable. It only carries data that Rodak forwards
-from a separate host collector. Firmware must treat a silent `pc_status` topic as normal.
+- `username` = `device_key`. `password` = `http_bearer_token` = the access token.
+- `keepalive` is always `240`. `protocol_version` is always `2`.
+- `home_enabled` is the integer `0` or `1`. *Informative:* RodakOS ignores a JSON boolean here.
+- `home_prefix` is the configured Home broker prefix, trimmed, default `rymcu/home/v1`. It is the
+  same for all devices. The broker lets the device subscribe and publish under it.
+  *Informative:* RodakOS v1 stores it and does not use it.
+- Pin mode adds `"transport": "mqtts"`. Legacy mode omits `transport`.
 
-## 5. Shadow state and device properties
+*Informative:* defaults that RodakOS applies when a field is absent (for other servers):
 
-Device-to-server topics:
+| Field | Default |
+| --- | --- |
+| `broker_address` | Host of the bootstrap origin (legacy mode only) |
+| `broker_port` | Bootstrap `mqttPort`, else `1883` |
+| `username` | `device_key` |
+| `password` | Access token |
+| `device_key` | WiFi MAC device key |
+| `http_base_url` | Bootstrap origin |
+| `keepalive` | `240` |
+| `protocol_version` | `2` |
+| each topic except `home_prefix` | `devices/{deviceKey}/...` as in §7.3 |
 
-```text
-devices/{deviceKey}/telemetry
-devices/{deviceKey}/shadow/report
-devices/{deviceKey}/ota/progress
-devices/{deviceKey}/effects/receipt
-```
+### 7.2 Accepted aliases
 
-Server-to-device topics:
+*Informative.* Rodak sends the canonical names. RodakOS also accepts these aliases during the v1
+compatibility window; the first match wins, in table order.
 
-```text
-devices/{deviceKey}/shadow/desired
-devices/{deviceKey}/ota/notify
-devices/{deviceKey}/commands/{commandNo}
-```
+| Canonical | Also accepted |
+| --- | --- |
+| `unifiedMqtt` (token response) | `unified_mqtt`, `mqttConnectInfo`, `mqtt_connect_info`, `mqtt`; else the bootstrap object |
+| `broker_address` | `brokerAddress`, `host`, `address`, `broker.address`, `broker.host`, `broker.brokerAddress`, bootstrap `mqttHost`/`mqtt_host` |
+| `broker_port` | `brokerPort`, `port`, `broker.port`, `broker.brokerPort`, bootstrap `mqttPort`/`mqtt_port` |
+| `protocol_version` | `protocolVersion` |
+| `password` | `httpBearerToken`, `http_bearer_token` |
+| `device_key` | `deviceKey` |
+| `http_base_url` | `httpBaseUrl`, `baseUrl` |
+| `home_enabled` | `homeEnabled` |
+| `topics.shadow_report` etc. | camelCase form, for example `shadowReport`, `otaNotify`, `pcStatus`, `homePrefix` |
+| `requestId`, `requestToken`, `pairingCode`, `expiresAt` | snake_case form |
+| `realtimeVoice` | `realtime_voice` |
 
-Command acknowledgement is published to the command topic with `/ack`
-appended. Telemetry reports firmware, WiFi RSSI, volume, heap/uptime/slot
-health, and valid `battery`/`charging` readings. Reported shadow includes
-firmware, volume, light, battery/charging, and `voice_identity`. A failed
-battery ADC read omits the field. It does not publish a guessed value.
+### 7.3 Topics
 
-The command surface accepts `ping` as a raw string, JSON string, or
-`{"command":"ping"}`/`{"type":"ping"}` object. The acknowledgement is
-`{"status":"ok","result":{"pong":true,"firmware":"..."}}` on
-`devices/{deviceKey}/commands/{commandNo}/ack`. It also supports
-`camera.stream.start/stop/signal` and `display.stream.start/stop/signal`, with a
-required `sessionId`, mutually exclusive camera/display sessions and SDP/ICE
-signaling. See [WebRTC peer integration](esp-peer-integration.md).
+| Topic | Direction | QoS | Retain | Payload |
+| --- | --- | --- | --- | --- |
+| `devices/{k}/telemetry` | device → server | 0 | no | [telemetry](../contracts/rodak-aiot/v1/schemas/telemetry.schema.json) |
+| `devices/{k}/shadow/report` | device → server | 0 | no | [shadow-report](../contracts/rodak-aiot/v1/schemas/shadow-report.schema.json) |
+| `devices/{k}/ota/progress` | device → server | 0; RodakOS uses 1 for `stepCode: staged` | no | [ota-progress](../contracts/rodak-aiot/v1/schemas/ota-progress.schema.json) |
+| `devices/{k}/effects/receipt` | device → server | 0 | no | [effect-receipt](../contracts/rodak-aiot/v1/schemas/effect-receipt.schema.json) |
+| `devices/{k}/commands/{commandNo}/ack` | device → server | 0 | no | [command-ack](../contracts/rodak-aiot/v1/schemas/command-ack.schema.json) |
+| `devices/{k}/shadow/desired` | server → device | 0 | no | [shadow-desired](../contracts/rodak-aiot/v1/schemas/shadow-desired.schema.json) |
+| `devices/{k}/ota/notify` | server → device | 0 | no | [ota-notify](../contracts/rodak-aiot/v1/schemas/ota-notify.schema.json) |
+| `devices/{k}/commands/{commandNo}` | server → device | 0 (device subscribes `commands/+`) | no | [command-request](../contracts/rodak-aiot/v1/schemas/command-request.schema.json) |
+| `devices/{k}/pc_status` | server → device | – | – | No built-in producer; see below |
 
-`voice.announce` (`{"command":"voice.announce","announceSeq":N,"priority":"normal"|"urgent"}`)
-asks the device to open a playback-only realtime voice session for a server-initiated
-announcement.
-[Realtime voice §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce) specifies
-the wire session (Rodak `docs/rodak-realtime-voice-protocol-v1.md` §8.2). The command carries no
-text. The server sends the spoken content only inside the authenticated voice session.
+- The broker ACL allows exactly these device topics plus the Home prefix and its descendants.
+  It does not check QoS or retain.
+- `effects/receipt` is fixed to `devices/{k}/effects/receipt`. It is not in `topics`, and
+  `mqttConnectInfo.publishTopics` omits it, but the broker allows it.
+- Each subscription triggers its own delivery: `shadow/desired` → the current desired snapshot;
+  `commands/+` → pending commands; `ota/notify` → the latest active OTA task (a `manifestVersion: 2`
+  task only if it has its signature); `pc_status` → nothing. A device therefore does not need to poll after reconnect.
+- The device connects after WiFi has an address. It publishes telemetry and reported shadow
+  after connect.
+- `pc_status`: the subscription is allowed for firmware compatibility. Rodak has no built-in
+  producer; a future host collector may forward data here. A silent topic is normal.
+- *Informative:* Rodak can also publish other payloads on the current device's `devices/{k}/`
+  topics, except `shadow/desired`. Devices MUST
+  validate every inbound payload and MUST NOT assume that only the producers in this document
+  write to these topics.
 
-- `announceSeq` must be a JSON integer in `1..4294967295`. Any other value returns
-  `invalid_payload`. Payload validation runs before the handler check, so a valid command on a
-  build without a voice handler returns `voice_unavailable`.
-- The device matches `priority` exactly. Only `"urgent"` is urgent. Any other value, or no
-  value, means `normal`.
-- The device accepts the command only when the voice assistant is idle. Idle means that no
-  interaction, start, audio focus, transport, or audio task is in progress.
-- For a `normal` announce, local music must also be stopped. An urgent announce can start while
-  music plays. Its exclusive audio focus pauses the music, and the music resumes afterwards.
-- On acceptance, the MQTT thread only queues the session open on the voice frontend's command
-  task and acknowledges `{"status":"ok"}`. A full queue or a busy assistant returns
-  `{"status":"error","errorCode":"busy"}`.
-- `ok` means accepted and queued, not played. If the session open fails later, the device logs
-  the failed stage (`prepare`, `audio_tasks`, `audio_focus`, `focus_commit`, `open`, `commit`).
-  The device sends no second ACK. Rodak's 30-second registration expiry covers this case.
+The channel definitions are in [`asyncapi.yaml`](../contracts/rodak-aiot/v1/asyncapi.yaml).
 
-`announceSeq` is a short-lived claim number. It is valid only within the 30-second registration
-window of the Rodak process that issued it. It is not a durable command identity. Rodak marks
-unfinished persisted `voice.announce` records as failed. Rodak never replays the same sequence
-after a server restart, HTTP pull, or device reconnect. Rodak registers a retried notice with a
-new `announceSeq`.
+## 8. Commands
 
-On the device, the ordinary 64-command ledger below still applies. An identical redelivery of
-the same command number replays the original ACK and does not queue a second session.
+### 8.1 Envelope
 
-Unsupported commands return an `unsupported_command` error status. There is currently no
-`volume.set` command handler on this acknowledgement channel.
+A command arrives on `devices/{k}/commands/{commandNo}`. Rodak's command numbers: ordinary =
+dashless UUIDv4 (32 hex); stream Start = `rodak-video-start-<32 hex>`; stream Signal =
+`rodak-video-<32 hex>`; stream Stop = `rodak-video-stop-<32 hex>`. The payload is a JSON object
+with `command` (or `type`) and command fields. `ping` may also be bare text or a JSON string.
+Managed stream commands also carry `_meta["rodak/videoSignal"]: {schema: "rodak.videoSignal.v1",
+dispatchId}`; RodakOS ignores `_meta`.
 
-### Command results and replay boundary
-
-The ordinary failure envelope is `{"status":"error","errorCode":"unsupported_command"}`.
-Camera/display failures use `camera_stream_unavailable` / `display_stream_unavailable`,
-`camera_stream_busy` / `display_stream_busy`, `camera_stream_start_failed` /
-`display_stream_start_failed`, `camera_stream_not_found` / `display_stream_not_found`, and
-`camera_signal_rejected` / `display_signal_rejected`. Shared validation codes are
-`invalid_payload`, `missing_session_id`, `invalid_signal` and `invalid_signal_encoding`.
-Service availability is checked before session validation. Successful stream commands return
-`result.sessionId`. Start also returns `result.transport: webrtc-datachannel` and
-`result.startCommandNo`, the original Start command number. These are ordinary
-command replies, without effect ID/hash, configuration revision, persistence or physical evidence.
-
-### Exact stream Stop (026)
-
-New clients identify the instance using the original Start command number:
+The device replies once on `devices/{k}/commands/{commandNo}/ack`:
 
 ```json
-{"command":"display.stream.stop","sessionId":"preview-session","startCommandNo":"start-command-1"}
+{"status": "ok", "result": {"pong": true, "firmware": "1.4.0"}}
+{"status": "error", "errorCode": "unsupported_command"}
 ```
 
-`camera.stream.stop` uses the same fields. A successful response contains
-`result: {sessionId, startCommandNo, stopOutcome}`. `stopOutcome: stopped` means this request
-revoked the matching active instance and its native Stop returned. `already_stopped` means the
-latest successfully started instance had already completed that cleanup in the same MQTT
-generation, connection epoch and authority. Neither outcome proves physical/DMA/idle-task
-resource return. Native joins keep their existing blocking limits. No hard timeout is promised.
+`ok` means accepted. For asynchronous commands it does not mean completed (§10).
 
-Each stream kind retains at most one volatile completed-cleanup proof. It is created only after
-native Stop returns, for the captured owner of a successful Start. Revocation or a terminal callback
-alone is insufficient. Failed/synchronously terminated starts cannot create a successful proof.
-A replacement Start invalidates the previous proof for that stream kind, while epoch/authority
-changes clear both. Late cleanup cannot repopulate a newer scope. Unknown sessions, wrong
-`startCommandNo`, the other stream kind and stale proofs return the existing `_stream_not_found`
-error without stopping a replacement. A present `startCommandNo` must be a nonempty string of
-at most 128 bytes. Invalid values return `invalid_start_command_no`. Ambiguous duplicate JSON
-keys or embedded JSON NULs in stream requests return `invalid_payload`.
+### 8.2 Command list
 
-An exact Stop's cached success is replayed only while its saved generation/epoch/instance nonce
-still matches the latest completed-cleanup proof and current connection. Otherwise this delivery
-returns `_stream_not_found`. The original final ledger record is not overwritten and no native
-operation is repeated. Cached failures remain conservative failures, and changed raw payloads
-still produce `command_conflict`. This is a response-scope restriction for exact Stop, not a
-renewal of an old authorization.
+| Command | Required fields | Success `result` | Detail |
+| --- | --- | --- | --- |
+| `ping` | – | `{pong: true, firmware}` | – |
+| `voice.announce` | `announceSeq`, `priority` (`normal` or `urgent`; Rodak always sends it) | none | §8.4 |
+| `camera.stream.start` / `display.stream.start` | Rodak sends `sessionId` (UUIDv4), `transport`, `width: 320`, `height: 240`, `fps: 5`, `expiresAt`, and `clientId` when set; only display adds `quality: 65`. RodakOS requires only `sessionId`. | `{sessionId, transport: "webrtc-datachannel", startCommandNo}` | [Peer integration](esp-peer-integration.md) |
+| `camera.stream.stop` / `display.stream.stop` | `sessionId`, `startCommandNo` (Rodak always sends it; RodakOS also accepts its absence) | `{sessionId, startCommandNo, stopOutcome}` | [Exact Stop](mqtt-command-semantics.md#exact-stream-stop-026) |
+| `camera.stream.signal` / `display.stream.signal` | `sessionId`, `type` (`sdp`/`candidate`), base64 `data` | `{sessionId}` | [Peer integration](esp-peer-integration.md) |
 
-For compatibility, a Stop with no `startCommandNo` can stop the current matching `sessionId`,
-returning the actual start identity and `stopOutcome: stopped`. It does not receive the new
-`already_stopped` behavior. Its existing cached-response behavior is unchanged. Such a legacy
-request cannot distinguish an old logical session from a same-named replacement. New clients
-must use a fresh Start command number for each instance and preserve it with the session.
-The existing 64-command replay window and reboot/eviction limits still apply. Intentionally
-reusing an evicted Start command number is not an unbounded exactly-once identity guarantee.
+Any other command returns `unsupported_command`. There is no `volume.set` command. Volume and
+light change through desired shadow (§9.3).
 
-Rodak now records native `status: error` replies as `failed`, retaining the first ACK body,
-timestamp and failure detail. Its first terminal command result is frozen: duplicate or conflicting
-replies and a late publish completion/failure cannot overwrite it. HTTP replies use the same
-classification, and both transports associate command numbers with the authenticated device.
-Desktop terminal freezing is independent of the firmware result-publication boundary below.
+Camera and display sessions are mutually exclusive. Later stream callbacks reuse the Start
+command's `/ack` topic with `result.cameraStream` or `result.displayStream`. These are sideband
+messages. They never settle the command or replace its first result.
 
-Camera/display callbacks reuse the start command's `/ack` topic. Their nested
-`result.cameraStream` / `result.displayStream` messages carry `event: signal/state`, session ID,
-peer state or SDP/candidate data. Rodak treats these as sideband messages: forwarding valid video
-signaling does not settle the command, and later callbacks do not replace the first command result.
-For `closed`, `disconnected` and `failed`, Rodak uses the topic's command number to find a persisted
-start request, then matches its session ID, the live session's device and stream kind. Closed stops
-that preview. Disconnected/failed fail it. New previews use new session IDs, so old-session events
-cannot terminate them. The desktop session does not separately bind a unique starting command number.
+How Rodak classifies an ordinary ACK:
 
-The firmware keeps a volatile window of the latest 64 admitted command numbers within the same
-authority. Identical raw payload bytes (SHA-256) replay the original final ACK without re-entering
-the handler. Changed bytes return `command_conflict`, including JSON whitespace changes. An
-in-flight duplicate neither executes nor emits an additional result. The original request completes.
-Completed records are immutable. Reconnects,
-ordinary token refresh and Stop/Start on the same service object retain the window. Authority
-replacement clears it, and old completion tickets cannot enter the new authority.
-Exact Stop successes additionally obey the completed-instance response-scope check described above.
+1. Sideband: top-level `event: signal|state`, or a `cameraStream`/`camera_stream`/`displayStream`/
+   `display_stream` result whose `event` is `signal`/`state` or whose `type` is `sdp`, `offer`,
+   `candidate` or `ice-candidate`.
+2. Failure: `status: "error"` or `ok: false`. Any `errorCode` string is accepted; the detail comes
+   from `errorMessage`, `message`, `errorCode` or `error_code`.
+3. Otherwise success, including raw text.
 
-Command numbers are limited to 128 bytes and input payloads to 256 KiB. Cached reply bodies share
-a 64 KiB budget. If a body cannot be retained, its recent completed ID stays as a tombstone and
-replay returns `command_result_unavailable` without execution. This error does not prove that the
-original command was never applied. New admissions evict the oldest completed record by first
-admission order at capacity. Cache hits do not refresh that order, and in-flight records are not
-evicted. Evicted commands and device reboots have no deduplication
-guarantee. A cached start success is historical evidence and does not reopen a stopped stream.
-Other ledger rejection codes are `command_limits_exceeded`, `command_hash_failed` and
-`command_capacity_exceeded`.
+Stream Signal and Stop ACKs additionally need matching session evidence; raw text does not
+settle them. The first terminal result is frozen.
 
-The MQTT worker rejects stale generation/epoch messages before handler entry. ACKs and asynchronous
-camera/display signal/state callbacks capture that original generation, epoch and ACK topic.
-A bounded result queue rejects stale callbacks and is cleared on epoch changes. The SDK user-event
-callback rechecks the scope and sends through direct QoS 0 publish with retain disabled, outside the
-service lock so synchronous disconnect callbacks can re-enter safely. This path does not store an
-SDK outbox item or fall back to ordinary Publish. A failed send is dropped without replay.
+### 8.3 Error codes
 
-The queue allows 8 entries, at most 64 KiB per payload, 128 KiB total payload and 512 bytes per
-topic. Overflow or unavailable SDK events drop results with a warning. An admitted send may still
-complete on its original SDK connection. Success is not a Broker acknowledgement. These limits
-do not prove that an unacknowledged command was never executed.
+| `errorCode` | Cause |
+| --- | --- |
+| `unsupported_command` | Unknown command, or a known command with no handler result. |
+| `invalid_payload` | Malformed fields, ambiguous duplicate keys, embedded NUL, bad `announceSeq`. |
+| `missing_session_id` | Stream command without `sessionId`. |
+| `invalid_start_command_no` | `startCommandNo` present but empty, non-string or over 128 bytes. |
+| `invalid_signal` / `invalid_signal_encoding` | Bad signal `type`/`data`, or `data` is not valid base64. |
+| `camera_stream_unavailable` / `display_stream_unavailable` | No stream service on this build. Checked before session validation. |
+| `camera_stream_busy` / `display_stream_busy` | Another stream is active. |
+| `camera_stream_start_failed` / `display_stream_start_failed` | Native start failed. |
+| `camera_stream_not_found` / `display_stream_not_found` | Unknown session, wrong `startCommandNo`, wrong kind, or stale proof. |
+| `camera_signal_rejected` / `display_signal_rejected` | The peer rejected the signal. |
+| `stream_instance_capacity_exceeded` | Instance nonces are exhausted. |
+| `stream_lease_expired`, `command_scope_expired` | The connection epoch or authority changed during the command. |
+| `voice_unavailable` | Build has no voice announce handler. |
+| `busy` | `voice.announce` while the assistant is busy, or the command queue is full. Rodak records an ordinary failed command and does not retry it. |
+| `command_conflict` | Same `commandNo`, different payload bytes. |
+| `command_result_unavailable` | Same `commandNo`, but the cached reply was not retained. The original may have been applied. |
+| `command_limits_exceeded`, `command_hash_failed`, `command_capacity_exceeded` | Replay ledger admission failure. |
 
-Stream leases bind generation, epoch, a non-reused instance nonce and session ID. Start/Stop/remote
-signaling share an operation mutex. Epoch changes revoke immediately and schedule worker cleanup
-outside the MQTT mutex. SDK and peer callbacks never wait for that operation mutex. Service Stop
-revokes admission before waiting for active operations. A Start that finishes after revocation
-stops its own instance. Old callbacks cannot clear a replacement with the same session string.
-`command_scope_expired` reports failed admission. Exhausted nonces reject with
-`stream_instance_capacity_exceeded`. An action admitted before revocation may finish and is then
-cleaned up. Neither this boundary nor the cache physically rolls back an already admitted action.
+### 8.4 `voice.announce`
 
-Signal publication requires the current active lease. Same-epoch terminal events may survive
-cleanup only while their instance nonce is still the latest for that resource. Replacement drops
-old terminal events. Data-channel close/disconnect map to the existing `closed` / `disconnected`
-wire states.
+```json
+{"command": "voice.announce", "announceSeq": 17, "priority": "normal"}
+```
 
-Remote input retains explicit enable/disable, sequence checks and rate limits. Text, shortcuts,
-pointers and deferred navigation carry a stream lease and a separate enable grant, checked at
-the final LVGL action. Disable/re-enable cannot revive an old grant. Stale cleanup cannot release
-a new owner's pointer. Controller destruction invalidates deferred navigation. Delayed control
-ACKs also retain an opaque peer-instance token, checked at the actual sender under the peer API
-lock, so sequence reuse alone cannot authorize a reply on the replacement peer.
+Server side:
 
-Ordinary telemetry/shadow Publish
-and effect receipt publishing retain their own SDK outbox behavior. Server-side effect receipt
-matching to the original authenticated connection remains necessary.
+- Rodak skips the dispatch if the device is inactive or offline, or already has a pending or
+  claimed announce.
+- `announceSeq` is a per-process counter starting at 1. *Informative:* Rodak has no upper cap;
+  RodakOS rejects values above 4294967295 with `invalid_payload`.
+- *Informative:* Rodak can also send other commands, including plain text, verbatim and without
+  a 256 KiB check. RodakOS validates every command and enforces its own limits.
+- Rodak registers the text for 30 seconds. The device must open the playback-only voice session
+  and claim it within that window. A late claim gets `session.end` with reason `announce-expired`.
+- Rodak discards stale persisted announce commands on later pull or reconnect, also after a
+  restart. A retried notice gets a new `announceSeq`.
 
-The independent [command host fixture](../tests/mqtt_volume_service/README.md#independent-command-fixture-and-tests)
-uses the production registered MQTT callback, fragments, queue, worker, handler and captured
-publications. Its host cases and Rodak's 21 cross-repository cases cover real ping shapes,
-unsupported/malformed commands, unavailable camera/display services, terminal replay behavior
-and device identity isolation. Host cases also model queued-versus-wire outbox stages, held SDK
-events, reconnects, late stream callbacks and synchronous disconnect during direct publication.
-The network SDK remains a fake. Direct QoS 0 outbox semantics are separately checked against the
-resolved ESP-MQTT source, whose hashes are recorded by the runner. The separate Rodak runner,
-`scripts/run-rodakos-command-conformance.mjs`, records frozen source/binary evidence. These counts
-do not extend the volume/light or MCP gate, and do not prove real WebRTC or hardware acceptance.
+Device side:
 
-### Volume configuration and evidence
+- The command carries no text. The server sends the spoken content only inside the authenticated
+  voice session. See [realtime voice §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce).
+- Validation runs before the handler check: an invalid `announceSeq` returns `invalid_payload`
+  even on a build without voice (`voice_unavailable`).
+- Only the exact string `"urgent"` is urgent. Any other value, or no value, means `normal`.
+- The device accepts only when the voice assistant is idle: no interaction, start, audio focus,
+  transport or audio task is in progress. A `normal` announce also requires local music to be
+  stopped. An urgent announce pauses music and resumes it afterwards.
+- On acceptance the device queues the session open and replies `{"status":"ok"}`. If the open
+  fails later, the device logs the stage and sends no second ACK. Rodak's 30-second claim window
+  covers this case.
 
-Desired shadow accepts `volume` inside either root `desired` or `state.desired`
-and clamps it to 0–100. `AudioOutputService` reports its accepted runtime
-configuration. `AudioService` and playback/UI read this shared output configuration. If an
-already open codec returns an API error when setting volume, the previous shared configuration
-is retained. Ordinary MQTT shadow reports show that retained configuration.
-With the codec closed, setting volume accepts configuration without opening it.
-The next playback open applies that configuration. If the initial volume API call
-fails, the open attempt is closed and its format state is cleared for retry.
+### 8.5 Replay summary
 
-This is an API error boundary, not full hardware verification. RodakOS builds a
-source-verified overlay for esp_codec_dev 1.5.7 so `esp_codec_dev_set_out_vol`
-propagates the selected codec/software-volume driver's error and commits its cache
-only on success. The original managed source remains unchanged. See
-[dependency maintenance](dependency-maintenance.md). Software success or a reported
-volume still does not establish I2C register application or audible speaker output.
+- The device keeps the latest 64 command numbers per authority. The same `commandNo` with the
+  same payload bytes replays the original ACK without re-execution. Different bytes return
+  `command_conflict`.
+- Reboot, eviction and authority replacement remove this guarantee.
+- The server MUST use a new `commandNo` for each new command and a new Start `commandNo` for each
+  stream instance.
+- Rodak records the first terminal result per command and does not overwrite it with later
+  replies.
 
-Versioned volume desired messages now use root `version`/`shadowVersion` as an ordering
-watermark. This is not the output configuration revision. Plain shadow reports still carry
-no volume `effectId`, desired applied revision or per-effect result.
-Connection establishment and unrelated state updates also publish ordinary shadow
-reports. A matching reported value, a newer server shadow version, or a successful
-MQTT publish cannot prove that a particular Agent Runtime effect executed on the
-device. Rodak's local desired-state compensation likewise does not prove physical
-restoration. A single desired publication may carry top-level
-`_meta['rodak/deviceEffect']` with `rodak.mqtt-volume-effect.v1` correlation. Its result is
-published separately on `devices/{deviceKey}/effects/receipt`, never inside reported shadow.
-See [MQTT volume effects](mqtt-volume-effects.md) for strict validation, scope and replay rules.
-The inner receipt is `rodakos.volume-receipt.v1` with an output-local configuration revision.
-It does not upgrade ordinary shadow reports into execution evidence. The former session-scoped
-voice MCP volume path was removed on 2026-10-21
-([historical contract](archive/2026-10-21-voice-volume-mcp.md)).
-`voice_identity` has its own revision/status semantics below and must not be generalized
-into a volume receipt.
+The full rules are in [MQTT command semantics](mqtt-command-semantics.md).
 
-### Light configuration and evidence
+## 9. Shadow and telemetry
 
-Desired `light` patches target discovered Board Manager RGB lights. Legacy messages without ID
-select the first light. Correlated `light.patch` requires a reported, real light ID and strict
-nonempty enabled/brightness/color fields. `LightService` merges and applies under one lock and
-commits accepted configuration/revision only on driver success. Failure retains prior values and
-reports `available=false`, numeric `last_error`, and `application: unverified`. It cannot guarantee
-physical rollback after a partial LED driver write. Each reported light object carries `id`,
-`available`, `last_error`, `configurationRevision`, `application`, `enabled`, `brightness` and
-`color`. Since 2026-11-05, Rodak's `rymcu-bigsmart` product thing model declares the same
-fields. Rodak therefore does not treat these values as unknown properties.
+### 9.1 Telemetry
 
-`rodak.mqtt-light-effect.v1` publication metadata and `rodakos.mqtt-light-result.v1` results use the
-same desired and independent effects/receipt topics as volume. The metadata schema selects only
-one domain, so old fields in the desired shadow cannot cause unrelated mutations. Light receipts
-include complete previous/current configuration and actual ID. Ordinary reports remain snapshots
-and never complete an effect by value comparison. The 64-result cache permits continued writes.
-Version-bound IDs and an authority-wide monotonic watermark prevent re-execution after eviction.
-See [MQTT light effects](mqtt-light-effects.md) for the full wire and cancellation contract.
+| Field | Type | Present when |
+| --- | --- | --- |
+| `firmware` | string | always |
+| `wifi_rssi` | integer dBm | WiFi associated |
+| `volume` | integer 0–100 | audio output exists |
+| `battery` | integer 0–100 | ADC read succeeded |
+| `charging` | boolean | charging state valid |
+| `free_heap`, `minimum_free_heap_size`, `uptime_ms` | integer | always |
+| `ota_slot` | string | always |
 
-This is the native RGB light capability, not LCD backlight or a brightness MCP tool. Voice identity,
-local music playback, streaming and OTA retain their distinct execution and verification contracts.
+A failed battery read MUST omit the field. The device MUST NOT publish a guessed value.
 
-### Voice identity
+*Informative:* this is the RodakOS emission profile. Rodak accepts any object, reads `firmware`
+or `firmwareVersion`, and only logs a warning for fields outside the thing model.
 
-The shared `voice_identity` desired/reported object is:
+### 9.2 Reported shadow
+
+| Field | Content |
+| --- | --- |
+| `firmware` | Firmware version |
+| `volume` | Accepted output configuration, 0–100 |
+| `light` | `{id, available, last_error, configurationRevision, application, enabled, brightness, color{r,g,b}}` |
+| `battery`, `charging` | As in telemetry |
+| `appearance` | Appearance state, see [appearance customization](appearance-customization.md) |
+| `voice_identity` | §9.4 |
+
+Rodak stores the whole flat object as the new reported snapshot, increments the shadow version,
+and merges `voice_identity` specially. Connect and unrelated state changes also publish reported
+shadow. A reported value is a snapshot. It is not evidence that a particular desired change
+executed (§10).
+
+### 9.3 Desired shadow
+
+Rodak always sends the full snapshot:
 
 ```json
 {
-  "voice_identity": {
-    "name": "罗达克",
-    "wakeWord": "你好达克",
-    "wakeCommand": "ni hao da ke",
-    "mode": "persistent",
-    "revision": 1,
-    "expiresAtMs": 0
-  }
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "shadowVersion": 42, "version": 42,
+  "desired":  {"volume": 30},
+  "reported": {"firmware": "1.4.0", "volume": 60},
+  "state": {"desired": {"volume": 30}, "reported": {"firmware": "1.4.0", "volume": 60}},
+  "_meta": {"rodak/shadowWrite": {"dispatchId": "a3bb189e-…"}}
 }
 ```
 
-Persistent identities have no effective expiry. Temporary identities require a
-positive absolute Unix-millisecond `expiresAtMs`. RodakOS checks identity fields and reports
-`status`, `runtime`, `model`, `revisionWatermark`, `activeConfirmed` and an optional `error` in the
-shadow. The highest accepted request is retained independently of the active identity, so temporary
-expiry does not lower the watermark or allow an old request to reactivate. Same-revision content
-conflicts are rejected. A bounded schema-1 NVS record holds the complete persistent/active/accepted
-snapshot, and uncertain writes or failed runtime recovery stop identity-driven wake listening.
-`pending`, `pending_clock` and `recovery_failed` do not claim an active confirmed identity. State
-changes are reported proactively. Acoustic recognition and physical NVS power-loss acceptance remain
-separate. See [identity persistence and recovery](voice-identity-wake-word.md).
+- `shadowVersion` and `version` are equal. A new shadow has version `0` and empty maps. Each
+  stored report and each desired write increments the version.
+- Every MQTT publication has exactly one `_meta` entry: `rodak/shadowWrite` (ordinary sync,
+  including the snapshot sent on subscribe) or `rodak/deviceEffect` (correlated effect, below).
+  `GET /shadow/desired` over HTTP returns the same snapshot without `_meta`.
+- Rodak validates the desired map only as JSON (at most 64 KiB, depth 32, plain objects, no
+  `__proto__`, `constructor` or `prototype` keys), except `voice_identity`. A `volume` can therefore
+  be any JSON value. *Informative:* RodakOS acts on an integer `volume`
+  and object `light`/`appearance` and ignores other types.
 
-## 6. Realtime voice handoff
+The device reads fields from root `desired` or from `state.desired`:
 
-The confirmed token response may include a `realtimeVoice` descriptor. It is
-optional for MQTT-only rollouts, but when present it must satisfy the separate
-[realtime voice v1 contract](rodak-realtime-voice-contract-v1.md). RodakOS
-stores the descriptor with the AIoT token and uses the same access token for the
-WebSocket `Authorization: Bearer` header. It never accepts a legacy XiaoZhi
-WebSocket object as a substitute.
+| Field | Rule | Detail |
+| --- | --- | --- |
+| `volume` | Integer, clamped to 0–100 | [Volume effects](mqtt-volume-effects.md) |
+| `light` | Patch of a discovered RGB light. No `id` selects the first light. | [Light effects](mqtt-light-effects.md) |
+| `appearance` | Appearance deployment | [Appearance customization](appearance-customization.md) |
+| `voice_identity` | §9.4 | [Voice identity](voice-identity-wake-word.md) |
 
-## 7. OTA ownership
+Root `version` or `shadowVersion` is an ordering watermark. A correlated desired message carries
+`_meta["rodak/deviceEffect"]`:
 
-Rodak publishes OTA task metadata on `ota/notify`. RodakOS obtains the manifest
-and download ticket over the configured HTTP origin, stages the image on SD,
-verifies its `manifestVersion: 2` metadata, size, SHA-256, and required `rsa2048-sha256` signature, and asks the immutable Recovery application to
-write `ota_0`. Progress and the terminal result use `ota/progress` or the
-matching HTTP result endpoint. Recovery, pending verification, confirmation,
-rollback, and journal schema remain firmware facts documented in
-[MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md).
+| `schema` | `operation` | `requested` |
+| --- | --- | --- |
+| `rodak.mqtt-volume-effect.v1` | `volume.set` | `{volume}` |
+| `rodak.mqtt-light-effect.v1` | `light.patch` | `{lightId, patch}`; `patch` has only `enabled`, `brightness`, `color{r,g,b}` |
 
-## 8. Compatibility boundary and ownership
+plus `effectId` (volume: UUIDv4; light: `light:<frame shadowVersion>:<UUIDv4>`), `parametersHash`
+(SHA-256 hex), `dispatchId` (UUIDv4) and `shadowVersion`. The
+device publishes the result on `effects/receipt`, never in reported shadow. One metadata object
+selects one domain only.
 
-- Device identity and credential persistence: `DeviceCloudConfigService`.
-- MQTT connection, topics, shadow, commands, and telemetry: `UnifiedMqttService`.
-- OTA download, journal, Recovery handoff, and result reporting: `OtaUpdateService`
-  and the factory Recovery image.
-- Voice identity policy: `VoiceWakeService` through the shadow contract.
-- Realtime voice transport: `RodakRealtimeVoiceTransport` under the separate
-  `rodak-realtime-voice/v1` contract.
-- XiaoZhi compatibility: Rodak server adapter only. It is not a RodakOS wire or
-  credential path.
+The receipt has exactly one of `receipt` and `errorCode` (`stale-shadow`, `effect-conflict`,
+`effect-capacity`, `invalid-request`, `outcome-unknown`). Rodak accepts it only if it is at most
+16 KiB and `effectId`, `parametersHash`, `dispatchId`, `shadowVersion` and the original MQTT
+connection match the pending dispatch. A `receipt` must also have `physicalVerified: false` and
+`persistence: volatile`. An error-only result does not need these fields; Rodak ignores extra root
+fields. Domain rules: [volume effects](mqtt-volume-effects.md),
+[light effects](mqtt-light-effects.md).
 
-## 9. Verification anchors
+### 9.4 Voice identity
 
-- RodakOS host tests: `device_pairing_protocol_test.cc`,
-  `device_pairing_policy_test.cc`, `mqtt_credential_refresh_policy_test.cc`,
-  `voice_identity_test.cc`, and `realtime_voice_contract_test.cc` (including the
-  `features.announce`/`announceSeq` session-open shape).
-- Rodak announce gates: `tests/main-integration/voice-announce.test.ts` and
-  `proactive-voice.test.ts`. The firmware `voice.announce` command path and announce session
-  have no host test. They need device validation.
-- Device workflow: `serial-provisioning.md` and the Recovery-safe
+```json
+{"voice_identity": {"name": "罗达克", "wakeWord": "你好达克", "wakeCommand": "ni hao da ke",
+                    "mode": "persistent", "revision": 1}}
+```
+
+- `mode` is `persistent` or `temporary`. A new or changed temporary identity MUST have a future
+  absolute Unix millisecond `expiresAtMs` (a safe integer). Rodak can republish an unchanged
+  temporary identity after it expired; the device then reports `expired`. Rodak omits
+  `expiresAtMs` for a persistent identity.
+  *Informative:* RodakOS also accepts `expiresAtMs: 0` there.
+- `revision` is a positive uint32. Text fields are trimmed and nonempty, with no C0 control or
+  DEL. `name` and `wakeWord` are at most 32 UTF-8 bytes, `wakeCommand` at most 128.
+- Reported state adds `status` (`applied`, `expired`, `pending`, `pending_clock`, `rejected`,
+  `recovery_failed`), `runtime`, `model`, `revisionWatermark` (at least the revision, at most
+  uint32), `activeConfirmed` and optional `error`.
+- A revision at or below the watermark MUST NOT reactivate. The same revision with different
+  content is rejected.
+- `voice_identity` has its own revision semantics. It MUST NOT be treated as a volume receipt.
+
+## 10. Evidence levels
+
+Each signal proves only its own level. Higher levels are not implied.
+
+| Level | Signal | Proves | Does not prove |
+| --- | --- | --- | --- |
+| L0 | MQTT publish completes | The SDK accepted the message | Broker or device receipt |
+| L1 | Command ACK `ok` | The device admitted and accepted the command | Completion, playback, physical effect |
+| L2 | Reported shadow value | The device's current accepted configuration | That a specific desired change caused it |
+| L3 | Effect receipt (`effects/receipt`) | One correlated effect reached the stated software stage | Physical output |
+| L4 | Hardware observation | Physical effect | – |
+
+The firmware currently claims at most L3 for volume and light, with `physicalVerified: false`.
+Rodak's local desired-state compensation does not prove physical restoration.
+
+## 11. Realtime voice handoff
+
+Rodak sends `realtimeVoice` in both the bootstrap and every token response. It MUST satisfy the
+[realtime voice v1 contract](rodak-realtime-voice-contract-v1.md). Rodak's value: endpoint
+`<ws|wss>://<http origin>/api/v1/aiot/devices/realtime-voice`, Opus 16 kHz up and 24 kHz down,
+60 ms frames, limits 8192/65536, all seven capabilities, all twelve events, all three VAD
+strategies, preferred `hybrid-fallback`. *Informative:* RodakOS treats the descriptor as optional
+so that it also works with MQTT-only servers.
+RodakOS stores the descriptor with the AIoT token and sends the same access token as
+`Authorization: Bearer`. It MUST NOT accept a legacy XiaoZhi WebSocket object instead.
+
+## 12. OTA
+
+```mermaid
+sequenceDiagram
+  participant S as Rodak
+  participant D as RodakOS
+  participant R as Recovery app
+  S->>D: MQTT ota/notify {protocolVersion, taskNo, packageCode, fromVersion?, toVersion}
+  D->>S: GET /api/v1/ota/check
+  S-->>D: {upgradeAvailable, taskNo, packageCode, fromVersion, toVersion}
+  D->>S: POST /api/v1/ota/download-ticket {taskNo}
+  S-->>D: {taskNo, ticketId (UUID), expiresInSeconds: 600}
+  D->>S: GET /api/v1/ota/manifest/{taskNo}?ticketId=...
+  D->>S: GET manifest.url, normally /api/v1/ota/artifacts/{taskNo}?ticketId=...
+  D-->>S: ota/progress check, prepare, download (QoS 0), staged (QoS 1)
+  D->>R: reboot into Recovery, write ota_0
+  D->>S: POST /api/v1/ota/tasks/{taskNo}/result {success, detail}
+  D-->>S: ota/progress success | failed | result_rejected
+```
+
+- Task numbers have the form `ota_<epoch ms>_<8 hex>`.
+- All OTA HTTP calls use `http_base_url` and `Authorization: Bearer <access token>`.
+- Rodak does not notify a v2 task that has no per-task signature.
+- The manifest RodakOS installs MUST have `manifestVersion: 2`, matching `taskNo` and `version`,
+  `packageCode`, `fileSize > 0`, `checksumType: sha256` with 64 lowercase hex characters,
+  `signatureType: rsa2048-sha256` and a 512 lowercase hex `signatureValue`, optional
+  `signingKeyId`. The signature is RSA PKCS#1 v1.5 SHA-256 over:
+
+  ```text
+  rodakos-ota-v2\nrymcu-bigsmart\nota_0\nrsa2048-sha256\n<taskNo>\n<version>\n<fileSize>\n<checksumValue>\n
+  ```
+
+  *Informative:* Rodak can also serve legacy manifests and external URLs. RodakOS rejects them.
+- Manifest errors are business codes: 403 invalid or expired ticket, 404 no owned task, 409
+  terminal task or missing signature.
+- The artifact route returns HTTP 200 with the image, or HTTP 206 for a satisfiable `Range`.
+  Errors (ticket, ownership, terminal task, missing file) use the business code as the HTTP status
+  (403, 404, 409) with the JSON envelope. The device MUST NOT write a non-2xx body as firmware.
+- `Range` follows RFC 9110 for one range: `bytes=a-b`, `bytes=a-` and the suffix `bytes=-N`
+  (last N bytes) give 206, with an end past the file clipped. A start at or past the file size,
+  or `bytes=-0`, gives HTTP 416 with `Content-Range: bytes */<size>`. A malformed range, `b < a`
+  or several ranges are ignored: full image, HTTP 200. *Informative:* RodakOS does not send
+  `Range`.
+- When Rodak attaches the signature itself, it checks the format (512 lowercase hex) and verifies
+  the RSA signature only if the attachment request supplies a nonblank `publicKeyPem`. When
+  serving, Rodak starts from the stored manifest snapshot, overwrites `taskNo`, `packageCode`,
+  `version`, `fileSize`, `checksumType` and `checksumValue` from the task, package or artifact (a
+  value can be absent for a legacy external package). `url` is the hosted artifact URL, built from
+  the request's HTTP origin (in pin mode, the pinned TLS name and HTTPS port) and the current
+  ticket, or else the snapshot's trimmed external URL.
+  If the task has an attached
+  signature, also overwrites `signatureType` and `signatureValue`; `signingKeyId` comes from the
+  attachment, or from the snapshot if the attachment has none. RodakOS always verifies the signature
+  itself.
+- The device verifies size, SHA-256 and signature before Recovery writes `ota_0`.
+- Progress never completes a task. Only `POST /tasks/{taskNo}/result` records `succeeded` or
+  `failed`. `success` MUST be a JSON boolean; any other type is business 400 and does not change
+  the task.
+- *Informative:* on MQTT, Rodak keeps `stepCode` only as a trimmed nonblank string, coerces
+  `progressPercent` with `Number()` (non-finite → 0, no range clamp) and drops `detail`. Over HTTP
+  it passes `Number(progressPercent ?? 0)` unchanged. Both HTTP progress and result can return
+  business 404 for an unknown or foreign task. The step list
+  in the diagram is the RodakOS emission profile.
+- Failure `errorCode` values (for example `MANIFEST_INVALID`, `SIGNATURE_INVALID`,
+  `SD_SPACE_LOW`) and the journal, rollback and confirmation rules are in
+  [MQTT and SD Recovery OTA](mqtt-ota-sd-recovery.md).
+
+## 13. Ownership
+
+| Concern | Owner |
+| --- | --- |
+| Device identity and credential persistence | `DeviceCloudConfigService` |
+| MQTT connection, topics, shadow, commands, telemetry | `UnifiedMqttService` |
+| OTA download, journal, Recovery handoff, result | `OtaUpdateService` and the factory Recovery image |
+| Voice identity policy | `VoiceWakeService` through shadow |
+| Realtime voice transport | `RodakRealtimeVoiceTransport`, under `rodak-realtime-voice/v1` |
+| XiaoZhi compatibility | None. XiaoZhi is not a RodakOS wire or credential path. |
+
+## 14. Machine-readable contract and verification
+
+[`contracts/rodak-aiot/v1/`](../contracts/rodak-aiot/v1/README.md) holds:
+
+- `openapi.yaml`: the HTTP operations of §4 and §12.
+- `asyncapi.yaml`: the MQTT channels of §7.3.
+- `schemas/*.schema.json`: JSON Schema 2020-12 for each payload.
+- `examples/valid/` and `examples/invalid/`: fixtures that each schema MUST accept or reject.
+  Most valid fixtures share one device, one OTA task and Rodak's real ID formats. Each binding
+  request ID is one scenario (manual, trust setup, expired, revoked). Fixtures named for an edge
+  rule (for example `binding-request.ascii-key-128-plus-space`) are standalone. The OTA signature verifies
+  with `examples/ota-signing-public-key.pem` (test key only).
+
+Schema profiles:
+
+| Payload direction | Schema describes |
+| --- | --- |
+| Rodak → device (HTTP responses, desired, notify, commands) | What Rodak emits. |
+| Device → Rodak (requests, telemetry, report, ACK, receipt, progress) | What RodakOS emits. The schema description states where Rodak accepts more; invalid fixtures there are RodakOS-profile negatives that Rodak may still accept. |
+
+`python3 tools/check_aiot_contract.py` validates every fixture, every schema reference and the OTA
+fixture signature. Rodak maintains the authoritative copy of these schemas and validates real
+server responses against them; this repository mirrors it byte for byte.
+The RodakOS host test `contract_fixture_test.cc` feeds the same fixtures to the firmware parsers.
+
+Rodak's code is the source of truth. When it changes a wire shape, update this document, the
+schema and the fixtures in one change. The alias table in §7.2 and the *Informative* notes
+describe what RodakOS also accepts.
+
+Other verification anchors:
+
+- RodakOS host tests: `device_pairing_protocol_test.cc`, `device_pairing_policy_test.cc`,
+  `mqtt_credential_refresh_policy_test.cc`, `voice_identity_test.cc`,
+  `realtime_voice_contract_test.cc`, `tests/mqtt_volume_service/`.
+- Rodak server tests cover pairing, token refresh, MQTT, shadow, commands, announce and OTA, and
+  validate real responses against `contracts/`.
+- The firmware `voice.announce` path has no host test. It needs device validation.
+- Device workflow: [serial provisioning](serial-provisioning.md) and the Recovery-safe
   `flash_and_test.ps1` path.
-- Rodak server gates: device pairing, token refresh, MQTT/OTA, shadow, and
-  hardware gate suites in the Rodak repository.
-- Ordinary commands: independent `tests/mqtt_volume_service/mqtt_command_service_test.cc`
-  and the command CLI, plus Rodak `tests/main-integration/command-ack-gateway.test.ts`.
-  The service host target now includes 55 command cases plus 31 effect cases. Its Debug and
-  ASan/UBSan/leak runs pass. Input-controller validation uses production code and real host LVGL
-  in `tests/remote_input`. Use the separate frozen-input runner and current
-  [build evidence](ota-release-readiness.md) for exact source identity and scope. No serial, flash,
-  device NVS or physical hardware run was performed for this slice.
+
+Current test counts and build evidence are in [AIoT implementation notes](aiot-implementation-notes.md#verification-evidence).
+
+## 15. Changelog
+
+| Date | Change |
+| --- | --- |
+| 2026-11-20 | Corrected to the server's behavior: business errors keep HTTP 200 (except the artifact route and access-token rejection); binding statuses `pending`/`awaiting-device`/`confirmed`/`expired`/`revoked`; confirmed `expiresAt` is Unix seconds; `/auth/token` rejects with 400/403/404; full token response with `mqttConnectInfo`; `home_enabled` is an integer; desired shadow carries both state copies and `_meta`; `realtimeVoice` is always sent; stream commands carry `rodak/videoSignal`; OTA notify/check/ticket/manifest fields; OTA result needs a boolean `success`; artifact `Range` follows RFC 9110. Added `/trust`, the HTTP fallbacks and cross-field schema rules. |
+| 2026-11-20 | Split into contract, [command semantics](mqtt-command-semantics.md) and [implementation notes](aiot-implementation-notes.md). Added diagrams, tables and `contracts/rodak-aiot/v1/`. |
+| 2026-11-05 | Rodak's `rymcu-bigsmart` thing model declares the reported light fields. |
+| 2026-10-26 | Rodak stopped sampling PC status itself. A future host collector may forward data to `pc_status`. |
+| 2026-10-21 | Session-scoped voice MCP volume path removed ([archive](archive/2026-10-21-voice-volume-mcp.md)). |
+| 2026-10-06 | Exact stream Stop (026) with `startCommandNo` and `stopOutcome`. |

@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/session-open.schema.json",
+  "title": "session.open (device -> server)",
+  "description": "First message on each connection. features.announce and features.announceSeq appear only on a playback-only announce session (contract section 8). generation is non-zero and wraps to 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "session.open"
+    },
+    "protocol": {
+      "const": "rodak-realtime-voice"
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "vadStrategies": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "device-authoritative",
+          "server-authoritative",
+          "hybrid-fallback"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "preferredVadStrategy": {
+      "enum": [
+        "device-authoritative",
+        "server-authoritative",
+        "hybrid-fallback"
+      ]
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mcp",
+        "device_vad_epoch"
+      ],
+      "properties": {
+        "mcp": {
+          "const": false
+        },
+        "device_vad_epoch": {
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "announce": {
+          "const": true
+        },
+        "announceSeq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      },
+      "dependentRequired": {
+        "announce": [
+          "announceSeq"
+        ],
+        "announceSeq": [
+          "announce"
+        ]
+      }
+    },
+    "uplink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "const": 16000
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "const": 60
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    },
+    "downlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "enum": [
+            8000,
+            12000,
+            16000,
+            24000,
+            48000
+          ]
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "enum": [
+            5,
+            10,
+            20,
+            40,
+            60
+          ]
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    }
+  },
+  "required": [
+    "event",
+    "protocol",
+    "protocolVersion",
+    "generation",
+    "vadStrategies",
+    "preferredVadStrategy",
+    "features",
+    "uplink",
+    "downlink"
+  ],
+  "x-preferredInList": {
+    "value": "preferredVadStrategy",
+    "list": "vadStrategies"
+  }
+}

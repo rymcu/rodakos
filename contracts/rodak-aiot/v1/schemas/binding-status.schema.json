@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/binding-status.schema.json",
+  "title": "GET /binding/requests/{requestId}/status data",
+  "description": "Rodak emits exactly five status values. It never emits approved or rejected. A confirmed response spreads the token response over the status record, so expiresAt becomes Unix seconds . An authenticated poll of a still-stored expired request returns status expired and deletes it; creation and listing also purge expired records, so a poll may get 404 without seeing expired.",
+  "type": "object",
+  "required": [
+    "requestId",
+    "deviceKey",
+    "productKey",
+    "status",
+    "requestedAt",
+    "expiresAt"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stored device ID. New devices get a UUIDv4; existing devices keep their ID."
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "deviceName": {
+      "type": "string"
+    },
+    "productKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time",
+      "x-calendarDate": true,
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+      "description": "Date.toISOString(): always three fraction digits."
+    },
+    "confirmedAt": {
+      "type": "string",
+      "format": "date-time",
+      "x-calendarDate": true,
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+      "description": "Date.toISOString(): always three fraction digits."
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "awaiting-device",
+        "confirmed",
+        "revoked",
+        "expired"
+      ]
+    },
+    "trustSetup": {}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "revoked",
+            "expired"
+          ]
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "trustSetup": {
+          "const": true
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "accessToken"
+            ]
+          },
+          {
+            "required": [
+              "deviceToken"
+            ]
+          },
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "required": [
+              "unifiedMqtt"
+            ]
+          },
+          {
+            "required": [
+              "mqttConnectInfo"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "trustSetup"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "accessToken"
+            ]
+          },
+          {
+            "required": [
+              "deviceToken"
+            ]
+          },
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "required": [
+              "unifiedMqtt"
+            ]
+          },
+          {
+            "required": [
+              "mqttConnectInfo"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "status": {
+          "const": "awaiting-device"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "trustSetup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "srpA": {
+              "type": "string",
+              "pattern": "^(?:[A-Za-z0-9+/]{4}){128}$",
+              "description": "Base64 of exactly 384 bytes."
+            },
+            "srpM1": {
+              "type": "string",
+              "pattern": "^(?:[A-Za-z0-9+/]{4}){21}[A-Za-z0-9+/][AQgw]==$",
+              "description": "Base64 of exactly 64 bytes."
+            },
+            "serverBind": {
+              "type": "string",
+              "pattern": "^(?:[A-Za-z0-9+/]{4}){10}[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=$",
+              "description": "Base64 of exactly 32 bytes."
+            }
+          },
+          "required": [
+            "srpA",
+            "srpM1",
+            "serverBind"
+          ]
+        }
+      }
+    },
+    {
+      "required": [
+        "deviceId",
+        "confirmedAt"
+      ],
+      "properties": {
+        "status": {
+          "const": "confirmed"
+        },
+        "trustSetup": {
+          "const": true
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "token-response.schema.json"
+        }
+      ]
+    },
+    {
+      "description": "Defensive branch: a confirmed record without deviceId is returned bare.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "deviceId"
+            ]
+          },
+          {
+            "required": [
+              "accessToken"
+            ]
+          },
+          {
+            "required": [
+              "deviceToken"
+            ]
+          },
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "required": [
+              "unifiedMqtt"
+            ]
+          },
+          {
+            "required": [
+              "mqttConnectInfo"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "status": {
+          "const": "confirmed"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "trustSetup": {
+          "const": true
+        }
+      }
+    }
+  ]
+}

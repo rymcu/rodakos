@@ -1,0 +1,8 @@
+{
+  "requestId": "3f2b8c1e9a4d4f6b8e2a1c5d7b9e0f12",
+  "pairingCode": "48291307",
+  "expiresAt": "2026-02-31T08:10:00.000Z",
+  "status": "pending",
+  "pollIntervalSeconds": 2,
+  "requestToken": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+}

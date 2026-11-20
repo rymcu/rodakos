@@ -1,0 +1,7 @@
+{
+  "name": "小达",
+  "wakeWord": "你好小达",
+  "wakeCommand": "ni hao xiao da",
+  "mode": "temporary",
+  "revision": 2
+}

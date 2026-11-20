@@ -134,4 +134,4 @@ WSL Debian 的 Debug 和 ASan/UBSan/leak 均通过完整 MQTT 的 8 个 CTest：
 025 已取得上述有限实机恢复证据。更广语音并发、撤权、异常 SDK 停止及资源门禁仍需
 独立验收；024 的主动隔离重启历史继续保留，不能追溯改写为已通过。
 
-相关合同：[MQTT volume effects](mqtt-volume-effects.md)、[命令结果与重放边界](rodak-aiot-contract-v1.md#command-results-and-replay-boundary)、[语音与 Device Cloud 恢复](voice-assistant.md)、[可信服务器与迁址](trusted-server-discovery.md)、[发布验收](ota-release-readiness.md)。
+相关合同：[MQTT volume effects](mqtt-volume-effects.md)、[命令结果与重放边界](mqtt-command-semantics.md#command-results-and-replay-boundary)、[语音与 Device Cloud 恢复](voice-assistant.md)、[可信服务器与迁址](trusted-server-discovery.md)、[发布验收](ota-release-readiness.md)。

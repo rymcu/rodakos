@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/voice-identity.schema.json",
+  "title": "voice_identity desired object",
+  "description": "Rodak's voice identity rules: trimmed, nonempty, no C0 controls or DEL, UTF-8 byte limits 32/32/128 (the schema checks characters). A future expiry is required only for a new or changed temporary identity; an unchanged one can be republished after it expired. Rodak omits expiresAtMs for persistent identities. RodakOS also accepts expiresAtMs 0 there.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "wakeWord",
+    "wakeCommand",
+    "mode",
+    "revision"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+      "x-maxUtf8Bytes": 32
+    },
+    "wakeWord": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+      "x-maxUtf8Bytes": 32
+    },
+    "wakeCommand": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+      "x-maxUtf8Bytes": 128
+    },
+    "mode": {
+      "enum": [
+        "persistent",
+        "temporary"
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "expiresAtMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "if": {
+    "properties": {
+      "mode": {
+        "const": "temporary"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "expiresAtMs"
+    ]
+  },
+  "else": {
+    "not": {
+      "required": [
+        "expiresAtMs"
+      ]
+    }
+  }
+}

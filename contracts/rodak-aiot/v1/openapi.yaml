@@ -1,0 +1,586 @@
+openapi: 3.1.0
+info:
+  title: Rodak AIoT v1 device HTTP API
+  version: "1"
+  description: |
+    Device-facing HTTP operations of `rodak-aiot/v1`, as the Rodak server implements them.
+    Normative prose: docs/rodak-aiot-contract-v1.md (§4, §12).
+
+    Error model. Every JSON body is the envelope `{code, message, data}`
+    (schemas/envelope.schema.json). Error transports:
+
+    - Business errors: **HTTP 200**, envelope `code` 400/401/403/404/409/410/413/429/500/503,
+      `data: null`. This is the normal case, also for a wrong pairing request token.
+    - Access-token pre-handler failures (missing, invalid, revoked bearer): **HTTP 401** and
+      envelope code 401.
+    - The binary artifact route `/api/v1/ota/artifacts/{taskNo}` and the Appearance routes
+      (`/api/v1/aiot/appearance/*`, not listed here) set the HTTP status to the business code.
+
+    A client MUST check the HTTP status and then the envelope `code`. Each HTTP 200 response below
+    is a `oneOf` of the route-specific success and the business error.
+servers:
+  - url: "{origin}"
+    variables:
+      origin:
+        default: http://rodak.local:9080
+        examples: ["http://192.168.1.20:9080", "https://rodak-a1b2c3d4e5f60718.local:9443"]
+        description: |
+          Origin of the provisioned bootstrap URL. Rodak's default HTTP port is 9080; the host is the
+          configured advertise host or a local IPv4 address. Pin mode: https://rodak-<16 hex>.local:<port>.
+components:
+  securitySchemes:
+    requestToken:
+      type: http
+      scheme: bearer
+      description: Binding request token (43-character base64url). Status polls and /trust only.
+    accessToken:
+      type: http
+      scheme: bearer
+      description: Device access token (HS256 JWT) from the token response.
+  schemas:
+    BusinessError:
+      type: object
+      required: [code, message, data]
+      properties:
+        code: {enum: [400, 401, 403, 404, 409, 410, 413, 429, 500, 503]}
+        message: {type: string}
+        data: {type: "null"}
+    Success:
+      type: object
+      required: [code, message, data]
+      properties:
+        code: {const: 200}
+        message: {type: string}
+        data: {}
+  responses:
+    Unauthorized:
+      description: Access-token pre-handler rejection. HTTP 401 and envelope code 401.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, message, data]
+            properties:
+              code: {const: 401}
+              message: {type: string}
+              data: {type: "null"}
+    ArtifactError:
+      description: Artifact download error. HTTP status equals the envelope code.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/BusinessError"}
+    TrueOrError:
+      description: "data: true, or a business error"
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - {$ref: "#/components/schemas/Success"}
+                  - properties: {data: {const: true}}
+              - {$ref: "#/components/schemas/BusinessError"}
+paths:
+  /api/v1/aiot/devices/bootstrap:
+    get:
+      operationId: getBootstrap
+      summary: Capability and routing discovery
+      responses:
+        "200":
+          description: "data: bootstrap"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code: {const: 200}
+                  message: {type: string}
+                  data: {$ref: "schemas/bootstrap.schema.json"}
+  /api/v1/aiot/devices/binding/request:
+    post:
+      operationId: createBindingRequest
+      summary: Start manual pairing or LAN trust setup
+      description: |
+        Trust setup (body `trustSetup`) is accepted only on the HTTPS listener. Errors: 400 invalid
+        input or device/product alias conflict; 413 if the stored request (body without secrets and
+        without trustSetup, plus the secret hash for manual pairing) is over 64 KiB; 429 if 256 unexpired requests exist, the device has 3 pending
+        requests, or the requester sent 20 requests in its current fixed 60-second window; 503 pairing
+        service not ready.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "schemas/binding-request.schema.json"}
+      responses:
+        "200":
+          description: "data: binding-request-created, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data: {$ref: "schemas/binding-request-created.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+  /api/v1/aiot/devices/binding/requests/{requestId}/status:
+    get:
+      operationId: getBindingStatus
+      summary: Poll binding status; a confirmed status carries credentials
+      description: |
+        Business errors: 401 missing or wrong request token, 404 unknown or already-removed request.
+        An authenticated poll of a still-stored expired request returns `status: expired` and deletes
+        it. Creating or listing requests also purges expired records, so a poll can get 404 without
+        seeing `expired`. A confirmed record without deviceId returns the bare status record
+        (success). A confirmed record whose device is no longer active or bound returns business 403.
+      security: [{requestToken: []}]
+      parameters:
+        - {name: requestId, in: path, required: true, schema: {type: string, pattern: "^[0-9a-f]{32}$"}}
+      responses:
+        "200":
+          description: "data: binding-status, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data: {$ref: "schemas/binding-status.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+  /api/v1/aiot/devices/binding/requests/{requestId}/trust:
+    post:
+      operationId: completeTrustSetup
+      summary: LAN trust setup proof (HTTPS listener only)
+      description: |
+        Body: `{abort: <any>}`, or the proof `{srpM2, deviceBind, credentials}`. `srpM2` is base64 of 64
+        bytes, `deviceBind` base64 of 32 bytes, and `credentials` is `{nonce, ciphertext}`: AES-256-GCM
+        with a 12-byte nonce, ciphertext plus 16-byte tag as base64 of 18 to 8192 bytes. It decrypts to
+        an object with a nonempty `deviceSecret` of at most 512 UTF-16 code units. A bad proof revokes
+        the request and returns business 401.
+        Returns `{status: "confirmed", sealed: {nonce, ciphertext}}` or `{status: "revoked"}`. The
+        sealed payload carries the server trust and a replacement request token for the next status
+        poll. See docs/lan-onboarding-design.md. Expired request: business 410.
+      security: [{requestToken: []}]
+      parameters:
+        - {name: requestId, in: path, required: true, schema: {type: string, pattern: "^[0-9a-f]{32}$"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [abort]
+                - type: object
+                  required: [srpM2, deviceBind, credentials]
+                  not: {required: [abort]}
+                  properties:
+                    srpM2: {type: string, pattern: "^(?:[A-Za-z0-9+/]{4}){21}[A-Za-z0-9+/][AQgw]==$"}
+                    deviceBind: {type: string, pattern: "^(?:[A-Za-z0-9+/]{4}){10}[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=$"}
+                    credentials:
+                      type: object
+                      required: [nonce, ciphertext]
+                      properties:
+                        nonce: {type: string, pattern: "^[A-Za-z0-9+/]{16}$"}
+                        ciphertext:
+                          type: string
+                          minLength: 24
+                          maxLength: 10924
+                          description: |
+                            Canonical base64 (re-encodes to the same text) of 18 to 8192 bytes. The two `not`
+                            branches exclude 16-17 bytes (24 characters with padding) and 8193-8194 bytes
+                            (10924 characters without padding).
+                          not:
+                            anyOf:
+                              - {minLength: 24, maxLength: 24, pattern: "="}
+                              - {minLength: 10924, maxLength: 10924, pattern: "^[^=]*$"}
+                          pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$"
+      responses:
+        "200":
+          description: "data: {status, sealed?}, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data:
+                        oneOf:
+                          - type: object
+                            additionalProperties: false
+                            required: [status]
+                            properties: {status: {const: revoked}}
+                          - type: object
+                            additionalProperties: false
+                            required: [status, sealed]
+                            properties:
+                              status: {const: confirmed}
+                              sealed:
+                                type: object
+                                required: [nonce, ciphertext]
+                                properties:
+                                  nonce: {type: string}
+                                  ciphertext: {type: string}
+                  - {$ref: "#/components/schemas/BusinessError"}
+  /api/v1/aiot/devices/auth/token:
+    post:
+      operationId: refreshDeviceToken
+      summary: Refresh the access token of a bound device
+      description: |
+        Business errors: 400 missing or invalid credential field, 404 unknown device, 403 product or
+        secret mismatch, inactive device, or device not paired. Rodak never sends 401 here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "schemas/token-refresh-request.schema.json"}
+      responses:
+        "200":
+          description: "data: token-response, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data: {$ref: "schemas/token-response.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+  /api/v1/aiot/devices/binding/unbind:
+    post:
+      operationId: unbindDevice
+      summary: Server-confirmed unbind. The request body is ignored.
+      security: [{accessToken: []}]
+      responses:
+        "200":
+          description: "data: unbind-response, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data: {$ref: "schemas/unbind-response.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/heartbeat:
+    post:
+      operationId: heartbeat
+      summary: Optional HTTP liveness (RodakOS uses MQTT)
+      security: [{accessToken: []}]
+      responses:
+        "200":
+          description: "data: heartbeat-response, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties: {data: {$ref: "schemas/heartbeat-response.schema.json"}}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/telemetry:
+    post:
+      operationId: postTelemetry
+      summary: HTTP telemetry fallback; data is true
+      security: [{accessToken: []}]
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "schemas/telemetry.schema.json"}
+      responses:
+        "200": {$ref: "#/components/responses/TrueOrError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/shadow/report:
+    post:
+      operationId: postShadowReport
+      summary: HTTP reported-shadow fallback. Body is `{reported}` or the reported object.
+      security: [{accessToken: []}]
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200":
+          description: "data: the stored shadow record or null, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties:
+                          data:
+                            oneOf:
+                              - {type: "null"}
+                              - type: object
+                                required: [deviceId, deviceKey, desired, reported, delta, version]
+                                description: Stored shadow document; desired, reported and delta are JSON text.
+                                properties:
+                                  deviceId: {type: string}
+                                  deviceKey: {type: string}
+                                  desired: {type: string}
+                                  reported: {type: string}
+                                  delta: {type: string}
+                                  version: {type: integer, minimum: 0}
+                                  updatedAt: {type: string}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/shadow/desired:
+    get:
+      operationId: getShadowDesired
+      summary: HTTP desired-shadow fallback
+      security: [{accessToken: []}]
+      responses:
+        "200":
+          description: "data: the desired snapshot without _meta, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties:
+                          data:
+                            type: object
+                            required: [deviceKey, shadowVersion, version, desired, reported, state]
+                            not: {required: [_meta]}
+                            properties:
+                              shadowVersion: {type: integer, minimum: 0}
+                              version: {type: integer, minimum: 0}
+                              desired: {type: object}
+                              reported: {type: object}
+                              state:
+                                type: object
+                                required: [desired, reported]
+                                properties:
+                                  desired: {type: object}
+                                  reported: {type: object}
+                            x-equalFields: [[shadowVersion, version], [desired, state.desired], [reported, state.reported]]
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/commands/pull:
+    get:
+      operationId: pullCommands
+      summary: HTTP command fallback
+      security: [{accessToken: []}]
+      parameters:
+        - name: limit
+          in: query
+          description: Converted with Number(), floored and clamped to 1..100. Non-finite values use 20.
+          schema: {type: string, default: "20"}
+      responses:
+        "200":
+          description: "data: pending and delivered command records, or business 503 if the command service is off"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties:
+                          data:
+                            type: array
+                            items: {$ref: "schemas/command-record.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/commands/{commandNo}/ack:
+    post:
+      operationId: ackCommand
+      summary: HTTP command ACK. Body is the ACK or a wrapper `{replyPayload, success}`.
+      description: |
+        Rodak unwraps `replyPayload`. If the wrapper has `success: false` and the inner ACK is not
+        classified as a failure, Rodak adds `ok: false` to the wrapper and classifies that; an outer
+        `event: signal|state` still wins as sideband.
+      security: [{accessToken: []}]
+      parameters:
+        - {name: commandNo, in: path, required: true, schema: {type: string, maxLength: 128}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - {$ref: "schemas/command-ack.schema.json"}
+                - type: object
+                  required: [replyPayload]
+                  properties:
+                    replyPayload: {}
+                    success: {type: boolean}
+      responses:
+        "200": {$ref: "#/components/responses/TrueOrError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/ota/check:
+    get:
+      operationId: checkOta
+      security: [{accessToken: []}]
+      responses:
+        "200":
+          description: "data: ota-check, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties: {data: {$ref: "schemas/ota-check.schema.json"}}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/ota/download-ticket:
+    post:
+      operationId: createOtaTicket
+      security: [{accessToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskNo]
+              properties: {taskNo: {type: string, minLength: 1}}
+      responses:
+        "200":
+          description: "data: ota-ticket, or business 404 (no owned task) / 409 (task terminal)"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data: {$ref: "schemas/ota-ticket.schema.json"}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/ota/manifest/{taskNo}:
+    get:
+      operationId: getOtaManifest
+      security: [{accessToken: []}]
+      parameters:
+        - {name: taskNo, in: path, required: true, schema: {type: string}}
+        - {name: ticketId, in: query, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: |
+            data: a manifest, or business 403 (invalid or expired ticket), 404 (no owned task),
+            409 (terminal task or missing per-task signature). The first branch is any manifest Rodak
+            can serve (legacy, external or missing URL included); ota-manifest.schema.json is the
+            RodakOS install profile that the device then enforces.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, message, data]
+                    properties:
+                      code: {const: 200}
+                      message: {type: string}
+                      data:
+                        type: object
+                        description: |
+                          Any manifest Rodak can serve, including a legacy one for an external package.
+                          Rodak always sets taskNo,
+                          packageCode and version. fileSize (positive), checksumType, checksumValue and url are
+                          present when known. Other snapshot fields pass through, except that an attached task
+                          signature replaces signatureType and signatureValue. A manifestVersion 2 manifest is
+                          served only with a nonempty signatureValue (otherwise business 409); signatureType can
+                          be missing on a pre-signed snapshot. RodakOS installs only manifests that match
+                          schemas/ota-manifest.schema.json.
+                        required: [taskNo, packageCode, version]
+                        properties:
+                          taskNo: {type: string, minLength: 1}
+                          packageCode: {type: string}
+                          version: {type: string}
+                          fileSize: {type: number, not: {const: 0}, description: "Stored value; 0 is omitted."}
+                          checksumType: {type: string}
+                          checksumValue: {type: string}
+                          url: {type: string}
+                        if:
+                          required: [manifestVersion]
+                          properties: {manifestVersion: {const: 2}}
+                        then:
+                          required: [signatureValue]
+                          properties:
+                            signatureValue: {type: string, minLength: 1}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/ota/artifacts/{taskNo}:
+    get:
+      operationId: downloadOtaArtifact
+      summary: Rodak-hosted image. A manifest may also point at an external URL.
+      description: |
+        Errors (ticket, ownership, terminal task, missing file) use the business code as the HTTP
+        status, with the JSON envelope. One Range per RFC 9110: `bytes=a-b`, `bytes=a-` and the
+        suffix `bytes=-N` (last N bytes) give 206, an end past the file is clipped. A start at or
+        past the file size, or `bytes=-0`, gives 416 with `Content-Range: bytes */<size>`. A
+        malformed range, `b < a` or several ranges are ignored and the full image is sent with 200.
+      security: [{accessToken: []}]
+      parameters:
+        - {name: taskNo, in: path, required: true, schema: {type: string}}
+        - {name: ticketId, in: query, required: true, schema: {type: string}}
+        - {name: Range, in: header, required: false, schema: {type: string}}
+      responses:
+        "200":
+          description: Full image
+          content:
+            application/octet-stream:
+              schema: {type: string, contentMediaType: application/octet-stream}
+        "206":
+          description: Requested byte range
+          content:
+            application/octet-stream:
+              schema: {type: string, contentMediaType: application/octet-stream}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/ArtifactError"}
+        "404": {$ref: "#/components/responses/ArtifactError"}
+        "409": {$ref: "#/components/responses/ArtifactError"}
+        "416":
+          description: "Range not satisfiable. Header `Content-Range: bytes */<size>`, empty body."
+  /api/v1/ota/tasks/{taskNo}/progress:
+    post:
+      operationId: reportOtaProgressHttp
+      summary: HTTP progress fallback (RodakOS uses MQTT ota/progress)
+      security: [{accessToken: []}]
+      parameters:
+        - {name: taskNo, in: path, required: true, schema: {type: string}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                progressPercent: {description: "Passed as Number(progressPercent ?? 0), unchanged."}
+                stepCode: {type: string}
+                detail: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/TrueOrError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/ota/tasks/{taskNo}/result:
+    post:
+      operationId: reportOtaResult
+      security: [{accessToken: []}]
+      parameters:
+        - {name: taskNo, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "schemas/ota-result-request.schema.json"}
+      description: "`success` must be a JSON boolean; any other type is business 400 and does not change the task."
+      responses:
+        "200": {$ref: "#/components/responses/TrueOrError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}

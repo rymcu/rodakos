@@ -1,0 +1,7 @@
+{
+  "firmware": "1.4.0",
+  "free_heap": 182344,
+  "minimum_free_heap_size": 120112,
+  "uptime_ms": 1000,
+  "ota_slot": "ota_0"
+}
