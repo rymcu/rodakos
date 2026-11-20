@@ -609,14 +609,16 @@ void SettingsApp::UpdateWiFiDetailPage() {
     const std::string ssid = connected ? wifi->GetConnectedSSID() : saved;
     lv_label_set_text(detail_ssid_label_, ssid.empty() ? "—" : ssid.c_str());
 
+    // The rejection belongs to the network that was tried, which may differ from the saved one.
+    const bool rejected = !connected && !ssid.empty() && wifi->AuthRejectedSSID() == ssid;
     const char* status_text = connected ? "已连接"
         : status == WiFiStatus::kConnecting ? "正在连接…"
-        : wifi->LastFailureWasAuthRejected() ? "密码错误"
+        : rejected ? "密码错误"
         : "未连接";
     lv_label_set_text(detail_status_label_, status_text);
     lv_obj_set_style_text_color(detail_status_label_,
                                 connected ? rodakos_theme_success()
-                                : wifi->LastFailureWasAuthRejected() ? rodakos_theme_error()
+                                : rejected ? rodakos_theme_error()
                                 : rodakos_theme_text_primary(),
                                 0);
 
@@ -691,17 +693,29 @@ void SettingsApp::OnConnectResult(WiFiStatus status, const std::string& ssid) {
             OnWiFiScanComplete(wifi_scan_results_);
             break;
         }
-        case WiFiStatus::kFailed:
+        case WiFiStatus::kFailed: {
             ESP_LOGE(TAG, "WiFi connection failed: %s", ssid.c_str());
-            if (wifi != nullptr && wifi->LastFailureWasAuthRejected()) {
-                // A changed router password lands here; ask for the new one straight away.
+            const bool rejected = wifi != nullptr && wifi->AuthRejectedSSID() == ssid;
+            // Switching to another network dropped the saved one. Its credentials are still
+            // stored (only a successful connection replaces them), so go back to it.
+            std::string saved_ssid;
+            std::string saved_password;
+            const bool fall_back = wifi_config_.LoadCredentials(saved_ssid, saved_password) &&
+                                   saved_ssid != ssid;
+            if (fall_back) {
+                ESP_LOGI(TAG, "Reconnecting to saved network %s", saved_ssid.c_str());
+                ConnectToNetwork(saved_ssid, saved_password);
+            }
+            if (rejected) {
+                // A wrong or changed password lands here; ask for it again straight away.
                 lv_label_set_text(wifi_status_label_, "密码错误");
                 ShowPasswordDialog(ssid, "密码错误，请重新输入");
-            } else {
+            } else if (!fall_back) {
                 const std::string text = "无法连接 " + ssid;
                 lv_label_set_text(wifi_status_label_, text.c_str());
             }
             break;
+        }
         case WiFiStatus::kDisconnected:
             lv_label_set_text(wifi_status_label_, "未连接");
             break;

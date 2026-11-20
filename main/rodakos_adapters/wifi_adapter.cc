@@ -112,6 +112,7 @@ public:
     std::string GetIPAddress() const override;
     WiFiLinkInfo GetLinkInfo() const override;
     bool LastFailureWasAuthRejected() const override;
+    std::string AuthRejectedSSID() const override;
 
 private:
     void AnnounceLocalHostname(esp_netif_t* sta_netif);
@@ -149,6 +150,7 @@ private:
     int retry_count_ = 0;
     static constexpr int kMaxRetries = 3;
     bool last_failure_auth_rejected_ = false;
+    std::string auth_rejected_ssid_;
     enum class RecoveryPhase { kIdle, kBackoff, kConnecting, kStopping };
     bool connection_established_ = false;
     RecoveryPhase recovery_phase_ = RecoveryPhase::kIdle;
@@ -789,6 +791,7 @@ bool ESP32WiFiAdapter::Connect(const std::string& ssid,
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         last_failure_auth_rejected_ = false;
+        auth_rejected_ssid_.clear();
     }
     // A prior attempt (including a timed-out barrier) must settle before IDF
     // accepts a new station configuration.
@@ -1122,6 +1125,11 @@ bool ESP32WiFiAdapter::LastFailureWasAuthRejected() const {
     return last_failure_auth_rejected_;
 }
 
+std::string ESP32WiFiAdapter::AuthRejectedSSID() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_failure_auth_rejected_ ? auth_rejected_ssid_ : std::string();
+}
+
 void ESP32WiFiAdapter::ProcessScanDone(const wifi_event_sta_scan_done_t* event,
                                        uint32_t expected_generation) {
     uint32_t generation = 0;
@@ -1350,6 +1358,7 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                         } else {
                             status_ = WiFiStatus::kFailed;
                             last_failure_auth_rejected_ = auth_rejected;
+                            auth_rejected_ssid_ = auth_rejected ? target_ssid_ : std::string();
                             callback = std::move(connect_callback_);
                             connect_callback_notified_ = false;
                         }

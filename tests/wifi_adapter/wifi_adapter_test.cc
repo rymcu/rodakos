@@ -308,12 +308,15 @@ RODAK_TEST("WiFi stops retrying and reports an auth rejection when the password 
     Disconnected("known-ap", false, 202);
     RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kFailed);
     RODAK_CHECK(fixture.wifi->LastFailureWasAuthRejected());
+    // Scoped to the network that refused the password, not the saved or previous one.
+    RODAK_CHECK_EQ(fixture.wifi->AuthRejectedSSID(), std::string("known-ap"));
     RODAK_CHECK_EQ(fixture.callbacks.size(), static_cast<size_t>(1));
     RODAK_CHECK(fixture.callbacks.back() == WiFiStatus::kFailed);
 
     // A new attempt clears the flag.
     fixture.Start();
     RODAK_CHECK_FALSE(fixture.wifi->LastFailureWasAuthRejected());
+    RODAK_CHECK(fixture.wifi->AuthRejectedSSID().empty());
 }
 
 RODAK_TEST("WiFi keeps retrying other failures and does not report them as auth rejections") {
