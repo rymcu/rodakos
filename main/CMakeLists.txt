@@ -101,6 +101,7 @@ set(SOURCES
     "phone_os/realtime_voice_contract.cc"
     "phone_os/realtime_voice_reconnect_policy.cc"
     "phone_os/web_file_system_service.cc"
+    "phone_os/web_access_guard.cc"
     "phone_ui/phone_ui.cc"
     "phone_ui/boot_animation.cc"
     "phone_ui/phone_fonts.cc"
@@ -287,6 +288,8 @@ add_custom_command(
     COMMENT "Pack embedded RodakOS voice models"
     VERBATIM
 )
+
+target_add_binary_data(${COMPONENT_LIB} "phone_os/web_files_page.html" TEXT)
 
 target_add_binary_data(
     ${COMPONENT_LIB}

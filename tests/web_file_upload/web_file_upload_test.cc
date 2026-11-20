@@ -74,7 +74,8 @@ httpd_req_t Request(rodakos::WebFileSystemService& service, const std::string& b
     req.user_ctx = &service;
     req.content_len = static_cast<int>(body.size());
     req.body.assign(body.begin(), body.end());
-    req.query = "token=token&path=%2Frecordings%2Fupload.bin";
+    req.query = "path=%2Frecordings%2Fupload.bin";
+    req.request_headers["X-Access-Code"] = service.guard_.code();
     return req;
 }
 void Release(FakeFiles& files) {
@@ -88,7 +89,7 @@ RODAK_TEST("production UploadHandler returns 409 when recording lease owns desti
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload").string();
     std::filesystem::create_directories(files.root);
     rodakos::WebFileSystemService service(&files);
-    service.access_token_ = "token";
+    service.guard_.Reset();
     service.state_.running = true;
     {
         std::lock_guard<std::mutex> lock(files.mutex);
@@ -110,7 +111,7 @@ RODAK_TEST("production UploadHandler keeps lease through body and responds OK") 
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload-ok").string();
     std::filesystem::create_directories(files.root + "/recordings");
     rodakos::WebFileSystemService service(&files);
-    service.access_token_ = "token";
+    service.guard_.Reset();
     service.state_.running = true;
     files.wait_for_release = true;
     auto request = Request(service);
@@ -135,7 +136,7 @@ RODAK_TEST("production UploadHandler rejects truncated body and cleans partial f
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload-fail").string();
     std::filesystem::create_directories(files.root);
     rodakos::WebFileSystemService service(&files);
-    service.access_token_ = "token";
+    service.guard_.Reset();
     service.state_.running = true;
     auto request = Request(service, "x");
     request.content_len = 3;
@@ -148,7 +149,7 @@ RODAK_TEST("production UploadHandler rejects truncated body and cleans partial f
 RODAK_TEST("production UploadHandler reports flush failure and removes partial file") {
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload-flush").string();
     std::filesystem::create_directories(files.root + "/recordings");
-    rodakos::WebFileSystemService service(&files); service.access_token_ = "token"; service.state_.running = true;
+    rodakos::WebFileSystemService service(&files); service.guard_.Reset(); service.state_.running = true;
     web_upload_test::SetFaults(true, false);
     auto request = Request(service, "flush");
     RODAK_CHECK_EQ(rodakos::WebFileSystemService::UploadHandler(&request), ESP_FAIL);
@@ -159,7 +160,7 @@ RODAK_TEST("production UploadHandler reports flush failure and removes partial f
 RODAK_TEST("production UploadHandler reports close failure and removes partial file") {
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload-close").string();
     std::filesystem::create_directories(files.root + "/recordings");
-    rodakos::WebFileSystemService service(&files); service.access_token_ = "token"; service.state_.running = true;
+    rodakos::WebFileSystemService service(&files); service.guard_.Reset(); service.state_.running = true;
     web_upload_test::SetFaults(false, true);
     auto request = Request(service, "close");
     RODAK_CHECK_EQ(rodakos::WebFileSystemService::UploadHandler(&request), ESP_FAIL);
@@ -171,11 +172,124 @@ RODAK_TEST("production UploadHandler reports close failure and removes partial f
 RODAK_TEST("production UploadHandler rejects a stream error after a full fwrite") {
     FakeFiles files; files.root = (std::filesystem::temp_directory_path() / "rodakos-web-upload-error").string();
     std::filesystem::create_directories(files.root + "/recordings");
-    rodakos::WebFileSystemService service(&files); service.access_token_ = "token"; service.state_.running = true;
+    rodakos::WebFileSystemService service(&files); service.guard_.Reset(); service.state_.running = true;
     web_upload_test::SetFaults(false, false, true);
     auto request = Request(service, "stream-error");
     RODAK_CHECK_EQ(rodakos::WebFileSystemService::UploadHandler(&request), ESP_FAIL);
     RODAK_CHECK_EQ(request.response_status, "500 Internal Server Error");
     RODAK_CHECK_FALSE(std::filesystem::exists(files.root + "/recordings/upload.bin"));
     web_upload_test::ResetFaults(); std::filesystem::remove_all(files.root);
+}
+
+namespace {
+uint32_t g_test_peer = 0x6458a8c0;  // 192.168.88.100
+uint32_t TestPeer(httpd_req_t*) { return g_test_peer; }
+
+struct AccessFixture {
+    FakeFiles files;
+    rodakos::WebFileSystemService service{&files};
+    AccessFixture() {
+        files.root = (std::filesystem::temp_directory_path() / "rodakos-web-access").string();
+        std::filesystem::create_directories(files.root + "/Music");
+        std::ofstream(files.root + "/Music/a.mp3") << "song";
+        service.guard_.Reset();
+        service.state_.running = true;
+        g_test_peer = 0x6458a8c0;
+        rodakos::WebFileSystemService::peer_address_override_ = TestPeer;
+    }
+    ~AccessFixture() {
+        rodakos::WebFileSystemService::peer_address_override_ = nullptr;
+        std::filesystem::remove_all(files.root);
+    }
+    httpd_req_t List(const std::string& code, bool header = true) {
+        httpd_req_t req;
+        req.user_ctx = &service;
+        req.query = "path=%2F";
+        if (header && !code.empty()) req.request_headers["X-Access-Code"] = code;
+        if (!header) req.query += "&token=" + code;
+        rodakos::WebFileSystemService::ListHandler(&req);
+        return req;
+    }
+};
+}  // namespace
+
+RODAK_TEST("web access index page is public and sets no-referrer") {
+    AccessFixture f;
+    httpd_req_t req;
+    req.user_ctx = &f.service;
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::IndexHandler(&req), ESP_OK);
+    RODAK_CHECK(req.response_status.empty());
+    RODAK_CHECK(req.response_body.find("<html") != std::string::npos);
+    RODAK_CHECK_EQ(req.response_headers["Referrer-Policy"], std::string("no-referrer"));
+}
+
+RODAK_TEST("web access file API requires the code and accepts it as a header or legacy query") {
+    AccessFixture f;
+    RODAK_CHECK_EQ(f.List("").response_status, std::string("401 Unauthorized"));
+    RODAK_CHECK_EQ(f.List("ZZZZZZZZ").response_status, std::string("401 Unauthorized"));
+    RODAK_CHECK(f.List(f.service.guard_.DisplayCode()).response_status.empty());
+    RODAK_CHECK(f.List(f.service.guard_.code(), false).response_status.empty());
+}
+
+RODAK_TEST("web access locks out only the computer that keeps guessing") {
+    AccessFixture f;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        RODAK_CHECK_EQ(f.List("ZZZZZZZZ").response_status, std::string("401 Unauthorized"));
+    }
+    const auto locked = f.List("ZZZZZZZZ");
+    RODAK_CHECK_EQ(locked.response_status, std::string("429 Too Many Requests"));
+    RODAK_CHECK_EQ(locked.response_headers.at("Retry-After"), std::string("30"));
+    RODAK_CHECK_EQ(f.List(f.service.guard_.code()).response_status, std::string("429 Too Many Requests"));
+
+    g_test_peer = 0x6558a8c0;  // 192.168.88.101
+    RODAK_CHECK(f.List(f.service.guard_.code()).response_status.empty());
+}
+
+RODAK_TEST("web access download needs a one-time ticket for that exact file") {
+    AccessFixture f;
+    httpd_req_t issue;
+    issue.user_ctx = &f.service;
+    issue.query = "path=%2FMusic%2Fa.mp3";
+    issue.request_headers["X-Access-Code"] = f.service.guard_.code();
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::TicketHandler(&issue), ESP_OK);
+    const std::string ticket = issue.response_body;
+    RODAK_CHECK_EQ(ticket.size(), static_cast<size_t>(16));
+
+    httpd_req_t download;
+    download.user_ctx = &f.service;
+    download.query = "path=%2FMusic%2Fa.mp3&ticket=" + ticket;
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::DownloadHandler(&download), ESP_OK);
+    RODAK_CHECK_EQ(download.response_body, std::string("song"));
+
+    httpd_req_t replay;
+    replay.user_ctx = &f.service;
+    replay.query = download.query;
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::DownloadHandler(&replay), ESP_FAIL);
+    RODAK_CHECK_EQ(replay.response_status, std::string("401 Unauthorized"));
+
+    httpd_req_t anonymous;
+    anonymous.user_ctx = &f.service;
+    anonymous.query = "path=%2FMusic%2Fa.mp3";
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::DownloadHandler(&anonymous), ESP_FAIL);
+    RODAK_CHECK_EQ(anonymous.response_status, std::string("401 Unauthorized"));
+}
+
+RODAK_TEST("web access ticket issuing itself requires the code") {
+    AccessFixture f;
+    httpd_req_t issue;
+    issue.user_ctx = &f.service;
+    issue.query = "path=%2FMusic%2Fa.mp3";
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::TicketHandler(&issue), ESP_FAIL);
+    RODAK_CHECK_EQ(issue.response_status, std::string("401 Unauthorized"));
+}
+
+RODAK_TEST("web access index serves the embedded login page without its NUL terminator") {
+    AccessFixture f;
+    httpd_req_t req;
+    req.user_ctx = &f.service;
+    rodakos::WebFileSystemService::IndexHandler(&req);
+    RODAK_CHECK(req.response_body.find("输入访问码") != std::string::npos);
+    RODAK_CHECK(req.response_body.find("X-Access-Code") != std::string::npos);
+    RODAK_CHECK(req.response_body.find('\0') == std::string::npos);
+    RODAK_CHECK(req.response_body.rfind("</html>") != std::string::npos);
 }

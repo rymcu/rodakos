@@ -14,6 +14,8 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_random.h>
+#include <esp_timer.h>
+#include <lwip/sockets.h>
 
 namespace rodakos {
 namespace {
@@ -23,54 +25,10 @@ constexpr size_t kIoBufferSize = 4096;
 constexpr size_t kMaxUploadBytes = 100 * 1024 * 1024;
 constexpr int kMaxUploadReceiveTimeouts = 90;
 
-const char kIndexHtml[] =
-    "<!doctype html><html><head><meta charset=\"utf-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>RodakOS Web Files</title>"
-    "<style>"
-    ":root{color-scheme:dark}body{margin:0;font:14px system-ui,-apple-system,Segoe UI,sans-serif;background:#101418;color:#eef3f7}"
-    "main{max-width:760px;margin:0 auto;padding:20px 14px}h1{font-size:22px;margin:0 0 12px}"
-    ".bar{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}.path{color:#9ed0ff;word-break:break-all}"
-    "button,input{font:inherit;border-radius:8px;border:1px solid #34424d;padding:9px 10px;background:#18212a;color:#eef3f7}"
-    "button{background:#22303b;cursor:pointer}button.primary{background:#2d7dff;border-color:#2d7dff}button.danger{background:#442029;border-color:#68313e}"
-    "button:disabled{opacity:.55;cursor:not-allowed}input[type=file]{max-width:260px}"
-    "table{width:100%;border-collapse:collapse;margin-top:10px}td,th{border-bottom:1px solid #26323c;padding:10px 6px;text-align:left}"
-    "th{color:#aab8c3;font-weight:600}.name{cursor:pointer}.muted{color:#8d9aa5}.actions{white-space:nowrap;text-align:right}.actions button{margin-left:6px;padding:6px 8px}"
-    "progress{width:100%;height:14px;margin-top:10px}#status{min-height:22px;margin-top:10px;color:#9ed0ff;white-space:pre-wrap}"
-    "@media(max-width:560px){.hide-sm{display:none}.actions button{margin:3px 0 3px 5px}}"
-    "</style></head><body><main>"
-    "<h1>RodakOS Web Files</h1>"
-    "<div class=\"bar\"><button id=\"up\">Up</button><button id=\"refresh\">Refresh</button><span class=\"path\" id=\"path\">/</span></div>"
-    "<div class=\"bar\"><input id=\"file\" type=\"file\"><button class=\"primary\" id=\"upload\">Upload</button><button id=\"mkdir\">New folder</button></div>"
-    "<progress id=\"bar\" value=\"0\" max=\"100\" hidden></progress><div id=\"status\"></div>"
-    "<table><thead><tr><th>Name</th><th class=\"hide-sm\">Size</th><th class=\"actions\">Actions</th></tr></thead><tbody id=\"list\"></tbody></table>"
-    "<script>"
-    "let cwd='/';const $=id=>document.getElementById(id);const token=new URLSearchParams(location.search).get('token')||'';"
-    "function enc(v){return encodeURIComponent(v)}"
-    "function auth(url){return url+(url.includes('?')?'&':'?')+'token='+enc(token)}"
-    "function join(a,b){if(a==='/'||!a)return '/'+b;return a+'/'+b}"
-    "function parent(p){if(p==='/'||!p)return '/';let i=p.lastIndexOf('/');return i<=0?'/':p.slice(0,i)}"
-    "function size(n){if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';return(n/1048576).toFixed(1)+' MB'}"
-    "async function textFetch(url,opt){let r=await fetch(url,opt);let t=await r.text();if(!r.ok)throw new Error(t||r.statusText);return t}"
-    "async function load(p=cwd){cwd=p;$('path').textContent=cwd;$('status').textContent='Loading...';"
-    "try{let r=await fetch(auth('/api/list?path='+enc(cwd)));if(!r.ok)throw new Error(await r.text());let data=await r.json();"
-    "let rows=data.entries.map(e=>`<tr><td class=\"name\" data-name=\"${e.name}\" data-dir=\"${e.dir?1:0}\">${e.dir?'[DIR] ':'[FILE] '}${e.name}</td><td class=\"hide-sm muted\">${e.dir?'Folder':size(e.size)}</td><td class=\"actions\">${e.dir?'':`<button data-act=\"download\" data-name=\"${e.name}\">Download</button>`}<button data-act=\"rename\" data-name=\"${e.name}\">Rename</button><button class=\"danger\" data-act=\"delete\" data-name=\"${e.name}\">Delete</button></td></tr>`).join('');"
-    "$('list').innerHTML=rows||'<tr><td colspan=\"3\" class=\"muted\">Empty folder</td></tr>';$('status').textContent='';"
-    "}catch(e){$('status').textContent='List failed: '+e.message}}"
-    "$('list').onclick=async ev=>{let t=ev.target;if(t.dataset.dir==='1')return load(join(cwd,t.dataset.name));"
-    "if(t.dataset.act==='download')location.href=auth('/api/download?path='+enc(join(cwd,t.dataset.name)));"
-    "if(t.dataset.act==='rename'){let old=join(cwd,t.dataset.name),name=prompt('Rename to',t.dataset.name);if(name)try{await textFetch(auth('/api/rename?from='+enc(old)+'&to='+enc(join(cwd,name))),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}"
-    "if(t.dataset.act==='delete'){let p=join(cwd,t.dataset.name);if(confirm('Delete '+p+'?'))try{await textFetch(auth('/api/delete?path='+enc(p)),{method:'POST'});load()}catch(e){$('status').textContent=e.message}}};"
-    "$('up').onclick=()=>load(parent(cwd));$('refresh').onclick=()=>load();"
-    "$('mkdir').onclick=async()=>{let name=prompt('Folder name');if(!name)return;try{await textFetch(auth('/api/mkdir?path='+enc(join(cwd,name))),{method:'POST'});load()}catch(e){$('status').textContent=e.message}};"
-    "$('upload').onclick=()=>{let file=$('file').files[0];if(!file){$('status').textContent='Choose a file first.';return}"
-    "let xhr=new XMLHttpRequest(),dest=join(cwd,file.name);xhr.open('POST',auth('/api/upload?path='+enc(dest)));xhr.setRequestHeader('Content-Type','application/octet-stream');"
-    "$('upload').disabled=true;$('bar').hidden=false;$('bar').value=0;$('status').textContent='Uploading '+file.name+'...';"
-    "xhr.upload.onprogress=e=>{if(e.lengthComputable)$('bar').value=Math.round(e.loaded*100/e.total)};"
-    "xhr.onload=()=>{$('upload').disabled=false;$('bar').hidden=true;if(xhr.status>=200&&xhr.status<300){$('status').textContent='Uploaded '+dest;load()}else $('status').textContent=xhr.responseText||('Upload failed: '+xhr.status)};"
-    "xhr.onerror=()=>{$('upload').disabled=false;$('bar').hidden=true;$('status').textContent='Upload failed: network error.'};xhr.send(file)};"
-    "load('/');"
-    "</script></main></body></html>";
+// The page lives in web_files_page.html (embedded at build time) so it is plain HTML/JS
+// instead of a C++ string with two layers of escaping.
+extern const char kWebFilesPageStart[] asm("_binary_web_files_page_html_start");
+extern const char kWebFilesPageEnd[] asm("_binary_web_files_page_html_end");
 
 bool IsHex(char ch) {
     return std::isxdigit(static_cast<unsigned char>(ch)) != 0;
@@ -242,10 +200,14 @@ bool GetQueryValue(httpd_req_t* req, const char* key, std::string& value) {
     return true;
 }
 
-std::string GenerateAccessToken() {
-    char token[17] = {};
-    std::snprintf(token, sizeof(token), "%08" PRIx32 "%08" PRIx32, esp_random(), esp_random());
-    return token;
+// Header names are case-insensitive in HTTP; esp_http_server matches them that way too.
+bool GetHeaderValue(httpd_req_t* req, const char* name, std::string& value) {
+    const size_t length = httpd_req_get_hdr_value_len(req, name);
+    if (length == 0 || length > 64) return false;
+    char buffer[65] = {};
+    if (httpd_req_get_hdr_value_str(req, name, buffer, sizeof(buffer)) != ESP_OK) return false;
+    value = buffer;
+    return true;
 }
 
 void SendText(httpd_req_t* req, int status_code, const char* status, const char* text) {
@@ -266,7 +228,9 @@ uint8_t* AllocIoBuffer() {
 
 }  // namespace
 
-WebFileSystemService::WebFileSystemService(FileService* file_service) : file_service_(file_service) {
+WebFileSystemService::WebFileSystemService(FileService* file_service)
+    : file_service_(file_service),
+      guard_([]() { return esp_random(); }, []() { return esp_timer_get_time() / 1000; }) {
     mutex_ = xSemaphoreCreateMutex();
     state_.message = "Stopped";
 }
@@ -301,6 +265,8 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
     config.ctrl_port = 32768;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.lru_purge_enable = true;
+    // Eight routes today; the default limit is also 8, so leave room for the next one.
+    config.max_uri_handlers = 12;
     config.stack_size = 6144;
 
     esp_err_t ret = httpd_start(&server_, &config);
@@ -323,6 +289,7 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
         {"/api/mkdir", HTTP_POST, MkdirHandler},
         {"/api/rename", HTTP_POST, RenameHandler},
         {"/api/delete", HTTP_POST, DeleteHandler},
+        {"/api/ticket", HTTP_POST, TicketHandler},
     };
 
     for (const auto& route : routes) {
@@ -343,13 +310,14 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        access_token_ = GenerateAccessToken();
+        guard_.Reset();
         state_.running = true;
-        state_.token = access_token_;
-        state_.url = "http://" + ip_address + ":" + std::to_string(kWebFilePort) + "/?token=" + access_token_;
+        state_.token = guard_.DisplayCode();
+        state_.url = "http://" + ip_address + ":" + std::to_string(kWebFilePort);
         state_.message = "Listening";
         xSemaphoreGive(mutex_);
     }
+    // The access code stays off the serial log.
     ESP_LOGI(TAG, "Web file system listening at %s", state_.url.c_str());
     return true;
 }
@@ -368,7 +336,7 @@ void WebFileSystemService::Stop() {
         state_.url.clear();
         state_.token.clear();
         state_.message = "Stopped";
-        access_token_.clear();
+        guard_.Clear();
         xSemaphoreGive(mutex_);
     }
     ESP_LOGI(TAG, "Web file system stopped");
@@ -464,36 +432,71 @@ void WebFileSystemService::CompleteUpload(const std::string& file_name, size_t b
     }
 }
 
-bool WebFileSystemService::AuthenticateRequest(httpd_req_t* req) const {
-    std::string token;
-    if (!GetQueryValue(req, "token", token)) {
-        SendText(req, 401, "401 Unauthorized", "Missing access token");
-        return false;
+uint32_t (*WebFileSystemService::peer_address_override_)(httpd_req_t*) = nullptr;
+
+uint32_t WebFileSystemService::PeerAddress(httpd_req_t* req) {
+    if (peer_address_override_ != nullptr) return peer_address_override_(req);
+    const int fd = httpd_req_to_sockfd(req);
+    sockaddr_storage address = {};
+    socklen_t length = sizeof(address);
+    if (fd < 0 || getpeername(fd, reinterpret_cast<sockaddr*>(&address), &length) != 0) return 0;
+    if (address.ss_family == AF_INET) {
+        return reinterpret_cast<sockaddr_in*>(&address)->sin_addr.s_addr;
     }
+    if (address.ss_family == AF_INET6) {
+        // IPv4-mapped or native IPv6: fold the last 32 bits into the key.
+        const auto* in6 = reinterpret_cast<sockaddr_in6*>(&address);
+        uint32_t tail = 0;
+        std::memcpy(&tail, &in6->sin6_addr.s6_addr[12], sizeof(tail));
+        return tail;
+    }
+    return 0;
+}
+
+bool WebFileSystemService::AuthenticateRequest(httpd_req_t* req) {
+    std::string code;
+    // The header keeps the code out of URLs, history and Referer; ?token= keeps old links working.
+    if (!GetHeaderValue(req, "X-Access-Code", code)) GetQueryValue(req, "token", code);
 
     if (mutex_ == nullptr) {
         SendText(req, 503, "503 Service Unavailable", "Service unavailable");
         return false;
     }
-
+    const uint32_t client = PeerAddress(req);
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    const bool valid = state_.running && !access_token_.empty() && token == access_token_;
+    const bool running = state_.running;
+    const WebAccessGuard::Result result =
+        running ? guard_.Check(client, code) : WebAccessGuard::Result::kRejected;
+    const int retry_after = guard_.RetryAfterSeconds(client);
     xSemaphoreGive(mutex_);
-    if (!valid) {
-        SendText(req, 401, "401 Unauthorized", "Invalid access token");
-        return false;
+
+    switch (result) {
+        case WebAccessGuard::Result::kAccepted:
+            return true;
+        case WebAccessGuard::Result::kLocked: {
+            const std::string seconds = std::to_string(retry_after > 0 ? retry_after : 1);
+            httpd_resp_set_hdr(req, "Retry-After", seconds.c_str());
+            SendText(req, 429, "429 Too Many Requests", "Too many attempts");
+            return false;
+        }
+        case WebAccessGuard::Result::kMissing:
+            SendText(req, 401, "401 Unauthorized", "Missing access code");
+            return false;
+        case WebAccessGuard::Result::kRejected:
+            SendText(req, 401, "401 Unauthorized", "Invalid access code");
+            return false;
     }
-    return true;
+    return false;
 }
 
 esp_err_t WebFileSystemService::IndexHandler(httpd_req_t* req) {
-    auto* self = static_cast<WebFileSystemService*>(req->user_ctx);
-    if (self == nullptr || !self->AuthenticateRequest(req)) {
-        return ESP_FAIL;
-    }
+    // Public: the page holds no file data and asks for the access code itself.
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, kIndexHtml, HTTPD_RESP_USE_STRLEN);
+    // A legacy /?token= link must not leak the code to other sites through Referer.
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+    // TEXT embedding appends a NUL terminator; do not send it.
+    return httpd_resp_send(req, kWebFilesPageStart, kWebFilesPageEnd - kWebFilesPageStart - 1);
 }
 
 esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {
@@ -549,11 +552,22 @@ esp_err_t WebFileSystemService::DownloadHandler(httpd_req_t* req) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
         return ESP_FAIL;
     }
-    if (!self->AuthenticateRequest(req)) {
-        return ESP_FAIL;
-    }
     if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
         SendText(req, 400, "400 Bad Request", "Unsafe path");
+        return ESP_FAIL;
+    }
+    // A plain browser download cannot send a header: it presents a one-time ticket instead.
+    std::string ticket;
+    bool authorized = false;
+    if (GetQueryValue(req, "ticket", ticket)) {
+        xSemaphoreTake(self->mutex_, portMAX_DELAY);
+        authorized = self->state_.running && self->guard_.RedeemTicket(ticket, path);
+        xSemaphoreGive(self->mutex_);
+        if (!authorized) {
+            SendText(req, 401, "401 Unauthorized", "Download link expired");
+            return ESP_FAIL;
+        }
+    } else if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
@@ -796,6 +810,24 @@ esp_err_t WebFileSystemService::RenameHandler(httpd_req_t* req) {
         return ESP_FAIL;
     }
     return httpd_resp_sendstr(req, "OK");
+}
+
+esp_err_t WebFileSystemService::TicketHandler(httpd_req_t* req) {
+    auto* self = static_cast<WebFileSystemService*>(req->user_ctx);
+    std::string path;
+    if (self == nullptr || !self->AuthenticateRequest(req)) {
+        return ESP_FAIL;
+    }
+    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
+        SendText(req, 400, "400 Bad Request", "Unsafe path");
+        return ESP_FAIL;
+    }
+    xSemaphoreTake(self->mutex_, portMAX_DELAY);
+    const std::string ticket = self->guard_.IssueTicket(path);
+    xSemaphoreGive(self->mutex_);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, ticket.c_str(), HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t WebFileSystemService::DeleteHandler(httpd_req_t* req) {

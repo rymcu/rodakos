@@ -21,6 +21,7 @@ struct httpd_req_t {
     std::string response_type;
     std::string response_body;
     std::map<std::string, std::string> response_headers;
+    std::map<std::string, std::string> request_headers;
 };
 struct httpd_uri_t { const char* uri; httpd_method_t method; httpd_uri_func_t handler; void* user_ctx; };
 struct httpd_config_t {
@@ -28,6 +29,7 @@ struct httpd_config_t {
     uint16_t ctrl_port = 0;
     bool lru_purge_enable = false;
     size_t stack_size = 0;
+    uint16_t max_uri_handlers = 8;
     bool (*uri_match_fn)(const char*, const char*, size_t) = nullptr;
 };
 #define HTTPD_RESP_USE_STRLEN (-1)
@@ -63,3 +65,17 @@ inline esp_err_t httpd_resp_set_hdr(httpd_req_t* req, const char* key, const cha
 inline esp_err_t httpd_resp_send(httpd_req_t* req, const char* data, ssize_t len) { if (data) req->response_body.append(data, len < 0 ? std::strlen(data) : static_cast<size_t>(len)); return ESP_OK; }
 inline esp_err_t httpd_resp_sendstr(httpd_req_t* req, const char* data) { return httpd_resp_send(req, data, HTTPD_RESP_USE_STRLEN); }
 inline esp_err_t httpd_resp_send_chunk(httpd_req_t* req, const char* data, size_t len) { if (data && len) req->response_body.append(data, len); return ESP_OK; }
+
+inline size_t httpd_req_get_hdr_value_len(httpd_req_t* req, const char* field) {
+    auto it = req->request_headers.find(field);
+    return it == req->request_headers.end() ? 0 : it->second.size();
+}
+inline esp_err_t httpd_req_get_hdr_value_str(httpd_req_t* req, const char* field, char* out, size_t len) {
+    auto it = req->request_headers.find(field);
+    if (it == req->request_headers.end() || it->second.size() + 1 > len) return ESP_FAIL;
+    std::memcpy(out, it->second.c_str(), it->second.size() + 1);
+    return ESP_OK;
+}
+// No real socket on the host: getpeername fails, and tests set the peer through the
+// service's PeerAddressOverride hook instead.
+inline int httpd_req_to_sockfd(httpd_req_t*) { return -1; }

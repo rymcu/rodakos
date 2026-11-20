@@ -57,30 +57,37 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
     lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    // Two numbered steps: the code is typed into the browser page, not into the address.
+    step_label_ = CreateSettingLabel(card, "1. 电脑浏览器打开", true);
+    lv_obj_set_style_text_font(step_label_, &phone_font_12, 0);
+    lv_obj_align(step_label_, LV_ALIGN_TOP_LEFT, 0, 20);
+
     url_label_ = CreateSettingLabel(card, "", false);
     lv_obj_set_width(url_label_, 276);
     lv_label_set_long_mode(url_label_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(url_label_, &phone_font_14, 0);
-    lv_obj_align(url_label_, LV_ALIGN_TOP_LEFT, 0, 24);
+    lv_obj_align(url_label_, LV_ALIGN_TOP_LEFT, 0, 36);
 
-    token_caption_ = CreateSettingLabel(card, "访问码", true);
+    token_caption_ = CreateSettingLabel(card, "2. 输入访问码", true);
     lv_obj_set_style_text_font(token_caption_, &phone_font_12, 0);
-    lv_obj_align(token_caption_, LV_ALIGN_TOP_LEFT, 0, 48);
+    lv_obj_align(token_caption_, LV_ALIGN_TOP_LEFT, 0, 56);
 
-    token_label_ = CreateSettingLabel(card, "", false);
-    lv_obj_set_style_text_font(token_label_, &phone_font_18, 0);
-    lv_obj_set_style_text_letter_space(token_label_, 1, 0);
-    lv_obj_align(token_label_, LV_ALIGN_TOP_LEFT, 0, 64);
+    // 8 characters fit in the 26 px digit font; easier to read across a desk.
+    token_label_ = lv_label_create(card);
+    lv_obj_set_style_text_font(token_label_, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(token_label_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_letter_space(token_label_, 3, 0);
+    lv_obj_align(token_label_, LV_ALIGN_TOP_LEFT, 0, 70);
 
     last_label_ = CreateSettingLabel(card, "", true);
     lv_obj_set_width(last_label_, 276);
     lv_label_set_long_mode(last_label_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(last_label_, &phone_font_12, 0);
-    lv_obj_align(last_label_, LV_ALIGN_TOP_LEFT, 0, 92);
+    lv_obj_align(last_label_, LV_ALIGN_TOP_LEFT, 0, 102);
 
     progress_bar_ = lv_bar_create(card);
     lv_obj_set_size(progress_bar_, 276, 6);
-    lv_obj_align(progress_bar_, LV_ALIGN_TOP_LEFT, 0, 112);
+    lv_obj_align(progress_bar_, LV_ALIGN_TOP_LEFT, 0, 117);
     lv_bar_set_range(progress_bar_, 0, 100);
     lv_obj_set_style_bg_color(progress_bar_, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
     lv_obj_set_style_bg_color(progress_bar_, rodakos_theme_primary(), LV_PART_INDICATOR);
@@ -144,20 +151,6 @@ std::string BaseName(const std::string& path) {
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
-// Splits the 16-character access code into groups of four for reading aloud or copying.
-std::string GroupToken(const std::string& token) {
-    std::string grouped;
-    for (size_t index = 0; index < token.size(); ++index) {
-        if (index > 0 && index % 4 == 0) grouped.push_back(' ');
-        grouped.push_back(token[index]);
-    }
-    return grouped;
-}
-
-std::string UrlWithoutToken(const std::string& url) {
-    const size_t query = url.find("/?token=");
-    return query == std::string::npos ? url : url.substr(0, query);
-}
 }  // namespace
 
 void SettingsWebFilesPage::Update() {
@@ -171,7 +164,7 @@ void SettingsWebFilesPage::Update() {
     const char* status = stopping ? "正在关闭…"
         : !state.running ? "已关闭"
         : state.busy ? "运行中 · 正在传输"
-        : "运行中 · 在电脑浏览器打开下面的地址";
+        : "运行中";
     lv_label_set_text(status_label_, status);
     lv_obj_set_style_text_color(status_label_,
                                 state.running && !stopping ? rodakos_theme_success()
@@ -179,12 +172,15 @@ void SettingsWebFilesPage::Update() {
                                 0);
 
     if (state.running) {
-        lv_label_set_text(url_label_, UrlWithoutToken(state.url).c_str());
-        lv_label_set_text(token_label_, GroupToken(state.token).c_str());
+        lv_label_set_text(url_label_, state.url.c_str());
+        // The service already formats the code as "K7QM 4RX8".
+        lv_label_set_text(token_label_, state.token.c_str());
+        lv_obj_clear_flag(step_label_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(token_caption_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(token_label_, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(url_label_, "开启后，同一网络的电脑可以用浏览器读写 SD 卡。");
+        lv_obj_add_flag(step_label_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(token_caption_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(token_label_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -230,6 +226,7 @@ void SettingsWebFilesPage::Reset() {
     stop_btn_ = nullptr;
     toggle_label_ = nullptr;
     token_caption_ = nullptr;
+    step_label_ = nullptr;
     token_label_ = nullptr;
     progress_bar_ = nullptr;
     // LVGL timers are not owned by objects; deleting the page widgets does not stop this one.
