@@ -120,10 +120,6 @@ bool SettingsApp::OnThemeChanged(PhoneAppContext& context) {
 void SettingsApp::DestroyUi() {
     CloseUsbDiskDialog();
     CloseButtonActionDialog();
-    if (usb_disk_restart_timer_ != nullptr) {
-        lv_timer_delete(usb_disk_restart_timer_);
-        usb_disk_restart_timer_ = nullptr;
-    }
     if (usb_disk_hint_page_ != nullptr && lv_obj_is_valid(usb_disk_hint_page_)) {
         lv_obj_delete(usb_disk_hint_page_);
     }
@@ -171,9 +167,11 @@ void SettingsApp::ResetUiPointers() {
     home_time_zone_value_ = nullptr;
     home_web_files_value_ = nullptr;
     usb_disk_dialog_ = nullptr;
+    usb_disk_sd_label_ = nullptr;
+    usb_disk_enter_button_ = nullptr;
+    usb_disk_sd_ready_ = false;
     button_action_dialog_ = nullptr;
     usb_disk_hint_page_ = nullptr;
-    usb_disk_restart_timer_ = nullptr;
     header_title_label_ = nullptr;
     timezone_dropdown_ = nullptr;
     ntp_dropdown_ = nullptr;

@@ -2,6 +2,9 @@
 
 #include <lvgl.h>
 
+#include <atomic>
+#include <memory>
+
 class PhoneAppContext;
 class PhoneUi;
 
@@ -12,6 +15,12 @@ public:
     void Show();
     void Update();
     void Reset();
+
+    // Shared with the stop worker so a late completion never touches a destroyed page.
+    struct StopGuard {
+        std::atomic<SettingsWebFilesPage*> page{nullptr};
+        std::atomic<bool> stopping{false};
+    };
 
 private:
     void Start();
@@ -25,4 +34,5 @@ private:
     lv_obj_t* last_label_ = nullptr;
     lv_obj_t* start_btn_ = nullptr;
     lv_obj_t* stop_btn_ = nullptr;
+    std::shared_ptr<StopGuard> stop_guard_;
 };

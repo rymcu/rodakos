@@ -10,6 +10,10 @@
 
 #include <cstdio>
 #include <string>
+#include <esp_lvgl_port.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <new>
 
 using namespace rodakos_settings;
 
@@ -18,6 +22,10 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
                                   PhoneUi& ui) {
     context_ = &context;
     ui_ = &ui;
+    if (!stop_guard_) {
+        stop_guard_ = std::make_shared<StopGuard>();
+        stop_guard_->page.store(this);
+    }
     if (body_ != nullptr) {
         return;
     }
@@ -132,8 +140,9 @@ void SettingsWebFilesPage::Update() {
     }
 
     const auto state = web_files->GetState();
-    const std::string status = state.running
-        ? (state.busy ? "Uploading..." : "Running")
+    const bool stopping = stop_guard_ && stop_guard_->stopping.load();
+    const std::string status = stopping ? "正在停止…"
+        : state.running ? (state.busy ? "Uploading..." : "Running")
         : "Stopped";
     lv_label_set_text(status_label_, status.c_str());
     lv_label_set_text(url_label_, state.running ? state.url.c_str() : state.message.c_str());
@@ -151,14 +160,14 @@ void SettingsWebFilesPage::Update() {
     }
 
     if (start_btn_ != nullptr) {
-        if (state.running) {
+        if (state.running || stopping) {
             lv_obj_add_state(start_btn_, LV_STATE_DISABLED);
         } else {
             lv_obj_clear_state(start_btn_, LV_STATE_DISABLED);
         }
     }
     if (stop_btn_ != nullptr) {
-        if (state.running) {
+        if (state.running && !stopping) {
             lv_obj_clear_state(stop_btn_, LV_STATE_DISABLED);
         } else {
             lv_obj_add_state(stop_btn_, LV_STATE_DISABLED);
@@ -167,6 +176,8 @@ void SettingsWebFilesPage::Update() {
 }
 
 void SettingsWebFilesPage::Reset() {
+    if (stop_guard_) stop_guard_->page.store(nullptr);
+    stop_guard_.reset();
     context_ = nullptr;
     ui_ = nullptr;
     body_ = nullptr;
@@ -208,12 +219,50 @@ void SettingsWebFilesPage::Start() {
     Update();
 }
 
+namespace {
+struct WebFilesStopArgs {
+    std::shared_ptr<SettingsWebFilesPage::StopGuard> guard;
+    rodakos::WebFileSystemService* web_files = nullptr;
+};
+
+void WebFilesStopDelivered(void* user_data) {
+    auto* args = static_cast<WebFilesStopArgs*>(user_data);
+    args->guard->stopping.store(false);
+    if (auto* page = args->guard->page.load()) page->Update();
+    delete args;
+}
+
+// httpd_stop waits for in-flight handlers, so an upload in progress would freeze the LVGL thread.
+void WebFilesStopTask(void* arg) {
+    auto* args = static_cast<WebFilesStopArgs*>(arg);
+    args->web_files->Stop();
+    bool queued = false;
+    if (lvgl_port_lock(1000)) {
+        queued = lv_async_call(WebFilesStopDelivered, args) == LV_RESULT_OK;
+        lvgl_port_unlock();
+    }
+    if (!queued) {
+        args->guard->stopping.store(false);
+        delete args;
+    }
+    vTaskDelete(nullptr);
+}
+}  // namespace
+
 void SettingsWebFilesPage::Stop() {
     auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
-    if (web_files == nullptr) {
+    if (web_files == nullptr || !stop_guard_) {
         return;
     }
-    web_files->Stop();
-    ui_->ShowToastUnlocked("Web files stopped");
+    bool expected = false;
+    if (!stop_guard_->stopping.compare_exchange_strong(expected, true)) return;
+    auto* args = new (std::nothrow) WebFilesStopArgs{stop_guard_, web_files};
+    if (args == nullptr ||
+        xTaskCreate(WebFilesStopTask, "web_stop", 4096, args, 3, nullptr) != pdPASS) {
+        delete args;
+        stop_guard_->stopping.store(false);
+        ui_->ShowToastUnlocked("无法停止，请稍后重试");
+        return;
+    }
     Update();
 }

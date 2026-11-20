@@ -70,6 +70,7 @@ public:
                                      uint32_t generation);
     void ReloadUiForTheme();
     void OnCloudSummaryReady(SettingsCloudSummary summary);
+    void OnUsbDiskSdProbed(bool ready);
     void OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results);
     void OnWiFiConnectAsyncComplete(WiFiStatus status,
                                     const std::string& ssid,
@@ -159,7 +160,9 @@ private:
     std::string home_time_zone_label_;
     lv_obj_t* usb_disk_dialog_ = nullptr;
     lv_obj_t* usb_disk_hint_page_ = nullptr;
-    lv_timer_t* usb_disk_restart_timer_ = nullptr;
+    lv_obj_t* usb_disk_sd_label_ = nullptr;
+    lv_obj_t* usb_disk_enter_button_ = nullptr;
+    bool usb_disk_sd_ready_ = false;
     lv_obj_t* header_title_label_ = nullptr;
 
     // 日期与时间页面控件

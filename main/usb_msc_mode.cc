@@ -216,10 +216,11 @@ void EnterUsbMscMode() {
 
     g_card = InitSdCardForMsc();
     if (g_card == nullptr) {
-        ESP_LOGE(TAG, "Cannot enter USB MSC mode without SD card");
-        while (true) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
+        // The one-shot boot request is already consumed, so a restart returns to normal mode
+        // instead of leaving the device stuck until a manual reset.
+        ESP_LOGE(TAG, "Cannot enter USB MSC mode without SD card; restarting to normal mode");
+        vTaskDelay(pdMS_TO_TICKS(150));
+        esp_restart();
     }
 
     tinyusb_msc_storage_config_t storage_cfg = {
