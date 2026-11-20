@@ -3,13 +3,71 @@
 
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
+#include "phone_os/phone_app_context.h"
+#include "phone_os/phone_services.h"
+#include "phone_os/web_file_system_service.h"
+#include "rodakos_adapters/file_service.h"
 #include "usb_msc_mode.h"
 
+#include <esp_log.h>
+#include <esp_lvgl_port.h>
 #include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include <memory>
+#include <new>
 
 namespace {
-void RestartTimerCallback(lv_timer_t* timer) {
-    lv_timer_delete(timer);
+constexpr const char* TAG = "SettingsUsbDisk";
+// Long enough for the user to read the hint page.
+constexpr uint32_t kRestartDelayMs = 1500;
+// Upper bound for an in-flight web upload to finish its current file.
+constexpr int kUploadDrainPolls = 50;
+
+// The card mounts on demand, so the dialog mounts it on a worker (card I/O) and reports back.
+struct UsbSdProbeArgs {
+    std::shared_ptr<SettingsCloudRefreshGuard> guard;
+    rodakos::FileService* files = nullptr;
+    bool ready = false;
+};
+
+void UsbSdProbeDelivered(void* user_data) {
+    auto* args = static_cast<UsbSdProbeArgs*>(user_data);
+    SettingsApp* app = args->guard ? args->guard->app.load() : nullptr;
+    if (app != nullptr) app->OnUsbDiskSdProbed(args->ready);
+    delete args;
+}
+
+void UsbSdProbeTask(void* arg) {
+    auto* args = static_cast<UsbSdProbeArgs*>(arg);
+    args->ready = args->files != nullptr && (args->files->IsMounted() || args->files->Init());
+    bool queued = false;
+    if (lvgl_port_lock(1000)) {
+        queued = lv_async_call(UsbSdProbeDelivered, args) == LV_RESULT_OK;
+        lvgl_port_unlock();
+    }
+    if (!queued) delete args;
+    vTaskDelete(nullptr);
+}
+
+struct UsbRestartArgs {
+    rodakos::WebFileSystemService* web_files = nullptr;
+};
+
+// Owned by the system, not by Settings: once the boot request is written, leaving Settings must
+// not cancel the restart, or the next ordinary boot would unexpectedly enter USB disk mode.
+void UsbRestartTask(void* arg) {
+    auto* args = static_cast<UsbRestartArgs*>(arg);
+    if (args->web_files != nullptr && args->web_files->IsRunning()) {
+        for (int poll = 0; poll < kUploadDrainPolls && args->web_files->GetState().busy; ++poll) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        // httpd_stop waits for in-flight handlers, so the current file is closed before reboot.
+        args->web_files->Stop();
+    }
+    delete args;
+    vTaskDelay(pdMS_TO_TICKS(kRestartDelayMs));
     esp_restart();
 }
 }  // namespace
@@ -29,7 +87,7 @@ void SettingsApp::ShowUsbDiskDialog() {
 
     auto* dialog_box = lv_obj_create(usb_disk_dialog_);
     lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, 286, 154);
+    lv_obj_set_size(dialog_box, 296, 212);
     lv_obj_center(dialog_box);
     lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
@@ -37,30 +95,53 @@ void SettingsApp::ShowUsbDiskDialog() {
     lv_obj_set_style_pad_all(dialog_box, 14, 0);
     lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* title = CreateSettingLabel(dialog_box, "USB Disk Mode");
+    auto* files = context_ != nullptr ? context_->services().file_service() : nullptr;
+    auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
+    const bool web_running = web_files != nullptr && web_files->IsRunning();
+    usb_disk_sd_ready_ = false;
+
+    auto* title = CreateSettingLabel(dialog_box, "进入 USB 磁盘模式？");
     lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     auto* message = CreateSettingLabel(
-        dialog_box,
-        "Reboot and share SD card with PC.\nSafely eject before reset.",
-        true);
-    lv_obj_set_width(message, 250);
+        dialog_box, "设备会重启，把 SD 卡作为 U 盘给电脑使用。", true);
+    lv_obj_set_width(message, 268);
     lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 36);
+    lv_obj_set_style_text_font(message, &phone_font_12, 0);
+    lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, 28);
+
+    usb_disk_sd_label_ = CreateSettingLabel(dialog_box, "正在检查 SD 卡…", true);
+    lv_obj_set_style_text_font(usb_disk_sd_label_, &phone_font_12, 0);
+    lv_obj_align(usb_disk_sd_label_, LV_ALIGN_TOP_LEFT, 0, 50);
+
+    lv_coord_t hint_y = 68;
+    if (web_running) {
+        auto* web_line = CreateSettingLabel(dialog_box, "网页传文件运行中，会等当前文件写完后关闭", false);
+        lv_obj_set_width(web_line, 268);
+        lv_label_set_long_mode(web_line, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(web_line, &phone_font_12, 0);
+        lv_obj_set_style_text_color(web_line, rodakos_theme_warning(), 0);
+        lv_obj_align(web_line, LV_ALIGN_TOP_LEFT, 0, hint_y);
+        hint_y += 18;
+    }
+    auto* exit_hint = CreateSettingLabel(dialog_box, "用完在电脑上安全弹出，再长按 IO10 键回到正常模式。", true);
+    lv_obj_set_width(exit_hint, 268);
+    lv_label_set_long_mode(exit_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(exit_hint, &phone_font_12, 0);
+    lv_obj_align(exit_hint, LV_ALIGN_TOP_LEFT, 0, hint_y);
 
     auto* cancel_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel_btn, 108, 34);
+    lv_obj_set_size(cancel_btn, 128, 36);
     lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel_btn, 6, 0);
+    lv_obj_set_style_radius(cancel_btn, 7, 0);
     lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
 
     auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "Cancel");
+    lv_label_set_text(cancel_label, "取消");
     lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
     lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
@@ -68,17 +149,26 @@ void SettingsApp::ShowUsbDiskDialog() {
     }, LV_EVENT_CLICKED, this);
 
     auto* enter_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(enter_btn, 108, 34);
+    lv_obj_set_size(enter_btn, 128, 36);
     lv_obj_align(enter_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(enter_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(enter_btn, 6, 0);
+    lv_obj_set_style_radius(enter_btn, 7, 0);
     lv_obj_set_style_shadow_width(enter_btn, 0, 0);
 
     auto* enter_label = lv_label_create(enter_btn);
-    lv_label_set_text(enter_label, "Enter");
+    lv_label_set_text(enter_label, "重启进入");
     lv_obj_set_style_text_color(enter_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(enter_label, &phone_font_12, 0);
+    lv_obj_set_style_text_font(enter_label, &phone_font_14, 0);
     lv_obj_center(enter_label);
+    lv_obj_add_state(enter_btn, LV_STATE_DISABLED);
+    usb_disk_enter_button_ = enter_btn;
+
+    auto* probe = new (std::nothrow) UsbSdProbeArgs{cloud_refresh_guard_, files, false};
+    if (probe == nullptr || !cloud_refresh_guard_ ||
+        xTaskCreate(UsbSdProbeTask, "usb_sd_probe", 4096, probe, 3, nullptr) != pdPASS) {
+        delete probe;
+        OnUsbDiskSdProbed(false);
+    }
     lv_obj_add_event_cb(enter_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->EnterUsbDiskMode();
@@ -90,11 +180,29 @@ void SettingsApp::CloseUsbDiskDialog() {
         lv_obj_delete(usb_disk_dialog_);
     }
     usb_disk_dialog_ = nullptr;
+    usb_disk_sd_label_ = nullptr;
+    usb_disk_enter_button_ = nullptr;
+}
+
+void SettingsApp::OnUsbDiskSdProbed(bool ready) {
+    usb_disk_sd_ready_ = ready;
+    if (usb_disk_sd_label_ == nullptr) return;
+    lv_label_set_text(usb_disk_sd_label_, ready ? "SD 卡：已插入" : "未检测到 SD 卡，无法进入");
+    lv_obj_set_style_text_color(usb_disk_sd_label_,
+                                ready ? rodakos_theme_success() : rodakos_theme_error(), 0);
+    if (usb_disk_enter_button_ != nullptr) {
+        if (ready) lv_obj_clear_state(usb_disk_enter_button_, LV_STATE_DISABLED);
+        else lv_obj_add_state(usb_disk_enter_button_, LV_STATE_DISABLED);
+    }
 }
 
 void SettingsApp::EnterUsbDiskMode() {
+    if (!usb_disk_sd_ready_) {
+        ui_->ShowToastUnlocked("未检测到 SD 卡");
+        return;
+    }
     if (!RequestUsbMscModeOnNextBoot()) {
-        ui_->ShowToastUnlocked("USB disk request failed");
+        ui_->ShowToastUnlocked("无法进入 USB 磁盘模式，请重试");
         return;
     }
 
@@ -115,7 +223,7 @@ void SettingsApp::ShowUsbDiskEnablePage() {
     lv_obj_clear_flag(usb_disk_hint_page_, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* title = lv_label_create(usb_disk_hint_page_);
-    lv_label_set_text(title, "USB Disk Mode");
+    lv_label_set_text(title, "USB 磁盘模式");
     lv_obj_set_style_text_font(title, &phone_font_18, 0);
     lv_obj_set_style_text_color(title, rodakos_theme_text_primary(), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
@@ -128,12 +236,11 @@ void SettingsApp::ShowUsbDiskEnablePage() {
 
     auto* message = lv_label_create(usb_disk_hint_page_);
     lv_label_set_text(message,
-                      "Enabling USB disk...\n\n"
-                      "The SD card will appear on your PC.\n"
-                      "Touch is disabled in this mode.\n\n"
-                      "To return:\n"
-                      "1. Safely eject on the PC\n"
-                      "2. Press reset or power cycle");
+                      "SD 卡将作为 U 盘出现在电脑上。\n"
+                      "此模式下触摸屏不可用。\n\n"
+                      "回到正常模式：\n"
+                      "1. 在电脑上安全弹出\n"
+                      "2. 长按 IO10 键，或按复位键");
     lv_obj_set_width(message, 286);
     lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(message, &phone_font_12, 0);
@@ -142,7 +249,7 @@ void SettingsApp::ShowUsbDiskEnablePage() {
     lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 92);
 
     auto* footer = lv_label_create(usb_disk_hint_page_);
-    lv_label_set_text(footer, "Rebooting now...");
+    lv_label_set_text(footer, "正在重启…");
     lv_obj_set_style_text_font(footer, &phone_font_12, 0);
     lv_obj_set_style_text_color(footer, rodakos_theme_primary(), 0);
     lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -10);
@@ -150,9 +257,13 @@ void SettingsApp::ShowUsbDiskEnablePage() {
     lv_obj_move_foreground(usb_disk_hint_page_);
     lv_refr_now(nullptr);
 
-    if (usb_disk_restart_timer_ != nullptr) {
-        lv_timer_delete(usb_disk_restart_timer_);
+    auto* args = new (std::nothrow) UsbRestartArgs;
+    if (args != nullptr) {
+        args->web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
+        if (xTaskCreate(UsbRestartTask, "usb_restart", 4096, args, 5, nullptr) == pdPASS) return;
+        delete args;
     }
-    usb_disk_restart_timer_ = lv_timer_create(RestartTimerCallback, 1200, nullptr);
-    lv_timer_set_repeat_count(usb_disk_restart_timer_, 1);
+    // No task: restart now rather than leave the boot request armed for a later ordinary boot.
+    ESP_LOGE(TAG, "Cannot start USB restart task; restarting immediately");
+    esp_restart();
 }
