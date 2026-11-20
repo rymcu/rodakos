@@ -19,6 +19,7 @@ add_executable(assistant_ui_tests
     "${RODAKOS_ROOT}/main/apps/settings/settings_app.cc"
     "${RODAKOS_ROOT}/main/apps/settings/settings_app_internal.cc"
     "${RODAKOS_ROOT}/main/apps/settings/settings_device_cloud_page.cc"
+    "${RODAKOS_ROOT}/main/apps/settings/device_cloud_page_model.cc"
     "${RODAKOS_ROOT}/main/phone_ui/soft_keyboard.cc"
     "${RODAKOS_ROOT}/main/phone_os/phone_app_registry.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_ui.cc"
