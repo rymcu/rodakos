@@ -33,6 +33,9 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <new>
 
 namespace {
 constexpr const char* TAG = "SystemInfoApp";
@@ -200,8 +203,9 @@ uint32_t CapabilityBits(PhoneCapability capabilities) {
 
 bool SystemInfoApp::OnCreate(PhoneAppContext& context) {
     BindServices(context);
-
-    ProbeStorage(true);
+    storage_snapshot_ = std::make_shared<StorageSnapshot>();
+    // Draw first; the card may take a while to mount and report free space.
+    RequestStorageProbe(true);
 
     PhoneUiLock lock(*ui_);
     if (!lock.locked()) {
@@ -226,6 +230,8 @@ void SystemInfoApp::OnDestroy() {
 
     context_ = nullptr;
     ui_ = nullptr;
+    // A probe still running keeps its own reference to the snapshot.
+    storage_snapshot_.reset();
     file_service_ = nullptr;
     audio_focus_service_ = nullptr;
     audio_output_service_ = nullptr;
@@ -451,19 +457,33 @@ void SystemInfoApp::RefreshMemory() {
 }
 
 void SystemInfoApp::RefreshStorage() {
-    ProbeStorage(false);
+    bool storage_checked = false;
+    bool storage_mounted = false;
+    rodakos::FileService::Capacity storage_capacity{};
+    if (storage_snapshot_) {
+        {
+            std::lock_guard<std::mutex> lock(storage_snapshot_->mutex);
+            storage_checked = storage_snapshot_->checked;
+            storage_mounted = storage_snapshot_->mounted;
+            storage_capacity = storage_snapshot_->capacity;
+        }
+        // Free space changes slowly; refresh it every 10 s instead of on every 2 s tick.
+        if (esp_timer_get_time() / 1000 - storage_snapshot_->updated_ms > 10000) {
+            RequestStorageProbe(false);
+        }
+    }
     char value_text[80] = {};
     char detail_text[96] = {};
-    if (storage_mounted_) {
+    if (storage_mounted) {
         char storage_free_text[24] = {};
         char storage_total_text[24] = {};
-        FormatBytes(storage_capacity_.free_bytes, storage_free_text, sizeof(storage_free_text));
-        FormatBytes(storage_capacity_.total_bytes, storage_total_text, sizeof(storage_total_text));
+        FormatBytes(storage_capacity.free_bytes, storage_free_text, sizeof(storage_free_text));
+        FormatBytes(storage_capacity.total_bytes, storage_total_text, sizeof(storage_total_text));
         std::snprintf(value_text, sizeof(value_text), "%s free", storage_free_text);
         std::snprintf(detail_text, sizeof(detail_text), "Total %s", storage_total_text);
         lv_label_set_text(storage_.value, value_text);
         lv_label_set_text(storage_.detail, detail_text);
-    } else if (storage_checked_) {
+    } else if (storage_checked) {
         lv_label_set_text(storage_.value, "SD card not mounted");
         lv_label_set_text(storage_.detail, "Storage service idle");
     } else {
@@ -485,7 +505,7 @@ void SystemInfoApp::RefreshHardware() {
     const bool has_i2c_config = esp_board_manager_check_name(ESP_BOARD_PERIPH_NAME_I2C_MASTER);
     lv_label_set_text_fmt(buses_.value, "I2C %s", has_i2c_config ? "declared" : "missing");
     lv_label_set_text_fmt(buses_.detail, "SD %s, diagnostics read-only",
-                          storage_mounted_ ? "mounted" : "not mounted");
+                          StorageMounted() ? "mounted" : "not mounted");
 
     if (camera_service_ == nullptr) {
         lv_label_set_text(camera_.value, "Unavailable");
@@ -605,26 +625,54 @@ void SystemInfoApp::RefreshFirmware() {
                           esp_get_idf_version());
 }
 
-void SystemInfoApp::ProbeStorage(bool allow_mount) {
-    storage_checked_ = file_service_ != nullptr;
-    storage_mounted_ = false;
-    storage_capacity_ = {};
+namespace {
+struct StorageProbeArgs {
+    std::shared_ptr<void> keep_alive;
+    void* snapshot = nullptr;
+    rodakos::FileService* files = nullptr;
+    bool allow_mount = false;
+};
+}  // namespace
 
+bool SystemInfoApp::StorageMounted() const {
+    if (!storage_snapshot_) return false;
+    std::lock_guard<std::mutex> lock(storage_snapshot_->mutex);
+    return storage_snapshot_->mounted;
+}
+
+void SystemInfoApp::RequestStorageProbe(bool allow_mount) {
+    if (!storage_snapshot_) return;
     if (file_service_ == nullptr) {
+        std::lock_guard<std::mutex> lock(storage_snapshot_->mutex);
+        storage_snapshot_->checked = false;
+        storage_snapshot_->updated_ms = esp_timer_get_time() / 1000;
         return;
     }
-
-    bool mounted = file_service_->IsMounted();
-    if (!mounted && allow_mount) {
-        mounted = file_service_->Init();
-    }
-    if (!mounted) {
-        return;
-    }
-
-    storage_mounted_ = true;
-    if (!file_service_->GetCapacity(storage_capacity_)) {
-        storage_capacity_ = {};
+    bool expected = false;
+    if (!storage_snapshot_->probing.compare_exchange_strong(expected, true)) return;
+    auto* args = new (std::nothrow) StorageProbeArgs{storage_snapshot_, storage_snapshot_.get(),
+                                                     file_service_, allow_mount};
+    auto task = [](void* arg) {
+        auto* probe = static_cast<StorageProbeArgs*>(arg);
+        auto* snapshot = static_cast<StorageSnapshot*>(probe->snapshot);
+        bool mounted = probe->files->IsMounted();
+        if (!mounted && probe->allow_mount) mounted = probe->files->Init();
+        rodakos::FileService::Capacity capacity{};
+        if (mounted && !probe->files->GetCapacity(capacity)) capacity = {};
+        {
+            std::lock_guard<std::mutex> lock(snapshot->mutex);
+            snapshot->checked = true;
+            snapshot->mounted = mounted;
+            snapshot->capacity = capacity;
+            snapshot->updated_ms = esp_timer_get_time() / 1000;
+        }
+        snapshot->probing.store(false);
+        delete probe;
+        vTaskDelete(nullptr);
+    };
+    if (args == nullptr || xTaskCreate(task, "sysinfo_sd", 4096, args, 2, nullptr) != pdPASS) {
+        delete args;
+        storage_snapshot_->probing.store(false);
     }
 }
 

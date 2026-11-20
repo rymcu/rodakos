@@ -3,6 +3,11 @@
 #include "phone_os/phone_app.h"
 #include "rodakos_adapters/file_service.h"
 
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+
 #include <lvgl.h>
 
 class PhoneAppContext;
@@ -50,12 +55,23 @@ private:
     void RefreshHardware();
     void RefreshVoice();
     void RefreshFirmware();
-    void ProbeStorage(bool allow_mount);
+    // Card I/O (mount, f_getfree) runs on a short worker; the LVGL timer only reads the result.
+    struct StorageSnapshot {
+        std::mutex mutex;
+        bool checked = false;
+        bool mounted = false;
+        rodakos::FileService::Capacity capacity{};
+        int64_t updated_ms = 0;
+        std::atomic<bool> probing{false};
+    };
+    void RequestStorageProbe(bool allow_mount);
+    bool StorageMounted() const;
     void NavigateHome();
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
     rodakos::FileService* file_service_ = nullptr;
+    std::shared_ptr<StorageSnapshot> storage_snapshot_;
     rodakos::AudioFocusService* audio_focus_service_ = nullptr;
     rodakos::AudioOutputService* audio_output_service_ = nullptr;
     rodakos::AudioService* audio_service_ = nullptr;
@@ -87,9 +103,6 @@ private:
     InfoLabels voice_;
     InfoLabels buttons_;
 
-    bool storage_checked_ = false;
-    bool storage_mounted_ = false;
-    rodakos::FileService::Capacity storage_capacity_;
 };
 
 void RegisterSystemInfoApp(PhoneAppRegistry& registry);
