@@ -106,9 +106,17 @@ lv_obj_t* CreateRow(lv_obj_t* list, int index, const char* icon, const char* tit
     return row;
 }
 
+// Settings is destroyed while 主题 or 关于本机 is open; remember where the list was so that
+// coming back lands on the same row instead of the top.
+lv_coord_t g_restore_scroll_y = -1;
+
+void RememberScroll(lv_obj_t* body) {
+    g_restore_scroll_y = body != nullptr ? lv_obj_get_scroll_y(body) : -1;
+}
+
 void OpenSystemInfo(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
-    if (context != nullptr) context->navigation().Launch("system");
+    if (context != nullptr) context->navigation().LaunchFrom("system", "settings");
 }
 
 std::string TimeZoneLabel(const std::string& tz) {
@@ -240,6 +248,7 @@ void SettingsApp::CreateMainPage() {
     auto* theme_row = CreateRow(display, 1, ICON_PALETTE, "主题", true, nullptr);
     lv_obj_add_event_cb(theme_row, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        RememberScroll(self->main_body_);
         lv_async_call(DeferOpenThemes, self->context_);
     }, LV_EVENT_CLICKED, this);
 
@@ -281,8 +290,15 @@ void SettingsApp::CreateMainPage() {
     lv_label_set_text(version_value, app_desc != nullptr ? app_desc->version : "");
     lv_obj_add_event_cb(about_row, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        RememberScroll(self->main_body_);
         lv_async_call(OpenSystemInfo, self->context_);
     }, LV_EVENT_CLICKED, this);
+
+    if (g_restore_scroll_y > 0) {
+        lv_obj_update_layout(main_body_);
+        lv_obj_scroll_to_y(main_body_, g_restore_scroll_y, LV_ANIM_OFF);
+    }
+    g_restore_scroll_y = -1;
 
     UpdateMainPageStatus();
 }

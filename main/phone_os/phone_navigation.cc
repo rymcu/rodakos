@@ -31,7 +31,26 @@ bool PhoneNavigation::RequestHome() {
 }
 
 bool PhoneNavigation::Launch(std::string_view app_id) {
+    child_app_.clear();
+    caller_app_.clear();
     return system_.LaunchApp(app_id);
+}
+
+bool PhoneNavigation::LaunchFrom(std::string_view app_id, std::string_view caller) {
+    if (!Launch(app_id)) {
+        return false;
+    }
+    child_app_.assign(app_id);
+    caller_app_.assign(caller);
+    return true;
+}
+
+bool PhoneNavigation::ReturnToCaller() {
+    const std::string caller = caller_app_;
+    if (caller.empty() || system_.GetAppHostState().current_app_id != child_app_) {
+        return ReturnHome();
+    }
+    return Launch(caller) || ReturnHome();
 }
 
 bool PhoneNavigation::RefreshTheme() {
@@ -39,6 +58,8 @@ bool PhoneNavigation::RefreshTheme() {
 }
 
 bool PhoneNavigation::ReturnHome() {
+    child_app_.clear();
+    caller_app_.clear();
     return system_.ReturnHome();
 }
 
