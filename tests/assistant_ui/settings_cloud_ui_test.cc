@@ -51,13 +51,14 @@ struct Fixture {
 
 RODAK_TEST("A bound device with expired credentials has a clickable retry separate from unbind") {
     Fixture f;
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Credentials need refresh");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "设备凭据需要更新");
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_unbind_button_, LV_OBJ_FLAG_HIDDEN));
-    lv_area_t retry, unbind;
-    lv_obj_get_coords(f.app.cloud_pairing_button_, &retry);
-    lv_obj_get_coords(f.app.cloud_unbind_button_, &unbind);
-    RODAK_CHECK(retry.y2 < unbind.y1);
+    // Unbind lives in the hidden Details panel, never beside Retry in the action bar.
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "重试");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "详情");
+    RODAK_CHECK(lv_obj_has_flag(f.app.cloud_details_panel_, LV_OBJ_FLAG_HIDDEN));
+    lv_area_t retry;
     lv_obj_scroll_to_view(f.app.cloud_pairing_button_, LV_ANIM_OFF); Pump();
     lv_obj_get_coords(f.app.cloud_pairing_button_, &retry);
     RODAK_CHECK(retry.y1 >= 40); RODAK_CHECK(retry.y2 < 240);
@@ -69,7 +70,7 @@ RODAK_TEST("A bound device with expired credentials has a clickable retry separa
     RODAK_CHECK_EQ(cloud_ui_test::refreshes, 1U);
     RODAK_CHECK_EQ(cloud_ui_test::unbinds, 0U);
     RODAK_CHECK_EQ(f.bound_notifications, 1U);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Voice service unavailable");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "语音服务不可用");
 }
 
 RODAK_TEST("A rejected credential refresh keeps the binding and never displays raw server errors") {
@@ -77,8 +78,8 @@ RODAK_TEST("A rejected credential refresh keeps the binding and never displays r
     cloud_ui_test::refresh_ok = false;
     cloud_ui_test::state.code = rodakos::CloudDiagnosticCode::kCredentialsRejected;
     f.app.RefreshDeviceCloud(); cloud_ui_test::RunTask(); Pump();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Credentials rejected");
-    RODAK_CHECK_EQ(f.app.cloud_pairing_error_, "Credentials rejected");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "设备凭据被拒绝");
+    RODAK_CHECK_EQ(f.app.cloud_pairing_error_, "设备凭据被拒绝");
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_unbind_button_, LV_OBJ_FLAG_HIDDEN));
     RODAK_CHECK_FALSE(f.app.cloud_refresh_guard_->refresh_in_progress.load());
     RODAK_CHECK_EQ(f.bound_notifications, 0U);
@@ -86,8 +87,9 @@ RODAK_TEST("A rejected credential refresh keeps the binding and never displays r
     cloud_ui_test::config.has_aiot_config = true;
     cloud_ui_test::state.code = rodakos::CloudDiagnosticCode::kReady;
     f.app.RefreshDeviceCloud(); cloud_ui_test::RunTask(); Pump();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "已绑定到 Rodak");
-    RODAK_CHECK(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "已连接");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "详情");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "解除连接");
 }
 
 RODAK_TEST("Settings destruction ignores delayed cloud completion without changing the voice lifecycle") {
@@ -122,8 +124,8 @@ RODAK_TEST("Settings refresh task allocation failure immediately leaves retry av
     f.app.ShowPage(SettingsPage::kMain);
     lv_test_wait(4050);
     f.app.ShowPage(SettingsPage::kDeviceCloud); Pump();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Refresh could not start");
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_guide_label_)), "Wait, then tap Retry to try again.");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "无法开始连接");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_guide_label_)), "请稍后点「重试」。");
     RODAK_CHECK_EQ(cloud_ui_test::refreshes, 0U);
     RODAK_CHECK_EQ(cloud_ui_test::unbinds, 0U);
     RODAK_CHECK(cloud_ui_test::state.code == rodakos::CloudDiagnosticCode::kCredentialsRejected);
@@ -131,7 +133,7 @@ RODAK_TEST("Settings refresh task allocation failure immediately leaves retry av
     RODAK_CHECK(cloud_ui_test::config.aiot_registered && cloud_ui_test::config.aiot_activated);
     RODAK_CHECK(f.app.OnThemeChanged(f.context));
     f.app.ShowPage(SettingsPage::kDeviceCloud); Pump();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Refresh could not start");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "无法开始连接");
     cloud_ui_test::task_create_ok = true;
     f.app.RefreshDeviceCloud();
     f.app.RefreshDeviceCloud();
@@ -140,7 +142,7 @@ RODAK_TEST("Settings refresh task allocation failure immediately leaves retry av
     cloud_ui_test::state.code = rodakos::CloudDiagnosticCode::kReady;
     cloud_ui_test::RunTask(); Pump();
     RODAK_CHECK_EQ(cloud_ui_test::refreshes, 1U);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "已绑定到 Rodak");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "已连接");
 }
 
 RODAK_TEST("Lost refresh callback is recovered by the UI timer and a later retry can complete") {
@@ -155,15 +157,16 @@ RODAK_TEST("Lost refresh callback is recovered by the UI timer and a later retry
     RODAK_CHECK_FALSE(f.app.cloud_refresh_guard_->refresh_in_progress.load());
     RODAK_CHECK_FALSE(lv_obj_has_state(f.app.cloud_pairing_button_, LV_STATE_DISABLED));
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Refresh result unavailable");
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_guide_label_)), "Tap Retry to check the connection.");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "未收到连接结果");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_guide_label_)), "请稍后点「重试」。");
     RODAK_CHECK(cloud_ui_test::state.code == rodakos::CloudDiagnosticCode::kReady);
     RODAK_CHECK_EQ(f.bound_notifications, 0U);
     lv_test_wait(4050); Pump();
     RODAK_CHECK_EQ(cloud_ui_test::refreshes, 1U);
     f.app.RefreshDeviceCloud(); cloud_ui_test::RunTask(); Pump();
     RODAK_CHECK_EQ(f.bound_notifications, 1U);
-    RODAK_CHECK(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "详情");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "解除连接");
 }
 
 RODAK_TEST("A rejected UI completion remains distinct from an older rejected credential diagnosis") {
@@ -176,7 +179,7 @@ RODAK_TEST("A rejected UI completion remains distinct from an older rejected cre
     lv_test_wait(2050); Pump();
     f.app.ShowPage(SettingsPage::kMain);
     f.app.ShowPage(SettingsPage::kDeviceCloud); Pump();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "Refresh result unavailable");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "未收到连接结果");
     RODAK_CHECK_FALSE(lv_obj_has_state(f.app.cloud_pairing_button_, LV_STATE_DISABLED));
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
     lv_test_wait(4050); Pump();

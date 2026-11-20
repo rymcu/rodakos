@@ -7,6 +7,11 @@ void SettingsApp::CreateWiFiDetailPage() {}
 void SettingsApp::UpdateWiFiDetailPage() {}
 void SettingsApp::StartWiFiScan() {}
 void SettingsApp::CreateDateTimePage() {}
+void SettingsApp::UpdateDateTimePage() {}
+void SettingsApp::CloseDateTimePicker() {}
+void SettingsApp::ClosePasswordDialog() {}
+void SettingsApp::CloseForgetWiFiDialog() {}
+void SettingsApp::UpdateMainPageStatus() {}
 void SettingsApp::CreateSystemShellPage() {}
 void SettingsApp::CreateButtonBindingsPage() {}
 void SettingsApp::UpdateButtonBindingsPage() {}
@@ -20,6 +25,7 @@ void SettingsWebFilesPage::Update() {}
 void SettingsWebFilesPage::Reset() {}
 // 首次接入页与服务属于 lan_onboarding；Device Cloud 页只读 Available() 决定是否显示入口。
 void SettingsApp::ShowLanOnboarding() {}
+void SettingsApp::CloseLanOnboarding() {}
 #include "phone_os/lan_onboarding_service.h"
 bool rodakos::LanOnboardingService::Available() { return false; }
 // 扫码配网页与服务需要相机，不在本目标内；Device Cloud 页同样只读 Available()。
