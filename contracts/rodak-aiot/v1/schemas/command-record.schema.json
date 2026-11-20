@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/command-record.schema.json",
+  "title": "GET /commands/pull data item",
+  "description": "One command record from GET /commands/pull. Pull returns pending and delivered records. HTTP pull is a fallback; RodakOS uses MQTT.",
+  "type": "object",
+  "required": [
+    "id",
+    "deviceId",
+    "deviceKey",
+    "commandNo",
+    "topic",
+    "payload",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stored device ID. New devices get a UUIDv4; existing devices keep their ID."
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "commandNo": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^devices/.+/commands/.+$"
+    },
+    "payload": {
+      "type": "string",
+      "description": "Raw payload text, published verbatim on MQTT."
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "delivered"
+      ]
+    },
+    "ackPayload": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "deliveredAt": {
+      "type": "string"
+    },
+    "ackedAt": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "description": "SQLite datetime('now','localtime'): YYYY-MM-DD HH:MM:SS."
+    },
+    "updatedAt": {
+      "type": "string",
+      "description": "SQLite datetime('now','localtime')."
+    }
+  }
+}

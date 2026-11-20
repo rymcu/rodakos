@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/envelope.schema.json",
+  "title": "Rodak HTTP response envelope",
+  "description": "Every JSON /api/v1 response. Business errors keep HTTP 200 and put the error in `code` with data null. Exceptions: a missing, invalid or revoked access token is HTTP 401 + code 401; the binary OTA artifact route uses the business code as the HTTP status. A success data may be null where a route says so (HTTP shadow report). Appearance routes (/api/v1/aiot/appearance/*) are the exception: they set the HTTP status to the business code .",
+  "type": "object",
+  "required": [
+    "code",
+    "message",
+    "data"
+  ],
+  "properties": {
+    "code": {
+      "type": "integer"
+    },
+    "message": {
+      "type": "string"
+    },
+    "data": {}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "code": {
+          "const": 200
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "enum": [
+            400,
+            401,
+            403,
+            404,
+            409,
+            410,
+            413,
+            429,
+            500,
+            503
+          ]
+        },
+        "data": {
+          "type": "null"
+        }
+      }
+    }
+  ]
+}

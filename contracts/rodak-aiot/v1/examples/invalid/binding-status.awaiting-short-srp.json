@@ -1,0 +1,14 @@
+{
+  "requestId": "9c4e7a2b1d3f4e5a8b6c0d1e2f3a4b5c",
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "deviceName": "RodakOS RYMCU BigSmart",
+  "productKey": "rymcu-bigsmart",
+  "requestedAt": "2026-11-20T08:00:00.000Z",
+  "expiresAt": "2026-11-20T08:10:00.000Z",
+  "status": "awaiting-device",
+  "trustSetup": {
+    "srpA": "QUFBQQ==",
+    "srpM1": "TTFNMQ==",
+    "serverBind": "U0VSVkVS"
+  }
+}

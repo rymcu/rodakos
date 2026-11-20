@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/output-stop.schema.json",
+  "title": "output.stop (server -> device)",
+  "description": "No more audio for this reply. The device drains the local tail.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "output.stop"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "playbackEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    }
+  },
+  "required": [
+    "event",
+    "sessionId"
+  ]
+}

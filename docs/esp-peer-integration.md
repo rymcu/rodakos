@@ -247,7 +247,7 @@ earlier version of this document kept that evidence here. Git history keeps that
 | Change | Record |
 |---|---|
 | 2026-10-01: first integration, screen stream, remote text input | Git history of this file |
-| 2026-10-06: stream instance isolation and exact stop | [Exact stream Stop contract](rodak-aiot-contract-v1.md#exact-stream-stop-026) |
+| 2026-10-06: stream instance isolation and exact stop | [Exact stream Stop contract](mqtt-command-semantics.md#exact-stream-stop-026) |
 | 027: explicit candidate capacity and resource sampling | [OTA release readiness](ota-release-readiness.md) |
 | 018: ACK retry, cancel, and device limits | [Media browsing](media-browsing.md#018-camera-分配保护ack-与阶段诊断) |
 | 019: remote gesture cancel | [Media browsing](media-browsing.md#019-取消远程手势的修正与制品) |

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/session-end.schema.json",
+  "title": "session.end (server -> device)",
+  "description": "Ends the session. reason is informational; the device treats every reason as an ordinary end. Rodak's current reasons are listed in examples.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "session.end"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "examples": [
+        "goodbye-intent",
+        "wake-arbitration-lost",
+        "announce-finished",
+        "announce-expired"
+      ]
+    }
+  },
+  "required": [
+    "event",
+    "sessionId"
+  ]
+}

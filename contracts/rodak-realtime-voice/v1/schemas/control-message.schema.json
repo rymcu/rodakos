@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/control-message.schema.json",
+  "title": "Any control message",
+  "description": "Every JSON text frame is one of the twelve events. Legacy XiaoZhi keys are rejected at any depth.",
+  "oneOf": [
+    {
+      "$ref": "session-open.schema.json"
+    },
+    {
+      "$ref": "session-ready.schema.json"
+    },
+    {
+      "$ref": "input-start.schema.json"
+    },
+    {
+      "$ref": "input-stop.schema.json"
+    },
+    {
+      "$ref": "wake-detected.schema.json"
+    },
+    {
+      "$ref": "playback-abort.schema.json"
+    },
+    {
+      "$ref": "vad.schema.json"
+    },
+    {
+      "$ref": "output-start.schema.json"
+    },
+    {
+      "$ref": "output-stop.schema.json"
+    },
+    {
+      "$ref": "session-end.schema.json"
+    },
+    {
+      "$ref": "mcp.schema.json"
+    },
+    {
+      "$ref": "error.schema.json"
+    }
+  ],
+  "x-forbiddenKeys": [
+    "hello",
+    "listen",
+    "tts",
+    "goodbye",
+    "type",
+    "session_id"
+  ]
+}

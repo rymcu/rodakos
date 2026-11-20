@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/effect-receipt.schema.json",
+  "title": "devices/{k}/effects/receipt",
+  "description": "Exactly one of receipt and errorCode; the physicalVerified/persistence rules apply only to receipt. Payload <= 16384 bytes. Rodak also matches effectId, parametersHash, dispatchId, shadowVersion and the original MQTT connection against live state; a schema-valid receipt can still be rejected.",
+  "type": "object",
+  "required": [
+    "schema",
+    "effectId",
+    "parametersHash",
+    "dispatchId",
+    "shadowVersion"
+  ],
+  "properties": {
+    "schema": {
+      "enum": [
+        "rodakos.mqtt-volume-result.v1",
+        "rodakos.mqtt-light-result.v1"
+      ]
+    },
+    "effectId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9:_-]{1,128}$"
+    },
+    "parametersHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dispatchId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv4 from randomUUID()."
+    },
+    "shadowVersion": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "receipt": {},
+    "errorCode": {
+      "enum": [
+        "stale-shadow",
+        "effect-conflict",
+        "effect-capacity",
+        "invalid-request",
+        "outcome-unknown"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "receipt"
+      ],
+      "not": {
+        "required": [
+          "errorCode"
+        ]
+      }
+    },
+    {
+      "required": [
+        "errorCode"
+      ],
+      "not": {
+        "required": [
+          "receipt"
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema": {
+            "const": "rodakos.mqtt-volume-result.v1"
+          }
+        },
+        "required": [
+          "receipt"
+        ]
+      },
+      "then": {
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema",
+              "effectId",
+              "parametersHash",
+              "operation",
+              "requested",
+              "previousVolume",
+              "volume",
+              "configurationRevision",
+              "status",
+              "application",
+              "persistence",
+              "physicalVerified"
+            ],
+            "properties": {
+              "schema": {
+                "const": "rodakos.volume-receipt.v1"
+              },
+              "effectId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "description": "UUIDv4 from randomUUID()."
+              },
+              "parametersHash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "operation": {
+                "const": "volume.set"
+              },
+              "requested": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "volume": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
+                },
+                "required": [
+                  "volume"
+                ]
+              },
+              "previousVolume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "volume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "configurationRevision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "status": {
+                "enum": [
+                  "configured",
+                  "rejected"
+                ]
+              },
+              "application": {
+                "enum": [
+                  "deferred",
+                  "codec-applied",
+                  "unverified"
+                ]
+              },
+              "errorCode": {
+                "const": "codec-volume-rejected"
+              },
+              "persistence": {
+                "const": "volatile"
+              },
+              "physicalVerified": {
+                "const": false
+              }
+            },
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "configured"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "application": {
+                  "enum": [
+                    "deferred",
+                    "codec-applied"
+                  ]
+                },
+                "configurationRevision": {
+                  "minimum": 1
+                }
+              },
+              "not": {
+                "required": [
+                  "errorCode"
+                ]
+              }
+            },
+            "else": {
+              "required": [
+                "errorCode"
+              ],
+              "properties": {
+                "application": {
+                  "const": "unverified"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema": {
+            "const": "rodakos.mqtt-light-result.v1"
+          }
+        },
+        "required": [
+          "receipt"
+        ]
+      },
+      "then": {
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "required": [
+              "schema",
+              "effectId",
+              "parametersHash",
+              "operation",
+              "requested",
+              "previous",
+              "current",
+              "configurationRevision",
+              "status",
+              "application",
+              "persistence",
+              "physicalVerified"
+            ],
+            "properties": {
+              "schema": {
+                "const": "rodakos.light-receipt.v1"
+              },
+              "effectId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "parametersHash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "operation": {
+                "const": "light.patch"
+              },
+              "requested": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "lightId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "patch": {
+                    "type": "object",
+                    "minProperties": 1
+                  }
+                },
+                "required": [
+                  "lightId",
+                  "patch"
+                ]
+              },
+              "previous": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "brightness": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "color": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "r": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "g": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "b": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      }
+                    },
+                    "required": [
+                      "r",
+                      "g",
+                      "b"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "enabled",
+                  "brightness",
+                  "color"
+                ]
+              },
+              "current": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "brightness": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "color": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "r": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "g": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "b": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      }
+                    },
+                    "required": [
+                      "r",
+                      "g",
+                      "b"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "enabled",
+                  "brightness",
+                  "color"
+                ]
+              },
+              "configurationRevision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "status": {
+                "enum": [
+                  "configured",
+                  "rejected"
+                ]
+              },
+              "application": {
+                "enum": [
+                  "driver-applied",
+                  "unverified"
+                ]
+              },
+              "errorCode": {
+                "const": "light-driver-rejected"
+              },
+              "persistence": {
+                "const": "volatile"
+              },
+              "physicalVerified": {
+                "const": false
+              }
+            },
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "configured"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "application": {
+                  "const": "driver-applied"
+                },
+                "configurationRevision": {
+                  "minimum": 1
+                }
+              },
+              "not": {
+                "required": [
+                  "errorCode"
+                ]
+              }
+            },
+            "else": {
+              "required": [
+                "errorCode"
+              ],
+              "properties": {
+                "application": {
+                  "const": "unverified"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

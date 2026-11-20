@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/light-state.schema.json",
+  "title": "Reported light object",
+  "description": "RodakOS emission profile; declared in Rodak's rymcu-bigsmart thing model. Rodak stores whatever is reported; the invalid fixture is a RodakOS-profile negative.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "last_error": {
+      "type": "integer"
+    },
+    "configurationRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "application": {
+      "enum": [
+        "driver-applied",
+        "unverified"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "brightness": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "color": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "r": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "b": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "required": [
+        "r",
+        "g",
+        "b"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "available",
+    "last_error",
+    "configurationRevision",
+    "application",
+    "enabled",
+    "brightness",
+    "color"
+  ]
+}

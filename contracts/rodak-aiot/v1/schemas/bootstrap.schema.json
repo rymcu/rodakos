@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/bootstrap.schema.json",
+  "title": "GET /bootstrap data",
+  "description": "GET /api/v1/aiot/devices/bootstrap data. Capability and routing only; it grants no access.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "module",
+    "protocol",
+    "protocolVersion",
+    "productKey",
+    "productKeys",
+    "protocols",
+    "productTypes",
+    "capabilities",
+    "heartbeatTimeout",
+    "deviceTokenTtl",
+    "mqttPort",
+    "mqttGatewayEnabled",
+    "realtimeVoice",
+    "endpoints"
+  ],
+  "properties": {
+    "module": {
+      "const": "aiot"
+    },
+    "protocol": {
+      "const": "rodak-aiot"
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "productKey": {
+      "const": "rymcu-bigsmart"
+    },
+    "productKeys": {
+      "const": [
+        "rymcu-bigsmart"
+      ]
+    },
+    "protocols": {
+      "enum": [
+        [
+          "http",
+          "mqtt"
+        ],
+        [
+          "https",
+          "mqtts"
+        ]
+      ]
+    },
+    "productTypes": {
+      "const": [
+        "device_model"
+      ]
+    },
+    "capabilities": {
+      "const": [
+        "manual-pairing",
+        "device-jwt-after-pairing",
+        "shadow",
+        "telemetry",
+        "command-pull",
+        "command-ack",
+        "thing-model",
+        "ota",
+        "realtime-voice"
+      ]
+    },
+    "heartbeatTimeout": {
+      "const": 180
+    },
+    "deviceTokenTtl": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Seconds."
+    },
+    "mqttPort": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "mqttHost": {
+      "type": "string",
+      "pattern": "^rodak-[0-9a-f]{16}\\.local$",
+      "description": "Secure (pinned) listener only: the server TLS name."
+    },
+    "mqttGatewayEnabled": {
+      "const": true
+    },
+    "realtimeVoice": {
+      "$ref": "realtime-voice-descriptor.schema.json"
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "httpBaseUrl": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "mqttEndpoint": {
+          "type": "string",
+          "pattern": "^mqtts?://"
+        },
+        "bindingRequest": {
+          "const": "/api/v1/aiot/devices/binding/request"
+        },
+        "bindingStatus": {
+          "const": "/api/v1/aiot/devices/binding/requests/{requestId}/status"
+        },
+        "bindingUnbind": {
+          "const": "/api/v1/aiot/devices/binding/unbind"
+        },
+        "heartbeat": {
+          "const": "/api/v1/aiot/devices/heartbeat"
+        },
+        "telemetry": {
+          "const": "/api/v1/aiot/devices/telemetry"
+        },
+        "shadowReport": {
+          "const": "/api/v1/aiot/devices/shadow/report"
+        },
+        "shadowDesired": {
+          "const": "/api/v1/aiot/devices/shadow/desired"
+        },
+        "commandsPull": {
+          "const": "/api/v1/aiot/devices/commands/pull"
+        },
+        "otaCheck": {
+          "const": "/api/v1/ota/check"
+        }
+      },
+      "required": [
+        "httpBaseUrl",
+        "mqttEndpoint",
+        "bindingRequest",
+        "bindingStatus",
+        "bindingUnbind",
+        "heartbeat",
+        "telemetry",
+        "shadowReport",
+        "shadowDesired",
+        "commandsPull",
+        "otaCheck"
+      ]
+    }
+  },
+  "if": {
+    "properties": {
+      "protocols": {
+        "const": [
+          "https",
+          "mqtts"
+        ]
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "mqttHost"
+    ]
+  },
+  "else": {
+    "not": {
+      "required": [
+        "mqttHost"
+      ]
+    }
+  }
+}

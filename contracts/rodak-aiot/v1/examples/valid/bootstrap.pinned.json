@@ -1,0 +1,99 @@
+{
+  "module": "aiot",
+  "protocol": "rodak-aiot",
+  "protocolVersion": 1,
+  "productKey": "rymcu-bigsmart",
+  "productKeys": [
+    "rymcu-bigsmart"
+  ],
+  "protocols": [
+    "https",
+    "mqtts"
+  ],
+  "productTypes": [
+    "device_model"
+  ],
+  "capabilities": [
+    "manual-pairing",
+    "device-jwt-after-pairing",
+    "shadow",
+    "telemetry",
+    "command-pull",
+    "command-ack",
+    "thing-model",
+    "ota",
+    "realtime-voice"
+  ],
+  "heartbeatTimeout": 180,
+  "deviceTokenTtl": 86400,
+  "mqttPort": 8883,
+  "mqttHost": "rodak-a1b2c3d4e5f60718.local",
+  "mqttGatewayEnabled": true,
+  "realtimeVoice": {
+    "schema": "rodak-realtime-voice/v1",
+    "protocol": "rodak-realtime-voice",
+    "protocolVersion": 1,
+    "transport": "websocket",
+    "endpoint": "wss://rodak-a1b2c3d4e5f60718.local:8443/api/v1/aiot/devices/realtime-voice",
+    "authMode": "device-token",
+    "uplink": {
+      "codec": "opus",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "frameDurationMs": 60
+    },
+    "downlink": {
+      "codec": "opus",
+      "sampleRateHz": 24000,
+      "channels": 1,
+      "frameDurationMs": 60
+    },
+    "limits": {
+      "maxAudioFrameBytes": 8192,
+      "maxControlBytes": 65536
+    },
+    "features": [],
+    "capabilities": [
+      "session",
+      "audio-input",
+      "audio-output",
+      "speech-boundaries",
+      "interrupt",
+      "assistant-events",
+      "mcp"
+    ],
+    "events": [
+      "session.open",
+      "session.ready",
+      "input.start",
+      "input.stop",
+      "wake.detected",
+      "playback.abort",
+      "vad",
+      "output.start",
+      "output.stop",
+      "session.end",
+      "mcp",
+      "error"
+    ],
+    "vadStrategies": [
+      "device-authoritative",
+      "server-authoritative",
+      "hybrid-fallback"
+    ],
+    "preferredVadStrategy": "hybrid-fallback"
+  },
+  "endpoints": {
+    "httpBaseUrl": "https://rodak-a1b2c3d4e5f60718.local:8443",
+    "mqttEndpoint": "mqtts://rodak-a1b2c3d4e5f60718.local:8883",
+    "bindingRequest": "/api/v1/aiot/devices/binding/request",
+    "bindingStatus": "/api/v1/aiot/devices/binding/requests/{requestId}/status",
+    "bindingUnbind": "/api/v1/aiot/devices/binding/unbind",
+    "heartbeat": "/api/v1/aiot/devices/heartbeat",
+    "telemetry": "/api/v1/aiot/devices/telemetry",
+    "shadowReport": "/api/v1/aiot/devices/shadow/report",
+    "shadowDesired": "/api/v1/aiot/devices/shadow/desired",
+    "commandsPull": "/api/v1/aiot/devices/commands/pull",
+    "otaCheck": "/api/v1/ota/check"
+  }
+}

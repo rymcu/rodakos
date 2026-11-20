@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/command-request.schema.json",
+  "title": "devices/{k}/commands/{commandNo}",
+  "description": "Commands that Rodak's dedicated producers emit: announce (priority defaults to normal), stream Start (quality only for display), stream Stop/Signal (with rodak/videoSignal). Command numbers: ordinary = dashless UUIDv4; Start = rodak-video-start-<32 hex>; Signal = rodak-video-<32 hex>; Stop = rodak-video-stop-<32 hex>. Rodak's generic command entry can also publish plain text or well-formed non-video JSON verbatim, without a size check (malformed text starting with {, [ or \" is rejected); this schema does not cover that path. The announce counter has no upper bound in Rodak; RodakOS rejects values over 4294967295. RodakOS limits payloads to 256 KiB and command numbers to 128 bytes, accepts a Stop without startCommandNo (legacy), and ignores _meta and unknown stream fields.",
+  "oneOf": [
+    {
+      "type": "string",
+      "const": "ping",
+      "description": "Bare text ping, or a JSON string \"ping\"."
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "const": "voice.announce"
+        },
+        "announceSeq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Rodak counter, no upper cap. RodakOS rejects values over 4294967295."
+        },
+        "priority": {
+          "enum": [
+            "normal",
+            "urgent"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "announceSeq",
+        "priority"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "sessionId",
+        "transport",
+        "width",
+        "height",
+        "fps",
+        "expiresAt",
+        "_meta"
+      ],
+      "properties": {
+        "command": {
+          "const": "camera.stream.start"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "UUIDv4 from randomUUID()."
+        },
+        "transport": {
+          "enum": [
+            "webrtc-datachannel",
+            "mjpeg"
+          ]
+        },
+        "width": {
+          "const": 320
+        },
+        "height": {
+          "const": 240
+        },
+        "fps": {
+          "const": 5
+        },
+        "clientId": {
+          "type": "string",
+          "pattern": "^\\S([\\s\\S]*\\S)?$",
+          "description": "Trimmed at both ends; omitted when blank."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rodak/videoSignal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema": {
+                  "const": "rodak.videoSignal.v1"
+                },
+                "dispatchId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                }
+              },
+              "required": [
+                "schema",
+                "dispatchId"
+              ]
+            }
+          },
+          "required": [
+            "rodak/videoSignal"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "sessionId",
+        "transport",
+        "width",
+        "height",
+        "fps",
+        "quality",
+        "expiresAt",
+        "_meta"
+      ],
+      "properties": {
+        "command": {
+          "const": "display.stream.start"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "UUIDv4 from randomUUID()."
+        },
+        "transport": {
+          "enum": [
+            "webrtc-datachannel",
+            "mjpeg"
+          ]
+        },
+        "width": {
+          "const": 320
+        },
+        "height": {
+          "const": 240
+        },
+        "fps": {
+          "const": 5
+        },
+        "quality": {
+          "const": 65
+        },
+        "clientId": {
+          "type": "string",
+          "pattern": "^\\S([\\s\\S]*\\S)?$",
+          "description": "Trimmed at both ends; omitted when blank."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rodak/videoSignal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema": {
+                  "const": "rodak.videoSignal.v1"
+                },
+                "dispatchId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                }
+              },
+              "required": [
+                "schema",
+                "dispatchId"
+              ]
+            }
+          },
+          "required": [
+            "rodak/videoSignal"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "enum": [
+            "camera.stream.stop",
+            "display.stream.stop"
+          ]
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "UUIDv4 from randomUUID()."
+        },
+        "startCommandNo": {
+          "type": "string",
+          "pattern": "^rodak-video-start-[0-9a-f]{32}$"
+        },
+        "_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rodak/videoSignal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema": {
+                  "const": "rodak.videoSignal.v1"
+                },
+                "dispatchId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                }
+              },
+              "required": [
+                "schema",
+                "dispatchId"
+              ]
+            }
+          },
+          "required": [
+            "rodak/videoSignal"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "sessionId",
+        "startCommandNo",
+        "_meta"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "enum": [
+            "camera.stream.signal",
+            "display.stream.signal"
+          ]
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "UUIDv4 from randomUUID()."
+        },
+        "type": {
+          "enum": [
+            "sdp",
+            "candidate"
+          ]
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 4,
+          "maxLength": 87384,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "x-base64NonblankUtf8": 65536,
+          "description": "Base64 of UTF-8 text that is not blank after trim, at most 64 KiB before encoding."
+        },
+        "_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rodak/videoSignal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema": {
+                  "const": "rodak.videoSignal.v1"
+                },
+                "dispatchId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                }
+              },
+              "required": [
+                "schema",
+                "dispatchId"
+              ]
+            }
+          },
+          "required": [
+            "rodak/videoSignal"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "sessionId",
+        "type",
+        "data",
+        "_meta"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+asyncapi: 3.0.0
+info:
+  title: Rodak AIoT v1 unified MQTT
+  version: "2"
+  description: |
+    MQTT channels of `rodak-aiot/v1` (unified MQTT payload version 2). Normative prose:
+    docs/rodak-aiot-contract-v1.md (§7–§10, §12). Actions are from the device's point of view:
+    `send` = device publishes, `receive` = device subscribes.
+
+    Rodak publishes desired shadow, ota/notify and commands at QoS 0, retain false.
+    Each subscription triggers its own delivery: shadow/desired -> current snapshot; commands/+ -> pending
+    commands; ota/notify -> latest active task (a manifestVersion 2 task only with its signature);
+    pc_status -> nothing.
+
+    The schemas describe Rodak's dedicated producers. Rodak can also publish other payloads on the
+    current device's devices/{k}/ topics, except shadow/desired; devices validate every inbound
+    payload.
+
+    Broker ACL: a device may subscribe only to the four `receive`
+    channels below and publish only to the five `send` channels, plus the configured Home prefix
+    (default `rymcu/home/v1`) and its descendants. The ACL does not check QoS or retain.
+servers:
+  legacy:
+    host: "{broker_address}:{broker_port}"
+    protocol: mqtt
+    description: Legacy mode. Username is the device key, password is the access token.
+    variables:
+      broker_address: {default: rodak.local, description: "Example only. Rodak uses its configured advertise host or a local IPv4 address."}
+      broker_port: {default: "1883"}
+  pinned:
+    host: "{tls_name}:{broker_port}"
+    protocol: mqtts
+    description: Pin mode. Host MUST equal the pinned TLS name.
+    variables:
+      tls_name: {default: rodak-a1b2c3d4e5f60718.local, description: "Example only. rodak-<first 16 hex of the server identity fingerprint>.local"}
+      broker_port: {default: "8883"}
+channels:
+  telemetry:
+    address: devices/{deviceKey}/telemetry
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      telemetry: {payload: {$ref: "schemas/telemetry.schema.json"}}
+  shadowReport:
+    address: devices/{deviceKey}/shadow/report
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      shadowReport: {payload: {$ref: "schemas/shadow-report.schema.json"}}
+  shadowDesired:
+    address: devices/{deviceKey}/shadow/desired
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      shadowDesired: {payload: {$ref: "schemas/shadow-desired.schema.json"}}
+  effectReceipt:
+    address: devices/{deviceKey}/effects/receipt
+    description: Fixed topic. Not listed in unifiedMqtt.topics.
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      effectReceipt: {payload: {$ref: "schemas/effect-receipt.schema.json"}}
+  otaNotify:
+    address: devices/{deviceKey}/ota/notify
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      otaNotify: {payload: {$ref: "schemas/ota-notify.schema.json"}}
+  otaProgress:
+    address: devices/{deviceKey}/ota/progress
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      otaProgress: {payload: {$ref: "schemas/ota-progress.schema.json"}}
+  command:
+    address: devices/{deviceKey}/commands/{commandNo}
+    description: The device subscribes to devices/{deviceKey}/commands/+.
+    parameters:
+      deviceKey: {$ref: "#/components/parameters/deviceKey"}
+      commandNo: {$ref: "#/components/parameters/commandNo"}
+    messages:
+      commandRequest: {payload: {$ref: "schemas/command-request.schema.json"}}
+  commandAck:
+    address: devices/{deviceKey}/commands/{commandNo}/ack
+    description: One ACK per command. Stream callbacks reuse this topic as sideband messages.
+    parameters:
+      deviceKey: {$ref: "#/components/parameters/deviceKey"}
+      commandNo: {$ref: "#/components/parameters/commandNo"}
+    messages:
+      commandAck: {payload: {$ref: "schemas/command-ack.schema.json"}}
+  pcStatus:
+    address: devices/{deviceKey}/pc_status
+    description: |
+      Subscription allowed for firmware compatibility. Rodak has no built-in producer; a host
+      collector or another server feature may publish here. A silent topic is normal.
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      pcStatus: {payload: {description: Any payload; not defined by this contract.}}
+operations:
+  publishTelemetry:
+    action: send
+    channel: {$ref: "#/channels/telemetry"}
+    bindings: {mqtt: {qos: 0, retain: false}}
+  publishShadowReport:
+    action: send
+    channel: {$ref: "#/channels/shadowReport"}
+    bindings: {mqtt: {qos: 0, retain: false}}
+  publishEffectReceipt:
+    action: send
+    channel: {$ref: "#/channels/effectReceipt"}
+    bindings: {mqtt: {qos: 0, retain: false}}
+  publishOtaProgress:
+    action: send
+    channel: {$ref: "#/channels/otaProgress"}
+    description: |
+      RodakOS publishes QoS 0, except stepCode staged at QoS 1. Rodak accepts any QoS; the
+      broker ACL checks only the topic. The binding states retain only, because QoS varies.
+    bindings: {mqtt: {retain: false}}
+  publishCommandAck:
+    action: send
+    channel: {$ref: "#/channels/commandAck"}
+    description: Direct QoS 0 publish without SDK outbox. A failed send is not replayed.
+    bindings: {mqtt: {qos: 0, retain: false}}
+  receiveShadowDesired:
+    action: receive
+    channel: {$ref: "#/channels/shadowDesired"}
+    bindings: {mqtt: {qos: 0}}
+  receiveOtaNotify:
+    action: receive
+    channel: {$ref: "#/channels/otaNotify"}
+    bindings: {mqtt: {qos: 0}}
+  receiveCommand:
+    action: receive
+    channel: {$ref: "#/channels/command"}
+    bindings: {mqtt: {qos: 0}}
+  receivePcStatus:
+    action: receive
+    channel: {$ref: "#/channels/pcStatus"}
+    bindings: {mqtt: {qos: 0}}
+components:
+  parameters:
+    deviceKey:
+      description: Device key, default lowercase WiFi STA MAC.
+    commandNo:
+      description: Server-chosen command number, at most 128 bytes.

@@ -1,0 +1,9 @@
+{
+  "command": "display.stream.start",
+  "sessionId": "8a1f5c2e-7b3d-4e6f-9a0b-1c2d3e4f5a6b",
+  "transport": "webrtc-datachannel",
+  "width": 320,
+  "height": 240,
+  "fps": 5,
+  "expiresAt": "2026-11-20T08:05:00.000Z"
+}

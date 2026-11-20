@@ -1,0 +1,24 @@
+{
+  "schema": "rodakos.mqtt-volume-result.v1",
+  "effectId": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+  "parametersHash": "b4d993f6d6bb26483efff58a32f8aa1b275925d0c77d36fbd243b0294e84933f",
+  "dispatchId": "c56a4180-65aa-42ec-a945-5fd21dec0538",
+  "shadowVersion": 42,
+  "receipt": {
+    "schema": "rodakos.volume-receipt.v1",
+    "effectId": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+    "parametersHash": "b4d993f6d6bb26483efff58a32f8aa1b275925d0c77d36fbd243b0294e84933f",
+    "operation": "volume.set",
+    "requested": {
+      "volume": 30
+    },
+    "previousVolume": 60,
+    "volume": 30,
+    "configurationRevision": 1,
+    "status": "configured",
+    "application": "deferred",
+    "persistence": "volatile",
+    "physicalVerified": false
+  },
+  "errorCode": "stale-shadow"
+}

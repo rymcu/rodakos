@@ -169,7 +169,7 @@ With the codec closed, an accepted setter is configuration for the next open, no
 These tests and the build therefore establish neither physical I2C/speaker behavior nor a
 correlated wire effect receipt. MQTT checks the service result and reports the retained value on
 failure, but ordinary shadow reports carry no volume effect ID or applied desired revision.
-See the [shadow contract](rodak-aiot-contract-v1.md#volume-configuration-and-evidence).
+See the [shadow contract](aiot-implementation-notes.md#volume-configuration-and-evidence).
 
 ## 2026-10-06 codec dependency correction
 
@@ -1412,7 +1412,7 @@ produce `already_stopped` only after its native Stop returns in the same MQTT ge
 epoch and authority. Cached successes additionally retain the original instance nonce; an
 unknown or replaced instance still fails without stopping a new peer. Legacy Stop without
 the start identity retains its active-session behavior and cannot claim same-name isolation.
-See the [wire contract](rodak-aiot-contract-v1.md#exact-stream-stop-026).
+See the [wire contract](mqtt-command-semantics.md#exact-stream-stop-026).
 
 The original-development-root package is `20261007-231703`, task `stream-stop-026`, version
 `0.1.2-dev.1`:

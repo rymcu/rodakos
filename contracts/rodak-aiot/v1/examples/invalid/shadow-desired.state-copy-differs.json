@@ -1,0 +1,30 @@
+{
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "shadowVersion": 42,
+  "version": 42,
+  "desired": {
+    "volume": 30
+  },
+  "reported": {
+    "firmware": "1.4.0",
+    "volume": 60,
+    "battery": 87,
+    "charging": true
+  },
+  "state": {
+    "desired": {
+      "volume": 31
+    },
+    "reported": {
+      "firmware": "1.4.0",
+      "volume": 60,
+      "battery": 87,
+      "charging": true
+    }
+  },
+  "_meta": {
+    "rodak/shadowWrite": {
+      "dispatchId": "c56a4180-65aa-42ec-a945-5fd21dec0538"
+    }
+  }
+}

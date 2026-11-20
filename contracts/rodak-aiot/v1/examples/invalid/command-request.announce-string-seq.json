@@ -1,0 +1,5 @@
+{
+  "command": "voice.announce",
+  "announceSeq": "17",
+  "priority": "normal"
+}

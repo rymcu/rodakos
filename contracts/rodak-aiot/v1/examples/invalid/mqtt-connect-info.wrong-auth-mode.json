@@ -1,0 +1,39 @@
+{
+  "endpoint": "mqtt://rodak.local:1883",
+  "sslEndpoint": "",
+  "wsEndpoint": "",
+  "clientId": "aa:bb:cc:dd:ee:ff",
+  "username": "aa:bb:cc:dd:ee:ff",
+  "password": "eyJhbGciOiJIUzI1NiJ9.eyJkaWQiOiI2ZjFjMmI5YS0zZDRlLTRmNWEtOGI3Yy05ZDBlMWYyYTNiNGMiLCJkayI6ImFhOmJiOmNjOmRkOmVlOmZmIiwicGsiOiJyeW1jdS1iaWdzbWFydCIsInR2IjozLCJleHAiOjE3OTUyNDgwNzJ9.bKjuOT1ME8ZBq6JA1evG98Yqw8ebLkvWmPV4YQgvxHE",
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "brokerAddress": "rodak.local",
+  "brokerPort": 1883,
+  "httpBaseUrl": "http://rodak.local:9080",
+  "httpBearerToken": "eyJhbGciOiJIUzI1NiJ9.eyJkaWQiOiI2ZjFjMmI5YS0zZDRlLTRmNWEtOGI3Yy05ZDBlMWYyYTNiNGMiLCJkayI6ImFhOmJiOmNjOmRkOmVlOmZmIiwicGsiOiJyeW1jdS1iaWdzbWFydCIsInR2IjozLCJleHAiOjE3OTUyNDgwNzJ9.bKjuOT1ME8ZBq6JA1evG98Yqw8ebLkvWmPV4YQgvxHE",
+  "protocolVersion": 2,
+  "homeEnabled": 0,
+  "topics": {
+    "telemetry": "devices/aa:bb:cc:dd:ee:ff/telemetry",
+    "shadowReport": "devices/aa:bb:cc:dd:ee:ff/shadow/report",
+    "shadowDesired": "devices/aa:bb:cc:dd:ee:ff/shadow/desired",
+    "otaNotify": "devices/aa:bb:cc:dd:ee:ff/ota/notify",
+    "otaProgress": "devices/aa:bb:cc:dd:ee:ff/ota/progress",
+    "commands": "devices/aa:bb:cc:dd:ee:ff/commands/+",
+    "pcStatus": "devices/aa:bb:cc:dd:ee:ff/pc_status",
+    "homePrefix": "rymcu/home/v1"
+  },
+  "subscribeTopics": [
+    "devices/aa:bb:cc:dd:ee:ff/shadow/desired",
+    "devices/aa:bb:cc:dd:ee:ff/commands/+",
+    "devices/aa:bb:cc:dd:ee:ff/ota/notify",
+    "devices/aa:bb:cc:dd:ee:ff/pc_status"
+  ],
+  "publishTopics": [
+    "devices/aa:bb:cc:dd:ee:ff/telemetry",
+    "devices/aa:bb:cc:dd:ee:ff/shadow/report",
+    "devices/aa:bb:cc:dd:ee:ff/commands/+/ack",
+    "devices/aa:bb:cc:dd:ee:ff/ota/progress"
+  ],
+  "vendorType": "rodak-local",
+  "authMode": "xiaozhi"
+}

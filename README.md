@@ -193,8 +193,12 @@ Start here:
 
 Design and contracts:
 
-- [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md),
-  [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md)
+- [Rodak AIoT v1 contract](docs/rodak-aiot-contract-v1.md) with its
+  [command semantics](docs/mqtt-command-semantics.md),
+  [implementation notes](docs/aiot-implementation-notes.md) and
+  [machine-readable schemas](contracts/rodak-aiot/v1/README.md),
+  [Rodak realtime voice v1 contract](docs/rodak-realtime-voice-contract-v1.md) with its
+  [machine-readable schemas](contracts/rodak-realtime-voice/v1/README.md)
 - [Rodak MQTT and SD Recovery OTA](docs/mqtt-ota-sd-recovery.md),
   [production signing](docs/production-signing.md)
 - [Serial provisioning](docs/serial-provisioning.md),

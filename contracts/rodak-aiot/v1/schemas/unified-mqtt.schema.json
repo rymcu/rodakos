@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/unified-mqtt.schema.json",
+  "title": "unifiedMqtt descriptor",
+  "description": "The unifiedMqtt object of a token response. username = device_key, password = http_bearer_token = access token. topics.home_prefix is the configured Home broker prefix (trimmed, default rymcu/home/v1), the same for all devices. The device topics all use the same device key; the schema checks only their suffixes.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-equalFields": [
+    [
+      "username",
+      "device_key"
+    ],
+    [
+      "password",
+      "http_bearer_token"
+    ]
+  ],
+  "x-topicsUseKey": {
+    "key": "device_key",
+    "topics": "topics",
+    "suffixes": {
+      "telemetry": "telemetry",
+      "shadow_report": "shadow/report",
+      "shadow_desired": "shadow/desired",
+      "ota_notify": "ota/notify",
+      "ota_progress": "ota/progress",
+      "commands": "commands/+",
+      "pc_status": "pc_status"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "broker_address",
+    "broker_port",
+    "username",
+    "password",
+    "http_base_url",
+    "http_bearer_token",
+    "keepalive",
+    "device_key",
+    "home_enabled",
+    "topics"
+  ],
+  "properties": {
+    "transport": {
+      "const": "mqtts",
+      "description": "Present only on the secure (pinned) listener."
+    },
+    "protocol_version": {
+      "const": 2
+    },
+    "broker_address": {
+      "type": "string",
+      "minLength": 1
+    },
+    "broker_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1
+    },
+    "http_base_url": {
+      "type": "string",
+      "pattern": "^https?://"
+    },
+    "http_bearer_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "keepalive": {
+      "const": 240
+    },
+    "device_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "home_enabled": {
+      "enum": [
+        0,
+        1
+      ]
+    },
+    "topics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "telemetry": {
+          "type": "string",
+          "pattern": "^devices/.+/telemetry$"
+        },
+        "shadow_report": {
+          "type": "string",
+          "pattern": "^devices/.+/shadow/report$"
+        },
+        "shadow_desired": {
+          "type": "string",
+          "pattern": "^devices/.+/shadow/desired$"
+        },
+        "ota_notify": {
+          "type": "string",
+          "pattern": "^devices/.+/ota/notify$"
+        },
+        "ota_progress": {
+          "type": "string",
+          "pattern": "^devices/.+/ota/progress$"
+        },
+        "commands": {
+          "type": "string",
+          "pattern": "^devices/.+/commands/\\+$"
+        },
+        "pc_status": {
+          "type": "string",
+          "pattern": "^devices/.+/pc_status$"
+        },
+        "home_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Configured Home prefix, trimmed; blank falls back to rymcu/home/v1."
+        }
+      },
+      "required": [
+        "telemetry",
+        "shadow_report",
+        "shadow_desired",
+        "ota_notify",
+        "ota_progress",
+        "commands",
+        "pc_status",
+        "home_prefix"
+      ]
+    }
+  }
+}
