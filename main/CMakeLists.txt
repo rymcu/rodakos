@@ -125,6 +125,7 @@ set(SOURCES
     "apps/settings/settings_device_cloud_page.cc"
     "apps/settings/settings_lan_onboarding_page.cc"
     "apps/settings/settings_setup_qr_page.cc"
+    "apps/settings/device_cloud_page_model.cc"
     "apps/settings/settings_main_page.cc"
     "apps/settings/settings_system_shell_page.cc"
     "apps/settings/settings_usb_disk.cc"
