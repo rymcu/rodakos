@@ -24,6 +24,7 @@
 #include "phone_os/device_cloud_config.h"
 #include "phone_os/serial_provisioning_service.h"
 #include "phone_os/lan_onboarding_service.h"
+#include "phone_os/setup_qr_scan_service.h"
 #include "phone_os/ota_update_service.h"
 #include "phone_os/unified_mqtt_service.h"
 #include "phone_os/camera_service.h"
@@ -740,6 +741,12 @@ extern "C" void app_main(void) {
     static rodakos::CameraService camera_service(file_service);
     ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
     static rodakos::WebRtcCameraService web_rtc_camera_service(&camera_service);
+    static rodakos::SetupQrScanService setup_qr_scan_service(
+        &camera_service, &audio_focus_service, wifi, device_cloud_config_service);
+    // A new bootstrap URL cleared the cached credentials; restart cloud like USB provisioning.
+    setup_qr_scan_service.SetServerChangedCallback([]() {
+        unified_mqtt_service.RequestCredentialRefresh();
+    });
     unified_mqtt_service.SetWebRtcCameraService(&web_rtc_camera_service);
     // While Camera streams, the largest internal block is about 1.6 KB, too small for the
     // voice WebSocket task. Voice takes priority, so a new session stops the remote stream.
@@ -883,6 +890,7 @@ extern "C" void app_main(void) {
     services.SetWakeOnLan(&wake_on_lan_service);
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
+    services.SetSetupQrScan(&setup_qr_scan_service);
     services.SetDeviceCloudUnboundCallback([]() {
         appearance_service.ForgetPublisher();
         unified_mqtt_service.StopWebRtcCameraStream();
@@ -978,6 +986,7 @@ extern "C" void app_main(void) {
     // OTA hands its flash and NVS steps to this internal-RAM stack and wakes it at once.
     ota_update_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
     lan_onboarding_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
+    setup_qr_scan_service.SetInternalWorkTask(xTaskGetCurrentTaskHandle());
     while (true) {
 #ifdef RODAKOS_RELEASE_TESTS
         // Outside all service/UI/serial locks, on the permanent internal-stack task.
@@ -986,6 +995,7 @@ extern "C" void app_main(void) {
         rodakos::PumpTaskRetirements();
         ota_update_service.PumpInternalStackWork();
         lan_onboarding_service.PumpInternalStackWork();
+        setup_qr_scan_service.PumpInternalStackWork();
         if (animation_started && boot_animation.HasCompleted()) {
             appearance_service.RecordAnimationMs(boot_animation.duration_ms());
             appearance_service.ReleaseBootAssets();
@@ -1017,6 +1027,7 @@ extern "C" void app_main(void) {
             if (ulTaskNotifyTake(pdTRUE, tick_period - elapsed) != 0) {
                 ota_update_service.PumpInternalStackWork();
                 lan_onboarding_service.PumpInternalStackWork();
+                setup_qr_scan_service.PumpInternalStackWork();
             }
         }
     }

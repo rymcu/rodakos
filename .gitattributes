@@ -2,3 +2,4 @@
 /tests/lan_trust_setup/srp6a-esp-vectors.json text eol=lf
 /tests/lan_trust_setup/trust-setup-protocol-vectors.json text eol=lf
 /tests/server_trust/test-ca.pem text eol=lf
+/tests/setup_qr_decoder/fixtures/*.pgm binary

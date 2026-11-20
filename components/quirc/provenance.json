@@ -1,0 +1,21 @@
+{
+  "component": "espressif/quirc",
+  "version": "1.2.0",
+  "registry_url": "https://components.espressif.com/",
+  "component_hash": "3be250a06364f0d71a7903b66ac93084d2ce3998c2e75a168b9f1f0621dd6218",
+  "archive_url": "https://components-file.espressif.com/components/espressif/quirc/1.2.0/espressif__quirc-v1.2.0.zip",
+  "archive_sha256": "0c76be8f35ecfb92b4643630206432f01b6a511d920659df90f476fa68828617",
+  "repository": "https://github.com/espressif/idf-extra-components.git",
+  "upstream": "https://github.com/dlbeer/quirc",
+  "license": "ISC",
+  "vendored_reason": "A registry dependency changes dependencies.lock, and the Camera overlay rejects an unreviewed dependency graph.",
+  "files_sha256_lf": {
+    "lib/decode.c": "d4468c55ecd0d2f905a6813513708005e6d609ef0a3d32a17673313c7552a7c1",
+    "lib/identify.c": "c36e93edfbc92a795f3edc9ec42d9e89e4d00aa376a88d48cc2e8118542a5372",
+    "lib/quirc.c": "0294b6c56f8c021b256c4c153d70483368164c6cf0cce643e1b6be03ed3585c0",
+    "lib/version_db.c": "6764aa2f245085080e1e5cefd9dcd59b9727718a0d4606956e0502a57f5dff30",
+    "lib/quirc.h": "49660ea710add2d6f304a1323f53190f5a2bf34db4dd160d633db0c3f22bfba5",
+    "lib/quirc_internal.h": "e383ed1a0ca70c07b0530d76bfeb6bd5525efda182589f48c978921a9e54676b",
+    "LICENSE": "a70ef3ea032998eead2e2c7573a170a809eae08e3ca134611f707eda5932c8a9"
+  }
+}
