@@ -104,6 +104,10 @@ private:
     void CloseSetupQr();
     // Cancels the scan and frees the overlay without touching other pages (used by DestroyUi).
     void TeardownSetupQr();
+    void ShowSetupQrManualEntry();
+    void UpdateSetupQrPreview();
+    void DetachSetupQrPreview();
+    void ReleaseSetupQrPreviewPixels();
     void UpdateSetupQr();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
@@ -196,6 +200,11 @@ private:
     lv_obj_t* setup_qr_progress_ = nullptr;
     lv_timer_t* setup_qr_timer_ = nullptr;
     uint32_t setup_qr_revision_ = 0;
+    lv_obj_t* setup_qr_preview_image_ = nullptr;
+    lv_obj_t* setup_qr_preview_placeholder_ = nullptr;
+    lv_image_dsc_t setup_qr_preview_dsc_ = {};
+    std::vector<uint8_t> setup_qr_preview_pixels_;
+    uint32_t setup_qr_preview_sequence_ = 0;
 
     // Web 上传页面控件
     SettingsWebFilesPage web_files_page_;

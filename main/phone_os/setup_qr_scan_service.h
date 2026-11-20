@@ -43,6 +43,8 @@ struct SetupQrScanSnapshot {
     bool open_network = false;
     // Host and optional port of the bootstrap URL, for display only.
     std::string server;
+    // Saving would change the bootstrap URL, which restarts the device (see RunSave).
+    bool will_restart = false;
     SetupQrApplyStatus result = SetupQrApplyStatus::kStorageFailed;
     // Stable code (qr_* error or apply status) for logs and UI mapping.
     std::string code;

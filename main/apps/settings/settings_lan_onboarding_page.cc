@@ -16,15 +16,27 @@
 // LanOnboardingService 的快照，界面只在 revision 变化时重绘。
 namespace {
 
-lv_obj_t* CreateActionButton(lv_obj_t* parent, const char* text, bool primary, lv_coord_t y) {
+// The display is 320x240 landscape and the overlay does not scroll: every control must fit.
+constexpr lv_coord_t kPad = 8;
+constexpr lv_coord_t kButtonHeight = 36;
+constexpr lv_coord_t kHalfButton = 148;
+constexpr lv_coord_t kContentTop = 26;
+constexpr lv_coord_t kServerRowHeight = 32;
+constexpr size_t kMaxServerRows = 4;
+
+lv_obj_t* CreateActionButton(lv_obj_t* parent, const char* text, bool primary, lv_align_t align,
+                             lv_coord_t width = kHalfButton, lv_coord_t y = 0) {
     auto* button = lv_btn_create(parent);
-    lv_obj_set_size(button, 264, 36);
-    lv_obj_align(button, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_set_size(button, width, kButtonHeight);
+    lv_obj_align(button, align, 0, y);
     lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_radius(button, 7, 0);
     lv_obj_set_style_shadow_width(button, 0, 0);
     auto* label = lv_label_create(button);
     lv_label_set_text(label, text);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(label, width - 16);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(label, primary ? lv_color_white() : rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(label, &phone_font_14, 0);
     lv_obj_center(label);
@@ -74,7 +86,8 @@ void SettingsApp::CloseLanOnboarding() {
     lan_onboarding_overlay_ = nullptr;
     lan_onboarding_body_ = nullptr;
     lan_onboarding_servers_.clear();
-    if (current_page_ == SettingsPage::kDeviceCloud) RefreshDeviceCloud();
+    // Completion already triggers the cloud refresh in main.cc; this only re-renders from NVS.
+    if (current_page_ == SettingsPage::kDeviceCloud) UpdateDeviceCloudPage();
 }
 
 void SettingsApp::UpdateLanOnboarding() {
@@ -100,36 +113,43 @@ void SettingsApp::UpdateLanOnboarding() {
     lan_onboarding_body_ = lv_obj_create(lan_onboarding_overlay_);
     lv_obj_remove_style_all(lan_onboarding_body_);
     lv_obj_set_size(lan_onboarding_body_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_pad_all(lan_onboarding_body_, 12, 0);
+    lv_obj_set_style_pad_all(lan_onboarding_body_, kPad, 0);
     lv_obj_clear_flag(lan_onboarding_body_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_update_layout(lan_onboarding_body_);
+    const lv_coord_t content_width = lv_obj_get_content_width(lan_onboarding_body_);
 
-    auto* title = CreateSettingLabel(lan_onboarding_body_, "连接到电脑上的 Rodak");
+    auto* title = CreateSettingLabel(lan_onboarding_body_, "局域网连接");
     lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     auto* message = CreateSettingLabel(lan_onboarding_body_, "", true);
-    lv_obj_set_width(message, 272);
+    lv_obj_set_width(message, content_width);
     lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, kContentTop);
 
-    lv_coord_t button_y = 330;
     using Phase = rodakos::LanOnboardingPhase;
+    lv_obj_t* primary = nullptr;
+    const char* close_text = "取消";
     switch (snapshot.phase) {
         case Phase::kIdle:
         case Phase::kDiscovering:
             lv_label_set_text(message, "正在局域网中查找 Rodak…");
             break;
         case Phase::kChooseServer: {
-            lv_label_set_text(message, snapshot.servers.empty()
-                                           ? snapshot.message.c_str()
-                                           : "选择要连接的电脑：");
             lan_onboarding_servers_ = snapshot.servers;
-            lv_coord_t y = 96;
-            for (size_t index = 0; index < lan_onboarding_servers_.size() && index < 4; ++index) {
+            if (lan_onboarding_servers_.empty()) {
+                lv_label_set_text(message, snapshot.message.c_str());
+                close_text = "返回";
+            } else {
+                lv_label_set_text(message, "选择要连接的电脑：");
+            }
+            lv_coord_t y = kContentTop + 22;
+            for (size_t index = 0; index < lan_onboarding_servers_.size() && index < kMaxServerRows;
+                 ++index) {
                 auto* button = CreateActionButton(lan_onboarding_body_,
                                                   ServerLabel(lan_onboarding_servers_[index]).c_str(),
-                                                  index == 0, y);
+                                                  index == 0, LV_ALIGN_TOP_LEFT, content_width, y);
+                lv_obj_set_height(button, kServerRowHeight);
                 lv_obj_set_user_data(button, reinterpret_cast<void*>(index));
                 lv_obj_add_event_cb(button, [](lv_event_t* e) {
                     auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
@@ -140,10 +160,11 @@ void SettingsApp::UpdateLanOnboarding() {
                         service->Connect(self->lan_onboarding_servers_[index]);
                     }
                 }, LV_EVENT_CLICKED, this);
-                y += 44;
+                y += kServerRowHeight + 4;
             }
-            auto* rescan = CreateActionButton(lan_onboarding_body_, "重新查找", false, 282);
-            lv_obj_add_event_cb(rescan, [](lv_event_t* e) {
+            primary = CreateActionButton(lan_onboarding_body_, "重新查找", lan_onboarding_servers_.empty(),
+                                         LV_ALIGN_BOTTOM_LEFT);
+            lv_obj_add_event_cb(primary, [](lv_event_t* e) {
                 auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
                 auto* service = self->context_->services().lan_onboarding();
                 if (service != nullptr) service->StartDiscovery();
@@ -165,17 +186,16 @@ void SettingsApp::UpdateLanOnboarding() {
             lv_label_set_text(code, grouped.c_str());
             lv_obj_set_style_text_font(code, &lv_font_montserrat_26, 0);
             lv_obj_set_style_text_color(code, rodakos_theme_text_primary(), 0);
-            lv_obj_set_style_transform_scale(code, 512, 0);
-            lv_obj_set_style_transform_pivot_x(code, LV_PCT(50), 0);
-            lv_obj_set_style_transform_pivot_y(code, LV_PCT(50), 0);
-            lv_obj_align(code, LV_ALIGN_TOP_MID, 0, 148);
-            if (!snapshot.server_name.empty()) {
-                auto* server = CreateSettingLabel(lan_onboarding_body_,
-                                                  ("目标：" + snapshot.server_name).c_str(), true);
-                lv_obj_align(server, LV_ALIGN_TOP_MID, 0, 222);
-            }
+            lv_obj_set_style_text_letter_space(code, 4, 0);
+            lv_obj_align(code, LV_ALIGN_TOP_MID, 0, kContentTop + 30);
+            std::string detail;
+            if (!snapshot.server_name.empty()) detail = "目标：" + snapshot.server_name;
+            auto* server = CreateSettingLabel(lan_onboarding_body_, detail.c_str(), true);
+            lv_obj_set_width(server, content_width);
+            lv_label_set_long_mode(server, LV_LABEL_LONG_DOT);
+            lv_obj_align(server, LV_ALIGN_TOP_LEFT, 0, kContentTop + 72);
             lan_onboarding_countdown_ = CreateSettingLabel(lan_onboarding_body_, "", true);
-            lv_obj_align(lan_onboarding_countdown_, LV_ALIGN_TOP_MID, 0, 250);
+            lv_obj_align(lan_onboarding_countdown_, LV_ALIGN_TOP_LEFT, 0, kContentTop + 92);
             const int64_t remaining = (snapshot.code_expires_at_ms - now_ms) / 1000;
             lv_label_set_text_fmt(lan_onboarding_countdown_, "%d:%02d 后失效",
                                   static_cast<int>(remaining > 0 ? remaining / 60 : 0),
@@ -184,15 +204,17 @@ void SettingsApp::UpdateLanOnboarding() {
         }
         case Phase::kCompleted:
             lv_label_set_text(message, "已安全连接到 Rodak。\n正在获取设备凭据…");
+            close_text = "完成";
             break;
         case Phase::kFailed: {
             const std::string text = snapshot.locked_until_ms > now_ms
                 ? snapshot.message + "\n多次失败，请 1 分钟后再试。"
                 : snapshot.message;
             lv_label_set_text(message, text.c_str());
+            close_text = "返回";
             if (snapshot.locked_until_ms <= now_ms) {
-                auto* retry = CreateActionButton(lan_onboarding_body_, "重新开始", true, 282);
-                lv_obj_add_event_cb(retry, [](lv_event_t* e) {
+                primary = CreateActionButton(lan_onboarding_body_, "重新开始", true, LV_ALIGN_BOTTOM_LEFT);
+                lv_obj_add_event_cb(primary, [](lv_event_t* e) {
                     auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
                     auto* service = self->context_->services().lan_onboarding();
                     if (service != nullptr) service->StartDiscovery();
@@ -202,9 +224,8 @@ void SettingsApp::UpdateLanOnboarding() {
         }
     }
 
-    auto* close = CreateActionButton(lan_onboarding_body_,
-                                     snapshot.phase == Phase::kCompleted ? "完成" : "取消", false,
-                                     button_y);
+    auto* close = CreateActionButton(lan_onboarding_body_, close_text, false,
+                                     primary != nullptr ? LV_ALIGN_BOTTOM_RIGHT : LV_ALIGN_BOTTOM_MID);
     lv_obj_add_event_cb(close, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         // 关闭会删除本按钮所在的界面，放到下一轮事件循环执行

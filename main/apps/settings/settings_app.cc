@@ -204,6 +204,8 @@ void SettingsApp::ResetUiPointers() {
     setup_qr_body_ = nullptr;
     setup_qr_progress_ = nullptr;
     setup_qr_timer_ = nullptr;
+    setup_qr_preview_image_ = nullptr;
+    setup_qr_preview_placeholder_ = nullptr;
     cloud_pairing_error_.clear();
     cloud_pairing_code_.clear();
     web_files_page_.Reset();
@@ -358,6 +360,10 @@ void SettingsApp::NavigateBack() {
 bool SettingsApp::OnBackRequested() {
     if (setup_qr_overlay_ != nullptr) {
         CloseSetupQr();
+        return true;
+    }
+    if (lan_onboarding_overlay_ != nullptr) {
+        CloseLanOnboarding();
         return true;
     }
     NavigateBack();
