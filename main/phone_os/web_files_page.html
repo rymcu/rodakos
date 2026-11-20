@@ -81,7 +81,15 @@ function size(n) { if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1
 async function api(url, opt) {
   const o = Object.assign({}, opt || {});
   o.headers = Object.assign({}, o.headers || {}, { "X-Access-Code": code });
-  const r = await fetch(url, o);
+  // The device serves one request at a time: a running download or upload holds the rest.
+  // Give up after a while instead of showing "正在加载" forever.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20000);
+  o.signal = ctl.signal;
+  let r;
+  try { r = await fetch(url, o); }
+  catch (e) { throw new Error(e.name === "AbortError" ? "设备没有响应，可能正在传输文件。请稍后点「刷新」重试。" : "连接设备失败：" + e.message); }
+  finally { clearTimeout(timer); }
   if (r.status === 401 || r.status === 429) {
     const wait = Number(r.headers.get("Retry-After") || 0);
     throw Object.assign(new Error("auth"), { status: r.status, wait });
@@ -119,7 +127,7 @@ function render(entries) {
     const name = document.createElement("td"); name.className = "name";
     if (e.dir) {
       const b = document.createElement("button"); b.type = "button";
-      b.textContent = "📁 " + e.name; b.onclick = () => load(join(cwd, e.name));
+      b.textContent = "📁 " + e.name; b.onclick = () => guard(() => load(join(cwd, e.name)));
       name.append(b);
     } else {
       const s = document.createElement("span"); s.textContent = e.name; name.append(s);
@@ -191,6 +199,7 @@ function download(path) {
     // A browser download cannot send headers: trade the code for a one-time, one-file ticket.
     const ticket = await (await api("/api/ticket?path=" + enc(path), { method: "POST" })).text();
     location.href = "/api/download?path=" + enc(path) + "&ticket=" + enc(ticket);
+    $("status").textContent = "已开始下载。下载完成前，设备会暂停响应其他操作。";
   });
 }
 

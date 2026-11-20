@@ -138,6 +138,27 @@ bool IsSafePath(const std::string& path, bool allow_root) {
     return true;
 }
 
+// Folders the system owns: OTA staging, RodakOS settings and assets, and the folder Windows
+// creates on every card. They are hidden from the root listing and refused by every API, so a
+// browser user cannot break an update or a theme by renaming or deleting them.
+bool IsSystemPath(const std::string& path) {
+    static constexpr const char* kSystemFolders[] = {"rodak-ota", "rodakos", "system volume information"};
+    if (path.size() < 2 || path[0] != '/') {
+        return false;
+    }
+    const size_t slash = path.find('/', 1);
+    std::string top = path.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
+    for (char& ch : top) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    for (const char* folder : kSystemFolders) {
+        if (top == folder) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string ParentPath(const std::string& path) {
     const size_t slash = path.find_last_of('/');
     if (slash == std::string::npos || slash == 0) {
@@ -216,6 +237,19 @@ void SendText(httpd_req_t* req, int status_code, const char* status, const char*
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
     ESP_LOGW(TAG, "HTTP %d: %s", status_code, text);
+}
+
+// Sends 400 for a malformed path and 403 for a system folder; true when the path may be used.
+bool AcceptPath(httpd_req_t* req, const std::string& path, bool allow_root) {
+    if (!IsSafePath(path, allow_root)) {
+        SendText(req, 400, "400 Bad Request", "Unsafe path");
+        return false;
+    }
+    if (IsSystemPath(path)) {
+        SendText(req, 403, "403 Forbidden", "系统文件夹，不能在网页里访问");
+        return false;
+    }
+    return true;
 }
 
 uint8_t* AllocIoBuffer() {
@@ -509,8 +543,11 @@ esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {
     if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, true)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "path", path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, path, true)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
@@ -525,10 +562,15 @@ esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {
     }
 
     std::string json = "{\"path\":\"" + JsonEscape(path) + "\",\"entries\":[";
+    bool first = true;
     for (size_t i = 0; i < entries.size(); ++i) {
-        if (i > 0) {
+        if (path == "/" && IsSystemPath("/" + entries[i].name)) {
+            continue;
+        }
+        if (!first) {
             json += ",";
         }
+        first = false;
         json += "{\"name\":\"" + JsonEscape(entries[i].name) + "\",";
         json += "\"dir\":";
         json += entries[i].is_directory ? "true" : "false";
@@ -552,8 +594,11 @@ esp_err_t WebFileSystemService::DownloadHandler(httpd_req_t* req) {
         SendText(req, 500, "500 Internal Server Error", "File service unavailable");
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "path", path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, path, false)) {
         return ESP_FAIL;
     }
     // A plain browser download cannot send a header: it presents a one-time ticket instead.
@@ -630,8 +675,11 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
         SendText(req, 413, "413 Payload Too Large", "Invalid upload size");
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", upload_path) || !IsSafePath(upload_path, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe destination path");
+    if (!GetQueryValue(req, "path", upload_path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, upload_path, false)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
@@ -754,8 +802,11 @@ esp_err_t WebFileSystemService::MkdirHandler(httpd_req_t* req) {
     if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "path", path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, path, false)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
@@ -786,9 +837,11 @@ esp_err_t WebFileSystemService::RenameHandler(httpd_req_t* req) {
     if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "from", from) || !GetQueryValue(req, "to", to) ||
-        !IsSafePath(from, false) || !IsSafePath(to, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "from", from) || !GetQueryValue(req, "to", to)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, from, false) || !AcceptPath(req, to, false)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
@@ -818,8 +871,11 @@ esp_err_t WebFileSystemService::TicketHandler(httpd_req_t* req) {
     if (self == nullptr || !self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "path", path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, path, false)) {
         return ESP_FAIL;
     }
     xSemaphoreTake(self->mutex_, portMAX_DELAY);
@@ -840,8 +896,11 @@ esp_err_t WebFileSystemService::DeleteHandler(httpd_req_t* req) {
     if (!self->AuthenticateRequest(req)) {
         return ESP_FAIL;
     }
-    if (!GetQueryValue(req, "path", path) || !IsSafePath(path, false)) {
-        SendText(req, 400, "400 Bad Request", "Unsafe path");
+    if (!GetQueryValue(req, "path", path)) {
+        SendText(req, 400, "400 Bad Request", "Missing path");
+        return ESP_FAIL;
+    }
+    if (!AcceptPath(req, path, false)) {
         return ESP_FAIL;
     }
     if (!self->file_service_->IsMounted() && !self->file_service_->Init()) {
