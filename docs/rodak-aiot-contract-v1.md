@@ -834,8 +834,9 @@ Schema profiles:
 | Device → Rodak (requests, telemetry, report, ACK, receipt, progress) | What RodakOS emits. The schema description states where Rodak accepts more; invalid fixtures there are RodakOS-profile negatives that Rodak may still accept. |
 
 `python3 tools/check_aiot_contract.py` validates every fixture, every schema reference and the OTA
-fixture signature. The RodakOS host test `contract_fixture_test.cc` feeds the same fixtures to the
-firmware parsers. Rodak SHOULD validate its responses against the same schemas.
+fixture signature. The schemas are owned by Rodak (`rymcu/rodak` `contracts/`), whose integration
+tests validate real server responses against them; this repository keeps a byte-identical copy.
+The RodakOS host test `contract_fixture_test.cc` feeds the same fixtures to the firmware parsers.
 
 Rodak's code is the source of truth. When it changes a wire shape, update this document, the
 schema and the fixtures in one change. The alias table in §7.2 and the *Informative* notes

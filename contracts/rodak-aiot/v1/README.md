@@ -70,8 +70,9 @@ The firmware host test `tests/app_model/contract_fixture_test.cc` parses the bin
 the production `ParseDevicePairingResponse`, and the `realtimeVoice` of Rodak's bootstrap and token
 responses with `ParseRealtimeVoiceDescriptor`.
 
-Rodak SHOULD validate its bootstrap, binding, token, unbind and OTA responses against the same
-schemas, for example by loading this directory in its integration tests.
+Rodak validates its real responses against these schemas in
+`tests/main-integration/aiot-contract-conformance.test.ts`. The Rodak copy of `contracts/` is the
+source of truth; see [contracts/README.md](../../README.md).
 
 ## Change rule
 
