@@ -200,6 +200,7 @@ Design and contracts:
 - [Serial provisioning](docs/serial-provisioning.md),
   [trusted server and LAN discovery](docs/trusted-server-discovery.md),
   [LAN first setup without USB](docs/lan-onboarding-design.md),
+  [QR code provisioning format](docs/qr-provisioning.md),
   [MQTT credential refresh](docs/mqtt-credential-refresh.md)
 - [Home layout and folder design](docs/home-layout-design.md),
   [icon visual refresh](docs/icon-visual-refresh.md),

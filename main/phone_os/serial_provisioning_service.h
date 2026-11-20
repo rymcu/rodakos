@@ -60,6 +60,9 @@ public:
     // Recovery is deliberately conservative: an incomplete transaction is
     // treated as unconfigured rather than allowing mixed credentials to run.
     static bool RecoverPendingTransaction(DeviceCloudConfigService& cloud_config);
+    // Other WiFi + bootstrap URL writers (QR setup) share this marker, so one boot-time
+    // recovery covers every interrupted provisioning path.
+    static bool SetTransactionPending(bool pending);
 
 private:
     struct Request {

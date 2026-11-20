@@ -139,6 +139,8 @@ void SettingsApp::DestroyUi() {
         lv_obj_delete(lan_onboarding_overlay_);
     }
     lan_onboarding_overlay_ = nullptr;
+    // Leaving Settings mid-scan must release the camera and drop a parsed WiFi password.
+    if (setup_qr_overlay_ != nullptr) TeardownSetupQr();
     if (time_sync_timer_ != nullptr) {
         lv_timer_delete(time_sync_timer_);
         time_sync_timer_ = nullptr;
@@ -197,6 +199,11 @@ void SettingsApp::ResetUiPointers() {
     lan_onboarding_countdown_ = nullptr;
     lan_onboarding_timer_ = nullptr;
     lan_onboarding_servers_.clear();
+    cloud_setup_qr_button_ = nullptr;
+    setup_qr_overlay_ = nullptr;
+    setup_qr_body_ = nullptr;
+    setup_qr_progress_ = nullptr;
+    setup_qr_timer_ = nullptr;
     cloud_pairing_error_.clear();
     cloud_pairing_code_.clear();
     web_files_page_.Reset();
@@ -349,6 +356,10 @@ void SettingsApp::NavigateBack() {
 }
 
 bool SettingsApp::OnBackRequested() {
+    if (setup_qr_overlay_ != nullptr) {
+        CloseSetupQr();
+        return true;
+    }
     NavigateBack();
     return true;
 }

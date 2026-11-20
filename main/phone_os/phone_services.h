@@ -21,6 +21,7 @@ class MotionService;
 class MusicPlayerService;
 class RecordingService;
 class SerialProvisioningService;
+class SetupQrScanService;
 class VoiceAssistantService;
 class VoiceWakeService;
 class WakeOnLanService;
@@ -90,6 +91,9 @@ public:
     void SetWebFiles(rodakos::WebFileSystemService* web_files) { web_files_ = web_files; }
     rodakos::WebFileSystemService* web_files() { return web_files_; }
 
+    void SetSetupQrScan(rodakos::SetupQrScanService* scan) { setup_qr_scan_ = scan; }
+    rodakos::SetupQrScanService* setup_qr_scan() { return setup_qr_scan_; }
+
     void SetCamera(rodakos::CameraService* camera) { camera_ = camera; }
     rodakos::CameraService* camera() { return camera_; }
 
@@ -132,6 +136,7 @@ private:
     rodakos::WakeOnLanService* wake_on_lan_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;
+    rodakos::SetupQrScanService* setup_qr_scan_ = nullptr;
     std::function<void()> device_cloud_unbound_callback_;
     std::function<void()> device_cloud_bound_callback_;
 };

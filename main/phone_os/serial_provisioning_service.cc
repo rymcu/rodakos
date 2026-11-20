@@ -136,6 +136,10 @@ SerialProvisioningService::~SerialProvisioningService() {
     Stop();
 }
 
+bool SerialProvisioningService::SetTransactionPending(bool pending) {
+    return SetPendingTransaction(pending);
+}
+
 bool SerialProvisioningService::RecoverPendingTransaction(
     DeviceCloudConfigService& cloud_config) {
     if (!HasPendingTransaction()) {
