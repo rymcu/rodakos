@@ -3,6 +3,7 @@
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/serial_provisioning_protocol.h"
 #include "phone_os/setup_qr_decoder.h"
 #include "rodakos_adapters/wifi_adapter.h"
 
@@ -24,6 +25,8 @@ constexpr uint32_t kTaskStackBytes = 12 * 1024;
 constexpr int kFramePollMs = 150;
 constexpr int64_t kScanTimeoutMs = 90 * 1000;
 constexpr int kCameraFirstFrameTimeoutMs = 5000;
+// Long enough to read "saved, restarting" before the screen goes dark.
+constexpr int kRestartNoticeMs = 2500;
 
 int64_t NowMs() { return esp_timer_get_time() / 1000; }
 
@@ -245,6 +248,15 @@ void SetupQrScanService::RunScan() {
 
     SetupQrPayload payload;
     const SetupQrError error = ParseSetupQr(text, payload);
+    // Same comparison SaveProvisioningUrl makes: an unchanged canonical URL keeps the binding.
+    bool will_restart = false;
+    if (error == SetupQrError::kNone && payload.kind == SetupQrKind::kRodak) {
+        DeviceCloudConfig current;
+        cloud_.Load(current);
+        std::string current_url;
+        will_restart = !NormalizeSerialProvisioningBootstrapUrl(current.provisioning_url, current_url) ||
+                       current_url != payload.bootstrap_url;
+    }
     text.assign(text.size(), '\0');
     if (error != SetupQrError::kNone) {
         ESP_LOGW(TAG, "QR code rejected: %s", SetupQrErrorCode(error));
@@ -257,6 +269,7 @@ void SetupQrScanService::RunScan() {
     snapshot_.ssid = payload.ssid;
     snapshot_.open_network = payload.open_network;
     snapshot_.server = DisplayServer(payload.bootstrap_url);
+    snapshot_.will_restart = will_restart;
     snapshot_.phase = SetupQrScanPhase::kConfirm;
     snapshot_.code.clear();
     ++snapshot_.revision;
@@ -307,8 +320,12 @@ void SetupQrScanService::RunSave() {
             ++snapshot_.revision;
         }
     }
-    // The bootstrap URL changed: restart the cloud client so no old credentials cross over.
-    if (status == SetupQrApplyStatus::kServerChanged && server_changed) server_changed();
+    // The bootstrap URL changed: restart so no old bootstrap task or MQTT outbox crosses over.
+    // Wait first so the user can read the result; Cancel() during the wait cannot undo the save.
+    if (status == SetupQrApplyStatus::kServerChanged && server_changed) {
+        vTaskDelay(pdMS_TO_TICKS(kRestartNoticeMs));
+        server_changed();
+    }
 }
 
 void SetupQrScanService::RunWithInternalStack(const std::function<void()>& work) {
