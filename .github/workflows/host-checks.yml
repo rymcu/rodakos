@@ -80,6 +80,7 @@ jobs:
             components/esp_rom/include
             components/protocomm/src/crypto/srp6a
             components/protocomm/include/crypto/srp6a
+            components/heap
 
       - name: Initialize container workspace paths
         run: |
@@ -93,6 +94,10 @@ jobs:
             echo "RODAKOS_IDF_PATH=$rodak_idf"
             echo "RODAKOS_CHECKS=$rodak_workspace/host-check-results"
           } >> "$GITHUB_ENV"
+
+      # mqtt_event_patch compiles the unmodified IDF TLSF heap; tlsf is a submodule of heap.
+      - name: Fetch the ESP-IDF TLSF heap submodule
+        run: git -C "$RODAKOS_IDF_PATH" submodule update --init --depth 1 components/heap/tlsf
 
       - name: Record source and tool identities
         run: |
