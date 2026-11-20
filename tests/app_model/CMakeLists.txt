@@ -24,6 +24,7 @@ add_executable(rodakos_app_model_tests
     setup_qr_payload_test.cc
     setup_qr_provisioning_test.cc
     device_cloud_page_model_test.cc
+    web_access_guard_test.cc
     mqtt_credential_refresh_policy_test.cc
     cloud_credential_freshness_test.cc
     cloud_credential_renewal_test.cc
@@ -63,6 +64,7 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/setup_qr_payload.cc
     ../../main/phone_os/setup_qr_provisioning.cc
     ../../main/apps/settings/device_cloud_page_model.cc
+    ../../main/phone_os/web_access_guard.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
     ../../main/phone_os/device_pairing_protocol.cc
     ../../main/phone_os/realtime_voice_contract.cc

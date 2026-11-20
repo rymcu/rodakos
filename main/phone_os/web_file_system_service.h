@@ -10,6 +10,8 @@
 #include <esp_err.h>
 #include <esp_http_server.h>
 
+#include "phone_os/web_access_guard.h"
+
 namespace rodakos {
 
 class FileService;
@@ -17,7 +19,9 @@ class FileService;
 struct WebFileSystemServiceState {
     bool running = false;
     bool busy = false;
+    // Address without the access code, e.g. http://192.168.88.17:8080
     std::string url;
+    // Access code for display, e.g. "K7QM 4RX8"; empty when stopped.
     std::string token;
     std::string message;
     std::string last_file;
@@ -45,7 +49,11 @@ private:
     void AddActiveBytes(size_t bytes);
     void SetActiveTotal(size_t bytes);
     void CompleteUpload(const std::string& file_name, size_t bytes);
-    bool AuthenticateRequest(httpd_req_t* req) const;
+    // Checks the X-Access-Code header (or the legacy ?token= query) and answers 401/429 itself.
+    bool AuthenticateRequest(httpd_req_t* req);
+    static uint32_t PeerAddress(httpd_req_t* req);
+    // Host tests have no socket; they supply the client address here. Unset on the device.
+    static uint32_t (*peer_address_override_)(httpd_req_t* req);
 
     static esp_err_t IndexHandler(httpd_req_t* req);
     static esp_err_t ListHandler(httpd_req_t* req);
@@ -54,12 +62,13 @@ private:
     static esp_err_t MkdirHandler(httpd_req_t* req);
     static esp_err_t RenameHandler(httpd_req_t* req);
     static esp_err_t DeleteHandler(httpd_req_t* req);
+    static esp_err_t TicketHandler(httpd_req_t* req);
 
     FileService* file_service_ = nullptr;
     httpd_handle_t server_ = nullptr;
     SemaphoreHandle_t mutex_ = nullptr;
     WebFileSystemServiceState state_;
-    std::string access_token_;
+    WebAccessGuard guard_;
 };
 
 }  // namespace rodakos

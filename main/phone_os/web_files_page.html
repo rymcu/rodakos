@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>RodakOS 网页传文件</title>
+<style>
+:root{color-scheme:dark;--bg:#101418;--panel:#18212a;--line:#34424d;--text:#eef3f7;--muted:#8d9aa5;--accent:#2d7dff;--link:#9ed0ff;--err:#ff8a8a;--danger:#442029;--danger-line:#68313e}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+main{max-width:760px;margin:0 auto;padding:20px 14px}
+h1{font-size:22px;margin:0 0 12px}
+button,input{font:inherit;border-radius:8px;border:1px solid var(--line);padding:9px 12px;background:var(--panel);color:var(--text)}
+button{cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.danger{background:var(--danger);border-color:var(--danger-line)}
+button:disabled{opacity:.55;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.muted{color:var(--muted)}.err{color:var(--err)}
+#login{max-width:340px;margin:12vh auto 0;display:grid;gap:12px}
+#login p{margin:0}
+#code{font:600 22px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.14em;text-align:center;text-transform:uppercase;padding:12px}
+#code.bad{border-color:var(--err)}
+label.remember{display:flex;gap:8px;align-items:center;color:#c9d6e0}
+#files[hidden],#login[hidden]{display:none}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.path{color:var(--link);word-break:break-all}
+.bar{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}
+input[type=file]{max-width:260px}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+td,th{border-bottom:1px solid #26323c;padding:10px 6px;text-align:left;vertical-align:middle}
+th{color:#aab8c3;font-weight:600}
+td.name button{background:none;border:0;padding:0;color:var(--link);text-align:left;word-break:break-all}
+td.name span{word-break:break-all}
+.actions{white-space:nowrap;text-align:right}.actions button{margin-left:6px;padding:6px 9px}
+progress{width:100%;height:14px;margin-top:10px}
+#status{min-height:22px;margin-top:10px;color:var(--link);white-space:pre-wrap}
+@media(max-width:560px){.hide-sm{display:none}.actions button{margin:3px 0 3px 5px}}
+</style>
+</head>
+<body>
+<main>
+<form id="login" autocomplete="off">
+  <h1>输入访问码</h1>
+  <p class="muted" id="login-hint">访问码显示在设备「设置 → 网页传文件」页面，共 8 位，不区分大小写，空格可省略。</p>
+  <input id="code" inputmode="text" maxlength="11" placeholder="XXXX XXXX" aria-label="访问码" spellcheck="false" autocapitalize="characters">
+  <label class="remember"><input type="checkbox" id="remember" checked> 在这台电脑上记住（设备重新开启服务后需要重新输入）</label>
+  <div id="login-error" class="err" role="alert"></div>
+  <button class="primary" id="enter" type="submit">进入</button>
+  <p class="muted">只能从同一局域网访问。</p>
+</form>
+
+<section id="files" hidden>
+  <div class="top"><h1>SD 卡 <span class="path" id="path">/</span></h1><button id="logout" type="button">退出</button></div>
+  <div class="bar"><button id="up" type="button">上一级</button><button id="refresh" type="button">刷新</button></div>
+  <div class="bar"><input id="file" type="file" aria-label="选择文件"><button class="primary" id="upload" type="button">上传文件</button><button id="mkdir" type="button">新建文件夹</button></div>
+  <progress id="bar" value="0" max="100" hidden></progress>
+  <div id="status" role="status"></div>
+  <table><thead><tr><th>名称</th><th class="hide-sm">大小</th><th class="actions">操作</th></tr></thead><tbody id="list"></tbody></table>
+</section>
+</main>
+<script>
+"use strict";
+const KEY = "rodakos-web-files-code";
+const $ = id => document.getElementById(id);
+let code = "";
+let cwd = "/";
+let loadGeneration = 0;
+
+function storageGet() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
+function storageSet(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+function storageClear() { try { localStorage.removeItem(KEY); } catch (e) {} }
+
+function normalize(v) { return v.toUpperCase().replace(/[\s-]/g, ""); }
+function enc(v) { return encodeURIComponent(v); }
+function join(a, b) { return a === "/" || !a ? "/" + b : a + "/" + b; }
+function parent(p) { if (p === "/" || !p) return "/"; const i = p.lastIndexOf("/"); return i <= 0 ? "/" : p.slice(0, i); }
+function size(n) { if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; return (n / 1048576).toFixed(1) + " MB"; }
+
+// Every API call carries the code in a header, so it never appears in a URL.
+async function api(url, opt) {
+  const o = Object.assign({}, opt || {});
+  o.headers = Object.assign({}, o.headers || {}, { "X-Access-Code": code });
+  const r = await fetch(url, o);
+  if (r.status === 401 || r.status === 429) {
+    const wait = Number(r.headers.get("Retry-After") || 0);
+    throw Object.assign(new Error("auth"), { status: r.status, wait });
+  }
+  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  return r;
+}
+
+function showLogin(message, hint) {
+  $("files").hidden = true;
+  $("login").hidden = false;
+  $("login-error").textContent = message || "";
+  if (hint) $("login-hint").textContent = hint;
+  $("code").classList.toggle("bad", !!message);
+  $("code").focus();
+}
+
+function lockedMessage(wait) {
+  return "尝试次数过多，请 " + (wait || 30) + " 秒后再试。";
+}
+
+// Builds rows with textContent only: a crafted file name on the SD card cannot inject markup.
+function render(entries) {
+  const list = $("list");
+  list.replaceChildren();
+  if (!entries.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 3; td.className = "muted"; td.textContent = "空文件夹";
+    tr.append(td); list.append(tr);
+    return;
+  }
+  for (const e of entries) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td"); name.className = "name";
+    if (e.dir) {
+      const b = document.createElement("button"); b.type = "button";
+      b.textContent = "📁 " + e.name; b.onclick = () => load(join(cwd, e.name));
+      name.append(b);
+    } else {
+      const s = document.createElement("span"); s.textContent = e.name; name.append(s);
+    }
+    const sz = document.createElement("td"); sz.className = "hide-sm muted";
+    sz.textContent = e.dir ? "文件夹" : size(e.size);
+    const act = document.createElement("td"); act.className = "actions";
+    if (!e.dir) act.append(button("下载", () => download(join(cwd, e.name))));
+    act.append(button("重命名", () => rename(e.name)));
+    const del = button("删除", () => remove(e.name)); del.className = "danger"; act.append(del);
+    tr.append(name, sz, act); list.append(tr);
+  }
+}
+
+function button(text, onclick) {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.onclick = onclick; return b;
+}
+
+// cwd and the rows change together, only after the new listing arrives, so a failed load
+// can never leave old rows pointing at a new folder.
+async function load(target) {
+  const p = target === undefined ? cwd : target;
+  const generation = ++loadGeneration;
+  $("status").textContent = "正在加载…";
+  try {
+    const data = await (await api("/api/list?path=" + enc(p))).json();
+    if (generation !== loadGeneration) return true;
+    cwd = p; $("path").textContent = cwd;
+    render(data.entries);
+    $("status").textContent = "";
+    return true;
+  } catch (e) {
+    if (generation !== loadGeneration) return false;
+    if (e.status) throw e;
+    $("status").textContent = "加载失败：" + e.message;
+    return false;
+  }
+}
+
+async function enter(candidate, fromStorage) {
+  code = normalize(candidate);
+  if (code.length !== 8) { showLogin("访问码是 8 位，请检查。"); return; }
+  $("enter").disabled = true;
+  try {
+    await load("/");
+    if ($("remember").checked) storageSet(code); else storageClear();
+    $("login").hidden = true; $("files").hidden = false;
+  } catch (e) {
+    code = "";
+    if (e.status === 429) showLogin(lockedMessage(e.wait));
+    else if (fromStorage) { storageClear(); showLogin("", "设备上的网页传文件已经重新开启，访问码变了。请输入新的访问码。"); $("code").value = ""; }
+    else showLogin("访问码不对。请核对设备屏幕上的 8 位访问码。");
+  } finally {
+    $("enter").disabled = false;
+  }
+}
+
+async function guard(action) {
+  try { await action(); }
+  catch (e) {
+    if (e.status === 401) { code = ""; storageClear(); showLogin("", "访问码已失效，请重新输入。"); }
+    else if (e.status === 429) showLogin(lockedMessage(e.wait));
+    else $("status").textContent = e.message;
+  }
+}
+
+function download(path) {
+  return guard(async () => {
+    // A browser download cannot send headers: trade the code for a one-time, one-file ticket.
+    const ticket = await (await api("/api/ticket?path=" + enc(path), { method: "POST" })).text();
+    location.href = "/api/download?path=" + enc(path) + "&ticket=" + enc(ticket);
+  });
+}
+
+function rename(name) {
+  const next = prompt("重命名为", name);
+  if (!next || next === name) return;
+  return guard(async () => {
+    await api("/api/rename?from=" + enc(join(cwd, name)) + "&to=" + enc(join(cwd, next)), { method: "POST" });
+    await load();
+  });
+}
+
+function remove(name) {
+  const p = join(cwd, name);
+  if (!confirm("删除 " + p + "？此操作无法撤销。")) return;
+  return guard(async () => { await api("/api/delete?path=" + enc(p), { method: "POST" }); await load(); });
+}
+
+$("login").onsubmit = ev => { ev.preventDefault(); enter($("code").value, false); };
+$("code").oninput = () => { $("code").classList.remove("bad"); $("login-error").textContent = ""; };
+$("logout").onclick = () => { code = ""; storageClear(); $("code").value = ""; showLogin("", "已退出。"); };
+$("up").onclick = () => guard(() => load(parent(cwd)));
+$("refresh").onclick = () => guard(() => load());
+$("mkdir").onclick = () => {
+  const name = prompt("文件夹名称");
+  if (!name) return;
+  guard(async () => { await api("/api/mkdir?path=" + enc(join(cwd, name)), { method: "POST" }); await load(); });
+};
+$("upload").onclick = () => {
+  const file = $("file").files[0];
+  if (!file) { $("status").textContent = "请先选择文件。"; return; }
+  const dest = join(cwd, file.name);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload?path=" + enc(dest));
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.setRequestHeader("X-Access-Code", code);
+  $("upload").disabled = true; $("bar").hidden = false; $("bar").value = 0;
+  $("status").textContent = "正在上传 " + file.name + "…";
+  xhr.upload.onprogress = e => { if (e.lengthComputable) $("bar").value = Math.round(e.loaded * 100 / e.total); };
+  xhr.onload = () => {
+    $("upload").disabled = false; $("bar").hidden = true;
+    if (xhr.status >= 200 && xhr.status < 300) { $("status").textContent = "已上传 " + dest; guard(() => load()); }
+    else if (xhr.status === 401) { code = ""; storageClear(); showLogin("", "访问码已失效，请重新输入。"); }
+    else $("status").textContent = xhr.responseText || ("上传失败：" + xhr.status);
+  };
+  xhr.onerror = () => { $("upload").disabled = false; $("bar").hidden = true; $("status").textContent = "上传失败：网络错误。"; };
+  xhr.send(file);
+};
+
+// Legacy links carried ?token=; use it once and drop it from the address bar and history.
+(() => {
+  const params = new URLSearchParams(location.search);
+  const legacy = params.get("token");
+  if (legacy) {
+    history.replaceState(null, "", location.pathname);
+    enter(legacy, false);
+    return;
+  }
+  const saved = storageGet();
+  if (saved) enter(saved, true); else showLogin("");
+})();
+</script>
+</body>
+</html>
