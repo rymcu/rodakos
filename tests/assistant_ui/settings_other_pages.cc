@@ -22,3 +22,9 @@ void SettingsWebFilesPage::Reset() {}
 void SettingsApp::ShowLanOnboarding() {}
 #include "phone_os/lan_onboarding_service.h"
 bool rodakos::LanOnboardingService::Available() { return false; }
+// 扫码配网页与服务需要相机，不在本目标内；Device Cloud 页同样只读 Available()。
+void SettingsApp::ShowSetupQr() {}
+void SettingsApp::CloseSetupQr() {}
+void SettingsApp::TeardownSetupQr() {}
+#include "phone_os/setup_qr_scan_service.h"
+bool rodakos::SetupQrScanService::Available() const { return false; }
