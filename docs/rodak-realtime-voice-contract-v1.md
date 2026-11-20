@@ -6,9 +6,9 @@
 > `realtime_voice_transport.*`
 
 This is the canonical RodakOS voice wire contract. It is independent of the
-legacy XiaoZhi protocol. The Rodak server may translate XiaoZhi traffic in a
-server-side adapter, but RodakOS must not accept XiaoZhi fields, event names,
-automatic greetings, or `/xiaozhi` endpoints in a canonical descriptor.
+legacy XiaoZhi protocol. Rodak currently has no XiaoZhi adapter. RodakOS must not
+accept XiaoZhi fields, event names, automatic greetings, or `/xiaozhi` endpoints in a
+canonical descriptor.
 
 ## 1. Descriptor from AIoT
 
@@ -284,8 +284,7 @@ rejects fields or markers associated with XiaoZhi, including `hello`, `listen`,
 `tts`, `goodbye`, legacy `type`/`session_id`, and legacy WebSocket descriptors.
 
 The canonical runtime must keep its own protocol-neutral session controller and
-gate. The historical `xiaozhiSessionMachine` is for the legacy adapter only and
-must not be reused by the Rodak realtime path.
+gate. It must not reuse the historical `xiaozhiSessionMachine`.
 
 ## 8. Server-initiated announce
 
@@ -303,7 +302,7 @@ MQTT voice.announce {announceSeq, priority} → device ACK ok | busy
 1. Rodak sends the MQTT command `voice.announce` with `announceSeq` and `priority`. The command
    does not carry the spoken text. The text travels only in the authenticated voice session.
    Command validation, the busy rules, and ACK semantics are in the
-   [AIoT contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+   [AIoT contract](rodak-aiot-contract-v1.md#9-shadow-and-telemetry).
 2. The device opens a normal connection with the regular headers. Its single `session.open`
    carries `features.announce: true` and the same `announceSeq`. The sequence is bound to that one
    `session.open`. The device clears the sequence immediately after that message. Later

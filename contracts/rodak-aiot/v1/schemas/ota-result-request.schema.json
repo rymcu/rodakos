@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/ota-result-request.schema.json",
+  "title": "POST /api/v1/ota/tasks/{taskNo}/result body",
+  "description": "RodakOS emission profile; the invalid fixture is a RodakOS-profile negative. Rodak applies Boolean(body.success), so a missing value is false and the string \"false\" records success; send a JSON boolean (http-api.ts:976-986). Repeats for a terminal task are ignored.",
+  "type": "object",
+  "required": [
+    "success",
+    "detail"
+  ],
+  "properties": {
+    "success": {
+      "type": "boolean"
+    },
+    "detail": {
+      "type": "string"
+    },
+    "errorCode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "errorMessage": {
+      "type": "string"
+    }
+  },
+  "if": {
+    "properties": {
+      "success": {
+        "const": false
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "errorCode"
+    ]
+  }
+}

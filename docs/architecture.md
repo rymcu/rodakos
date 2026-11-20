@@ -227,7 +227,7 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   It preserves software priority and no-codec software output. Other dependency API error paths
   remain outside this focused correction. Success does not establish hardware or acoustic success.
   Ordinary shadow reports contain no volume effect ID or applied desired version. See the
-  [AIoT shadow contract](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties).
+  [AIoT shadow contract](rodak-aiot-contract-v1.md#9-shadow-and-telemetry).
   Correlated MQTT volume effects use a separate `effects/receipt` publication and a bounded
   authority-scoped ledger. Real connection epochs travel through fragment assembly and the
   worker queue. The scope check and `ApplyVolume` share the MQTT service lock with cancellation.
@@ -272,7 +272,7 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   cache replays immutable command results. `RemoteInputController` owns bounded input queues and
   stream/control grants checked at final LVGL execution. `DisplayControlAckTracker` binds replies
   to an opaque peer instance. Admitted actions may finish. Eviction/reboot are outside the replay
-  guarantee. See the [command result boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary).
+  guarantee. See the [command result boundary](mqtt-command-semantics.md#command-results-and-replay-boundary).
 - Shell preferences use the short-lived `shell` NVS namespace. Settings exposes explicit commit results so a failed save cannot be reported as successful.
 - ButtonBindingService encodes Lock and Control Center as stable actions. Persisted `btnbind` values override compiled defaults.
 - WakeOnLanService creates a UDP socket only for a user-requested wake, requires active WiFi, and
@@ -370,7 +370,8 @@ and [navigation host coverage](../tests/navigation_ui/README.md).
 - [Project roadmap](roadmap.md)
 - [OpenOS comparison and design decisions](openos-comparison.md)
 - [Home layout and folder design](home-layout-design.md)
-- [Rodak AIoT v1 contract](rodak-aiot-contract-v1.md)
+- [Rodak AIoT v1 contract](rodak-aiot-contract-v1.md), [MQTT command semantics](mqtt-command-semantics.md),
+  [AIoT implementation notes](aiot-implementation-notes.md), [machine-readable contract](../contracts/rodak-aiot/v1/README.md)
 - [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md)
 - [Voice assistant integration](voice-assistant.md)
 - [Voice task retirement and software evidence](voice-task-retirement.md)

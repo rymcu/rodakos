@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/ota-ticket.schema.json",
+  "title": "POST /api/v1/ota/download-ticket data",
+  "description": "Rodak ota-service.ts:670-682.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "taskNo": {
+      "type": "string",
+      "pattern": "^ota_[0-9]{13}_[0-9a-f]{8}$",
+      "description": "Rodak createTaskNo(): ota_<epoch-ms>_<8 hex> (ota-service.ts:71-73)."
+    },
+    "ticketId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv4 from randomUUID()."
+    },
+    "expiresInSeconds": {
+      "const": 600
+    }
+  },
+  "required": [
+    "taskNo",
+    "ticketId",
+    "expiresInSeconds"
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/binding-request-created.schema.json",
+  "title": "POST /binding/request data",
+  "description": "Manual: 8-digit pairingCode, 10-minute expiry, poll every 2 s. Trust setup: trustSetup {required:true}, 5-minute expiry, poll every 1 s (http-api.ts:484-496, device-binding-authorization.ts:20-28).",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "requestToken": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+          "description": "32 random bytes, base64url without padding."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "status": {
+          "const": "pending"
+        },
+        "pairingCode": {
+          "type": "string",
+          "pattern": "^[0-9]{8}$"
+        },
+        "pollIntervalSeconds": {
+          "const": 2
+        }
+      },
+      "required": [
+        "requestId",
+        "requestToken",
+        "expiresAt",
+        "status",
+        "pairingCode",
+        "pollIntervalSeconds"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "requestToken": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+          "description": "32 random bytes, base64url without padding."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "x-calendarDate": true,
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])T([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$",
+          "description": "Date.toISOString(): always three fraction digits."
+        },
+        "status": {
+          "const": "pending"
+        },
+        "trustSetup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "const": true
+            }
+          },
+          "required": [
+            "required"
+          ]
+        },
+        "pollIntervalSeconds": {
+          "const": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "requestToken",
+        "expiresAt",
+        "status",
+        "trustSetup",
+        "pollIntervalSeconds"
+      ]
+    }
+  ]
+}

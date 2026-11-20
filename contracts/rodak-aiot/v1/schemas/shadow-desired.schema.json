@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/shadow-desired.schema.json",
+  "title": "devices/{k}/shadow/desired (MQTT)",
+  "description": "Rodak getDesiredShadowPayload (device-state.ts:977-992) and publishDesiredShadow (server-runtime.ts:1665-1677) send both version keys with the same value (0 for a new shadow; each report and each desired write adds 1) and the same maps at root and under state. Every MQTT publication has exactly one _meta entry: rodak/shadowWrite for an ordinary sync, including the snapshot sent on subscribe, or rodak/deviceEffect for a correlated effect (mqtt-broker.ts:474-501, 552-556). HTTP GET /shadow/desired returns the same snapshot without _meta (not covered by this schema). A light effectId has the form light:<shadowVersion of this frame>:<UUIDv4>, and _meta.rodak/deviceEffect.shadowVersion equals the frame shadowVersion (the version after the write). Rodak publishes QoS 0, retain false.",
+  "type": "object",
+  "required": [
+    "deviceKey",
+    "shadowVersion",
+    "version",
+    "desired",
+    "reported",
+    "state",
+    "_meta"
+  ],
+  "x-equalFields": [
+    [
+      "shadowVersion",
+      "version"
+    ],
+    [
+      "desired",
+      "state.desired"
+    ],
+    [
+      "reported",
+      "state.reported"
+    ]
+  ],
+  "x-effectVersion": true,
+  "properties": {
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "shadowVersion": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "desired": {
+      "type": "object",
+      "description": "Rodak checks it only as JSON (64 KiB, depth 32, plain objects, no __proto__, constructor or prototype key at any depth), except voice_identity. RodakOS acts on an integer volume and object light/appearance and ignores other types.",
+      "x-forbiddenKeys": [
+        "__proto__",
+        "constructor",
+        "prototype"
+      ],
+      "properties": {
+        "voice_identity": {
+          "$ref": "voice-identity.schema.json"
+        }
+      }
+    },
+    "reported": {
+      "type": "object"
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "desired": {
+          "type": "object",
+          "description": "Rodak checks it only as JSON (64 KiB, depth 32, plain objects, no __proto__, constructor or prototype key at any depth), except voice_identity. RodakOS acts on an integer volume and object light/appearance and ignores other types.",
+          "x-forbiddenKeys": [
+            "__proto__",
+            "constructor",
+            "prototype"
+          ],
+          "properties": {
+            "voice_identity": {
+              "$ref": "voice-identity.schema.json"
+            }
+          }
+        },
+        "reported": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "desired",
+        "reported"
+      ]
+    },
+    "_meta": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "rodak/shadowWrite": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dispatchId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "description": "UUIDv4 from randomUUID()."
+            }
+          },
+          "required": [
+            "dispatchId"
+          ]
+        },
+        "rodak/deviceEffect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema",
+            "effectId",
+            "parametersHash",
+            "dispatchId",
+            "shadowVersion",
+            "operation",
+            "requested"
+          ],
+          "properties": {
+            "schema": {
+              "enum": [
+                "rodak.mqtt-volume-effect.v1",
+                "rodak.mqtt-light-effect.v1"
+              ]
+            },
+            "effectId": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9:_-]{1,128}$"
+            },
+            "parametersHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "dispatchId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "description": "UUIDv4 from randomUUID()."
+            },
+            "shadowVersion": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "operation": {
+              "enum": [
+                "volume.set",
+                "light.patch"
+              ]
+            },
+            "requested": {
+              "type": "object"
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "schema": {
+                  "const": "rodak.mqtt-volume-effect.v1"
+                },
+                "operation": {
+                  "const": "volume.set"
+                },
+                "effectId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                },
+                "requested": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "volume": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": [
+                    "volume"
+                  ]
+                }
+              }
+            },
+            {
+              "properties": {
+                "schema": {
+                  "const": "rodak.mqtt-light-effect.v1"
+                },
+                "operation": {
+                  "const": "light.patch"
+                },
+                "effectId": {
+                  "type": "string",
+                  "pattern": "^light:[0-9]+:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                },
+                "requested": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "lightId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "patch": {
+                      "type": "object",
+                      "minProperties": 1,
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "brightness": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "color": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "r": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "g": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "b": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            }
+                          },
+                          "required": [
+                            "r",
+                            "g",
+                            "b"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "lightId",
+                    "patch"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

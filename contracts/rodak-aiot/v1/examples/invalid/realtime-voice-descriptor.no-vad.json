@@ -1,0 +1,48 @@
+{
+  "schema": "rodak-realtime-voice/v1",
+  "protocol": "rodak-realtime-voice",
+  "protocolVersion": 1,
+  "transport": "websocket",
+  "endpoint": "ws://rodak.local:9080/api/v1/aiot/devices/realtime-voice",
+  "authMode": "device-token",
+  "uplink": {
+    "codec": "opus",
+    "sampleRateHz": 16000,
+    "channels": 1,
+    "frameDurationMs": 60
+  },
+  "downlink": {
+    "codec": "opus",
+    "sampleRateHz": 24000,
+    "channels": 1,
+    "frameDurationMs": 60
+  },
+  "limits": {
+    "maxAudioFrameBytes": 8192,
+    "maxControlBytes": 65536
+  },
+  "features": [],
+  "capabilities": [
+    "session",
+    "audio-input",
+    "audio-output",
+    "speech-boundaries",
+    "interrupt",
+    "assistant-events",
+    "mcp"
+  ],
+  "events": [
+    "session.open",
+    "session.ready",
+    "input.start",
+    "input.stop",
+    "wake.detected",
+    "playback.abort",
+    "vad",
+    "output.start",
+    "output.stop",
+    "session.end",
+    "mcp",
+    "error"
+  ]
+}

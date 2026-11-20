@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/mqtt-connect-info.schema.json",
+  "title": "mqttConnectInfo object",
+  "description": "Rodak buildAiotMqttConnectInfo (http-api.ts:194-241). camelCase counterpart of unifiedMqtt without keepalive, plus endpoint, sslEndpoint, wsEndpoint, clientId, subscribeTopics (desired, commands, ota notify, pc_status), publishTopics (telemetry, report, commands/+/ack, ota progress), vendorType and authMode. publishTopics omits effects/receipt although the broker allows it.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-equalFields": [
+    [
+      "clientId",
+      "username",
+      "deviceKey"
+    ],
+    [
+      "password",
+      "httpBearerToken"
+    ]
+  ],
+  "x-endpointMatches": {
+    "endpoint": "endpoint",
+    "host": "brokerAddress",
+    "port": "brokerPort",
+    "transport": "transport",
+    "sslEndpoint": "sslEndpoint"
+  },
+  "x-topicsUseKey": {
+    "key": "deviceKey",
+    "topics": "topics",
+    "suffixes": {
+      "telemetry": "telemetry",
+      "shadowReport": "shadow/report",
+      "shadowDesired": "shadow/desired",
+      "otaNotify": "ota/notify",
+      "otaProgress": "ota/progress",
+      "commands": "commands/+",
+      "pcStatus": "pc_status"
+    },
+    "lists": {
+      "subscribeTopics": [
+        "shadowDesired",
+        "commands",
+        "otaNotify",
+        "pcStatus"
+      ],
+      "publishTopics": [
+        "telemetry",
+        "shadowReport",
+        "commands/+/ack",
+        "otaProgress"
+      ]
+    }
+  },
+  "required": [
+    "endpoint",
+    "sslEndpoint",
+    "wsEndpoint",
+    "clientId",
+    "username",
+    "password",
+    "deviceKey",
+    "brokerAddress",
+    "brokerPort",
+    "httpBaseUrl",
+    "httpBearerToken",
+    "protocolVersion",
+    "homeEnabled",
+    "topics",
+    "subscribeTopics",
+    "publishTopics",
+    "vendorType",
+    "authMode"
+  ],
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "pattern": "^mqtts?://"
+    },
+    "sslEndpoint": {
+      "type": "string"
+    },
+    "wsEndpoint": {
+      "const": ""
+    },
+    "transport": {
+      "const": "mqtts"
+    },
+    "clientId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "brokerAddress": {
+      "type": "string",
+      "minLength": 1
+    },
+    "brokerPort": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "httpBaseUrl": {
+      "type": "string",
+      "pattern": "^https?://"
+    },
+    "httpBearerToken": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocolVersion": {
+      "const": 2
+    },
+    "homeEnabled": {
+      "enum": [
+        0,
+        1
+      ]
+    },
+    "topics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "telemetry": {
+          "type": "string",
+          "pattern": "^devices/.+/telemetry$"
+        },
+        "shadowReport": {
+          "type": "string",
+          "pattern": "^devices/.+/shadow/report$"
+        },
+        "shadowDesired": {
+          "type": "string",
+          "pattern": "^devices/.+/shadow/desired$"
+        },
+        "otaNotify": {
+          "type": "string",
+          "pattern": "^devices/.+/ota/notify$"
+        },
+        "otaProgress": {
+          "type": "string",
+          "pattern": "^devices/.+/ota/progress$"
+        },
+        "commands": {
+          "type": "string",
+          "pattern": "^devices/.+/commands/\\+$"
+        },
+        "pcStatus": {
+          "type": "string",
+          "pattern": "^devices/.+/pc_status$"
+        },
+        "homePrefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Configured Home prefix, trimmed; blank falls back to rymcu/home/v1."
+        }
+      },
+      "required": [
+        "telemetry",
+        "shadowReport",
+        "shadowDesired",
+        "otaNotify",
+        "otaProgress",
+        "commands",
+        "pcStatus",
+        "homePrefix"
+      ]
+    },
+    "subscribeTopics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "publishTopics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "vendorType": {
+      "const": "rodak-local"
+    },
+    "authMode": {
+      "const": "device-jwt"
+    }
+  }
+}

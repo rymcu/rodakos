@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/telemetry.schema.json",
+  "title": "devices/{k}/telemetry",
+  "description": "RodakOS emission profile; the invalid fixtures are RodakOS-profile negatives. Rodak accepts any object, reads firmware or firmwareVersion, and only warns on thing-model mismatches (device-state.ts:885-925).",
+  "type": "object",
+  "required": [
+    "firmware",
+    "free_heap",
+    "minimum_free_heap_size",
+    "uptime_ms",
+    "ota_slot"
+  ],
+  "properties": {
+    "firmware": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wifi_rssi": {
+      "type": "integer",
+      "maximum": 0
+    },
+    "volume": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "battery": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "charging": {
+      "type": "boolean"
+    },
+    "free_heap": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "minimum_free_heap_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uptime_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ota_slot": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

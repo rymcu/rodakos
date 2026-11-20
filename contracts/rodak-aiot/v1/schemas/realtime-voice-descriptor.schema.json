@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/realtime-voice-descriptor.schema.json",
+  "title": "realtimeVoice descriptor",
+  "description": "Rodak buildRealtimeVoiceDescriptor (realtime-voice-contract.ts:408-436). AIoT routes pass only the endpoint, so the emitted value is fixed: opus 16k/24k, 60 ms, limits 8192/65536, all 7 capabilities, all 12 events, all 3 VAD strategies, preferred hybrid-fallback. RodakOS accepts the wider ranges of docs/rodak-realtime-voice-contract-v1.md section 1.",
+  "type": "object",
+  "required": [
+    "schema",
+    "protocol",
+    "protocolVersion",
+    "transport",
+    "endpoint",
+    "authMode",
+    "uplink",
+    "downlink",
+    "limits",
+    "features",
+    "capabilities",
+    "events",
+    "vadStrategies",
+    "preferredVadStrategy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "rodak-realtime-voice/v1"
+    },
+    "protocol": {
+      "const": "rodak-realtime-voice"
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "transport": {
+      "const": "websocket"
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^wss?://[^/?#@]+/api/v1/aiot/devices/realtime-voice$"
+    },
+    "authMode": {
+      "const": "device-token"
+    },
+    "uplink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "const": 16000
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "const": 60
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    },
+    "downlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "const": 24000
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "const": 60
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxAudioFrameBytes": {
+          "const": 8192
+        },
+        "maxControlBytes": {
+          "const": 65536
+        }
+      },
+      "required": [
+        "maxAudioFrameBytes",
+        "maxControlBytes"
+      ]
+    },
+    "features": {
+      "const": []
+    },
+    "capabilities": {
+      "const": [
+        "session",
+        "audio-input",
+        "audio-output",
+        "speech-boundaries",
+        "interrupt",
+        "assistant-events",
+        "mcp"
+      ]
+    },
+    "events": {
+      "const": [
+        "session.open",
+        "session.ready",
+        "input.start",
+        "input.stop",
+        "wake.detected",
+        "playback.abort",
+        "vad",
+        "output.start",
+        "output.stop",
+        "session.end",
+        "mcp",
+        "error"
+      ]
+    },
+    "vadStrategies": {
+      "const": [
+        "device-authoritative",
+        "server-authoritative",
+        "hybrid-fallback"
+      ]
+    },
+    "preferredVadStrategy": {
+      "const": "hybrid-fallback"
+    }
+  }
+}

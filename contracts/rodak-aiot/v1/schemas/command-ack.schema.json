@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/command-ack.schema.json",
+  "title": "devices/{k}/commands/{commandNo}/ack",
+  "description": "RodakOS emission profile; the invalid fixtures are RodakOS-profile negatives that Rodak may still accept. Rodak classifyDeviceCommandAck (src/shared/device-command-ack.ts:13-40) is broader: event signal/state, or a cameraStream/camera_stream/displayStream/display_stream result whose event is signal/state or whose type is sdp/offer/candidate/ice-candidate = sideband; status error or ok false = failure (any errorCode, extra fields allowed); anything else, even raw text = acknowledgement. Managed Signal and Stop ACKs are checked first by their dispatchers and need matching session evidence; raw text does not settle them. The first terminal result is frozen.",
+  "type": "object",
+  "required": [
+    "status"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "status": {
+          "const": "ok"
+        },
+        "result": {
+          "type": "object",
+          "description": "Command result. On a stream Start topic, a cameraStream or displayStream entry whose event is signal/state (or type sdp/candidate) marks a sideband callback that never settles the command; sibling keys are allowed.",
+          "properties": {
+            "cameraStream": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                },
+                "event": {
+                  "enum": [
+                    "signal",
+                    "state"
+                  ]
+                }
+              }
+            },
+            "displayStream": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "description": "UUIDv4 from randomUUID()."
+                },
+                "event": {
+                  "enum": [
+                    "signal",
+                    "state"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "not": {
+        "required": [
+          "errorCode"
+        ]
+      }
+    },
+    {
+      "required": [
+        "errorCode"
+      ],
+      "properties": {
+        "status": {
+          "const": "error"
+        },
+        "errorCode": {
+          "enum": [
+            "unsupported_command",
+            "invalid_payload",
+            "missing_session_id",
+            "invalid_start_command_no",
+            "invalid_signal",
+            "invalid_signal_encoding",
+            "camera_stream_unavailable",
+            "display_stream_unavailable",
+            "camera_stream_busy",
+            "display_stream_busy",
+            "camera_stream_start_failed",
+            "display_stream_start_failed",
+            "camera_stream_not_found",
+            "display_stream_not_found",
+            "camera_signal_rejected",
+            "display_signal_rejected",
+            "stream_instance_capacity_exceeded",
+            "stream_lease_expired",
+            "command_scope_expired",
+            "voice_unavailable",
+            "busy",
+            "command_conflict",
+            "command_result_unavailable",
+            "command_limits_exceeded",
+            "command_hash_failed",
+            "command_capacity_exceeded"
+          ]
+        }
+      },
+      "not": {
+        "required": [
+          "result"
+        ]
+      }
+    }
+  ]
+}

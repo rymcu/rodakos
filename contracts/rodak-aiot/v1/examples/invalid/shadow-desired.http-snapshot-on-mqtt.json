@@ -1,0 +1,25 @@
+{
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "shadowVersion": 42,
+  "version": 42,
+  "desired": {
+    "volume": 30
+  },
+  "reported": {
+    "firmware": "1.4.0",
+    "volume": 60,
+    "battery": 87,
+    "charging": true
+  },
+  "state": {
+    "desired": {
+      "volume": 30
+    },
+    "reported": {
+      "firmware": "1.4.0",
+      "volume": 60,
+      "battery": 87,
+      "charging": true
+    }
+  }
+}

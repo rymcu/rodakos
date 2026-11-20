@@ -1,0 +1,6 @@
+{
+  "protocol": "rodak-aiot",
+  "productKey": "rymcu-bigsmart",
+  "deviceKey": "aa:bb:cc:dd:ee:ff",
+  "credentialSecret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}

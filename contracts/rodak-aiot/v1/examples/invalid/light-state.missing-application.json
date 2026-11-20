@@ -1,0 +1,13 @@
+{
+  "id": "board_rgb",
+  "available": true,
+  "last_error": 0,
+  "configurationRevision": 3,
+  "enabled": true,
+  "brightness": 30,
+  "color": {
+    "r": 32,
+    "g": 160,
+    "b": 255
+  }
+}

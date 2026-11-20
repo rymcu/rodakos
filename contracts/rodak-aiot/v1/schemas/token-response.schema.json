@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/token-response.schema.json",
+  "title": "Token response data",
+  "description": "Rodak buildAiotTokenResponse (http-api.ts:244-298), used by /auth/token and a confirmed binding status. deviceToken, token and accessToken are the same HS256 JWT; expiresIn = tokenTtlSeconds; expiresAt = expires_at in Unix seconds. productKey and credentialKey copy the device's product key (rymcu-bigsmart for RodakOS).",
+  "type": "object",
+  "required": [
+    "deviceId",
+    "deviceCode",
+    "deviceKey",
+    "productKey",
+    "credentialKey",
+    "deviceToken",
+    "token",
+    "accessToken",
+    "tokenType",
+    "expiresIn",
+    "expiresAt",
+    "expires_at",
+    "tokenTtlSeconds",
+    "activationStatus",
+    "activationRequired",
+    "realtimeVoice",
+    "mqttConnectInfo",
+    "unifiedMqtt"
+  ],
+  "properties": {
+    "mqttHost": {
+      "type": "string",
+      "pattern": "^rodak-[0-9a-f]{16}\\.local$"
+    },
+    "mqttPort": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stored device ID. New devices get a UUIDv4; existing devices keep their ID."
+    },
+    "deviceCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "description": "Device key. RodakOS default: lowercase WiFi STA MAC."
+    },
+    "productKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "credentialKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deviceToken": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^eyJhbGciOiJIUzI1NiJ9\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
+      "description": "HS256 JWT. Header {alg:HS256}. Claims: the first of {did,dk,pk,tv}, {did,dk,tv}, {did,tv}, {dk,tv} that fits 255 characters, plus exp (device-auth.ts:113-155)."
+    },
+    "token": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^eyJhbGciOiJIUzI1NiJ9\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
+      "description": "HS256 JWT. Header {alg:HS256}. Claims: the first of {did,dk,pk,tv}, {did,dk,tv}, {did,tv}, {dk,tv} that fits 255 characters, plus exp (device-auth.ts:113-155)."
+    },
+    "accessToken": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^eyJhbGciOiJIUzI1NiJ9\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
+      "description": "HS256 JWT. Header {alg:HS256}. Claims: the first of {did,dk,pk,tv}, {did,dk,tv}, {did,tv}, {dk,tv} that fits 255 characters, plus exp (device-auth.ts:113-155)."
+    },
+    "tokenType": {
+      "const": "Bearer"
+    },
+    "expiresIn": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "expiresAt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Unix seconds."
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Unix seconds."
+    },
+    "tokenTtlSeconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "activationStatus": {
+      "const": 1
+    },
+    "activationRequired": {
+      "const": false
+    },
+    "realtimeVoice": {
+      "$ref": "realtime-voice-descriptor.schema.json"
+    },
+    "mqttConnectInfo": {
+      "$ref": "mqtt-connect-info.schema.json"
+    },
+    "unifiedMqtt": {
+      "$ref": "unified-mqtt.schema.json"
+    }
+  },
+  "dependentRequired": {
+    "mqttHost": [
+      "mqttPort"
+    ],
+    "mqttPort": [
+      "mqttHost"
+    ]
+  },
+  "x-equalFields": [
+    [
+      "deviceToken",
+      "token",
+      "accessToken",
+      "unifiedMqtt.password",
+      "unifiedMqtt.http_bearer_token",
+      "mqttConnectInfo.password",
+      "mqttConnectInfo.httpBearerToken"
+    ],
+    [
+      "deviceKey",
+      "deviceCode",
+      "unifiedMqtt.device_key",
+      "unifiedMqtt.username",
+      "mqttConnectInfo.deviceKey",
+      "mqttConnectInfo.clientId"
+    ],
+    [
+      "productKey",
+      "credentialKey"
+    ],
+    [
+      "expiresIn",
+      "tokenTtlSeconds"
+    ],
+    [
+      "expiresAt",
+      "expires_at"
+    ],
+    [
+      "unifiedMqtt.broker_address",
+      "mqttConnectInfo.brokerAddress"
+    ],
+    [
+      "unifiedMqtt.broker_port",
+      "mqttConnectInfo.brokerPort"
+    ],
+    [
+      "unifiedMqtt.http_base_url",
+      "mqttConnectInfo.httpBaseUrl"
+    ],
+    [
+      "unifiedMqtt.home_enabled",
+      "mqttConnectInfo.homeEnabled"
+    ],
+    [
+      "unifiedMqtt.transport",
+      "mqttConnectInfo.transport"
+    ],
+    [
+      "unifiedMqtt.topics.home_prefix",
+      "mqttConnectInfo.topics.homePrefix"
+    ],
+    [
+      "mqttHost",
+      "unifiedMqtt.broker_address"
+    ],
+    [
+      "mqttPort",
+      "unifiedMqtt.broker_port"
+    ]
+  ],
+  "x-samePresence": [
+    [
+      "unifiedMqtt.transport",
+      "mqttConnectInfo.transport",
+      "mqttHost"
+    ]
+  ]
+}

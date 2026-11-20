@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/shadow-report.schema.json",
+  "title": "devices/{k}/shadow/report",
+  "description": "RodakOS emission profile; the invalid fixtures are RodakOS-profile negatives. Rodak stores the whole flat object as the reported snapshot and merges voice_identity specially (device-state.ts:928-974). A snapshot is not evidence that a desired change executed.",
+  "type": "object",
+  "required": [
+    "firmware"
+  ],
+  "properties": {
+    "firmware": {
+      "type": "string",
+      "minLength": 1
+    },
+    "volume": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "light": {
+      "$ref": "light-state.schema.json"
+    },
+    "battery": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "charging": {
+      "type": "boolean"
+    },
+    "appearance": {
+      "type": "object"
+    },
+    "voice_identity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+          "x-maxUtf8Bytes": 32
+        },
+        "wakeWord": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+          "x-maxUtf8Bytes": 32
+        },
+        "wakeCommand": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f]([^\\u0000-\\u001f\\u007f]*[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\u0000-\\u001f\\u007f])?$",
+          "x-maxUtf8Bytes": 128
+        },
+        "mode": {
+          "enum": [
+            "persistent",
+            "temporary"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "expired",
+            "pending",
+            "pending_clock",
+            "rejected",
+            "recovery_failed"
+          ]
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "revisionWatermark": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "activeConfirmed": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

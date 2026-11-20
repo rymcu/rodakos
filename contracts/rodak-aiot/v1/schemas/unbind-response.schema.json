@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/unbind-response.schema.json",
+  "title": "POST /binding/unbind data",
+  "description": "Rodak http-api.ts:578-591. The handler ignores the request body. After success the old access token is invalid, so a retry may get HTTP 401.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stored device ID. New devices get a UUIDv4; existing devices keep their ID."
+    },
+    "status": {
+      "const": "unbound"
+    }
+  },
+  "required": [
+    "deviceId",
+    "status"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "requestId": "9c4e7a2b1d3f4e5a8b6c0d1e2f3a4b5c",
+  "trustSetup": {
+    "required": true
+  },
+  "expiresAt": "2026-11-20T08:05:00.000Z",
+  "status": "pending",
+  "pollIntervalSeconds": 1,
+  "requestToken": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+}

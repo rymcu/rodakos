@@ -1,0 +1,22 @@
+{
+  "protocol": "rodak-aiot",
+  "protocolVersion": 1,
+  "productKey": "rymcu-bigsmart",
+  "product_key": "rymcu-bigsmart",
+  "deviceCode": "ab",
+  "deviceKey": "ab",
+  "deviceSecret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "credentialSecret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "deviceName": "RodakOS RYMCU BigSmart",
+  "clientId": "3f2b8c1e-9a4d-4f6b-8e2a-1c5d7b9e0f12",
+  "firmwareVersion": "1.4.0",
+  "hardwareVersion": "rymcu_bigsmart",
+  "application": {
+    "name": "rodakos",
+    "version": "1.4.0"
+  },
+  "board": {
+    "type": "rymcu_bigsmart",
+    "productKey": "rymcu-bigsmart"
+  }
+}

@@ -87,8 +87,8 @@ gates are local tests, local builds, package verification and recorded device wi
 | Cloud diagnosis | Real credential expiry/revocation, DNS/HTTP cancellation latency, device typography and touch | [Cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery), [#24](https://github.com/rymcu/rodakos/issues/24) |
 | Voice identity | NVS power-cut/reboot, clock sync, model recovery under pressure, multi-speaker and two-device isolation | [Identity validation](voice-identity-wake-word.md#validation-gates) |
 | Audio and light | Codec start/stop failure recovery, audible output, RGB driver failures and physical light output | [MQTT volume effects](mqtt-volume-effects.md), [MQTT light effects](mqtt-light-effects.md) |
-| Media and input | Physical SD/touch, remote-input timing under load, GT911 touch | [Media browsing](media-browsing.md), [Media save](media-save.md), [Command boundary](rodak-aiot-contract-v1.md#command-results-and-replay-boundary) |
-| Board telemetry | Battery/charging readings on hardware, I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#5-shadow-state-and-device-properties) |
+| Media and input | Physical SD/touch, remote-input timing under load, GT911 touch | [Media browsing](media-browsing.md), [Media save](media-save.md), [Command boundary](mqtt-command-semantics.md#command-results-and-replay-boundary) |
+| Board telemetry | Battery/charging readings on hardware, I2C/SD/memory-pressure diagnostics | [AIoT device properties](rodak-aiot-contract-v1.md#9-shadow-and-telemetry) |
 
 The recorded COM3 voice, provisioning, WebRTC and appearance gates stay accepted within their
 documented limits. An ordinary regression rerun is not new evidence for the production key, power

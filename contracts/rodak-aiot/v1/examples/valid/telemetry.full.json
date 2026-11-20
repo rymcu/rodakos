@@ -1,0 +1,11 @@
+{
+  "firmware": "1.4.0",
+  "wifi_rssi": -52,
+  "volume": 60,
+  "battery": 87,
+  "charging": false,
+  "free_heap": 182344,
+  "minimum_free_heap_size": 120112,
+  "uptime_ms": 3600000,
+  "ota_slot": "ota_0"
+}

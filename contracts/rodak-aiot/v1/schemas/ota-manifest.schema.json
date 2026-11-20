@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/ota-manifest.schema.json",
+  "title": "GET /api/v1/ota/manifest/{taskNo} data, RodakOS install profile",
+  "description": "This is what RodakOS accepts for installation, not everything Rodak can serve. Rodak can also return legacy manifests, external or missing URLs, and a pre-signed v2 snapshot whose original field spelling (for example an uppercase signature) passes through (ota-service.ts:136-149, 691-725); RodakOS rejects those. When Rodak attaches a signature itself (ota-service.ts:749-792) it requires checksumType sha256, the stored size and lowercased checksum, and 512 lowercase hex signature digits; it verifies the RSA signature only when the attachment request supplies a nonblank publicKeyPem. When serving, Rodak overwrites checksumValue and similar fields from the stored package or artifact metadata. Signed text: rodakos-ota-v2\\nrymcu-bigsmart\\nota_0\\nrsa2048-sha256\\n<taskNo>\\n<version>\\n<fileSize>\\n<checksum>\\n. version is at most 127 UTF-8 bytes. The fileSize ceiling is the RodakOS ota_0 size.",
+  "type": "object",
+  "required": [
+    "manifestVersion",
+    "taskNo",
+    "packageCode",
+    "version",
+    "url",
+    "fileSize",
+    "checksumType",
+    "checksumValue",
+    "signatureType",
+    "signatureValue"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "const": 2
+    },
+    "protocolVersion": {
+      "const": 2
+    },
+    "taskNo": {
+      "type": "string",
+      "pattern": "^ota_[0-9]{13}_[0-9a-f]{8}$",
+      "description": "Rodak createTaskNo(): ota_<epoch-ms>_<8 hex> (ota-service.ts:71-73)."
+    },
+    "packageCode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 127,
+      "x-maxUtf8Bytes": 127
+    },
+    "fileName": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https?://"
+    },
+    "fileSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 13959168
+    },
+    "checksumType": {
+      "const": "sha256"
+    },
+    "checksumValue": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signatureType": {
+      "const": "rsa2048-sha256"
+    },
+    "signatureValue": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{512}$"
+    },
+    "signingKeyId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

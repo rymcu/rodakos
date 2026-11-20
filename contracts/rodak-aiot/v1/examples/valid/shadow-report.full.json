@@ -1,0 +1,32 @@
+{
+  "firmware": "1.4.0",
+  "volume": 60,
+  "light": {
+    "id": "board_rgb",
+    "available": true,
+    "last_error": 0,
+    "configurationRevision": 3,
+    "application": "driver-applied",
+    "enabled": true,
+    "brightness": 30,
+    "color": {
+      "r": 32,
+      "g": 160,
+      "b": 255
+    }
+  },
+  "battery": 87,
+  "charging": true,
+  "voice_identity": {
+    "name": "罗达克",
+    "wakeWord": "你好达克",
+    "wakeCommand": "ni hao da ke",
+    "mode": "persistent",
+    "revision": 1,
+    "revisionWatermark": 1,
+    "activeConfirmed": true,
+    "status": "applied",
+    "runtime": "multinet",
+    "model": "multinet7_cn"
+  }
+}
