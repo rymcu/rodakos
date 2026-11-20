@@ -5,6 +5,8 @@
 class PhoneNavigation {
 public:
     bool Launch(std::string_view id) { launches.emplace_back(id); return true; }
+    bool LaunchFrom(std::string_view id, std::string_view) { return Launch(id); }
+    bool ReturnToCaller() { ++home_count; return true; }
     void ReturnHome() { ++home_count; }
     void RefreshTheme() {}
     std::vector<std::string> launches;

@@ -28,6 +28,14 @@ void DeferReturnHome(void* user_data) {
     }
 }
 
+// Back from 主题: to Settings when Settings opened it, otherwise to the desktop.
+void DeferReturnToCaller(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) {
+        context->navigation().ReturnToCaller();
+    }
+}
+
 void DeferRefreshTheme(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
@@ -142,6 +150,7 @@ void ThemesApp::OnDestroy() {
         if (lock.locked()) {
             if (context_ != nullptr) {
                 lv_async_call_cancel(DeferReturnHome, context_);
+                lv_async_call_cancel(DeferReturnToCaller, context_);
                 lv_async_call_cancel(DeferRefreshTheme, context_);
             }
             DestroyUi();
@@ -583,7 +592,9 @@ void ThemesApp::NavigateBack() {
         ShowPage(ThemesPage::kMain);
         return;
     }
-    NavigateHome();
+    if (context_ != nullptr) {
+        lv_async_call(DeferReturnToCaller, context_);
+    }
 }
 
 void ThemesApp::NavigateHome() {

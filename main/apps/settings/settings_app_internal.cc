@@ -19,7 +19,7 @@ void DeferReturnHome(void* user_data) {
 void DeferOpenThemes(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {
-        context->navigation().Launch("themes");
+        context->navigation().LaunchFrom("themes", "settings");
     }
 }
 

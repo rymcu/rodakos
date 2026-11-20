@@ -33,6 +33,7 @@ public:
     void OnResume() override {}
     void OnPause() override {}
     void OnDestroy() override;
+    bool OnBackRequested() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
 
     void Refresh();
@@ -66,6 +67,7 @@ private:
     };
     void RequestStorageProbe(bool allow_mount);
     bool StorageMounted() const;
+    void NavigateBack();
     void NavigateHome();
 
     PhoneAppContext* context_ = nullptr;

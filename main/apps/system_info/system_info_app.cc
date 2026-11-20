@@ -51,6 +51,14 @@ void DeferReturnHome(void* user_data) {
     }
 }
 
+// Back from 关于本机: to Settings when Settings opened it, otherwise to the desktop.
+void DeferReturnToCaller(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) {
+        context->navigation().ReturnToCaller();
+    }
+}
+
 void RefreshTimerCallback(lv_timer_t* timer) {
     auto* self = static_cast<SystemInfoApp*>(lv_timer_get_user_data(timer));
     if (self != nullptr) {
@@ -323,7 +331,7 @@ void SystemInfoApp::CreateUi() {
 
     CreateAppHeader(root_, "System", [](lv_event_t* e) {
         auto* self = static_cast<SystemInfoApp*>(lv_event_get_user_data(e));
-        self->NavigateHome();
+        self->NavigateBack();
     }, [](lv_event_t* e) {
         auto* self = static_cast<SystemInfoApp*>(lv_event_get_user_data(e));
         self->NavigateHome();
@@ -674,6 +682,15 @@ void SystemInfoApp::RequestStorageProbe(bool allow_mount) {
         delete args;
         storage_snapshot_->probing.store(false);
     }
+}
+
+bool SystemInfoApp::OnBackRequested() {
+    NavigateBack();
+    return true;
+}
+
+void SystemInfoApp::NavigateBack() {
+    lv_async_call(DeferReturnToCaller, context_);
 }
 
 void SystemInfoApp::NavigateHome() {
