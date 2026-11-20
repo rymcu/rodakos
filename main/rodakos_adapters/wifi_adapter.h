@@ -15,6 +15,14 @@ struct WiFiScanResult {
     bool is_secured;           // 是否加密
 };
 
+// Live details of the current association, read from the driver on request.
+struct WiFiLinkInfo {
+    bool valid = false;
+    int8_t rssi = 0;
+    std::string gateway;
+    std::string netmask;
+};
+
 /**
  * WiFi 连接状态
  */
@@ -89,6 +97,16 @@ public:
      * 获取 IP 地址
      */
     virtual std::string GetIPAddress() const = 0;
+
+    /**
+     * 读取当前连接的信号强度、网关和子网掩码；未连接时 valid=false
+     */
+    virtual WiFiLinkInfo GetLinkInfo() const = 0;
+
+    /**
+     * 最近一次连接失败是否因为密码被拒绝（路由器改密等）；新的连接请求会清除
+     */
+    virtual bool LastFailureWasAuthRejected() const = 0;
 };
 
 /**

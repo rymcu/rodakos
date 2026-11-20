@@ -15,7 +15,7 @@ void LostIP();
 void StaleLostIP();
 void ForeignLostIP();
 void MissingLostIP();
-void Disconnected(const std::string& ssid, bool still_associated = false);
+void Disconnected(const std::string& ssid, bool still_associated = false, uint8_t reason = 0);
 void SetConnectedDriver(const std::string& ssid);
 void SetConnectResult(esp_err_t error);
 void SetDisconnectResult(esp_err_t error);

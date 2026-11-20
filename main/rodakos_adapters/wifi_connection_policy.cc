@@ -28,6 +28,24 @@ bool ShouldRetryWiFiConnection(int retry_count,
            max_retries > 0 && retry_count < max_retries;
 }
 
+WiFiFailureKind ClassifyWiFiDisconnectReason(uint8_t reason) {
+    // Values from esp_wifi_types_generic.h (wifi_err_reason_t); kept numeric for host tests.
+    switch (reason) {
+        case 2:    // AUTH_EXPIRE
+        case 14:   // MIC_FAILURE
+        case 15:   // 4WAY_HANDSHAKE_TIMEOUT
+        case 202:  // AUTH_FAIL
+        case 204:  // HANDSHAKE_TIMEOUT
+            return WiFiFailureKind::kAuthRejected;
+        case 201:  // NO_AP_FOUND
+        case 210:  // NO_AP_FOUND_W_COMPATIBLE_SECURITY
+        case 211:  // NO_AP_FOUND_IN_AUTHMODE_THRESHOLD
+            return WiFiFailureKind::kNetworkNotFound;
+        default:
+            return WiFiFailureKind::kOther;
+    }
+}
+
 uint32_t WiFiRecoveryBackoffMs(uint32_t retry_count) {
     return retry_count >= 5 ? 30000 : (1000u << retry_count);
 }

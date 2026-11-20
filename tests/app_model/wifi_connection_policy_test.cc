@@ -50,3 +50,15 @@ RODAK_TEST("WiFi retry policy stops at the retry budget and requires an active c
     RODAK_CHECK_FALSE(ShouldRetryWiFiConnection(0, 3, true, false));
     RODAK_CHECK_FALSE(ShouldRetryWiFiConnection(-1, 3, true, true));
 }
+
+RODAK_TEST("WiFi disconnect reasons map wrong passwords to an auth rejection") {
+    for (const uint8_t reason : {2, 14, 15, 202, 204}) {
+        RODAK_CHECK(ClassifyWiFiDisconnectReason(reason) == WiFiFailureKind::kAuthRejected);
+    }
+    for (const uint8_t reason : {201, 210, 211}) {
+        RODAK_CHECK(ClassifyWiFiDisconnectReason(reason) == WiFiFailureKind::kNetworkNotFound);
+    }
+    for (const uint8_t reason : {0, 1, 8, 200, 203, 205}) {
+        RODAK_CHECK(ClassifyWiFiDisconnectReason(reason) == WiFiFailureKind::kOther);
+    }
+}
