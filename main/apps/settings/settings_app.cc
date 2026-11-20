@@ -193,13 +193,22 @@ void SettingsApp::ResetUiPointers() {
     cloud_pairing_timer_ = nullptr;
     cloud_url_dialog_ = nullptr;
     cloud_url_textarea_ = nullptr;
-    cloud_lan_onboarding_button_ = nullptr;
+    cloud_status_card_ = nullptr;
+    cloud_status_dot_ = nullptr;
+    cloud_summary_label_ = nullptr;
+    cloud_details_link_ = nullptr;
+    cloud_secondary_button_ = nullptr;
+    cloud_secondary_button_label_ = nullptr;
+    cloud_details_panel_ = nullptr;
+    cloud_trust_label_ = nullptr;
+    cloud_edit_url_button_ = nullptr;
+    cloud_manual_pair_button_ = nullptr;
+    cloud_details_open_ = false;
     lan_onboarding_overlay_ = nullptr;
     lan_onboarding_body_ = nullptr;
     lan_onboarding_countdown_ = nullptr;
     lan_onboarding_timer_ = nullptr;
     lan_onboarding_servers_.clear();
-    cloud_setup_qr_button_ = nullptr;
     setup_qr_overlay_ = nullptr;
     setup_qr_body_ = nullptr;
     setup_qr_progress_ = nullptr;
@@ -229,6 +238,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
     if (cloud_pairing_timer_ != nullptr && page != SettingsPage::kDeviceCloud) {
         lv_timer_pause(cloud_pairing_timer_);
     }
+    cloud_details_open_ = false;
 
     // 隐藏所有页面
     if (main_body_ != nullptr) {
@@ -324,7 +334,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(device_cloud_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "连接与云服务");
+                lv_label_set_text(header_title_label_, "连接服务");
             }
             UpdateDeviceCloudPage();
             break;
@@ -341,6 +351,10 @@ void SettingsApp::ShowPage(SettingsPage page) {
 }
 
 void SettingsApp::NavigateBack() {
+    if (current_page_ == SettingsPage::kDeviceCloud && cloud_details_open_) {
+        ShowDeviceCloudDetails(false);
+        return;
+    }
     if (current_page_ == SettingsPage::kWiFiDetail) {
         ShowPage(SettingsPage::kWiFiList);
         return;

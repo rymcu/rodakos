@@ -6,6 +6,7 @@
 #include "rodakos_adapters/wifi_adapter.h"
 #include "rodakos_adapters/wifi_config.h"
 #include "apps/settings/settings_web_files_page.h"
+#include "apps/settings/device_cloud_page_model.h"
 #include <lvgl.h>
 #include <atomic>
 #include <cstdint>
@@ -89,6 +90,8 @@ private:
                                  const rodakos::ButtonAction& action);
     void CreateDeviceCloudPage();
     void UpdateDeviceCloudPage();
+    void ShowDeviceCloudDetails(bool show);
+    void RunDeviceCloudAction(rodakos_settings::DeviceCloudAction action);
     void RefreshDeviceCloud();
     void ShowDeviceCloudUnbindDialog();
     void CloseDeviceCloudUnbindDialog();
@@ -176,6 +179,19 @@ private:
     lv_obj_t* cloud_pairing_button_ = nullptr;
     lv_obj_t* cloud_pairing_button_label_ = nullptr;
     lv_obj_t* cloud_unbind_button_ = nullptr;
+    lv_obj_t* cloud_status_card_ = nullptr;
+    lv_obj_t* cloud_status_dot_ = nullptr;
+    lv_obj_t* cloud_summary_label_ = nullptr;
+    lv_obj_t* cloud_details_link_ = nullptr;
+    lv_obj_t* cloud_secondary_button_ = nullptr;
+    lv_obj_t* cloud_secondary_button_label_ = nullptr;
+    lv_obj_t* cloud_details_panel_ = nullptr;
+    lv_obj_t* cloud_trust_label_ = nullptr;
+    lv_obj_t* cloud_edit_url_button_ = nullptr;
+    lv_obj_t* cloud_manual_pair_button_ = nullptr;
+    bool cloud_details_open_ = false;
+    rodakos_settings::DeviceCloudAction cloud_primary_action_ = rodakos_settings::DeviceCloudAction::kNone;
+    rodakos_settings::DeviceCloudAction cloud_secondary_action_ = rodakos_settings::DeviceCloudAction::kNone;
     lv_obj_t* cloud_unbind_dialog_ = nullptr;
     lv_timer_t* cloud_pairing_timer_ = nullptr;
     lv_obj_t* cloud_url_dialog_ = nullptr;
@@ -183,7 +199,6 @@ private:
     std::string cloud_pairing_error_;
     std::string cloud_pairing_code_;
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
-    lv_obj_t* cloud_lan_onboarding_button_ = nullptr;
 
     // 首次接入（无 USB）全屏页
     lv_obj_t* lan_onboarding_overlay_ = nullptr;
@@ -194,7 +209,6 @@ private:
     std::vector<rodakos::DiscoveredRodakServer> lan_onboarding_servers_;
 
     // 扫码配网全屏页
-    lv_obj_t* cloud_setup_qr_button_ = nullptr;
     lv_obj_t* setup_qr_overlay_ = nullptr;
     lv_obj_t* setup_qr_body_ = nullptr;
     lv_obj_t* setup_qr_progress_ = nullptr;
