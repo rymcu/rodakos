@@ -6,6 +6,7 @@
 #include "phone_os/lan_onboarding_service.h"
 #include "phone_os/phone_app_context.h"
 #include "phone_os/phone_services.h"
+#include "phone_os/setup_qr_scan_service.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 
@@ -284,6 +285,22 @@ void SettingsApp::CreateDeviceCloudPage() {
     }, LV_EVENT_CLICKED, this);
     lv_obj_add_flag(cloud_lan_onboarding_button_, LV_OBJ_FLAG_HIDDEN);
 
+    // 服务器不在局域网时（例如公网部署的 IntelliConnect）：扫控制台生成的配网二维码
+    cloud_setup_qr_button_ = lv_btn_create(device_cloud_body_);
+    lv_obj_set_size(cloud_setup_qr_button_, 288, 38);
+    lv_obj_set_pos(cloud_setup_qr_button_, 4, 448);
+    lv_obj_set_style_bg_color(cloud_setup_qr_button_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cloud_setup_qr_button_, 7, 0);
+    auto* qr_label = lv_label_create(cloud_setup_qr_button_);
+    lv_label_set_text(qr_label, "扫码配置 Wi-Fi 与服务器");
+    lv_obj_set_style_text_color(qr_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(qr_label, &phone_font_14, 0);
+    lv_obj_center(qr_label);
+    lv_obj_add_event_cb(cloud_setup_qr_button_, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowSetupQr();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_add_flag(cloud_setup_qr_button_, LV_OBJ_FLAG_HIDDEN);
+
     cloud_pairing_timer_ = lv_timer_create([](lv_timer_t* timer) {
         auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
         if (self != nullptr && self->cloud_refresh_guard_ &&
@@ -400,6 +417,18 @@ void SettingsApp::UpdateDeviceCloudPage() {
         lv_obj_set_y(cloud_lan_onboarding_button_, 258);
         if (cloud_pairing_button_ != nullptr) {
             lv_obj_set_y(cloud_pairing_button_, lan_available ? 400 : 258);
+        }
+    }
+    if (cloud_setup_qr_button_ != nullptr) {
+        // A pinned server cannot be replaced by a QR code; hide the entry instead of failing later.
+        auto* scan = context_->services().setup_qr_scan();
+        const bool qr_available = scan != nullptr && scan->Available() &&
+            !config.server_trust_error && config.server_trust.empty() &&
+            !config.server_trust_pending;
+        if (qr_available) {
+            lv_obj_clear_flag(cloud_setup_qr_button_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(cloud_setup_qr_button_, LV_OBJ_FLAG_HIDDEN);
         }
     }
     if (cloud_unbind_button_ != nullptr) {

@@ -21,6 +21,8 @@ add_executable(rodakos_app_model_tests
     voice_identity_test.cc
     voice_identity_record_test.cc
     serial_provisioning_frame_test.cc
+    setup_qr_payload_test.cc
+    setup_qr_provisioning_test.cc
     mqtt_credential_refresh_policy_test.cc
     cloud_credential_freshness_test.cc
     cloud_credential_renewal_test.cc
@@ -55,6 +57,8 @@ add_executable(rodakos_app_model_tests
     ../../main/phone_os/voice_assistant_reconnect_coordinator.cc
     ../../main/phone_os/voice_assistant_transport.cc
     ../../main/phone_os/serial_provisioning_protocol.cc
+    ../../main/phone_os/setup_qr_payload.cc
+    ../../main/phone_os/setup_qr_provisioning.cc
     ../../main/phone_os/mqtt_credential_refresh_policy.cc
     ../../main/phone_os/device_pairing_protocol.cc
     ../../main/phone_os/realtime_voice_contract.cc

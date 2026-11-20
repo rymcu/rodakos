@@ -1,3 +1,4 @@
 /tools/run_release_host_checks.sh text eol=lf
 /tests/lan_trust_setup/srp6a-esp-vectors.json text eol=lf
 /tests/lan_trust_setup/trust-setup-protocol-vectors.json text eol=lf
+/tests/setup_qr_decoder/fixtures/*.pgm binary

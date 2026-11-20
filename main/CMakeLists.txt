@@ -86,6 +86,11 @@ set(SOURCES
     "phone_os/battery_level_model.cc"
     "phone_os/battery_monitor.cc"
     "phone_os/serial_provisioning_protocol.cc"
+    "phone_os/setup_qr_payload.cc"
+    "phone_os/setup_qr_decoder.cc"
+    "phone_os/setup_qr_provisioning.cc"
+    "phone_os/setup_qr_provisioning_store.cc"
+    "phone_os/setup_qr_scan_service.cc"
     "phone_os/serial_provisioning_binding.cc"
     "phone_os/serial_provisioning_service.cc"
     "phone_os/mqtt_credential_refresh_policy.cc"
@@ -119,6 +124,7 @@ set(SOURCES
     "apps/settings/settings_datetime_page.cc"
     "apps/settings/settings_device_cloud_page.cc"
     "apps/settings/settings_lan_onboarding_page.cc"
+    "apps/settings/settings_setup_qr_page.cc"
     "apps/settings/settings_main_page.cc"
     "apps/settings/settings_system_shell_page.cc"
     "apps/settings/settings_usb_disk.cc"
@@ -195,6 +201,7 @@ idf_component_register(
         esp_tinyusb
         esp_new_jpeg
         rodakos_fonts
+        quirc
 )
 
 target_link_options(${COMPONENT_LIB} INTERFACE

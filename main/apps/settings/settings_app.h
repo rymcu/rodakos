@@ -100,6 +100,11 @@ private:
     void ShowLanOnboarding();
     void CloseLanOnboarding();
     void UpdateLanOnboarding();
+    void ShowSetupQr();
+    void CloseSetupQr();
+    // Cancels the scan and frees the overlay without touching other pages (used by DestroyUi).
+    void TeardownSetupQr();
+    void UpdateSetupQr();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -183,6 +188,14 @@ private:
     lv_timer_t* lan_onboarding_timer_ = nullptr;
     uint32_t lan_onboarding_revision_ = 0;
     std::vector<rodakos::DiscoveredRodakServer> lan_onboarding_servers_;
+
+    // 扫码配网全屏页
+    lv_obj_t* cloud_setup_qr_button_ = nullptr;
+    lv_obj_t* setup_qr_overlay_ = nullptr;
+    lv_obj_t* setup_qr_body_ = nullptr;
+    lv_obj_t* setup_qr_progress_ = nullptr;
+    lv_timer_t* setup_qr_timer_ = nullptr;
+    uint32_t setup_qr_revision_ = 0;
 
     // Web 上传页面控件
     SettingsWebFilesPage web_files_page_;
