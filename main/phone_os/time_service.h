@@ -34,6 +34,8 @@ void TimeServiceApplySavedTimeZone();
 bool TimeServiceStartSync(const std::string& server);
 bool TimeServiceStartSavedSync();
 TimeSyncStatus TimeServiceGetSyncStatus();
+// Wall-clock seconds of the most recent successful SNTP sync this boot; 0 if none yet.
+int64_t TimeServiceLastSyncEpoch();
 size_t TimeServiceFindTimeZoneIndex(const std::string& tz);
 size_t TimeServiceFindNtpServerIndex(const std::string& server);
 bool TimeServiceTimeIsValid();

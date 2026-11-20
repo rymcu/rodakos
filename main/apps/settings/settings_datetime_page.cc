@@ -8,141 +8,172 @@
 #include "phone_ui/phone_ui.h"
 
 #include <esp_log.h>
+
+#include <cstdio>
+#include <ctime>
 #include <string>
 
+// Date & Time: current time and last sync at the top, time zone and server as 38 px rows that
+// open full-screen pickers, and one 40 px 立即校时 button at the bottom of the 320x200 body.
 namespace {
 constexpr const char* TAG = "SettingsApp";
+constexpr lv_coord_t kGridX = 10;
+constexpr lv_coord_t kGridWidth = 300;
+constexpr lv_coord_t kRowHeight = 38;
+constexpr lv_coord_t kPickerRowHeight = 38;
+
+const char* kWeekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+
+lv_obj_t* CreateValueRow(lv_obj_t* list, int index, const char* icon, const char* title,
+                         lv_obj_t** value_out) {
+    auto* row = lv_obj_create(list);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, kGridWidth, kRowHeight);
+    lv_obj_set_pos(row, 0, kRowHeight * index);
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+    if (index > 0) {
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
+    }
+    auto* icon_label = lv_label_create(row);
+    lv_label_set_text(icon_label, icon);
+    lv_obj_set_style_text_color(icon_label, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
+    lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, 0, 0);
+    auto* title_label = rodakos_settings::CreateSettingLabel(row, title, false);
+    lv_obj_align(title_label, LV_ALIGN_LEFT_MID, 28, 0);
+    auto* value = rodakos_settings::CreateSettingLabel(row, "", true);
+    lv_obj_set_width(value, 140);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(value, &phone_font_12, 0);
+    lv_obj_align(value, LV_ALIGN_RIGHT_MID, -16, 0);
+    auto* arrow = lv_label_create(row);
+    lv_label_set_text(arrow, ">");
+    lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
+    lv_obj_set_style_text_font(arrow, &phone_font_14, 0);
+    lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+    *value_out = value;
+    return row;
+}
+
+std::string ServerLabel(const std::string& server) {
+    size_t count = 0;
+    const RodakNtpServer* servers = TimeServiceNtpServers(&count);
+    for (size_t index = 0; index < count; ++index) {
+        if (server == servers[index].server && servers[index].server[0] != '\0') return server;
+    }
+    return server.empty() ? "未设置" : server;
+}
 }  // namespace
 
 using namespace rodakos_settings;
+
 void SettingsApp::CreateDateTimePage() {
     datetime_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
     lv_obj_remove_style_all(datetime_body_);
     lv_obj_set_size(datetime_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
     lv_obj_set_pos(datetime_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
     lv_obj_set_style_bg_opa(datetime_body_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(datetime_body_, 0, 0);
+    lv_obj_clear_flag(datetime_body_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
 
-    auto* tz_card = CreateSettingCard(datetime_body_, 4, 64);
-    lv_obj_set_style_pad_all(tz_card, 8, 0);
-    auto* tz_icon = lv_label_create(tz_card);
-    lv_label_set_text(tz_icon, ICON_GLOBE);
-    lv_obj_set_style_text_color(tz_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(tz_icon, PhoneIconFont(), 0);
-    lv_obj_align(tz_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    datetime_clock_label_ = lv_label_create(datetime_body_);
+    lv_obj_set_style_text_font(datetime_clock_label_, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(datetime_clock_label_, rodakos_theme_text_primary(), 0);
+    lv_obj_set_pos(datetime_clock_label_, kGridX + 4, 0);
 
-    auto* tz_title = CreateSettingLabel(tz_card, "Time zone", true);
-    lv_obj_set_style_text_font(tz_title, &phone_font_12, 0);
-    lv_obj_set_width(tz_title, 236);
-    lv_label_set_long_mode(tz_title, LV_LABEL_LONG_DOT);
-    lv_obj_align(tz_title, LV_ALIGN_TOP_LEFT, 32, -1);
+    datetime_date_label_ = CreateSettingLabel(datetime_body_, "", true);
+    lv_obj_set_style_text_font(datetime_date_label_, &phone_font_12, 0);
+    lv_obj_set_pos(datetime_date_label_, kGridX + 96, 10);
 
-    timezone_dropdown_ = lv_dropdown_create(tz_card);
-    lv_dropdown_set_options(timezone_dropdown_,
-                            "Shanghai (UTC+8)\nUTC\nTokyo (UTC+9)\nLos Angeles\nNew York\nLondon\nBerlin");
-    lv_dropdown_set_selected(
-        timezone_dropdown_,
-        static_cast<uint16_t>(TimeServiceFindTimeZoneIndex(TimeServiceLoadTimeZone())));
-    lv_obj_set_size(timezone_dropdown_, 236, 28);
-    lv_obj_align(timezone_dropdown_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
-    lv_obj_set_style_bg_color(timezone_dropdown_, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(timezone_dropdown_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(timezone_dropdown_, &phone_font_12, 0);
-    lv_obj_set_style_border_width(timezone_dropdown_, 0, 0);
-    lv_obj_set_style_radius(timezone_dropdown_, 6, 0);
-    lv_obj_add_event_cb(timezone_dropdown_, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        auto* dropdown = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        self->SaveTimeZone(lv_dropdown_get_selected(dropdown));
-    }, LV_EVENT_VALUE_CHANGED, this);
-
-    auto* server_card = CreateSettingCard(datetime_body_, 72, 64);
-    lv_obj_set_style_pad_all(server_card, 8, 0);
-    auto* server_icon = lv_label_create(server_card);
-    lv_label_set_text(server_icon, ICON_CLOUD);
-    lv_obj_set_style_text_color(server_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(server_icon, PhoneIconFont(), 0);
-    lv_obj_align(server_icon, LV_ALIGN_LEFT_MID, 0, 0);
-
-    auto* server_title = CreateSettingLabel(server_card, "Time server", true);
-    lv_obj_set_style_text_font(server_title, &phone_font_12, 0);
-    lv_obj_set_width(server_title, 236);
-    lv_label_set_long_mode(server_title, LV_LABEL_LONG_DOT);
-    lv_obj_align(server_title, LV_ALIGN_TOP_LEFT, 32, -1);
-
-    ntp_dropdown_ = lv_dropdown_create(server_card);
-    lv_dropdown_set_options(ntp_dropdown_,
-                            "pool.ntp.org\n0.pool.ntp.org\n1.pool.ntp.org\nntp.aliyun.com\nTencent CN\nApple\nGoogle\nCustom");
-    lv_dropdown_set_selected(
-        ntp_dropdown_,
-        static_cast<uint16_t>(TimeServiceFindNtpServerIndex(TimeServiceLoadNtpServer())));
-    lv_obj_set_size(ntp_dropdown_, 166, 28);
-    lv_obj_align(ntp_dropdown_, LV_ALIGN_BOTTOM_LEFT, 32, 0);
-    lv_obj_set_style_bg_color(ntp_dropdown_, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(ntp_dropdown_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(ntp_dropdown_, &phone_font_12, 0);
-    lv_obj_set_style_border_width(ntp_dropdown_, 0, 0);
-    lv_obj_set_style_radius(ntp_dropdown_, 6, 0);
-    lv_obj_add_event_cb(ntp_dropdown_, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        auto* dropdown = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        const size_t index = lv_dropdown_get_selected(dropdown);
-        size_t count = 0;
-        const auto* servers = TimeServiceNtpServers(&count);
-        if (index >= count) {
-            return;
-        }
-        if (servers[index].server[0] == '\0') {
-            self->ShowNtpServerDialog();
-            return;
-        }
-        self->SaveNtpServer(servers[index].server);
-    }, LV_EVENT_VALUE_CHANGED, this);
-
-    auto* edit_btn = lv_btn_create(server_card);
-    lv_obj_remove_style_all(edit_btn);
-    lv_obj_set_size(edit_btn, 36, 28);
-    lv_obj_align(edit_btn, LV_ALIGN_BOTTOM_RIGHT, -42, 0);
-    lv_obj_set_style_bg_color(edit_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_bg_opa(edit_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(edit_btn, 6, 0);
-    lv_obj_clear_flag(edit_btn, LV_OBJ_FLAG_SCROLLABLE);
-    auto* edit_icon = lv_label_create(edit_btn);
-    lv_label_set_text(edit_icon, ICON_EDIT);
-    lv_obj_set_style_text_color(edit_icon, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(edit_icon, PhoneIconFont(), 0);
-    lv_obj_center(edit_icon);
-    lv_obj_add_event_cb(edit_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->ShowNtpServerDialog();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* sync_btn = lv_btn_create(server_card);
-    lv_obj_remove_style_all(sync_btn);
-    lv_obj_set_size(sync_btn, 36, 28);
-    lv_obj_align(sync_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(sync_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_bg_opa(sync_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(sync_btn, 6, 0);
-    lv_obj_clear_flag(sync_btn, LV_OBJ_FLAG_SCROLLABLE);
-    auto* sync_icon = lv_label_create(sync_btn);
-    lv_label_set_text(sync_icon, ICON_REFRESH);
-    lv_obj_set_style_text_color(sync_icon, lv_color_white(), 0);
-    lv_obj_set_style_text_font(sync_icon, PhoneIconFont(), 0);
-    lv_obj_center(sync_icon);
-    lv_obj_add_event_cb(sync_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->StartTimeSync();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* status_card = CreateSettingCard(datetime_body_, 144, 40);
-    lv_obj_set_style_pad_all(status_card, 8, 0);
-    time_sync_status_label_ = CreateSettingLabel(status_card, "Sync status: idle", true);
-    lv_obj_set_style_text_font(time_sync_status_label_, &phone_font_12, 0);
-    lv_obj_set_width(time_sync_status_label_, 264);
+    time_sync_status_label_ = CreateSettingLabel(datetime_body_, "", true);
+    lv_obj_set_width(time_sync_status_label_, kGridWidth - 8);
     lv_label_set_long_mode(time_sync_status_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(time_sync_status_label_, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_text_font(time_sync_status_label_, &phone_font_12, 0);
+    lv_obj_set_pos(time_sync_status_label_, kGridX + 4, 34);
+
+    auto* list = lv_obj_create(datetime_body_);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, kGridWidth, kRowHeight * 2);
+    lv_obj_set_pos(list, kGridX, 58);
+    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(list, 8, 0);
+    lv_obj_set_style_clip_corner(list, true, 0);
+    lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* tz_row = CreateValueRow(list, 0, ICON_GLOBE, "时区", &timezone_dropdown_);
+    lv_obj_add_event_cb(tz_row, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowDateTimePicker(false);
+    }, LV_EVENT_CLICKED, this);
+    auto* server_row = CreateValueRow(list, 1, ICON_CLOCK, "校时服务器", &ntp_dropdown_);
+    lv_obj_add_event_cb(server_row, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowDateTimePicker(true);
+    }, LV_EVENT_CLICKED, this);
+
+    time_sync_button_ = lv_btn_create(datetime_body_);
+    lv_obj_set_size(time_sync_button_, kGridWidth, 40);
+    lv_obj_set_pos(time_sync_button_, kGridX, 150);
+    lv_obj_set_style_bg_color(time_sync_button_, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(time_sync_button_, 7, 0);
+    lv_obj_set_style_shadow_width(time_sync_button_, 0, 0);
+    auto* sync_label = lv_label_create(time_sync_button_);
+    lv_label_set_text(sync_label, "立即校时");
+    lv_obj_set_style_text_color(sync_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(sync_label, &phone_font_14, 0);
+    lv_obj_center(sync_label);
+    lv_obj_add_event_cb(time_sync_button_, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->StartTimeSync();
+    }, LV_EVENT_CLICKED, this);
+
+    // The clock and the last-sync line refresh once per second while the page exists.
+    datetime_clock_timer_ = lv_timer_create([](lv_timer_t* timer) {
+        auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
+        if (self != nullptr) self->UpdateDateTimePage();
+    }, 1000, this);
+    UpdateDateTimePage();
+}
+
+void SettingsApp::UpdateDateTimePage() {
+    if (datetime_clock_label_ == nullptr) return;
+    if (TimeServiceTimeIsValid()) {
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+        localtime_r(&now, &local);
+        lv_label_set_text_fmt(datetime_clock_label_, "%02d:%02d", local.tm_hour, local.tm_min);
+        lv_label_set_text_fmt(datetime_date_label_, "%d 月 %d 日 %s", local.tm_mon + 1, local.tm_mday,
+                              kWeekdays[local.tm_wday % 7]);
+    } else {
+        lv_label_set_text(datetime_clock_label_, "--:--");
+        lv_label_set_text(datetime_date_label_, "时间尚未校准");
+    }
+
+    if (!time_sync_in_progress_) {
+        const int64_t last = TimeServiceLastSyncEpoch();
+        if (last > 0) {
+            const std::time_t at = static_cast<std::time_t>(last);
+            std::tm local{};
+            localtime_r(&at, &local);
+            lv_label_set_text_fmt(time_sync_status_label_, "上次校时：%d 月 %d 日 %02d:%02d",
+                                  local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min);
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_success(), 0);
+        } else {
+            lv_label_set_text(time_sync_status_label_,
+                              TimeServiceTimeIsValid() ? "本次开机尚未校时" : "联网后会自动校时");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_text_secondary(), 0);
+        }
+    }
+
+    lv_label_set_text(timezone_dropdown_, home_time_zone_label_.empty()
+                                              ? TimeServiceLoadTimeZone().c_str()
+                                              : home_time_zone_label_.c_str());
+    lv_label_set_text(ntp_dropdown_, ServerLabel(datetime_server_cache_).c_str());
 }
 
 void SettingsApp::SaveTimeZone(size_t index) {
@@ -151,58 +182,173 @@ void SettingsApp::SaveTimeZone(size_t index) {
     if (index >= count) {
         return;
     }
-
-    TimeServiceSaveTimeZone(zones[index].tz);
-    home_time_zone_label_ = zones[index].label;
-    TimeServiceApplyTimeZone(zones[index].tz);
-    ui_->ShowToastUnlocked("Time zone saved");
-    ESP_LOGI(TAG, "Time zone changed: %s (%s)", zones[index].label, zones[index].tz);
-}
-
-void SettingsApp::SaveNtpServer(const std::string& server) {
-    if (server.empty()) {
-        ui_->ShowToastUnlocked("Server name is empty");
+    if (!TimeServiceSaveTimeZone(zones[index].tz)) {
+        ui_->ShowToastUnlocked("时区保存失败，请重试");
         return;
     }
+    home_time_zone_label_ = zones[index].label;
+    TimeServiceApplyTimeZone(zones[index].tz);
+    ESP_LOGI(TAG, "Time zone changed: %s (%s)", zones[index].label, zones[index].tz);
+    UpdateDateTimePage();
+}
 
-    TimeServiceSaveNtpServer(server);
-    if (ntp_dropdown_ != nullptr) {
-        lv_dropdown_set_selected(
-            ntp_dropdown_,
-            static_cast<uint16_t>(TimeServiceFindNtpServerIndex(server)));
+bool SettingsApp::SaveNtpServer(const std::string& server) {
+    if (server.empty()) {
+        return false;
     }
-    ui_->ShowToastUnlocked("NTP server saved");
+    if (!TimeServiceSaveNtpServer(server)) {
+        ui_->ShowToastUnlocked("服务器保存失败，请重试");
+        return false;
+    }
+    datetime_server_cache_ = server;
     ESP_LOGI(TAG, "NTP server changed: %s", server.c_str());
+    UpdateDateTimePage();
+    return true;
+}
+
+void SettingsApp::ShowDateTimePicker(bool servers) {
+    CloseDateTimePicker();
+    datetime_picker_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(datetime_picker_);
+    lv_obj_set_size(datetime_picker_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(datetime_picker_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(datetime_picker_, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(datetime_picker_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = CreateSettingLabel(datetime_picker_, servers ? "选择校时服务器" : "选择时区", false);
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_set_pos(title, kGridX + 4, 8);
+
+    auto* list = lv_obj_create(datetime_picker_);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, kGridWidth, 150);
+    lv_obj_set_pos(list, kGridX, 38);
+    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(list, 8, 0);
+    lv_obj_set_style_clip_corner(list, true, 0);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+
+    size_t count = 0;
+    const std::string current = servers ? datetime_server_cache_ : TimeServiceLoadTimeZone();
+    const RodakNtpServer* server_list = servers ? TimeServiceNtpServers(&count) : nullptr;
+    const RodakTimeZone* zone_list = servers ? nullptr : TimeServiceTimeZones(&count);
+    bool current_listed = false;
+    for (size_t index = 0; index < count; ++index) {
+        const bool custom = servers && server_list[index].server[0] == '\0';
+        const char* label = servers ? (custom ? "自定义…" : server_list[index].server)
+                                    : zone_list[index].label;
+        const char* value = servers ? server_list[index].server : zone_list[index].tz;
+        const bool selected = !custom && current == value;
+        current_listed = current_listed || selected;
+
+        auto* row = lv_obj_create(list);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, kGridWidth, kPickerRowHeight);
+        lv_obj_set_pos(row, 0, static_cast<lv_coord_t>(index) * kPickerRowHeight);
+        lv_obj_set_style_pad_hor(row, 12, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+        if (index > 0) {
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
+            lv_obj_set_style_border_width(row, 1, 0);
+            lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
+        }
+        auto* name = CreateSettingLabel(row, label, false);
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
+        if (selected || (custom && !current_listed && index + 1 == count && !current.empty())) {
+            auto* check = CreateSettingLabel(row, custom ? current.c_str() : "✓", false);
+            lv_obj_set_width(check, 150);
+            lv_label_set_long_mode(check, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_text_align(check, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_obj_set_style_text_color(check, rodakos_theme_primary(), 0);
+            lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+        }
+        lv_obj_set_user_data(row, reinterpret_cast<void*>(index | (servers ? 0x10000u : 0u)));
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+            const auto data = reinterpret_cast<uintptr_t>(
+                lv_obj_get_user_data(static_cast<lv_obj_t*>(lv_event_get_current_target(e))));
+            const bool is_server = (data & 0x10000u) != 0;
+            const size_t index = data & 0xffffu;
+            // Picking deletes the picker that owns this row; run after the event returns.
+            self->datetime_pending_choice_ = data;
+            lv_async_call([](void* user_data) {
+                auto* app = static_cast<SettingsApp*>(user_data);
+                const uintptr_t choice = app->datetime_pending_choice_;
+                app->CloseDateTimePicker();
+                const bool server_choice = (choice & 0x10000u) != 0;
+                const size_t picked = choice & 0xffffu;
+                if (!server_choice) {
+                    app->SaveTimeZone(picked);
+                    return;
+                }
+                size_t total = 0;
+                const RodakNtpServer* list = TimeServiceNtpServers(&total);
+                if (picked >= total) return;
+                if (list[picked].server[0] == '\0') app->ShowNtpServerDialog();
+                else app->SaveNtpServer(list[picked].server);
+            }, self);
+            (void)is_server;
+            (void)index;
+        }, LV_EVENT_CLICKED, this);
+    }
+
+    auto* back = lv_btn_create(datetime_picker_);
+    lv_obj_set_size(back, kGridWidth, 40);
+    lv_obj_set_pos(back, kGridX, 192);
+    lv_obj_set_style_bg_color(back, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(back, 7, 0);
+    lv_obj_set_style_shadow_width(back, 0, 0);
+    auto* back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "取消");
+    lv_obj_set_style_text_color(back_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(back_label, &phone_font_14, 0);
+    lv_obj_center(back_label);
+    lv_obj_add_event_cb(back, [](lv_event_t* e) {
+        lv_async_call([](void* user_data) {
+            static_cast<SettingsApp*>(user_data)->CloseDateTimePicker();
+        }, lv_event_get_user_data(e));
+    }, LV_EVENT_CLICKED, this);
+}
+
+void SettingsApp::CloseDateTimePicker() {
+    if (datetime_picker_ != nullptr && lv_obj_is_valid(datetime_picker_)) {
+        lv_obj_delete(datetime_picker_);
+    }
+    datetime_picker_ = nullptr;
 }
 
 void SettingsApp::StartTimeSync() {
     auto* wifi = context_->services().wifi();
     if (wifi == nullptr || wifi->GetStatus() != WiFiStatus::kConnected) {
         if (time_sync_status_label_ != nullptr) {
-            lv_label_set_text(time_sync_status_label_, "Sync status: WiFi not connected");
+            lv_label_set_text(time_sync_status_label_, "请先连接 Wi-Fi");
             lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
         }
-        ui_->ShowToastUnlocked("Connect WiFi first");
         return;
     }
-
     if (time_sync_timer_ != nullptr) {
         lv_timer_delete(time_sync_timer_);
         time_sync_timer_ = nullptr;
     }
-
     if (!TimeServiceStartSavedSync()) {
         if (time_sync_status_label_ != nullptr) {
-            lv_label_set_text(time_sync_status_label_, "Sync status: failed");
-            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
+            lv_label_set_text(time_sync_status_label_, "校时没有开始，请检查服务器设置");
+            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_error(), 0);
         }
         return;
     }
 
     time_sync_in_progress_ = true;
     time_sync_poll_count_ = 0;
+    time_sync_start_epoch_ = TimeServiceLastSyncEpoch();
+    if (time_sync_button_ != nullptr) lv_obj_add_state(time_sync_button_, LV_STATE_DISABLED);
     if (time_sync_status_label_ != nullptr) {
-        lv_label_set_text(time_sync_status_label_, "Sync status: syncing...");
+        lv_label_set_text(time_sync_status_label_, "正在校时…");
         lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_primary(), 0);
     }
     time_sync_timer_ = lv_timer_create([](lv_timer_t* timer) {
@@ -211,46 +357,34 @@ void SettingsApp::StartTimeSync() {
             self->UpdateTimeSyncStatus();
         }
     }, 1000, this);
-    ui_->ShowToastUnlocked("Time sync started");
 }
 
 void SettingsApp::UpdateTimeSyncStatus() {
     if (!time_sync_in_progress_) {
         return;
     }
-
     time_sync_poll_count_++;
-    const TimeSyncStatus status = TimeServiceGetSyncStatus();
-    if (status == TimeSyncStatus::kCompleted) {
+    // A newer callback timestamp is the success signal; it also catches a late success after the
+    // wait below has given up, through the last-sync line in UpdateDateTimePage.
+    const bool synced = TimeServiceGetSyncStatus() == TimeSyncStatus::kCompleted ||
+                        TimeServiceLastSyncEpoch() != time_sync_start_epoch_;
+    if (synced || time_sync_poll_count_ >= kTimeSyncTimeoutPolls) {
         time_sync_in_progress_ = false;
         if (time_sync_timer_ != nullptr) {
             lv_timer_delete(time_sync_timer_);
             time_sync_timer_ = nullptr;
         }
-        if (time_sync_status_label_ != nullptr) {
-            lv_label_set_text(time_sync_status_label_, "Sync status: synced");
-            lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_success(), 0);
-        }
-        ui_->ShowToastUnlocked("Time synced");
-        return;
-    }
-
-    if (time_sync_poll_count_ >= kTimeSyncTimeoutPolls) {
-        time_sync_in_progress_ = false;
-        if (time_sync_timer_ != nullptr) {
-            lv_timer_delete(time_sync_timer_);
-            time_sync_timer_ = nullptr;
-        }
-        if (time_sync_status_label_ != nullptr) {
-            lv_label_set_text(time_sync_status_label_, "Sync status: timeout");
+        if (time_sync_button_ != nullptr) lv_obj_clear_state(time_sync_button_, LV_STATE_DISABLED);
+        if (!synced && time_sync_status_label_ != nullptr) {
+            lv_label_set_text(time_sync_status_label_, "校时超时，请检查网络后重试");
             lv_obj_set_style_text_color(time_sync_status_label_, rodakos_theme_warning(), 0);
+            return;
         }
-        ui_->ShowToastUnlocked("Sync timeout");
+        UpdateDateTimePage();
         return;
     }
-
     if (time_sync_status_label_ != nullptr) {
-        lv_label_set_text_fmt(time_sync_status_label_, "Sync status: syncing... %lus",
+        lv_label_set_text_fmt(time_sync_status_label_, "正在校时… %lu 秒",
                               static_cast<unsigned long>(time_sync_poll_count_));
     }
 }
@@ -259,81 +393,97 @@ void SettingsApp::ShowNtpServerDialog() {
     if (ntp_dialog_ != nullptr) {
         return;
     }
-    if (ntp_dropdown_ != nullptr) {
-        lv_dropdown_set_selected(
-            ntp_dropdown_,
-            static_cast<uint16_t>(TimeServiceFindNtpServerIndex(TimeServiceLoadNtpServer())));
-    }
 
     ntp_dialog_ = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(ntp_dialog_);
     lv_obj_set_size(ntp_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(ntp_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(ntp_dialog_, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(ntp_dialog_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(ntp_dialog_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(ntp_dialog_, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Ends at y=116 so the 120 px keyboard never covers it.
     auto* dialog_box = lv_obj_create(ntp_dialog_);
     lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, 288, 112);
-    lv_obj_align(dialog_box, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_size(dialog_box, 304, 108);
+    lv_obj_set_pos(dialog_box, 8, 8);
     lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 10, 0);
-    lv_obj_set_style_pad_all(dialog_box, 14, 0);
+    lv_obj_set_style_radius(dialog_box, 8, 0);
+    lv_obj_set_style_pad_hor(dialog_box, 12, 0);
+    lv_obj_set_style_pad_ver(dialog_box, 8, 0);
     lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* title = CreateSettingLabel(dialog_box, "NTP Server");
-    lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+    auto* title = CreateSettingLabel(dialog_box, "自定义校时服务器", false);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    ntp_error_label_ = CreateSettingLabel(dialog_box, "", false);
+    lv_obj_set_style_text_font(ntp_error_label_, &phone_font_12, 0);
+    lv_obj_set_style_text_color(ntp_error_label_, rodakos_theme_error(), 0);
+    lv_obj_align(ntp_error_label_, LV_ALIGN_TOP_LEFT, 0, 22);
 
     ntp_textarea_ = lv_textarea_create(dialog_box);
-    lv_obj_set_size(ntp_textarea_, 252, 32);
-    lv_obj_align(ntp_textarea_, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_size(ntp_textarea_, 152, 36);
+    lv_obj_align(ntp_textarea_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_textarea_set_one_line(ntp_textarea_, true);
     lv_textarea_set_max_length(ntp_textarea_, 63);
-    lv_textarea_set_text(ntp_textarea_, TimeServiceLoadNtpServer().c_str());
+    lv_textarea_set_text(ntp_textarea_, datetime_server_cache_.c_str());
     lv_textarea_set_placeholder_text(ntp_textarea_, "pool.ntp.org");
     lv_obj_set_style_bg_color(ntp_textarea_, rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_text_color(ntp_textarea_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_border_color(ntp_textarea_, rodakos_theme_primary(), LV_STATE_FOCUSED);
+    lv_obj_set_style_text_font(ntp_textarea_, &phone_font_12, 0);
+    lv_obj_set_style_border_width(ntp_textarea_, 0, 0);
+    lv_obj_set_style_radius(ntp_textarea_, 6, 0);
 
     auto* cancel_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel_btn, 108, 28);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_size(cancel_btn, 60, 36);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 156, 0);
     lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_radius(cancel_btn, 6, 0);
     lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
-
     auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "Cancel");
+    lv_label_set_text(cancel_label, "取消");
     lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
     lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->CloseNtpServerDialog();
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseNtpServerDialog();
     }, LV_EVENT_CLICKED, this);
 
     auto* save_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(save_btn, 108, 28);
+    lv_obj_set_size(save_btn, 60, 36);
     lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(save_btn, rodakos_theme_primary(), 0);
     lv_obj_set_style_radius(save_btn, 6, 0);
     lv_obj_set_style_shadow_width(save_btn, 0, 0);
-
     auto* save_label = lv_label_create(save_btn);
-    lv_label_set_text(save_label, "Save");
+    lv_label_set_text(save_label, "保存");
     lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
+    lv_obj_set_style_text_font(save_label, &phone_font_14, 0);
     lv_obj_center(save_label);
     lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        const std::string server = TrimServerName(lv_textarea_get_text(self->ntp_textarea_));
-        self->SaveNtpServer(server);
-        self->CloseNtpServerDialog();
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->SubmitNtpServerDialog();
     }, LV_EVENT_CLICKED, this);
 
-    soft_keyboard_.Show(ntp_textarea_);
+    soft_keyboard_.Show(ntp_textarea_, [this]() {
+        lv_async_call([](void* user_data) {
+            static_cast<SettingsApp*>(user_data)->SubmitNtpServerDialog();
+        }, this);
+    });
+}
+
+void SettingsApp::SubmitNtpServerDialog() {
+    if (ntp_textarea_ == nullptr) return;
+    const std::string server = TrimServerName(lv_textarea_get_text(ntp_textarea_));
+    if (server.empty()) {
+        // Keep the dialog open with the reason, instead of closing on an invalid entry.
+        lv_label_set_text(ntp_error_label_, "请输入服务器地址");
+        return;
+    }
+    if (!SaveNtpServer(server)) {
+        lv_label_set_text(ntp_error_label_, "保存失败，请重试");
+        return;
+    }
+    CloseNtpServerDialog();
 }
 
 void SettingsApp::CloseNtpServerDialog() {
@@ -343,6 +493,7 @@ void SettingsApp::CloseNtpServerDialog() {
     }
     ntp_dialog_ = nullptr;
     ntp_textarea_ = nullptr;
+    ntp_error_label_ = nullptr;
 }
 
 void SettingsApp::CloseNtpServerDialogAsync() {

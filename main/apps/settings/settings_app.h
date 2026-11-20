@@ -143,7 +143,11 @@ private:
     void OnConnectResult(WiFiStatus status, const std::string& ssid);
     void UpdateWiFiDetailPage();
     void SaveTimeZone(size_t index);
-    void SaveNtpServer(const std::string& server);
+    bool SaveNtpServer(const std::string& server);
+    void UpdateDateTimePage();
+    void ShowDateTimePicker(bool servers);
+    void CloseDateTimePicker();
+    void SubmitNtpServerDialog();
     void StartTimeSync();
     void UpdateTimeSyncStatus();
 
@@ -177,6 +181,16 @@ private:
     lv_obj_t* ntp_dialog_ = nullptr;
     lv_obj_t* ntp_textarea_ = nullptr;
     lv_obj_t* time_sync_status_label_ = nullptr;
+    lv_obj_t* time_sync_button_ = nullptr;
+    lv_obj_t* datetime_clock_label_ = nullptr;
+    lv_obj_t* datetime_date_label_ = nullptr;
+    lv_obj_t* datetime_picker_ = nullptr;
+    lv_obj_t* ntp_error_label_ = nullptr;
+    lv_timer_t* datetime_clock_timer_ = nullptr;
+    uintptr_t datetime_pending_choice_ = 0;
+    int64_t time_sync_start_epoch_ = 0;
+    // Loaded once per Settings session; picker and dialog edits update it.
+    std::string datetime_server_cache_;
     lv_timer_t* time_sync_timer_ = nullptr;
     bool time_sync_in_progress_ = false;
     uint32_t time_sync_poll_count_ = 0;
