@@ -8,6 +8,7 @@
 #include "phone_ui/phone_ui.h"
 #include "rodakos_adapters/wifi_adapter.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <esp_lvgl_port.h>
@@ -38,85 +39,79 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
     lv_obj_set_style_pad_all(body_, 0, 0);
     lv_obj_add_flag(body_, LV_OBJ_FLAG_HIDDEN);
 
-    auto* status_card = CreateSettingCard(body_, 4, 72);
-    lv_obj_set_style_pad_all(status_card, 10, 0);
+    // Status card: state, address and access code on separate static lines (easier to copy than
+    // a scrolling URL), then the upload in progress or the last upload.
+    auto* card = lv_obj_create(body_);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, 300, 138);
+    lv_obj_set_pos(card, 10, 4);
+    lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_set_style_pad_hor(card, 12, 0);
+    lv_obj_set_style_pad_ver(card, 8, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* status_icon = lv_label_create(status_card);
-    lv_label_set_text(status_icon, ICON_CLOUD);
-    lv_obj_set_style_text_color(status_icon, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
-    lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
-
-    auto* status_title = CreateSettingLabel(status_card, "File service", true);
-    lv_obj_set_style_text_font(status_title, &phone_font_12, 0);
-    lv_obj_align(status_title, LV_ALIGN_TOP_LEFT, 32, 0);
-
-    status_label_ = CreateSettingLabel(status_card, "Stopped", false);
-    lv_obj_set_width(status_label_, 240);
+    status_label_ = CreateSettingLabel(card, "", false);
+    lv_obj_set_width(status_label_, 276);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 32, 22);
+    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    url_label_ = CreateSettingLabel(status_card, "Start to show URL", true);
-    lv_obj_set_width(url_label_, 240);
-    lv_label_set_long_mode(url_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_align(url_label_, LV_ALIGN_TOP_LEFT, 32, 42);
+    url_label_ = CreateSettingLabel(card, "", false);
+    lv_obj_set_width(url_label_, 276);
+    lv_label_set_long_mode(url_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(url_label_, &phone_font_14, 0);
+    lv_obj_align(url_label_, LV_ALIGN_TOP_LEFT, 0, 24);
 
-    auto* last_card = CreateSettingCard(body_, 84, 50);
-    lv_obj_set_style_pad_all(last_card, 10, 0);
+    token_caption_ = CreateSettingLabel(card, "访问码", true);
+    lv_obj_set_style_text_font(token_caption_, &phone_font_12, 0);
+    lv_obj_align(token_caption_, LV_ALIGN_TOP_LEFT, 0, 48);
 
-    auto* last_title = CreateSettingLabel(last_card, "Last upload", true);
-    lv_obj_set_style_text_font(last_title, &phone_font_12, 0);
-    lv_obj_align(last_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    token_label_ = CreateSettingLabel(card, "", false);
+    lv_obj_set_style_text_font(token_label_, &phone_font_18, 0);
+    lv_obj_set_style_text_letter_space(token_label_, 1, 0);
+    lv_obj_align(token_label_, LV_ALIGN_TOP_LEFT, 0, 64);
 
-    last_label_ = CreateSettingLabel(last_card, "None", false);
+    last_label_ = CreateSettingLabel(card, "", true);
     lv_obj_set_width(last_label_, 276);
     lv_label_set_long_mode(last_label_, LV_LABEL_LONG_DOT);
-    lv_obj_align(last_label_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_text_font(last_label_, &phone_font_12, 0);
+    lv_obj_align(last_label_, LV_ALIGN_TOP_LEFT, 0, 92);
 
-    auto* controls = lv_obj_create(body_);
-    lv_obj_remove_style_all(controls);
-    lv_obj_set_size(controls, 300, 38);
-    lv_obj_set_pos(controls, 10, 148);
-    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(controls,
-                          LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
+    progress_bar_ = lv_bar_create(card);
+    lv_obj_set_size(progress_bar_, 276, 6);
+    lv_obj_align(progress_bar_, LV_ALIGN_TOP_LEFT, 0, 112);
+    lv_bar_set_range(progress_bar_, 0, 100);
+    lv_obj_set_style_bg_color(progress_bar_, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(progress_bar_, rodakos_theme_primary(), LV_PART_INDICATOR);
+    lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
 
-    start_btn_ = lv_btn_create(controls);
-    lv_obj_set_size(start_btn_, 142, 34);
-    lv_obj_set_style_bg_color(start_btn_, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(start_btn_, 6, 0);
+    // One button whose action follows the state: 开启 when stopped, 关闭 when running.
+    start_btn_ = lv_btn_create(body_);
+    lv_obj_set_size(start_btn_, 300, 40);
+    lv_obj_set_pos(start_btn_, 10, 150);
+    lv_obj_set_style_radius(start_btn_, 7, 0);
     lv_obj_set_style_shadow_width(start_btn_, 0, 0);
-    auto* start_label = lv_label_create(start_btn_);
-    lv_label_set_text(start_label, "Start");
-    lv_obj_set_style_text_color(start_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(start_label, &phone_font_12, 0);
-    lv_obj_center(start_label);
+    toggle_label_ = lv_label_create(start_btn_);
+    lv_obj_set_style_text_font(toggle_label_, &phone_font_14, 0);
+    lv_obj_center(toggle_label_);
     lv_obj_add_event_cb(start_btn_, [](lv_event_t* e) {
         auto* self = static_cast<SettingsWebFilesPage*>(lv_event_get_user_data(e));
-        if (self != nullptr) {
-            self->Start();
-        }
+        if (self == nullptr || self->context_ == nullptr) return;
+        auto* web_files = self->context_->services().web_files();
+        if (web_files != nullptr && web_files->IsRunning()) self->Stop();
+        else self->Start();
     }, LV_EVENT_CLICKED, this);
+    stop_btn_ = nullptr;
 
-    stop_btn_ = lv_btn_create(controls);
-    lv_obj_set_size(stop_btn_, 142, 34);
-    lv_obj_set_style_bg_color(stop_btn_, rodakos_theme_error(), 0);
-    lv_obj_set_style_radius(stop_btn_, 6, 0);
-    lv_obj_set_style_shadow_width(stop_btn_, 0, 0);
-    auto* stop_label = lv_label_create(stop_btn_);
-    lv_label_set_text(stop_label, "Stop");
-    lv_obj_set_style_text_color(stop_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(stop_label, &phone_font_12, 0);
-    lv_obj_center(stop_label);
-    lv_obj_add_event_cb(stop_btn_, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsWebFilesPage*>(lv_event_get_user_data(e));
-        if (self != nullptr) {
-            self->Stop();
+    // Upload progress changes without user input; poll while the page exists.
+    refresh_timer_ = lv_timer_create([](lv_timer_t* timer) {
+        auto* self = static_cast<SettingsWebFilesPage*>(lv_timer_get_user_data(timer));
+        if (self != nullptr && self->body_ != nullptr &&
+            !lv_obj_has_flag(self->body_, LV_OBJ_FLAG_HIDDEN)) {
+            self->Update();
         }
-    }, LV_EVENT_CLICKED, this);
+    }, 1000, this);
 
     Update();
 }
@@ -133,6 +128,38 @@ void SettingsWebFilesPage::Show() {
     }
 }
 
+namespace {
+std::string FormatSize(size_t bytes) {
+    char text[24];
+    if (bytes >= 1024 * 1024) {
+        std::snprintf(text, sizeof(text), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    } else {
+        std::snprintf(text, sizeof(text), "%u KB", static_cast<unsigned>((bytes + 1023) / 1024));
+    }
+    return text;
+}
+
+std::string BaseName(const std::string& path) {
+    const size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// Splits the 16-character access code into groups of four for reading aloud or copying.
+std::string GroupToken(const std::string& token) {
+    std::string grouped;
+    for (size_t index = 0; index < token.size(); ++index) {
+        if (index > 0 && index % 4 == 0) grouped.push_back(' ');
+        grouped.push_back(token[index]);
+    }
+    return grouped;
+}
+
+std::string UrlWithoutToken(const std::string& url) {
+    const size_t query = url.find("/?token=");
+    return query == std::string::npos ? url : url.substr(0, query);
+}
+}  // namespace
+
 void SettingsWebFilesPage::Update() {
     auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
     if (web_files == nullptr || status_label_ == nullptr) {
@@ -141,37 +168,52 @@ void SettingsWebFilesPage::Update() {
 
     const auto state = web_files->GetState();
     const bool stopping = stop_guard_ && stop_guard_->stopping.load();
-    const std::string status = stopping ? "正在停止…"
-        : state.running ? (state.busy ? "Uploading..." : "Running")
-        : "Stopped";
-    lv_label_set_text(status_label_, status.c_str());
-    lv_label_set_text(url_label_, state.running ? state.url.c_str() : state.message.c_str());
+    const char* status = stopping ? "正在关闭…"
+        : !state.running ? "已关闭"
+        : state.busy ? "运行中 · 正在传输"
+        : "运行中 · 在电脑浏览器打开下面的地址";
+    lv_label_set_text(status_label_, status);
+    lv_obj_set_style_text_color(status_label_,
+                                state.running && !stopping ? rodakos_theme_success()
+                                                           : rodakos_theme_text_primary(),
+                                0);
 
-    if (state.last_file.empty()) {
-        lv_label_set_text(last_label_, "None");
+    if (state.running) {
+        lv_label_set_text(url_label_, UrlWithoutToken(state.url).c_str());
+        lv_label_set_text(token_label_, GroupToken(state.token).c_str());
+        lv_obj_clear_flag(token_caption_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(token_label_, LV_OBJ_FLAG_HIDDEN);
     } else {
-        char text[220] = {};
-        std::snprintf(text,
-                      sizeof(text),
-                      "%s (%u KB)",
-                      state.last_file.c_str(),
-                      static_cast<unsigned>((state.last_bytes + 1023) / 1024));
-        lv_label_set_text(last_label_, text);
+        lv_label_set_text(url_label_, "开启后，同一网络的电脑可以用浏览器读写 SD 卡。");
+        lv_obj_add_flag(token_caption_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(token_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (state.busy && state.active_total_bytes > 0) {
+        const int percent = static_cast<int>(
+            std::min<size_t>(100, state.active_bytes * 100 / state.active_total_bytes));
+        const std::string text = "上传 " + BaseName(state.last_file) + "  " + std::to_string(percent) + "%";
+        lv_label_set_text(last_label_, text.c_str());
+        lv_bar_set_value(progress_bar_, percent, LV_ANIM_OFF);
+        lv_obj_clear_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
+        if (state.last_file.empty()) {
+            lv_label_set_text(last_label_, "还没有上传过文件");
+        } else {
+            const std::string text = "最近上传：" + BaseName(state.last_file) + "（" +
+                                     FormatSize(state.last_bytes) + "）";
+            lv_label_set_text(last_label_, text.c_str());
+        }
     }
 
     if (start_btn_ != nullptr) {
-        if (state.running || stopping) {
-            lv_obj_add_state(start_btn_, LV_STATE_DISABLED);
-        } else {
-            lv_obj_clear_state(start_btn_, LV_STATE_DISABLED);
-        }
-    }
-    if (stop_btn_ != nullptr) {
-        if (state.running && !stopping) {
-            lv_obj_clear_state(stop_btn_, LV_STATE_DISABLED);
-        } else {
-            lv_obj_add_state(stop_btn_, LV_STATE_DISABLED);
-        }
+        const bool running = state.running && !stopping;
+        lv_label_set_text(toggle_label_, stopping ? "正在关闭…" : running ? "关闭" : "开启");
+        lv_obj_set_style_bg_color(start_btn_, running ? rodakos_theme_bg_tertiary() : rodakos_theme_primary(), 0);
+        lv_obj_set_style_text_color(toggle_label_, running ? rodakos_theme_text_primary() : lv_color_white(), 0);
+        if (stopping) lv_obj_add_state(start_btn_, LV_STATE_DISABLED);
+        else lv_obj_clear_state(start_btn_, LV_STATE_DISABLED);
     }
 }
 
@@ -186,35 +228,37 @@ void SettingsWebFilesPage::Reset() {
     last_label_ = nullptr;
     start_btn_ = nullptr;
     stop_btn_ = nullptr;
+    toggle_label_ = nullptr;
+    token_caption_ = nullptr;
+    token_label_ = nullptr;
+    progress_bar_ = nullptr;
+    // LVGL timers are not owned by objects; deleting the page widgets does not stop this one.
+    if (refresh_timer_ != nullptr) lv_timer_delete(refresh_timer_);
+    refresh_timer_ = nullptr;
 }
 
 void SettingsWebFilesPage::Start() {
     auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
     auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
     if (wifi == nullptr || web_files == nullptr) {
-        ui_->ShowToastUnlocked("Web files unavailable");
+        ui_->ShowToastUnlocked("网页传文件不可用");
         return;
     }
     if (wifi->GetStatus() != WiFiStatus::kConnected || wifi->GetIPAddress().empty()) {
-        ui_->ShowToastUnlocked("Connect WiFi first");
         if (status_label_ != nullptr) {
-            lv_label_set_text(status_label_, "WiFi not connected");
+            lv_label_set_text(status_label_, "请先连接 Wi-Fi");
+            lv_obj_set_style_text_color(status_label_, rodakos_theme_warning(), 0);
         }
         return;
     }
 
-    if (web_files->Start(wifi->GetIPAddress())) {
-        const auto state = web_files->GetState();
-        ui_->ShowToastUnlocked("Web files started");
-        if (url_label_ != nullptr) {
-            lv_label_set_text(url_label_, state.url.c_str());
-        }
-    } else {
-        const auto state = web_files->GetState();
-        ui_->ShowToastUnlocked("Web files failed");
+    if (!web_files->Start(wifi->GetIPAddress())) {
+        Update();
         if (status_label_ != nullptr) {
-            lv_label_set_text(status_label_, state.message.c_str());
+            lv_label_set_text(status_label_, "开启失败，请稍后重试");
+            lv_obj_set_style_text_color(status_label_, rodakos_theme_error(), 0);
         }
+        return;
     }
     Update();
 }
@@ -261,7 +305,7 @@ void SettingsWebFilesPage::Stop() {
         xTaskCreate(WebFilesStopTask, "web_stop", 4096, args, 3, nullptr) != pdPASS) {
         delete args;
         stop_guard_->stopping.store(false);
-        ui_->ShowToastUnlocked("无法停止，请稍后重试");
+        ui_->ShowToastUnlocked("无法关闭，请稍后重试");
         return;
     }
     Update();

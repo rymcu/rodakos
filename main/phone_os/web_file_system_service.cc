@@ -364,6 +364,7 @@ void WebFileSystemService::Stop() {
         state_.running = false;
         state_.busy = false;
         state_.active_bytes = 0;
+        state_.active_total_bytes = 0;
         state_.url.clear();
         state_.token.clear();
         state_.message = "Stopped";
@@ -412,6 +413,7 @@ bool WebFileSystemService::TryBeginWrite(const std::string& message, const std::
     }
     state_.busy = true;
     state_.active_bytes = 0;
+    state_.active_total_bytes = 0;
     state_.message = message;
     if (!file_name.empty()) {
         state_.last_file = file_name;
@@ -425,6 +427,7 @@ void WebFileSystemService::SetBusy(bool busy, const std::string& file_name) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         state_.busy = busy;
         state_.active_bytes = 0;
+        state_.active_total_bytes = 0;
         if (!file_name.empty()) {
             state_.last_file = file_name;
         }
@@ -440,11 +443,20 @@ void WebFileSystemService::AddActiveBytes(size_t bytes) {
     }
 }
 
+void WebFileSystemService::SetActiveTotal(size_t bytes) {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        state_.active_total_bytes = bytes;
+        xSemaphoreGive(mutex_);
+    }
+}
+
 void WebFileSystemService::CompleteUpload(const std::string& file_name, size_t bytes) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         state_.busy = false;
         state_.active_bytes = 0;
+        state_.active_total_bytes = 0;
         state_.last_file = file_name;
         state_.last_bytes = bytes;
         state_.message = "Last upload complete";
@@ -644,6 +656,7 @@ esp_err_t WebFileSystemService::UploadHandler(httpd_req_t* req) {
         }
 
         ESP_LOGI(TAG, "Receiving upload %s (%d bytes)", upload_path.c_str(), req->content_len);
+        self->SetActiveTotal(static_cast<size_t>(req->content_len));
         int remaining = req->content_len;
         bool failed = false;
         int operation_errno = 0;
