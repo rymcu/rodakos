@@ -153,6 +153,7 @@ void SettingsApp::SaveTimeZone(size_t index) {
     }
 
     TimeServiceSaveTimeZone(zones[index].tz);
+    home_time_zone_label_ = zones[index].label;
     TimeServiceApplyTimeZone(zones[index].tz);
     ui_->ShowToastUnlocked("Time zone saved");
     ESP_LOGI(TAG, "Time zone changed: %s (%s)", zones[index].label, zones[index].tz);

@@ -21,6 +21,9 @@ class SettingsApp;
 
 enum class SettingsCloudRefreshFailure { kNone, kTaskStart, kCompletionDelivery };
 
+// Status shown at the end of the 连接服务 row on the Settings home.
+enum class SettingsCloudSummary { kUnknown, kUnbound, kPairing, kBound, kAttention };
+
 struct SettingsCloudRefreshGuard {
     std::atomic<SettingsApp*> app{nullptr};
     std::atomic<bool> refresh_in_progress{false};
@@ -66,6 +69,7 @@ public:
                                      const std::string& error,
                                      uint32_t generation);
     void ReloadUiForTheme();
+    void OnCloudSummaryReady(SettingsCloudSummary summary);
     void OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results);
     void OnWiFiConnectAsyncComplete(WiFiStatus status,
                                     const std::string& ssid,
@@ -78,6 +82,8 @@ private:
     void ResetUiPointers();
     void ShowPage(SettingsPage page);
     void CreateMainPage();
+    // Refreshes the row-end values; NVS-backed values are read off the LVGL thread.
+    void UpdateMainPageStatus();
     void CreateWiFiListPage();
     void CreateWiFiDetailPage();
     void CreateDateTimePage();
@@ -144,7 +150,13 @@ private:
     lv_obj_t* main_body_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
     lv_obj_t* brightness_slider_ = nullptr;
-    lv_obj_t* language_switch_ = nullptr;
+    lv_obj_t* home_wifi_value_ = nullptr;
+    lv_obj_t* home_cloud_value_ = nullptr;
+    lv_obj_t* home_time_zone_value_ = nullptr;
+    lv_obj_t* home_web_files_value_ = nullptr;
+    SettingsCloudSummary home_cloud_summary_ = SettingsCloudSummary::kUnknown;
+    bool home_cloud_summary_pending_ = false;
+    std::string home_time_zone_label_;
     lv_obj_t* usb_disk_dialog_ = nullptr;
     lv_obj_t* usb_disk_hint_page_ = nullptr;
     lv_timer_t* usb_disk_restart_timer_ = nullptr;

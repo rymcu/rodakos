@@ -53,7 +53,7 @@ bool SettingsApp::CreateUi() {
     lv_obj_set_style_pad_all(root_, 0, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    CreateAppHeader(root_, "Settings", [](lv_event_t* e) {
+    CreateAppHeader(root_, "设置", [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         self->NavigateBack();
     }, [](lv_event_t* e) {
@@ -166,7 +166,10 @@ void SettingsApp::ResetUiPointers() {
     device_cloud_body_ = nullptr;
     brightness_label_ = nullptr;
     brightness_slider_ = nullptr;
-    language_switch_ = nullptr;
+    home_wifi_value_ = nullptr;
+    home_cloud_value_ = nullptr;
+    home_time_zone_value_ = nullptr;
+    home_web_files_value_ = nullptr;
     usb_disk_dialog_ = nullptr;
     button_action_dialog_ = nullptr;
     usb_disk_hint_page_ = nullptr;
@@ -271,8 +274,9 @@ void SettingsApp::ShowPage(SettingsPage page) {
                 lv_obj_clear_flag(main_body_, LV_OBJ_FLAG_HIDDEN);
             }
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "Settings");
+                lv_label_set_text(header_title_label_, "设置");
             }
+            UpdateMainPageStatus();
             break;
 
         case SettingsPage::kWiFiList:
@@ -281,7 +285,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(wifi_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "WiFi");
+                lv_label_set_text(header_title_label_, "Wi-Fi");
             }
             StartWiFiScan();  // 自动扫描
             break;
@@ -303,7 +307,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(datetime_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "Date & Time");
+                lv_label_set_text(header_title_label_, "日期与时间");
             }
             break;
 
@@ -313,7 +317,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(system_shell_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "System Shell");
+                lv_label_set_text(header_title_label_, "锁屏与控制中心");
             }
             break;
 
@@ -323,7 +327,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(buttons_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "Buttons");
+                lv_label_set_text(header_title_label_, "按键");
             }
             UpdateButtonBindingsPage();
             break;
@@ -343,7 +347,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             web_files_page_.Create(main_body_, *context_, *ui_);
             web_files_page_.Show();
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "Web Files");
+                lv_label_set_text(header_title_label_, "网页传文件");
             }
             web_files_page_.Update();
             break;

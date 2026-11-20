@@ -10,7 +10,6 @@ namespace rodakos_settings {
 
 inline constexpr const char* kDisplayNamespace = "display";
 inline constexpr const char* kBrightnessKey = "brightness";
-inline constexpr const char* kLanguageKey = "language";
 inline constexpr uint32_t kTimeSyncTimeoutPolls = 20;
 
 void DeferReturnHome(void* user_data);
