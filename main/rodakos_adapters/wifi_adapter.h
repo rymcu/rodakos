@@ -107,6 +107,11 @@ public:
      * 最近一次连接失败是否因为密码被拒绝（路由器改密等）；新的连接请求会清除
      */
     virtual bool LastFailureWasAuthRejected() const = 0;
+
+    /**
+     * 密码被拒的网络名；没有密码被拒时为空。界面只应对这个网络显示「密码错误」
+     */
+    virtual std::string AuthRejectedSSID() const = 0;
 };
 
 /**
