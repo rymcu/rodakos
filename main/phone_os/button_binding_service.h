@@ -71,6 +71,8 @@ public:
     ButtonBinding GetBinding(std::string_view button_id, ButtonEvent event) const;
     bool SetBinding(std::string_view button_id, ButtonEvent event, const ButtonAction& action);
     bool ResetBinding(std::string_view button_id, ButtonEvent event);
+    // What the binding does when the user has not customised it.
+    ButtonAction DefaultAction(std::string_view button_id, ButtonEvent event) const;
 
     static const char* EventName(ButtonEvent event);
     static const char* EventLabel(ButtonEvent event);
@@ -120,7 +122,6 @@ private:
                           bool check_generation = false);
     void ProcessQueuedEvent(const QueuedButtonEvent& event);
     void ExecuteAction(const ButtonAction& action, const std::string& toast);
-    ButtonAction DefaultAction(std::string_view button_id, ButtonEvent event) const;
     std::string StorageKey(std::string_view button_id, ButtonEvent event) const;
     const RegisteredButton* FindRegistered(std::string_view button_id) const;
     const ButtonState* FindButton(std::string_view button_id) const;
