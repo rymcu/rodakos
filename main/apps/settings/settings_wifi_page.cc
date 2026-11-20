@@ -12,8 +12,16 @@
 #include <memory>
 #include <string>
 
+// Wi-Fi list, password entry and details. Layout follows the Settings grid: x=10, width 300,
+// 38 px rows, actions at the bottom of the 320x200 body.
 namespace {
 constexpr const char* TAG = "SettingsApp";
+
+constexpr lv_coord_t kGridX = 10;
+constexpr lv_coord_t kGridWidth = 300;
+constexpr lv_coord_t kRowHeight = 38;
+constexpr lv_coord_t kActionY = 150;
+constexpr lv_coord_t kActionHeight = 40;
 
 struct WiFiScanPayload {
     std::shared_ptr<SettingsWiFiAsyncGuard> guard;
@@ -76,165 +84,168 @@ void QueueWiFiAsyncPayload(Payload* payload, Callback callback) {
     }
 }
 
-lv_obj_t* CreateNetworkItem(lv_obj_t* parent, const WiFiScanResult& ap, size_t index,
-                             bool is_connected, bool is_saved) {
-    auto* item = lv_obj_create(parent);
-    lv_obj_remove_style_all(item);
-    lv_obj_set_size(item, 290, 56);
-    lv_obj_set_pos(item, 5, index * 60);
-    lv_obj_set_style_bg_color(item, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(item, 8, 0);
-    lv_obj_set_style_pad_all(item, 12, 0);
-    lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
+// Words instead of colour alone, so the strength reads without telling hues apart.
+const char* SignalWord(int rssi) {
+    if (rssi >= -55) return "强";
+    if (rssi >= -67) return "中";
+    if (rssi >= -78) return "较弱";
+    return "弱";
+}
 
-    if (is_connected) {
-        lv_obj_set_style_border_width(item, 2, 0);
-        lv_obj_set_style_border_color(item, rodakos_theme_primary(), 0);
+lv_obj_t* CreateGroupList(lv_obj_t* parent, lv_coord_t y, int rows) {
+    auto* list = lv_obj_create(parent);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, kGridWidth, kRowHeight * rows);
+    lv_obj_set_pos(list, kGridX, y);
+    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(list, 8, 0);
+    lv_obj_set_style_clip_corner(list, true, 0);
+    lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    return list;
+}
+
+// One network row: name on the left, "🔒 中" or status on the right.
+lv_obj_t* CreateNetworkRow(lv_obj_t* list, int index, const std::string& ssid,
+                           const std::string& value, lv_color_t value_color, bool chevron) {
+    auto* row = lv_obj_create(list);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, kGridWidth, kRowHeight);
+    lv_obj_set_pos(row, 0, kRowHeight * index);
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+    if (index > 0) {
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
     }
 
-    lv_obj_set_style_bg_color(item, rodakos_theme_primary(), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(item, LV_OPA_20, LV_STATE_PRESSED);
+    auto* icon = lv_label_create(row);
+    lv_label_set_text(icon, ICON_WIFI);
+    lv_obj_set_style_text_color(icon, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_font(icon, PhoneIconFont(), 0);
+    lv_obj_align(icon, LV_ALIGN_LEFT_MID, 0, 0);
 
-    auto* ssid_label = lv_label_create(item);
-    char ssid_text[64];
-    if (is_connected) {
-        snprintf(ssid_text, sizeof(ssid_text), "%s [Connected]", ap.ssid.c_str());
-    } else if (is_saved) {
-        snprintf(ssid_text, sizeof(ssid_text), "%s [Saved]", ap.ssid.c_str());
-    } else {
-        snprintf(ssid_text, sizeof(ssid_text), "%s", ap.ssid.c_str());
+    auto* name = rodakos_settings::CreateSettingLabel(row, ssid.c_str(), false);
+    lv_obj_set_width(name, 150);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 28, 0);
+
+    auto* status = rodakos_settings::CreateSettingLabel(row, value.c_str(), true);
+    lv_obj_set_width(status, 90);
+    lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(status, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(status, &phone_font_12, 0);
+    lv_obj_set_style_text_color(status, value_color, 0);
+    lv_obj_align(status, LV_ALIGN_RIGHT_MID, chevron ? -18 : 0, 0);
+
+    if (chevron) {
+        auto* arrow = lv_label_create(row);
+        lv_label_set_text(arrow, ">");
+        lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
+        lv_obj_set_style_text_font(arrow, &phone_font_14, 0);
+        lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
     }
-    lv_label_set_text(ssid_label, ssid_text);
-    lv_obj_set_width(ssid_label, 200);
-    lv_label_set_long_mode(ssid_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(ssid_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(ssid_label, &phone_font_14, 0);
-    lv_obj_align(ssid_label, LV_ALIGN_TOP_LEFT, 0, 0);
+    return row;
+}
 
-    const char* signal_icon;
-    lv_color_t signal_color;
-    if (ap.rssi >= -50) {
-        signal_icon = ICON_SIGNAL;
-        signal_color = rodakos_theme_success();
-    } else if (ap.rssi >= -70) {
-        signal_icon = ICON_SIGNAL;
-        signal_color = rodakos_theme_primary();
-    } else if (ap.rssi >= -80) {
-        signal_icon = ICON_SIGNAL;
-        signal_color = rodakos_theme_warning();
-    } else {
-        signal_icon = ICON_SIGNAL;
-        signal_color = rodakos_theme_error();
-    }
+lv_obj_t* CreateWideButton(lv_obj_t* parent, const char* text, bool primary, bool danger,
+                           lv_coord_t x, lv_coord_t width) {
+    auto* button = lv_btn_create(parent);
+    lv_obj_set_size(button, width, kActionHeight);
+    lv_obj_set_pos(button, x, kActionY);
+    lv_obj_set_style_radius(button, 7, 0);
+    lv_obj_set_style_shadow_width(button, 0, 0);
+    lv_obj_set_style_bg_opa(button, danger ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_border_width(button, danger ? 1 : 0, 0);
+    lv_obj_set_style_border_color(button, rodakos_theme_error(), 0);
+    auto* label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &phone_font_14, 0);
+    lv_obj_set_style_text_color(label,
+                                danger ? rodakos_theme_error()
+                                       : (primary ? lv_color_white() : rodakos_theme_text_primary()),
+                                0);
+    lv_obj_center(label);
+    return button;
+}
 
-    auto* signal_label = lv_label_create(item);
-    lv_label_set_text(signal_label, signal_icon);
-    lv_obj_set_style_text_color(signal_label, signal_color, 0);
-    lv_obj_set_style_text_font(signal_label, PhoneIconFont(), 0);
-    lv_obj_align(signal_label, LV_ALIGN_TOP_RIGHT, 0, 0);
-
-    char info_text[48];
-    if (ap.is_secured) {
-        snprintf(info_text, sizeof(info_text), ICON_LOCK " Secured • %d dBm", ap.rssi);
-    } else {
-        snprintf(info_text, sizeof(info_text), "Open • %d dBm", ap.rssi);
-    }
-
-    auto* info_label = lv_label_create(item);
-    lv_label_set_text(info_label, info_text);
-    lv_obj_set_style_text_color(info_label, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(info_label, &phone_font_12, 0);
-    lv_obj_align(info_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-
-    return item;
+lv_obj_t* CreateDetailRow(lv_obj_t* list, int index, const char* name) {
+    auto* row = lv_obj_create(list);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, kGridWidth, 26);
+    lv_obj_set_pos(row, 0, 26 * index + 4);
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    auto* key = rodakos_settings::CreateSettingLabel(row, name, true);
+    lv_obj_set_style_text_font(key, &phone_font_12, 0);
+    lv_obj_align(key, LV_ALIGN_LEFT_MID, 0, 0);
+    auto* value = rodakos_settings::CreateSettingLabel(row, "", false);
+    lv_obj_set_width(value, 190);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(value, &phone_font_12, 0);
+    lv_obj_align(value, LV_ALIGN_RIGHT_MID, 0, 0);
+    return value;
 }
 }  // namespace
 
 using namespace rodakos_settings;
+
 void SettingsApp::CreateWiFiListPage() {
-    // 创建 WiFi 页面的 body 容器
     wifi_body_ = lv_obj_create(lv_obj_get_parent(main_body_));
     lv_obj_remove_style_all(wifi_body_);
     lv_obj_set_size(wifi_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
     lv_obj_set_pos(wifi_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
     lv_obj_set_style_bg_opa(wifi_body_, LV_OPA_TRANSP, 0);
-    lv_obj_add_flag(wifi_body_, LV_OBJ_FLAG_HIDDEN);  // 默认隐藏
+    lv_obj_add_flag(wifi_body_, LV_OBJ_FLAG_HIDDEN);
 
-    // 顶部信息区域
-    auto* info_container = lv_obj_create(wifi_body_);
-    lv_obj_remove_style_all(info_container);
-    lv_obj_set_size(info_container, 300, 60);
-    lv_obj_align(info_container, LV_ALIGN_TOP_MID, 0, 5);
-    lv_obj_set_style_bg_color(info_container, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(info_container, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(info_container, 8, 0);
-    lv_obj_set_style_pad_all(info_container, 12, 0);
-    lv_obj_clear_flag(info_container, LV_OBJ_FLAG_SCROLLABLE);
-
-    // 状态图标
-    auto* status_icon = lv_label_create(info_container);
-    lv_label_set_text(status_icon, ICON_WIFI);
-    lv_obj_set_style_text_font(status_icon, PhoneIconFont(), 0);
-    lv_obj_align(status_icon, LV_ALIGN_LEFT_MID, 0, 0);
-
-    // 状态文字
-    wifi_status_label_ = lv_label_create(info_container);
-    lv_label_set_text(wifi_status_label_, "Tap 'Scan' to search");
-    lv_obj_set_width(wifi_status_label_, 220);
-    lv_label_set_long_mode(wifi_status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_color(wifi_status_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(wifi_status_label_, &phone_font_12, 0);
-    lv_obj_align(wifi_status_label_, LV_ALIGN_LEFT_MID, 35, 0);
-
-    // 扫描按钮（右侧）
-    auto* scan_btn = lv_btn_create(info_container);
-    lv_obj_set_size(scan_btn, 60, 30);
-    lv_obj_align(scan_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(scan_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(scan_btn, 6, 0);
-
-    auto* scan_label = lv_label_create(scan_btn);
-    lv_label_set_text(scan_label, "Scan");
-    lv_obj_set_style_text_color(scan_label, rodakos_theme_bg_primary(), 0);
-    lv_obj_set_style_text_font(scan_label, &phone_font_12, 0);
-    lv_obj_center(scan_label);
-
-    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->StartWiFiScan();
-    }, LV_EVENT_CLICKED, this);
-
-    // 网络列表容器
+    // The whole list scrolls; the status line and rescan button sit at its top.
     wifi_list_container_ = lv_obj_create(wifi_body_);
     lv_obj_remove_style_all(wifi_list_container_);
-    lv_obj_set_size(wifi_list_container_, 300, 115);
-    lv_obj_set_pos(wifi_list_container_, 10, 73);
-    lv_obj_set_style_bg_opa(wifi_list_container_, LV_OPA_TRANSP, 0);
+    lv_obj_set_size(wifi_list_container_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_bottom(wifi_list_container_, 8, 0);
     lv_obj_set_scrollbar_mode(wifi_list_container_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(wifi_list_container_, LV_DIR_VER);
 
-    // 提示文字
-    auto* hint_label = lv_label_create(wifi_body_);
-    lv_label_set_text(hint_label, "Tap network to connect");
-    lv_obj_set_style_text_color(hint_label, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(hint_label, &phone_font_12, 0);
-    lv_obj_align(hint_label, LV_ALIGN_BOTTOM_MID, 0, -5);
+    wifi_status_label_ = CreateSettingLabel(wifi_body_, "", true);
+    lv_obj_set_width(wifi_status_label_, 200);
+    lv_label_set_long_mode(wifi_status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(wifi_status_label_, &phone_font_12, 0);
+    lv_obj_set_pos(wifi_status_label_, kGridX + 4, 8);
+
+    auto* scan_btn = lv_btn_create(wifi_body_);
+    lv_obj_set_size(scan_btn, 84, 30);
+    lv_obj_set_pos(scan_btn, kGridX + kGridWidth - 84, 2);
+    lv_obj_set_style_bg_color(scan_btn, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(scan_btn, 7, 0);
+    lv_obj_set_style_shadow_width(scan_btn, 0, 0);
+    lv_obj_set_ext_click_area(scan_btn, 6);
+    auto* scan_label = lv_label_create(scan_btn);
+    lv_label_set_text(scan_label, "重新扫描");
+    lv_obj_set_style_text_color(scan_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(scan_label, &phone_font_12, 0);
+    lv_obj_center(scan_label);
+    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->StartWiFiScan();
+    }, LV_EVENT_CLICKED, this);
 }
 
 void SettingsApp::StartWiFiScan() {
     auto* wifi = context_->services().wifi();
     if (wifi == nullptr) {
-        ui_->ShowToastUnlocked("WiFi not available");
+        lv_label_set_text(wifi_status_label_, "Wi-Fi 不可用");
         return;
     }
 
-    lv_label_set_text(wifi_status_label_, "Scanning...");
-    lv_obj_clean(wifi_list_container_);
-
+    lv_label_set_text(wifi_status_label_, "正在扫描…");
     auto guard = wifi_async_guard_;
     const uint32_t generation = guard != nullptr ? guard->generation.load() : 0;
-    wifi->StartScan([guard, generation](const std::vector<WiFiScanResult>& results) {
+    const bool started = wifi->StartScan([guard, generation](const std::vector<WiFiScanResult>& results) {
         auto* payload = new WiFiScanPayload{
             .guard = guard,
             .generation = generation,
@@ -242,6 +253,10 @@ void SettingsApp::StartWiFiScan() {
         };
         QueueWiFiAsyncPayload(payload, WiFiScanCompleteCallback);
     });
+    if (!started) {
+        // Keep the previous results visible; the user can tap 重新扫描 again.
+        lv_label_set_text(wifi_status_label_, "扫描没有开始，请稍后重试");
+    }
 }
 
 void SettingsApp::OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& results) {
@@ -250,194 +265,213 @@ void SettingsApp::OnWiFiScanAsyncComplete(const std::vector<WiFiScanResult>& res
 }
 
 void SettingsApp::OnWiFiScanComplete(const std::vector<WiFiScanResult>& results) {
-    if (results.empty()) {
-        lv_label_set_text(wifi_status_label_, "No networks found");
-        return;
-    }
-
-    char status_text[64];
-    snprintf(status_text, sizeof(status_text), "Found %zu network(s)", results.size());
-    lv_label_set_text(wifi_status_label_, status_text);
-
-    // 获取保存的 SSID（用于标记已保存网络）
-    std::string saved_ssid = wifi_config_.GetSavedSSID();
-
-    // 获取当前连接状态
-    auto* wifi = context_->services().wifi();
-    bool is_connected = wifi && (wifi->GetStatus() == WiFiStatus::kConnected);
-
+    if (wifi_list_container_ == nullptr) return;
     lv_obj_clean(wifi_list_container_);
 
-    for (size_t i = 0; i < results.size(); ++i) {
-        // 如果已连接且是保存的网络，则标记为已连接
-        bool is_current = is_connected && (results[i].ssid == saved_ssid);
-        bool is_saved = (results[i].ssid == saved_ssid);
+    auto* wifi = context_->services().wifi();
+    const bool connected = wifi != nullptr && wifi->GetStatus() == WiFiStatus::kConnected;
+    const std::string current_ssid = connected ? wifi->GetConnectedSSID() : std::string();
+    const std::string saved_ssid = wifi_config_.GetSavedSSID();
 
-        auto* item = CreateNetworkItem(wifi_list_container_, results[i], i, is_current, is_saved);
-        auto* payload = new NetworkItemPayload{.index = i};
-        lv_obj_set_user_data(item, payload);
-        lv_obj_add_event_cb(item, NetworkItemDeleteEvent, LV_EVENT_DELETE, payload);
+    // Rows under the 38 px status/rescan line.
+    lv_coord_t y = 38;
 
-        lv_obj_add_event_cb(item, [](lv_event_t* e) {
-            auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-            auto* item = static_cast<lv_obj_t*>(lv_event_get_target(e));
-            auto* payload = static_cast<NetworkItemPayload*>(lv_obj_get_user_data(item));
-            const size_t index = payload != nullptr ? payload->index : self->wifi_scan_results_.size();
-
-            if (index < self->wifi_scan_results_.size()) {
-                const auto& ap = self->wifi_scan_results_[index];
-                self->OnNetworkSelected(ap.ssid, ap.is_secured);
-            }
+    // Current network first; ⓘ opens details. A saved but unreachable network also gets a row,
+    // so the user can still forget it or re-enter its password.
+    const std::string pinned_ssid = !current_ssid.empty() ? current_ssid : saved_ssid;
+    if (!pinned_ssid.empty()) {
+        auto* list = CreateGroupList(wifi_list_container_, y, 1);
+        const bool is_current = !current_ssid.empty();
+        auto* row = CreateNetworkRow(list, 0, pinned_ssid, is_current ? "已连接 ⓘ" : "已保存 ⓘ",
+                                     is_current ? rodakos_theme_success() : rodakos_theme_text_secondary(),
+                                     false);
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowPage(SettingsPage::kWiFiDetail);
         }, LV_EVENT_CLICKED, this);
+        y += kRowHeight + 8;
     }
 
+    std::vector<size_t> others;
+    for (size_t index = 0; index < results.size(); ++index) {
+        if (!results[index].ssid.empty() && results[index].ssid != pinned_ssid) others.push_back(index);
+    }
+
+    if (!others.empty()) {
+        auto* label = CreateSettingLabel(wifi_list_container_, "其他网络", true);
+        lv_obj_set_style_text_font(label, &phone_font_12, 0);
+        lv_obj_set_pos(label, kGridX + 4, y);
+        y += 18;
+        auto* list = CreateGroupList(wifi_list_container_, y, static_cast<int>(others.size()));
+        for (size_t row_index = 0; row_index < others.size(); ++row_index) {
+            const auto& ap = results[others[row_index]];
+            const std::string value = std::string(ap.is_secured ? ICON_LOCK " " : "开放 · ") + SignalWord(ap.rssi);
+            auto* row = CreateNetworkRow(list, static_cast<int>(row_index), ap.ssid, value,
+                                         rodakos_theme_text_secondary(), false);
+            auto* payload = new NetworkItemPayload{others[row_index]};
+            lv_obj_set_user_data(row, payload);
+            lv_obj_add_event_cb(row, NetworkItemDeleteEvent, LV_EVENT_DELETE, payload);
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+                auto* item = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
+                auto* payload = static_cast<NetworkItemPayload*>(lv_obj_get_user_data(item));
+                if (payload != nullptr && payload->index < self->wifi_scan_results_.size()) {
+                    const auto& ap = self->wifi_scan_results_[payload->index];
+                    self->OnNetworkSelected(ap.ssid, ap.is_secured);
+                }
+            }, LV_EVENT_CLICKED, this);
+        }
+    }
+
+    char status[48];
+    std::snprintf(status, sizeof(status), results.empty() ? "没有找到网络" : "找到 %u 个网络",
+                  static_cast<unsigned>(results.size()));
+    lv_label_set_text(wifi_status_label_, status);
     ESP_LOGI(TAG, "WiFi scan complete: %zu networks", results.size());
 }
 
 void SettingsApp::OnNetworkSelected(const std::string& ssid, bool is_secured) {
     ESP_LOGI(TAG, "Network selected: %s (secured: %d)", ssid.c_str(), is_secured);
-
-    // 检查是否是已连接的网络
-    auto* wifi = context_->services().wifi();
-    bool is_connected = wifi && (wifi->GetStatus() == WiFiStatus::kConnected);
     std::string saved_ssid = wifi_config_.GetSavedSSID();
-
-    if (is_connected && ssid == saved_ssid) {
-        // 已连接的网络：显示详情页面
-        ShowPage(SettingsPage::kWiFiDetail);
-    } else if (ssid == saved_ssid) {
-        // 已保存密码的网络：尝试自动连接
-        ESP_LOGI(TAG, "Saved network, attempting auto-connect");
+    if (ssid == saved_ssid) {
         std::string saved_password;
         if (wifi_config_.LoadCredentials(saved_ssid, saved_password)) {
             ConnectToNetwork(ssid, saved_password);
-        } else {
-            // 密码读取失败，要求输入
-            if (is_secured) {
-                ShowPasswordDialog(ssid);
-            } else {
-                ConnectToNetwork(ssid, "");
-            }
+            return;
         }
-    } else if (is_secured) {
-        // 加密网络：显示密码输入
+    }
+    if (is_secured) {
         ShowPasswordDialog(ssid);
     } else {
-        // 开放网络：直接连接
         ConnectToNetwork(ssid, "");
     }
 }
 
-void SettingsApp::ShowPasswordDialog(const std::string& ssid) {
-    // 创建模态背景
+void SettingsApp::ClosePasswordDialog() {
+    soft_keyboard_.Hide();
+    if (password_dialog_ != nullptr && lv_obj_is_valid(password_dialog_)) {
+        lv_obj_delete(password_dialog_);
+    }
+    password_dialog_ = nullptr;
+    password_textarea_ = nullptr;
+}
+
+void SettingsApp::ShowPasswordDialog(const std::string& ssid, const char* notice) {
+    ClosePasswordDialog();
+    connecting_ssid_ = ssid;
+
+    // Full-screen layer: the 120 px keyboard takes the bottom half, the field sits above it.
     password_dialog_ = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(password_dialog_);
     lv_obj_set_size(password_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(password_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(password_dialog_, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(password_dialog_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(password_dialog_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(password_dialog_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 对话框容器
-    auto* dialog_box = lv_obj_create(password_dialog_);
-    lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, 280, 180);
-    lv_obj_center(dialog_box);
-    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 12, 0);
-    lv_obj_set_style_pad_all(dialog_box, 16, 0);
-    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+    auto* box = lv_obj_create(password_dialog_);
+    lv_obj_remove_style_all(box);
+    // Ends at y=116, above the keyboard (y=120).
+    lv_obj_set_size(box, 304, 108);
+    lv_obj_set_pos(box, 8, 8);
+    lv_obj_set_style_bg_color(box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(box, 8, 0);
+    lv_obj_set_style_pad_hor(box, 12, 0);
+    lv_obj_set_style_pad_ver(box, 8, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 标题
-    auto* title_label = lv_label_create(dialog_box);
-    lv_label_set_text(title_label, "Enter Password");
-    lv_obj_set_style_text_color(title_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(title_label, &phone_font_18, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 0);
+    auto* caption = CreateSettingLabel(box, notice != nullptr ? notice : "连接到", notice != nullptr ? false : true);
+    lv_obj_set_width(caption, 236);
+    lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(caption, &phone_font_12, 0);
+    if (notice != nullptr) lv_obj_set_style_text_color(caption, rodakos_theme_warning(), 0);
+    lv_obj_align(caption, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // SSID 标签
-    auto* ssid_label = lv_label_create(dialog_box);
-    lv_label_set_text(ssid_label, ssid.c_str());
-    lv_obj_set_style_text_color(ssid_label, rodakos_theme_text_secondary(), 0);
-    lv_obj_set_style_text_font(ssid_label, &phone_font_12, 0);
-    lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 26);
+    auto* name = CreateSettingLabel(box, ssid.c_str(), false);
+    lv_obj_set_width(name, 236);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 18);
 
-    // 密码输入框
-    password_textarea_ = lv_textarea_create(dialog_box);
-    lv_obj_set_size(password_textarea_, 240, 40);
-    lv_obj_align(password_textarea_, LV_ALIGN_TOP_MID, 0, 50);
-    lv_textarea_set_placeholder_text(password_textarea_, "Password");
+    password_textarea_ = lv_textarea_create(box);
+    lv_obj_set_size(password_textarea_, 160, 36);
+    lv_obj_align(password_textarea_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_textarea_set_placeholder_text(password_textarea_, "密码");
     lv_textarea_set_password_mode(password_textarea_, true);
     lv_textarea_set_one_line(password_textarea_, true);
+    lv_textarea_set_max_length(password_textarea_, 64);
     lv_obj_set_style_bg_color(password_textarea_, rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_text_color(password_textarea_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_border_color(password_textarea_, rodakos_theme_primary(), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(password_textarea_, 0, 0);
+    lv_obj_set_style_radius(password_textarea_, 6, 0);
 
-    // 显示软键盘
-    soft_keyboard_.Show(password_textarea_);
+    // Long passwords are easy to mistype on a small keyboard; let the user check them.
+    auto* reveal = lv_btn_create(box);
+    lv_obj_set_size(reveal, 48, 36);
+    lv_obj_align(reveal, LV_ALIGN_BOTTOM_LEFT, 164, 0);
+    lv_obj_set_style_bg_color(reveal, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(reveal, 6, 0);
+    lv_obj_set_style_shadow_width(reveal, 0, 0);
+    auto* reveal_label = lv_label_create(reveal);
+    lv_label_set_text(reveal_label, "显示");
+    lv_obj_set_style_text_color(reveal_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(reveal_label, &phone_font_12, 0);
+    lv_obj_center(reveal_label);
+    lv_obj_add_event_cb(reveal, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        auto* button = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
+        if (self->password_textarea_ == nullptr) return;
+        const bool hidden = lv_textarea_get_password_mode(self->password_textarea_);
+        lv_textarea_set_password_mode(self->password_textarea_, !hidden);
+        lv_label_set_text(lv_obj_get_child(button, 0), hidden ? "隐藏" : "显示");
+    }, LV_EVENT_CLICKED, this);
 
-    // 按钮容器
-    auto* btn_container = lv_obj_create(dialog_box);
-    lv_obj_remove_style_all(btn_container);
-    lv_obj_set_size(btn_container, 240, 40);
-    lv_obj_align(btn_container, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_flex_flow(btn_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(btn_container, LV_OBJ_FLAG_SCROLLABLE);
-
-    // 取消按钮
-    auto* cancel_btn = lv_btn_create(btn_container);
-    lv_obj_set_size(cancel_btn, 100, 36);
-    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel_btn, 6, 0);
-
-    auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "Cancel");
+    // 取消 / 连接 share the field row; the keyboard's OK key also connects.
+    auto* cancel = lv_btn_create(box);
+    lv_obj_set_size(cancel, 36, 36);
+    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(cancel, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cancel, 5, 0);
+    lv_obj_set_style_shadow_width(cancel, 0, 0);
+    auto* cancel_label = lv_label_create(cancel);
+    lv_label_set_text(cancel_label, ICON_CLOSE);
     lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, PhoneIconFont(), 0);
     lv_obj_center(cancel_label);
-
-    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        // 隐藏软键盘
-        self->soft_keyboard_.Hide();
-        // 关闭对话框
-        if (self->password_dialog_ != nullptr && lv_obj_is_valid(self->password_dialog_)) {
-            lv_obj_delete(self->password_dialog_);
-            self->password_dialog_ = nullptr;
-            self->password_textarea_ = nullptr;
-        }
+    lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ClosePasswordDialog();
     }, LV_EVENT_CLICKED, this);
 
-    // 连接按钮
-    auto* connect_btn = lv_btn_create(btn_container);
-    lv_obj_set_size(connect_btn, 100, 36);
-    lv_obj_set_style_bg_color(connect_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(connect_btn, 6, 0);
-
-    auto* connect_label = lv_label_create(connect_btn);
-    lv_label_set_text(connect_label, "Connect");
-    lv_obj_set_style_text_color(connect_label, rodakos_theme_bg_primary(), 0);
+    auto* connect = lv_btn_create(box);
+    lv_obj_set_size(connect, 64, 36);
+    lv_obj_align(connect, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(connect, rodakos_theme_primary(), 0);
+    lv_obj_set_style_radius(connect, 5, 0);
+    lv_obj_set_style_shadow_width(connect, 0, 0);
+    auto* connect_label = lv_label_create(connect);
+    lv_label_set_text(connect_label, "连接");
+    lv_obj_set_style_text_color(connect_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(connect_label, &phone_font_14, 0);
     lv_obj_center(connect_label);
-
-    // 保存 SSID 到 SettingsApp 成员变量，避免内存管理问题
-    connecting_ssid_ = ssid;
-
-    lv_obj_add_event_cb(connect_btn, [](lv_event_t* e) {
+    const auto submit = [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->SubmitPasswordDialog();
+    };
+    lv_obj_add_event_cb(connect, submit, LV_EVENT_CLICKED, this);
 
-        const char* password = lv_textarea_get_text(self->password_textarea_);
-        self->ConnectToNetwork(self->connecting_ssid_, password ? password : "");
+    soft_keyboard_.Show(password_textarea_, [this]() {
+        // Runs from the keyboard event; defer the teardown until after the event returns.
+        lv_async_call([](void* user_data) {
+            static_cast<SettingsApp*>(user_data)->SubmitPasswordDialog();
+        }, this);
+    });
+}
 
-        // 隐藏软键盘
-        self->soft_keyboard_.Hide();
-
-        // 关闭对话框
-        if (self->password_dialog_ != nullptr && lv_obj_is_valid(self->password_dialog_)) {
-            lv_obj_delete(self->password_dialog_);
-            self->password_dialog_ = nullptr;
-            self->password_textarea_ = nullptr;
-        }
-    }, LV_EVENT_CLICKED, this);
+void SettingsApp::SubmitPasswordDialog() {
+    if (password_textarea_ == nullptr) return;
+    const char* text = lv_textarea_get_text(password_textarea_);
+    const std::string password = text != nullptr ? text : "";
+    const std::string ssid = connecting_ssid_;
+    ClosePasswordDialog();
+    ConnectToNetwork(ssid, password);
 }
 
 void SettingsApp::CreateWiFiDetailPage() {
@@ -446,158 +480,177 @@ void SettingsApp::CreateWiFiDetailPage() {
     lv_obj_set_size(wifi_detail_body_, lv_obj_get_width(main_body_), lv_obj_get_height(main_body_));
     lv_obj_set_pos(wifi_detail_body_, lv_obj_get_x(main_body_), lv_obj_get_y(main_body_));
     lv_obj_set_style_bg_opa(wifi_detail_body_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(wifi_detail_body_, 0, 0);
+    lv_obj_clear_flag(wifi_detail_body_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(wifi_detail_body_, LV_OBJ_FLAG_HIDDEN);
 
-    // 内容区域
-    auto* content = lv_obj_create(wifi_detail_body_);
-    lv_obj_remove_style_all(content);
-    lv_obj_set_size(content, 300, 148);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_set_style_pad_all(content, 16, 0);
-    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(content, 12, 0);
+    auto* card = lv_obj_create(wifi_detail_body_);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, kGridWidth, 136);
+    lv_obj_set_pos(card, kGridX, 6);
+    lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // SSID
-    detail_ssid_label_ = lv_label_create(content);
-    lv_label_set_text(detail_ssid_label_, "SSID: ");
-    lv_obj_set_style_text_color(detail_ssid_label_, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(detail_ssid_label_, &phone_font_14, 0);
+    detail_ssid_label_ = CreateDetailRow(card, 0, "网络");
+    detail_status_label_ = CreateDetailRow(card, 1, "状态");
+    detail_ip_label_ = CreateDetailRow(card, 2, "IP 地址");
+    detail_gateway_label_ = CreateDetailRow(card, 3, "网关 / 掩码");
+    detail_rssi_label_ = CreateDetailRow(card, 4, "信号");
+    detail_netmask_label_ = nullptr;
 
-    // 状态
-    detail_status_label_ = lv_label_create(content);
-    lv_label_set_text(detail_status_label_, "Status: ");
-    lv_obj_set_style_text_color(detail_status_label_, rodakos_theme_text_secondary(), 0);
-
-    // IP 地址
-    detail_ip_label_ = lv_label_create(content);
-    lv_label_set_text(detail_ip_label_, "IP Address: ");
-    lv_obj_set_style_text_color(detail_ip_label_, rodakos_theme_text_secondary(), 0);
-
-    // 网关
-    detail_gateway_label_ = lv_label_create(content);
-    lv_label_set_text(detail_gateway_label_, "Gateway: ");
-    lv_obj_set_style_text_color(detail_gateway_label_, rodakos_theme_text_secondary(), 0);
-
-    // 子网掩码
-    detail_netmask_label_ = lv_label_create(content);
-    lv_label_set_text(detail_netmask_label_, "Netmask: ");
-    lv_obj_set_style_text_color(detail_netmask_label_, rodakos_theme_text_secondary(), 0);
-
-    // 信号强度
-    detail_rssi_label_ = lv_label_create(content);
-    lv_label_set_text(detail_rssi_label_, "Signal: ");
-    lv_obj_set_style_text_color(detail_rssi_label_, rodakos_theme_text_secondary(), 0);
-
-    // 按钮容器
-    auto* btn_container = lv_obj_create(wifi_detail_body_);
-    lv_obj_remove_style_all(btn_container);
-    lv_obj_set_size(btn_container, 280, 40);
-    lv_obj_align(btn_container, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_flex_flow(btn_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // "断开连接" 按钮
-    auto* disconnect_btn = lv_btn_create(btn_container);
-    lv_obj_set_size(disconnect_btn, 130, 36);
-    lv_obj_set_style_bg_color(disconnect_btn, rodakos_theme_warning(), 0);
-    lv_obj_set_style_radius(disconnect_btn, 6, 0);
-
-    auto* disconnect_label = lv_label_create(disconnect_btn);
-    lv_label_set_text(disconnect_label, "Disconnect");
-    lv_obj_set_style_text_color(disconnect_label, lv_color_white(), 0);
-    lv_obj_center(disconnect_label);
-
-    lv_obj_add_event_cb(disconnect_btn, [](lv_event_t* e) {
+    wifi_detail_connect_button_ = CreateWideButton(wifi_detail_body_, "重新输入密码", false, false,
+                                                   kGridX, (kGridWidth - 8) / 2);
+    lv_obj_add_event_cb(wifi_detail_connect_button_, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        auto* wifi = self->context_->services().wifi();
-        if (wifi != nullptr) {
-            wifi->Disconnect();
-            self->ui_->ShowToastUnlocked("Disconnected");
-            self->ShowPage(SettingsPage::kWiFiList);
-        }
+        const std::string ssid = self->wifi_config_.GetSavedSSID();
+        if (!ssid.empty()) self->ShowPasswordDialog(ssid);
     }, LV_EVENT_CLICKED, this);
 
-    // "忘记网络" 按钮
-    auto* forget_btn = lv_btn_create(btn_container);
-    lv_obj_set_size(forget_btn, 130, 36);
-    lv_obj_set_style_bg_color(forget_btn, rodakos_theme_error(), 0);
-    lv_obj_set_style_radius(forget_btn, 6, 0);
-
-    auto* forget_label = lv_label_create(forget_btn);
-    lv_label_set_text(forget_label, "Forget");
-    lv_obj_set_style_text_color(forget_label, lv_color_white(), 0);
-    lv_obj_center(forget_label);
-
-    lv_obj_add_event_cb(forget_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        if (!self->wifi_config_.ClearCredentials()) {
-            self->ui_->ShowToastUnlocked("Failed to forget network");
-            return;
-        }
-        self->ui_->ShowToastUnlocked("Network forgotten");
-
-        auto* wifi = self->context_->services().wifi();
-        if (wifi != nullptr) {
-            wifi->Disconnect();
-        }
-
-        self->ShowPage(SettingsPage::kWiFiList);
+    auto* forget = CreateWideButton(wifi_detail_body_, "忘记此网络", false, true,
+                                    kGridX + (kGridWidth - 8) / 2 + 8, (kGridWidth - 8) / 2);
+    lv_obj_add_event_cb(forget, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowForgetWiFiDialog();
     }, LV_EVENT_CLICKED, this);
 
     UpdateWiFiDetailPage();
 }
 
+void SettingsApp::ShowForgetWiFiDialog() {
+    const std::string ssid = wifi_config_.GetSavedSSID();
+    if (ssid.empty() || wifi_forget_dialog_ != nullptr) return;
+
+    wifi_forget_dialog_ = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(wifi_forget_dialog_);
+    lv_obj_set_size(wifi_forget_dialog_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(wifi_forget_dialog_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(wifi_forget_dialog_, LV_OPA_70, 0);
+    lv_obj_clear_flag(wifi_forget_dialog_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* box = lv_obj_create(wifi_forget_dialog_);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, 296, 150);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_set_style_pad_all(box, 14, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    const std::string title_text = "忘记「" + ssid + "」？";
+    auto* title = CreateSettingLabel(box, title_text.c_str(), false);
+    lv_obj_set_width(title, 268);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    auto* message = CreateSettingLabel(box, "设备会断开这个网络并删除保存的密码，下次需要重新输入。", true);
+    lv_obj_set_width(message, 268);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(message, &phone_font_12, 0);
+    lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, 30);
+
+    auto* cancel = lv_btn_create(box);
+    lv_obj_set_size(cancel, 128, 36);
+    lv_obj_align(cancel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_radius(cancel, 7, 0);
+    lv_obj_set_style_shadow_width(cancel, 0, 0);
+    auto* cancel_label = lv_label_create(cancel);
+    lv_label_set_text(cancel_label, "取消");
+    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
+    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
+    lv_obj_center(cancel_label);
+    lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseForgetWiFiDialog();
+    }, LV_EVENT_CLICKED, this);
+
+    auto* confirm = lv_btn_create(box);
+    lv_obj_set_size(confirm, 128, 36);
+    lv_obj_align(confirm, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(confirm, rodakos_theme_error(), 0);
+    lv_obj_set_style_radius(confirm, 7, 0);
+    lv_obj_set_style_shadow_width(confirm, 0, 0);
+    auto* confirm_label = lv_label_create(confirm);
+    lv_label_set_text(confirm_label, "忘记");
+    lv_obj_set_style_text_color(confirm_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(confirm_label, &phone_font_14, 0);
+    lv_obj_center(confirm_label);
+    lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        self->CloseForgetWiFiDialog();
+        if (!self->wifi_config_.ClearCredentials()) {
+            self->ui_->ShowToastUnlocked("删除失败，请重试");
+            return;
+        }
+        if (auto* wifi = self->context_->services().wifi(); wifi != nullptr) wifi->Disconnect();
+        self->ui_->ShowToastUnlocked("已忘记该网络");
+        self->ShowPage(SettingsPage::kWiFiList);
+    }, LV_EVENT_CLICKED, this);
+}
+
+void SettingsApp::CloseForgetWiFiDialog() {
+    if (wifi_forget_dialog_ != nullptr && lv_obj_is_valid(wifi_forget_dialog_)) {
+        lv_obj_delete(wifi_forget_dialog_);
+    }
+    wifi_forget_dialog_ = nullptr;
+}
+
 void SettingsApp::UpdateWiFiDetailPage() {
     auto* wifi = context_->services().wifi();
-    if (wifi == nullptr) {
+    if (wifi == nullptr || detail_ssid_label_ == nullptr) {
         return;
     }
+    const WiFiStatus status = wifi->GetStatus();
+    const bool connected = status == WiFiStatus::kConnected;
+    const std::string saved = wifi_config_.GetSavedSSID();
+    const std::string ssid = connected ? wifi->GetConnectedSSID() : saved;
+    lv_label_set_text(detail_ssid_label_, ssid.empty() ? "—" : ssid.c_str());
 
-    // SSID
-    std::string ssid = wifi->GetConnectedSSID();
-    char ssid_text[64];
-    snprintf(ssid_text, sizeof(ssid_text), "SSID: %s", ssid.c_str());
-    lv_label_set_text(detail_ssid_label_, ssid_text);
-
-    // 状态
-    WiFiStatus status = wifi->GetStatus();
-    const char* status_str = (status == WiFiStatus::kConnected) ? "Connected" : "Disconnected";
-    char status_text[64];
-    snprintf(status_text, sizeof(status_text), "Status: %s", status_str);
+    const char* status_text = connected ? "已连接"
+        : status == WiFiStatus::kConnecting ? "正在连接…"
+        : wifi->LastFailureWasAuthRejected() ? "密码错误"
+        : "未连接";
     lv_label_set_text(detail_status_label_, status_text);
+    lv_obj_set_style_text_color(detail_status_label_,
+                                connected ? rodakos_theme_success()
+                                : wifi->LastFailureWasAuthRejected() ? rodakos_theme_error()
+                                : rodakos_theme_text_primary(),
+                                0);
 
-    // IP 地址
-    std::string ip = wifi->GetIPAddress();
-    char ip_text[64];
-    snprintf(ip_text, sizeof(ip_text), "IP Address: %s", ip.c_str());
-    lv_label_set_text(detail_ip_label_, ip_text);
+    const std::string ip = connected ? wifi->GetIPAddress() : std::string();
+    lv_label_set_text(detail_ip_label_, ip.empty() ? "—" : ip.c_str());
 
-    // TODO: 从 esp_netif 获取网关和子网掩码
-    lv_label_set_text(detail_gateway_label_, "Gateway: 192.168.88.1");
-    lv_label_set_text(detail_netmask_label_, "Netmask: 255.255.255.0");
-
-    // TODO: 信号强度需要从 WiFi 驱动获取
-    lv_label_set_text(detail_rssi_label_, "Signal: Good");
+    const WiFiLinkInfo link = wifi->GetLinkInfo();
+    if (link.valid) {
+        const std::string net = link.gateway + " / " + link.netmask;
+        lv_label_set_text(detail_gateway_label_, net.c_str());
+        lv_label_set_text_fmt(detail_rssi_label_, "%s（%d dBm）", SignalWord(link.rssi),
+                              static_cast<int>(link.rssi));
+    } else {
+        lv_label_set_text(detail_gateway_label_, "—");
+        lv_label_set_text(detail_rssi_label_, connected ? "未知" : "—");
+    }
+    if (wifi_detail_connect_button_ != nullptr) {
+        if (saved.empty()) lv_obj_add_state(wifi_detail_connect_button_, LV_STATE_DISABLED);
+        else lv_obj_clear_state(wifi_detail_connect_button_, LV_STATE_DISABLED);
+    }
 }
 
 void SettingsApp::ConnectToNetwork(const std::string& ssid, const std::string& password) {
     auto* wifi = context_->services().wifi();
     if (wifi == nullptr) {
-        ui_->ShowToastUnlocked("WiFi not available");
+        lv_label_set_text(wifi_status_label_, "Wi-Fi 不可用");
         return;
     }
 
     connecting_ssid_ = ssid;
-
-    char status_text[64];
-    snprintf(status_text, sizeof(status_text), "Connecting to %s...", ssid.c_str());
-    lv_label_set_text(wifi_status_label_, status_text);
+    const std::string connecting = "正在连接 " + ssid + "…";
+    lv_label_set_text(wifi_status_label_, connecting.c_str());
 
     auto guard = wifi_async_guard_;
     const uint32_t generation = guard != nullptr ? guard->generation.load() : 0;
-    wifi->Connect(ssid, password, [guard, generation, ssid, password](WiFiStatus status) {
+    const bool started = wifi->Connect(ssid, password, [guard, generation, ssid, password](WiFiStatus status) {
         auto* payload = new WiFiConnectPayload{
             .guard = guard,
             .generation = generation,
@@ -607,6 +660,10 @@ void SettingsApp::ConnectToNetwork(const std::string& ssid, const std::string& p
         };
         QueueWiFiAsyncPayload(payload, WiFiConnectCompleteCallback);
     });
+    if (!started) {
+        const std::string failed = "无法连接 " + ssid + "，请稍后重试";
+        lv_label_set_text(wifi_status_label_, failed.c_str());
+    }
 }
 
 void SettingsApp::OnWiFiConnectAsyncComplete(WiFiStatus status,
@@ -614,45 +671,42 @@ void SettingsApp::OnWiFiConnectAsyncComplete(WiFiStatus status,
                                              const std::string& password) {
     if (status == WiFiStatus::kConnected) {
         if (!wifi_config_.SaveCredentials(ssid, password)) {
-            ui_->ShowToastUnlocked("WiFi connected, but credentials were not saved");
-            OnConnectResult(WiFiStatus::kFailed, ssid);
-            return;
+            ui_->ShowToastUnlocked("已连接，但密码没有保存");
         }
     }
     OnConnectResult(status, ssid);
 }
 
 void SettingsApp::OnConnectResult(WiFiStatus status, const std::string& ssid) {
-    char msg[128];
-
+    auto* wifi = context_->services().wifi();
     switch (status) {
         case WiFiStatus::kConnected: {
-            auto* wifi = context_->services().wifi();
-            std::string ip = wifi ? wifi->GetIPAddress() : "unknown";
-            snprintf(msg, sizeof(msg), "Connected to %s\nIP: %s", ssid.c_str(), ip.c_str());
-            lv_label_set_text(wifi_status_label_, msg);
-            ui_->ShowToastUnlocked("WiFi connected!");
-
-            // 保存 WiFi 凭据
-            // 注意：密码已经在 ConnectToNetwork 中传递，我们需要保存它
-            ESP_LOGI(TAG, "WiFi connected: %s, IP: %s", ssid.c_str(), ip.c_str());
+            const std::string text = "已连接 " + ssid;
+            lv_label_set_text(wifi_status_label_, text.c_str());
+            ESP_LOGI(TAG, "WiFi connected: %s, IP: %s", ssid.c_str(),
+                     wifi != nullptr ? wifi->GetIPAddress().c_str() : "unknown");
+            // Re-render so the connected network moves into the top group.
+            OnWiFiScanComplete(wifi_scan_results_);
             break;
         }
-
         case WiFiStatus::kFailed:
-            snprintf(msg, sizeof(msg), "Failed to connect to %s", ssid.c_str());
-            lv_label_set_text(wifi_status_label_, msg);
-            ui_->ShowToastUnlocked("Connection failed");
             ESP_LOGE(TAG, "WiFi connection failed: %s", ssid.c_str());
+            if (wifi != nullptr && wifi->LastFailureWasAuthRejected()) {
+                // A changed router password lands here; ask for the new one straight away.
+                lv_label_set_text(wifi_status_label_, "密码错误");
+                ShowPasswordDialog(ssid, "密码错误，请重新输入");
+            } else {
+                const std::string text = "无法连接 " + ssid;
+                lv_label_set_text(wifi_status_label_, text.c_str());
+            }
             break;
-
         case WiFiStatus::kDisconnected:
-            lv_label_set_text(wifi_status_label_, "Disconnected");
+            lv_label_set_text(wifi_status_label_, "未连接");
             break;
-
-        case WiFiStatus::kConnecting:
-            snprintf(msg, sizeof(msg), "Connecting to %s...", ssid.c_str());
-            lv_label_set_text(wifi_status_label_, msg);
+        case WiFiStatus::kConnecting: {
+            const std::string text = "正在连接 " + ssid + "…";
+            lv_label_set_text(wifi_status_label_, text.c_str());
             break;
+        }
     }
 }

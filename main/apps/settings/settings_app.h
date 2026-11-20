@@ -133,7 +133,12 @@ private:
     void StartWiFiScan();
     void OnWiFiScanComplete(const std::vector<WiFiScanResult>& results);
     void OnNetworkSelected(const std::string& ssid, bool is_secured);
-    void ShowPasswordDialog(const std::string& ssid);
+    // `notice` replaces the caption, e.g. after the router rejected the saved password.
+    void ShowPasswordDialog(const std::string& ssid, const char* notice = nullptr);
+    void ClosePasswordDialog();
+    void SubmitPasswordDialog();
+    void ShowForgetWiFiDialog();
+    void CloseForgetWiFiDialog();
     void ConnectToNetwork(const std::string& ssid, const std::string& password);
     void OnConnectResult(WiFiStatus status, const std::string& ssid);
     void UpdateWiFiDetailPage();
@@ -243,6 +248,8 @@ private:
     lv_obj_t* wifi_status_label_ = nullptr;
     lv_obj_t* wifi_list_container_ = nullptr;
     lv_obj_t* password_dialog_ = nullptr;
+    lv_obj_t* wifi_forget_dialog_ = nullptr;
+    lv_obj_t* wifi_detail_connect_button_ = nullptr;
     lv_obj_t* password_textarea_ = nullptr;
     std::shared_ptr<SettingsWiFiAsyncGuard> wifi_async_guard_;
     std::vector<WiFiScanResult> wifi_scan_results_;

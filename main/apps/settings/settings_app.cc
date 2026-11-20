@@ -119,6 +119,8 @@ bool SettingsApp::OnThemeChanged(PhoneAppContext& context) {
 
 void SettingsApp::DestroyUi() {
     CloseUsbDiskDialog();
+    ClosePasswordDialog();
+    CloseForgetWiFiDialog();
     CloseButtonActionDialog();
     if (usb_disk_hint_page_ != nullptr && lv_obj_is_valid(usb_disk_hint_page_)) {
         lv_obj_delete(usb_disk_hint_page_);
@@ -227,6 +229,7 @@ void SettingsApp::ResetUiPointers() {
     detail_gateway_label_ = nullptr;
     detail_netmask_label_ = nullptr;
     detail_rssi_label_ = nullptr;
+    wifi_detail_connect_button_ = nullptr;
 }
 
 void SettingsApp::ShowPage(SettingsPage page) {
@@ -294,7 +297,7 @@ void SettingsApp::ShowPage(SettingsPage page) {
             }
             lv_obj_clear_flag(wifi_detail_body_, LV_OBJ_FLAG_HIDDEN);
             if (header_title_label_ != nullptr) {
-                lv_label_set_text(header_title_label_, "WiFi Details");
+                lv_label_set_text(header_title_label_, "Wi-Fi 详情");
             }
             UpdateWiFiDetailPage();  // 刷新数据
             break;
