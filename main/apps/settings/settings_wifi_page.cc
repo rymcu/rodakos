@@ -276,13 +276,13 @@ void SettingsApp::OnWiFiScanComplete(const std::vector<WiFiScanResult>& results)
     // Rows under the 38 px status/rescan line.
     lv_coord_t y = 38;
 
-    // Current network first; ⓘ opens details. A saved but unreachable network also gets a row,
+    // Current network first; the info icon opens details. A saved but unreachable network also gets a row,
     // so the user can still forget it or re-enter its password.
     const std::string pinned_ssid = !current_ssid.empty() ? current_ssid : saved_ssid;
     if (!pinned_ssid.empty()) {
         auto* list = CreateGroupList(wifi_list_container_, y, 1);
         const bool is_current = !current_ssid.empty();
-        auto* row = CreateNetworkRow(list, 0, pinned_ssid, is_current ? "已连接 ⓘ" : "已保存 ⓘ",
+        auto* row = CreateNetworkRow(list, 0, pinned_ssid, is_current ? "已连接  " ICON_INFO : "已保存  " ICON_INFO,
                                      is_current ? rodakos_theme_success() : rodakos_theme_text_secondary(),
                                      false);
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
@@ -400,6 +400,8 @@ void SettingsApp::ShowPasswordDialog(const std::string& ssid, const char* notice
     lv_textarea_set_max_length(password_textarea_, 64);
     lv_obj_set_style_bg_color(password_textarea_, rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_text_color(password_textarea_, rodakos_theme_text_primary(), 0);
+    // LVGL's default font has no CJK fallback; the 密码 placeholder would draw as boxes.
+    lv_obj_set_style_text_font(password_textarea_, &phone_font_14, 0);
     lv_obj_set_style_border_width(password_textarea_, 0, 0);
     lv_obj_set_style_radius(password_textarea_, 6, 0);
 
