@@ -19,5 +19,15 @@ bool ShouldRetryWiFiConnection(int retry_count,
                                bool connection_active,
                                bool has_callback);
 
+enum class WiFiFailureKind {
+    kOther,
+    // The access point rejected the credentials (wrong or changed password).
+    kAuthRejected,
+    kNetworkNotFound,
+};
+
+// Maps an ESP-IDF wifi_err_reason_t value to what the user can act on.
+WiFiFailureKind ClassifyWiFiDisconnectReason(uint8_t reason);
+
 // Only a configuration that has acquired an IP uses persistent recovery.
 uint32_t WiFiRecoveryBackoffMs(uint32_t retry_count);

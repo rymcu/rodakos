@@ -287,3 +287,39 @@ RODAK_TEST("WiFi valid DHCP renewal cancels a LOST IP watchdog and rejects its d
     RODAK_CHECK_EQ(ConnectCalls(), 1);
     RODAK_CHECK_EQ(DisconnectCalls(), 0);
 }
+
+RODAK_TEST("WiFi link info reports the driver's RSSI, gateway and netmask only while connected") {
+    Fixture fixture;
+    RODAK_CHECK_FALSE(fixture.wifi->GetLinkInfo().valid);
+    fixture.Establish();
+    const WiFiLinkInfo info = fixture.wifi->GetLinkInfo();
+    RODAK_CHECK(info.valid);
+    RODAK_CHECK_EQ(static_cast<int>(info.rssi), -57);
+    RODAK_CHECK_EQ(info.gateway, std::string("192.168.88.1"));
+    RODAK_CHECK_EQ(info.netmask, std::string("255.255.255.0"));
+    SetAPInfoResult(ESP_FAIL);
+    RODAK_CHECK_FALSE(fixture.wifi->GetLinkInfo().valid);
+    SetAPInfoResult(ESP_OK);
+}
+
+RODAK_TEST("WiFi stops retrying and reports an auth rejection when the password is refused") {
+    Fixture fixture;
+    fixture.Start();
+    Disconnected("known-ap", false, 202);
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kFailed);
+    RODAK_CHECK(fixture.wifi->LastFailureWasAuthRejected());
+    RODAK_CHECK_EQ(fixture.callbacks.size(), static_cast<size_t>(1));
+    RODAK_CHECK(fixture.callbacks.back() == WiFiStatus::kFailed);
+
+    // A new attempt clears the flag.
+    fixture.Start();
+    RODAK_CHECK_FALSE(fixture.wifi->LastFailureWasAuthRejected());
+}
+
+RODAK_TEST("WiFi keeps retrying other failures and does not report them as auth rejections") {
+    Fixture fixture;
+    fixture.Start();
+    Disconnected("known-ap", false, 201);
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kConnecting);
+    RODAK_CHECK_FALSE(fixture.wifi->LastFailureWasAuthRejected());
+}

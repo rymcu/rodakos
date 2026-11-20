@@ -8,6 +8,33 @@
 
 static const char* TAG = "SoftKeyboard";
 
+namespace {
+// LVGL's default special layer lacks ~ ^ | and the backtick, so WiFi passwords containing them
+// could not be typed. Same layout, with those four keys added to the second and third rows.
+// Keys that switch layers keep LVGL's own labels ("abc", the keyboard and OK symbols).
+const char* const kSpecialMap[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
+    "abc", "+", "&", "/", "*", "=", "%", "!", "?", "#", "<", ">", "~", "\n",
+    "\\", "@", "$", "(", ")", "{", "}", "[", "]", ";", "\"", "'", "^", "|", "`", "\n",
+    LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""};
+
+constexpr lv_buttonmatrix_ctrl_t Ctrl(uint32_t flags) {
+    return static_cast<lv_buttonmatrix_ctrl_t>(flags);
+}
+constexpr uint32_t kPopover = LV_BUTTONMATRIX_CTRL_POPOVER;
+constexpr uint32_t kChecked = LV_BUTTONMATRIX_CTRL_CHECKED;
+constexpr uint32_t kModeFlags =
+    LV_BUTTONMATRIX_CTRL_NO_REPEAT | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_CHECKED;
+constexpr lv_buttonmatrix_ctrl_t kKey = Ctrl(kPopover | 1);
+constexpr lv_buttonmatrix_ctrl_t kMode2 = Ctrl(kModeFlags | 2);
+constexpr lv_buttonmatrix_ctrl_t kChecked2 = Ctrl(kChecked | 2);
+const lv_buttonmatrix_ctrl_t kSpecialCtrl[] = {
+    kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kChecked2,
+    kMode2, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey,
+    kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey, kKey,
+    kMode2, kChecked2, Ctrl(6), kChecked2, kMode2};
+}  // namespace
+
 SoftKeyboard::~SoftKeyboard() {
     Hide();
 }
@@ -39,6 +66,7 @@ void SoftKeyboard::Show(lv_obj_t* textarea, std::function<void()> on_ready) {
         static_cast<uint32_t>(LV_PART_ITEMS) | static_cast<uint32_t>(LV_STATE_PRESSED));
     lv_obj_set_style_bg_color(keyboard_, rodakos_theme_primary(), pressed_items);
     lv_obj_set_style_text_color(keyboard_, rodakos_theme_bg_primary(), pressed_items);
+    lv_keyboard_set_map(keyboard_, LV_KEYBOARD_MODE_SPECIAL, kSpecialMap, kSpecialCtrl);
     lv_keyboard_set_mode(keyboard_, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_obj_add_event_cb(keyboard_, KeyboardEventHandler, LV_EVENT_ALL, this);
     if (!textarea_handler_registered_) {

@@ -134,12 +134,13 @@ void MissingLostIP() {
     ip_event_got_ip_t event{};
     Enqueue(IP_EVENT, IP_EVENT_STA_LOST_IP, &event, sizeof(event)); Drain();
 }
-void Disconnected(const std::string& ssid, bool still_associated) {
+void Disconnected(const std::string& ssid, bool still_associated, uint8_t reason) {
     {
         std::lock_guard<std::mutex> lock(mutex);
         if (!still_associated) associated = false;
     }
     wifi_event_sta_disconnected_t event{};
+    event.reason = reason;
     event.ssid_len = static_cast<uint8_t>(ssid.size());
     std::memcpy(event.ssid, ssid.data(), std::min(ssid.size(), sizeof(event.ssid)));
     Enqueue(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &event, sizeof(event)); Drain();
@@ -173,7 +174,10 @@ void esp_netif_destroy_default_wifi(void*) { DriverCall call; }
 esp_err_t esp_netif_get_ip_info(esp_netif_t*, esp_netif_ip_info_t* result) {
     DriverCall call; ++ip_info_calls; std::lock_guard<std::mutex> lock(mutex);
     if (ip_info_result != ESP_OK) return ip_info_result;
-    result->ip.addr = live_ip; return ESP_OK;
+    result->ip.addr = live_ip;
+    result->gw.addr = 0xc0a85801;       // 192.168.88.1
+    result->netmask.addr = 0xffffff00;  // 255.255.255.0
+    return ESP_OK;
 }
 esp_err_t esp_netif_set_hostname(esp_netif_t*, const char* hostname) {
     DriverCall call; std::lock_guard<std::mutex> lock(mutex); netif_hostname = hostname; return ESP_OK;
@@ -217,6 +221,7 @@ esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t* ap) {
     if (ap_info_result != ESP_OK) return ap_info_result;
     if (!associated) return ESP_ERR_WIFI_NOT_CONNECT;
     std::memcpy(ap->ssid, associated_ssid.data(), std::min(associated_ssid.size(), sizeof(ap->ssid)));
+    ap->rssi = -57;
     return ESP_OK;
 }
 esp_err_t esp_wifi_scan_start(const wifi_scan_config_t*, bool) { DriverCall call; return ESP_OK; }

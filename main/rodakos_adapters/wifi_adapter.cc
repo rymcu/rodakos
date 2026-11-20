@@ -110,6 +110,8 @@ public:
     WiFiStatus GetStatus() const override;
     std::string GetConnectedSSID() const override;
     std::string GetIPAddress() const override;
+    WiFiLinkInfo GetLinkInfo() const override;
+    bool LastFailureWasAuthRejected() const override;
 
 private:
     void AnnounceLocalHostname(esp_netif_t* sta_netif);
@@ -146,6 +148,7 @@ private:
     std::function<void(WiFiStatus)> connect_callback_;
     int retry_count_ = 0;
     static constexpr int kMaxRetries = 3;
+    bool last_failure_auth_rejected_ = false;
     enum class RecoveryPhase { kIdle, kBackoff, kConnecting, kStopping };
     bool connection_established_ = false;
     RecoveryPhase recovery_phase_ = RecoveryPhase::kIdle;
@@ -783,6 +786,10 @@ bool ESP32WiFiAdapter::Connect(const std::string& ssid,
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        last_failure_auth_rejected_ = false;
+    }
     // A prior attempt (including a timed-out barrier) must settle before IDF
     // accepts a new station configuration.
     if (!DisconnectAndWaitWithOperation(kConnectDisconnectTimeoutMs)) {
@@ -1086,6 +1093,35 @@ std::string ESP32WiFiAdapter::GetIPAddress() const {
     return ip_address_;
 }
 
+WiFiLinkInfo ESP32WiFiAdapter::GetLinkInfo() const {
+    WiFiLinkInfo info;
+    void* netif = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (status_ != WiFiStatus::kConnected) return info;
+        netif = sta_netif_;
+    }
+    wifi_ap_record_t ap{};
+    esp_netif_ip_info_t ip{};
+    if (netif == nullptr || esp_wifi_sta_get_ap_info(&ap) != ESP_OK ||
+        esp_netif_get_ip_info(static_cast<esp_netif_t*>(netif), &ip) != ESP_OK) {
+        return info;
+    }
+    char text[16];
+    std::snprintf(text, sizeof(text), IPSTR, IP2STR(&ip.gw));
+    info.gateway = text;
+    std::snprintf(text, sizeof(text), IPSTR, IP2STR(&ip.netmask));
+    info.netmask = text;
+    info.rssi = ap.rssi;
+    info.valid = true;
+    return info;
+}
+
+bool ESP32WiFiAdapter::LastFailureWasAuthRejected() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_failure_auth_rejected_;
+}
+
 void ESP32WiFiAdapter::ProcessScanDone(const wifi_event_sta_scan_done_t* event,
                                        uint32_t expected_generation) {
     uint32_t generation = 0;
@@ -1297,7 +1333,10 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                         sta_connected_generation_ = 0;
                         connected_ssid_.clear();
                         ip_address_.clear();
-                        if (ShouldRetryWiFiConnection(
+                        const bool auth_rejected =
+                            ClassifyWiFiDisconnectReason(event->reason) == WiFiFailureKind::kAuthRejected;
+                        // Retrying a rejected password only delays the prompt to re-enter it.
+                        if (!auth_rejected && ShouldRetryWiFiConnection(
                                 retry_count_, kMaxRetries,
                                 status_ == WiFiStatus::kConnecting ||
                                     status_ == WiFiStatus::kConnected,
@@ -1310,6 +1349,7 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                             connect_callback_notified_ = false;
                         } else {
                             status_ = WiFiStatus::kFailed;
+                            last_failure_auth_rejected_ = auth_rejected;
                             callback = std::move(connect_callback_);
                             connect_callback_notified_ = false;
                         }

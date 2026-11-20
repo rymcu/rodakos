@@ -21,7 +21,7 @@ inline constexpr int ESP_EVENT_ANY_ID = -1, WIFI_EVENT_STA_START = 1,
 enum esp_mac_type_t { ESP_MAC_WIFI_STA = 0 };
 struct esp_netif_t {};
 struct esp_ip4_addr_t { uint32_t addr = 0; };
-struct esp_netif_ip_info_t { esp_ip4_addr_t ip; };
+struct esp_netif_ip_info_t { esp_ip4_addr_t ip; esp_ip4_addr_t netmask; esp_ip4_addr_t gw; };
 struct ip_event_got_ip_t { esp_netif_t* esp_netif = nullptr; esp_netif_ip_info_t ip_info; };
 #define IPSTR "%u.%u.%u.%u"
 #define IP2STR(ip) ((ip)->addr >> 24), (((ip)->addr >> 16) & 255), (((ip)->addr >> 8) & 255), ((ip)->addr & 255)
@@ -31,7 +31,7 @@ struct wifi_config_t { struct { uint8_t ssid[32]{}; uint8_t password[64]{}; } st
 struct wifi_scan_config_t { bool show_hidden = false; int scan_type = 0; };
 struct wifi_ap_record_t { uint8_t ssid[33]{}; int8_t rssi = -40; uint8_t authmode = 0; };
 struct wifi_event_sta_connected_t { uint8_t ssid[32]{}; uint8_t ssid_len = 0; };
-using wifi_event_sta_disconnected_t = wifi_event_sta_connected_t;
+struct wifi_event_sta_disconnected_t { uint8_t ssid[32]{}; uint8_t ssid_len = 0; uint8_t bssid[6]{}; uint8_t reason = 0; int8_t rssi = 0; };
 struct wifi_event_sta_scan_done_t { uint32_t status = 0; };
 using TickType_t = uint32_t;
 using BaseType_t = int;
