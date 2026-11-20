@@ -326,3 +326,32 @@ RODAK_TEST("WiFi keeps retrying other failures and does not report them as auth 
     RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kConnecting);
     RODAK_CHECK_FALSE(fixture.wifi->LastFailureWasAuthRejected());
 }
+
+RODAK_TEST("WiFi a failed attempt does not block the next connection or a scan") {
+    Fixture fixture;
+    fixture.Start("other-ap");
+    // The AP rejects the password. The real driver then answers esp_wifi_disconnect() with
+    // ESP_OK and posts no further event, although the station is no longer associated.
+    SetDisconnectResult(ESP_OK);
+    Disconnected("other-ap", false, 202);
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kFailed);
+
+    // Falling back to the saved network must start a new attempt, not wait for a disconnect
+    // event that the driver will never send.
+    RODAK_CHECK(fixture.wifi->Connect("known-ap", "test-only-password", [](WiFiStatus) {}));
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kConnecting);
+    Connected("known-ap");
+    GotIP();
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kConnected);
+    RODAK_CHECK(fixture.wifi->StartScan([](const std::vector<WiFiScanResult>&) {}));
+}
+
+RODAK_TEST("WiFi scanning works after a failed attempt with no fallback") {
+    Fixture fixture;
+    fixture.Start("other-ap");
+    SetDisconnectResult(ESP_OK);
+    Disconnected("other-ap", false, 202);
+    RODAK_CHECK_EQ(fixture.wifi->GetStatus(), WiFiStatus::kFailed);
+    RODAK_CHECK(fixture.wifi->DisconnectAndWait(2000));
+    RODAK_CHECK(fixture.wifi->StartScan([](const std::vector<WiFiScanResult>&) {}));
+}
