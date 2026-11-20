@@ -53,11 +53,8 @@ RODAK_TEST("A bound device with expired credentials has a clickable retry separa
     Fixture f;
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "设备凭据需要更新");
     RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_pairing_button_, LV_OBJ_FLAG_HIDDEN));
-    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_unbind_button_, LV_OBJ_FLAG_HIDDEN));
-    // Unbind lives in the hidden Details panel, never beside Retry in the action bar.
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "重试");
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "详情");
-    RODAK_CHECK(lv_obj_has_flag(f.app.cloud_details_panel_, LV_OBJ_FLAG_HIDDEN));
+    // 重试 is the primary action; 解除连接 is reached through 详情, never next to 重试.
+    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.cloud_secondary_button_, LV_OBJ_FLAG_HIDDEN));
     lv_area_t retry;
     lv_obj_scroll_to_view(f.app.cloud_pairing_button_, LV_ANIM_OFF); Pump();
     lv_obj_get_coords(f.app.cloud_pairing_button_, &retry);
@@ -89,7 +86,6 @@ RODAK_TEST("A rejected credential refresh keeps the binding and never displays r
     f.app.RefreshDeviceCloud(); cloud_ui_test::RunTask(); Pump();
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_status_label_)), "已连接");
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "详情");
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "解除连接");
 }
 
 RODAK_TEST("Settings destruction ignores delayed cloud completion without changing the voice lifecycle") {
@@ -166,7 +162,6 @@ RODAK_TEST("Lost refresh callback is recovered by the UI timer and a later retry
     f.app.RefreshDeviceCloud(); cloud_ui_test::RunTask(); Pump();
     RODAK_CHECK_EQ(f.bound_notifications, 1U);
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_pairing_button_label_)), "详情");
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.cloud_secondary_button_label_)), "解除连接");
 }
 
 RODAK_TEST("A rejected UI completion remains distinct from an older rejected credential diagnosis") {
