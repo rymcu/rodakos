@@ -34,5 +34,10 @@ private:
     lv_obj_t* last_label_ = nullptr;
     lv_obj_t* start_btn_ = nullptr;
     lv_obj_t* stop_btn_ = nullptr;
+    lv_obj_t* toggle_label_ = nullptr;
+    lv_obj_t* token_caption_ = nullptr;
+    lv_obj_t* token_label_ = nullptr;
+    lv_obj_t* progress_bar_ = nullptr;
+    lv_timer_t* refresh_timer_ = nullptr;
     std::shared_ptr<StopGuard> stop_guard_;
 };

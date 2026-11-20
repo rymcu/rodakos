@@ -23,6 +23,8 @@ struct WebFileSystemServiceState {
     std::string last_file;
     size_t last_bytes = 0;
     size_t active_bytes = 0;
+    // Expected size of the upload in progress; 0 when unknown or idle.
+    size_t active_total_bytes = 0;
 };
 
 class WebFileSystemService {
@@ -41,6 +43,7 @@ private:
     bool TryBeginWrite(const std::string& message, const std::string& file_name = "");
     void SetBusy(bool busy, const std::string& file_name = "");
     void AddActiveBytes(size_t bytes);
+    void SetActiveTotal(size_t bytes);
     void CompleteUpload(const std::string& file_name, size_t bytes);
     bool AuthenticateRequest(httpd_req_t* req) const;
 
