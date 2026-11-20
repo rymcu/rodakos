@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Validate the machine-readable Rodak AIoT v1 contract.
+"""Validate the machine-readable Rodak contracts under contracts/<name>/v<N>/.
 
-Checks:
+Contracts: rodak-aiot/v1 and rodak-realtime-voice/v1. For each one:
   1. Every schema is a valid JSON Schema 2020-12 document.
   2. Every fixture in examples/valid/ matches its schema.
   3. Every fixture in examples/invalid/ is rejected by its schema.
   4. Every schema has at least one valid and one invalid fixture.
-  5. openapi.yaml and asyncapi.yaml only reference existing schema files.
-  6. Every contracts/... schema link in docs/rodak-aiot-contract-v1.md exists.
+  5. openapi.yaml and asyncapi.yaml, when present, only reference existing schema files.
+  6. Every contracts/... link in the contract's prose document exists.
   7. Extension keywords for rules that JSON Schema cannot express (see EXTENSIONS below).
-  8. The valid signed OTA manifest verifies with examples/ota-signing-public-key.pem, using the
-     same signed text as Rodak and tools/ota_security.py (skipped if cryptography is absent).
+  8. rodak-aiot only: the valid signed OTA manifest verifies with examples/ota-signing-public-key.pem,
+     using the same signed text as Rodak and tools/ota_security.py (skipped if cryptography is absent).
 
 A fixture is named <schema-name>.<case>.json. Requires: jsonschema>=4.18, referencing, PyYAML.
 """
@@ -31,10 +31,15 @@ except ImportError as exc:  # pragma: no cover - environment message only
     sys.exit(f"missing dependency: {exc.name}. Install: pip install 'jsonschema>=4.18' PyYAML")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+CONTRACTS = {
+    "rodak-aiot/v1": ROOT / "docs" / "rodak-aiot-contract-v1.md",
+    "rodak-realtime-voice/v1": ROOT / "docs" / "rodak-realtime-voice-contract-v1.md",
+}
+# Defaults used by tests and by older callers: the AIoT contract.
 CONTRACT = ROOT / "contracts" / "rodak-aiot" / "v1"
 SCHEMAS = CONTRACT / "schemas"
 EXAMPLES = CONTRACT / "examples"
-DOC = ROOT / "docs" / "rodak-aiot-contract-v1.md"
+DOC = CONTRACTS["rodak-aiot/v1"]
 
 
 def load_json(path: pathlib.Path):
@@ -58,6 +63,8 @@ def load_json(path: pathlib.Path):
 #   x-samePresence: [[paths]]    the listed paths are either all present or all absent
 #   x-forbiddenKeys: [keys]      no object at any depth has one of these keys
 #   x-nonblankAfterTrim: true    string is nonempty after JavaScript trim()
+#   x-preferredInList: {value, list}  object[value] is one of object[list]
+#   x-rav1: {maxPayloadBytes}    hex RAV1 frame: the length field equals the payload length
 #   x-noControlAfterTrim: true   after JavaScript trim(), no C0 control or DEL remains
 #   (x-endpointMatches also checks sslEndpoint: "" without TLS, == endpoint with TLS)
 JS_WHITESPACE = "\t\n\v\f\r              " \
@@ -119,6 +126,18 @@ def extension_errors(schema, value, schemas, path="<root>"):
         present = {dotted: dig(value, dotted)[0] for dotted in group}
         if len(set(present.values())) > 1:
             yield f"{path}: {present} must be all present or all absent"
+    rule = schema.get("x-preferredInList")
+    if rule and isinstance(value, dict) and rule["value"] in value and rule["list"] in value:
+        if value[rule["value"]] not in value[rule["list"]]:
+            yield f"{path}/{rule['value']}: not in {rule['list']}"
+    rule = schema.get("x-rav1")
+    if rule and isinstance(value, str) and len(value) >= 24 and len(value) % 2 == 0:
+        declared = int(value[16:24], 16)
+        actual = (len(value) - 24) // 2
+        if declared != actual:
+            yield f"{path}: RAV1 length field {declared} != payload {actual}"
+        if actual > rule["maxPayloadBytes"]:
+            yield f"{path}: RAV1 payload {actual} > {rule['maxPayloadBytes']}"
     if schema.get("x-nonblankAfterTrim") and isinstance(value, str) and not js_trim(value):
         yield f"{path}: blank after trim"
     if schema.get("x-noControlAfterTrim") and isinstance(value, str) and \
@@ -198,12 +217,14 @@ def extension_errors(schema, value, schemas, path="<root>"):
                 yield from extension_errors(sub, value[name], schemas, f"{path}/{name}")
 
 
-def main() -> int:
+def check_contract(contract_name: str, doc: pathlib.Path) -> tuple[list[str], int, int]:
+    contract = ROOT / "contracts" / contract_name
+    schema_dir = contract / "schemas"
+    examples = contract / "examples"
     errors: list[str] = []
-    schemas = {p.name.removesuffix(".schema.json"): load_json(p) for p in sorted(SCHEMAS.glob("*.schema.json"))}
+    schemas = {p.name.removesuffix(".schema.json"): load_json(p) for p in sorted(schema_dir.glob("*.schema.json"))}
     if not schemas:
-        print(f"no schemas under {SCHEMAS}")
-        return 1
+        return [f"{contract_name}: no schemas under {schema_dir}"], 0, 0
 
     registry = Registry()
     for name, schema in schemas.items():
@@ -222,7 +243,7 @@ def main() -> int:
 
     coverage = {name: {"valid": 0, "invalid": 0} for name in schemas}
     for kind in ("valid", "invalid"):
-        for fixture in sorted((EXAMPLES / kind).glob("*.json")):
+        for fixture in sorted((examples / kind).glob("*.json")):
             schema_name = fixture.name.split(".", 1)[0]
             validator = validators.get(schema_name)
             if validator is None:
@@ -248,41 +269,56 @@ def main() -> int:
                 errors.append(f"schema {name}: no {kind} fixture")
 
     for spec in ("openapi.yaml", "asyncapi.yaml"):
-        text = (CONTRACT / spec).read_text(encoding="utf-8")
+        if not (contract / spec).exists():
+            continue
+        text = (contract / spec).read_text(encoding="utf-8")
         yaml.safe_load(text)
         for ref in sorted(set(re.findall(r"schemas/([a-z0-9-]+)\.schema\.json", text))):
             if ref not in schemas:
                 errors.append(f"{spec}: references missing schema {ref}")
 
-    for ref in sorted(set(re.findall(r"contracts/rodak-aiot/v1/([A-Za-z0-9_./-]+)", DOC.read_text(encoding="utf-8")))):
-        target = CONTRACT / ref.rstrip(").")
-        if not target.exists():
-            errors.append(f"{DOC.name}: link to missing {ref}")
+    pattern = r"contracts/" + re.escape(contract_name) + r"/([A-Za-z0-9_./-]+)"
+    for ref in sorted(set(re.findall(pattern, doc.read_text(encoding="utf-8")))):
+        if not (contract / ref.rstrip(").")).exists():
+            errors.append(f"{doc.name}: link to missing {ref}")
 
-    manifest = EXAMPLES / "valid" / "ota-manifest.signed-v2.json"
-    public_key = EXAMPLES / "ota-signing-public-key.pem"
+    manifest = examples / "valid" / "ota-manifest.signed-v2.json"
+    if manifest.exists():
+        errors += verify_ota_signature(manifest, examples / "ota-signing-public-key.pem")
+
+    total = sum(c["valid"] + c["invalid"] for c in coverage.values())
+    return [f"{contract_name}: {e}" for e in errors], len(schemas), total
+
+
+def verify_ota_signature(manifest: pathlib.Path, public_key: pathlib.Path) -> list[str]:
     try:
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding
     except ImportError:
         print("note: cryptography not installed; OTA signature fixture not verified")
-    else:
-        m = load_json(manifest)
-        fields = ["rodakos-ota-v2", "rymcu-bigsmart", "ota_0", "rsa2048-sha256", m["taskNo"], m["version"],
-                  str(m["fileSize"]), m["checksumValue"], ""]
-        signed = "\n".join(fields).encode("utf-8")
-        key = serialization.load_pem_public_key(public_key.read_bytes())
-        try:
-            key.verify(bytes.fromhex(m["signatureValue"]), signed, padding.PKCS1v15(), hashes.SHA256())
-        except Exception:  # noqa: BLE001
-            errors.append(f"valid/{manifest.name}: signature does not verify")
+        return []
+    m = load_json(manifest)
+    fields = ["rodakos-ota-v2", "rymcu-bigsmart", "ota_0", "rsa2048-sha256", m["taskNo"], m["version"],
+              str(m["fileSize"]), m["checksumValue"], ""]
+    key = serialization.load_pem_public_key(public_key.read_bytes())
+    try:
+        key.verify(bytes.fromhex(m["signatureValue"]), "\n".join(fields).encode("utf-8"),
+                   padding.PKCS1v15(), hashes.SHA256())
+    except Exception:  # noqa: BLE001
+        return [f"valid/{manifest.name}: signature does not verify"]
+    return []
 
-    total = sum(c["valid"] + c["invalid"] for c in coverage.values())
-    if errors:
-        print("\n".join(errors))
-        print(f"FAILED: {len(errors)} problem(s), {len(schemas)} schemas, {total} fixtures")
+
+def main() -> int:
+    all_errors: list[str] = []
+    for name, doc in CONTRACTS.items():
+        errors, schema_count, fixture_count = check_contract(name, doc)
+        all_errors += errors
+        status = "FAILED" if errors else "OK"
+        print(f"{status} {name}: {schema_count} schemas, {fixture_count} fixtures")
+    if all_errors:
+        print("\n".join(all_errors))
         return 1
-    print(f"OK: {len(schemas)} schemas, {total} fixtures, openapi/asyncapi references resolved")
     return 0
 
 

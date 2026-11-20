@@ -3,18 +3,32 @@
 > Schema: `rodak-realtime-voice/v1`  
 > Transport: WebSocket  
 > Firmware: `main/phone_os/realtime_voice_contract.*` and
-> `realtime_voice_transport.*`
+> `realtime_voice_transport.*`  
+> Canonical server: Rodak `src/main/server/realtime-voice-*.ts`  
+> Machine-readable form: [`contracts/rodak-realtime-voice/v1/`](../contracts/rodak-realtime-voice/v1/README.md)  
+> Source of truth: when this document and Rodak's code disagree, Rodak is correct.
 
 This is the canonical RodakOS voice wire contract. It is independent of the
 legacy XiaoZhi protocol. Rodak currently has no XiaoZhi adapter. RodakOS must not
 accept XiaoZhi fields, event names, automatic greetings, or `/xiaozhi` endpoints in a
 canonical descriptor.
 
+The keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119. Text marked *Informative*
+describes the current RodakOS implementation.
+
+| You are | Read |
+| --- | --- |
+| Implementing the server side | §1–§5, §7, §8 |
+| Building a device or simulator | All sections, then [voice assistant](voice-assistant.md) for firmware timing |
+| Checking a message | `contracts/rodak-realtime-voice/v1/schemas/` |
+
 ## 1. Descriptor from AIoT
 
-The confirmed AIoT token response may contain `realtimeVoice` (or its
-snake_case alias). The descriptor is optional for MQTT-only devices. When it is
-present, all of the following fields are required unless marked optional:
+Rodak sends `realtimeVoice` in the bootstrap and in every AIoT token response. *Informative:*
+RodakOS also accepts the `realtime_voice` alias and treats the descriptor as optional for MQTT-only
+servers. When it is present, all of the following fields are required unless marked optional.
+The values below are what Rodak's AIoT routes emit (schema
+[`realtime-voice-descriptor`](../contracts/rodak-aiot/v1/schemas/realtime-voice-descriptor.schema.json)):
 
 ```json
 {
@@ -41,14 +55,15 @@ present, all of the following fields are required unless marked optional:
     "maxControlBytes": 65536
   },
   "features": [],
-  "capabilities": ["session", "audio-input", "audio-output"],
+  "capabilities": ["session", "audio-input", "audio-output", "speech-boundaries",
+                   "interrupt", "assistant-events", "mcp"],
   "events": [
     "session.open", "session.ready", "input.start", "input.stop",
     "wake.detected", "playback.abort", "vad", "output.start",
     "output.stop", "session.end", "mcp", "error"
   ],
-  "vadStrategies": ["server-authoritative"],
-  "preferredVadStrategy": "server-authoritative"
+  "vadStrategies": ["device-authoritative", "server-authoritative", "hybrid-fallback"],
+  "preferredVadStrategy": "hybrid-fallback"
 }
 ```
 
@@ -152,7 +167,8 @@ as a [historical contract](archive/2026-10-21-voice-volume-mcp.md).
 ## 3. Control events
 
 All JSON control messages are UTF-8 objects with an `event` field. Events after
-the handshake carry the negotiated `sessionId`.
+the handshake carry the negotiated `sessionId`, which MUST be nonblank after trim. Each event has
+a schema in [`contracts/rodak-realtime-voice/v1/schemas/`](../contracts/rodak-realtime-voice/v1/README.md).
 
 | Direction | Event | Required or meaningful fields |
 | --- | --- | --- |
@@ -179,8 +195,9 @@ action that causes the server to send `session.end`. `goodbye` is not a wire
 event in this contract.
 
 `session.end.reason` is informational. The device handles every reason as an ordinary session
-end and re-arms local wake. Rodak currently sends these reasons: `shutdown`,
-`wake-arbitration-lost` (§6), `announce-finished` and `announce-expired` (§8).
+end and re-arms local wake. Rodak currently sends these reasons: `goodbye-intent` (the user said
+goodbye), `wake-arbitration-lost` (§6), `announce-finished` and `announce-expired` (§8). A new
+reason MUST NOT require device changes.
 
 An MCP `payload` must be a JSON object. Scalar and array payloads are rejected.
 Outer control JSON is bounded to twelve nesting levels before parsing. The transport still
@@ -224,7 +241,7 @@ Late output, audio, errors, and lifecycle callbacks from an older generation
 must be dropped. They must never reopen playback, replace the session, or start
 a second WebSocket.
 
-## 6. Device voice policy
+## 6. Session lifecycle
 
 The canonical product flow is:
 
@@ -234,37 +251,30 @@ local wake → connect → session.open/ready → wake.detected → input.start
 → input.start (same session) or session.end
 ```
 
-The follow-up window is 30 seconds and is refreshed when capture restarts or
-fresh speech begins. An initial connection or first-turn failure, a terminal transport error,
-connection/listening watchdog, explicit `session.end`, or follow-up timeout closes the session and
-re-arms local wake monitoring. A watchdog must not cut off audio that is already draining.
-The device also ends the session when a reply stalls: no binary audio frame and no `output.stop`
-for 20 s after `output.start` or after the previous reply frame. The server must keep a reply's
-frames less than 20 s apart, or send `output.stop`. This watchdog fires only after local playback
-has gone quiet, so it never cuts off draining audio.
+Rules both sides rely on:
 
-An interaction is established only after `session.ready`, `wake.detected`, and its first
-`input.start` have all succeeded. `session.open` is a prerequisite of `session.ready`. A failure
-before that point is an initial-setup failure and ends the wake interaction. Once established, a
-retryable failure remains eligible for reconnect even before the first `output.start` arrives. The
-service retries only retryable transport failures: network loss, connect/session-ready timeout, send
-failure, WebSocket `1011`, `1012`, or `1013`, or a server `error` with `retryable: true`. It does not
-retry configuration or authentication errors, protocol errors, WebSocket `1002` or `4001`,
-`session.end`, user stop, or deinitialization. Retry timing is bounded to three attempts with
-exponential backoff from 250 ms to 8 s. Each attempt performs
-`close/wait → session.open/session.ready → wake.detected → input.start`. Only a completed sequence
-commits the new active generation. Old recorder frames, inbound callbacks, playback state, and decoder
-state are discarded at the recovery boundary.
+- An interaction is established only after `session.ready`, `wake.detected` and its first
+  `input.start` succeed. A failure before that point ends the wake interaction.
+- The device MAY reconnect an established interaction only after a retryable failure: network
+  loss, connect or `session.ready` timeout, send failure, WebSocket `1011`/`1012`/`1013`, or a
+  server `error` with `retryable: true`. It MUST NOT retry configuration or authentication errors,
+  protocol errors, WebSocket `1002`/`4001`, `session.end`, user stop or deinitialization.
+- Each reconnect performs `session.open/session.ready → wake.detected → input.start` on a new
+  generation. Only a completed sequence commits it. Results of the old generation MUST be dropped.
+- The server MUST keep the frames of one reply less than 20 s apart, or send `output.stop`. The
+  device ends a session whose reply stalls for 20 s.
+- A confirmed barge-in sends `vad` and `playback.abort` on the current session and playback epoch,
+  and rejects late audio until the next `output.start`.
 
-During AEC/VAD-enabled playback, the capture path may remain open. A confirmed
-barge-in sends `vad`/`playback.abort` on the current session and playback epoch,
-closes only the decoder, and rejects late audio until the next `output.start`.
-Manual wake interruption uses `reason: "wake-word"` and follows with a new
-`input.start` on the same session.
+*Informative:* RodakOS timing (30 s follow-up window, three reconnect attempts with 250 ms–8 s
+backoff, recorder pre-roll, AEC/VAD gating) is in
+[voice assistant: wire behavior](voice-assistant.md#wire-behavior) and
+[reconnect policy](voice-assistant.md#reconnect-policy).
 
 ### Multi-device wake arbitration (server side)
 
-When several devices on one Rodak server report `wake.detected` within 1.5 s, the server treats
+When several devices on one Rodak server report `wake.detected` within 1.5 s
+(`VOICE_WAKE_ARBITRATION_WINDOW_MS`), the server treats
 them as one wake. The server answers only the first device. Each losing device receives `session.end`
 with `reason: "wake-arbitration-lost"`, and then the server closes that connection. RodakOS needs
 no special handling: this is an ordinary session end that re-arms local wake.
@@ -323,7 +333,7 @@ Device-side termination and failure rules:
   device does not send `playback.abort` and does not turn the announce into a conversation. The
   device closes the WebSocket without sending `input.stop`. Rodak's protocol also allows
   `playback.abort` followed by a normal interaction, but RodakOS does not use that option.
-- The 20 s reply-stall watchdog from §6 starts when the session commits, before `output.start`
+- The 20 s reply-stall watchdog (§6) starts when the session commits, before `output.start`
   arrives. If the server stays silent for 20 s, the device ends the announce. If `output.stop`
   arrives but `session.end` does not, the 30-second follow-up timeout closes the session.
 - An announce session never reconnects. Any transport failure ends it, because a retry would
@@ -338,21 +348,28 @@ device reconnect. A retried notice gets a new sequence. Rodak's `played` status 
 non-empty audio downlink completed in software on the original authenticated connection. It is
 not evidence that the speaker produced sound.
 
-## 9. Verification anchors
+## 9. Machine-readable contract and verification
 
-Host coverage is limited to pure contract and coordinator behavior.
-`tests/app_model/realtime_voice_contract_test.cc` covers descriptor validation,
-VAD negotiation, RAV1 parsing, MCP/error validation, generation isolation,
-playback epochs, monotonic sequences, bounded reconnect policy, and the `session.open`
-announce flags. The test checks that the flags appear only with a non-zero `announceSeq` and that
-`features.mcp` stays `false`. The announce state machine in `VoiceAssistantService` has no host
-test. Its playback-only start, no follow-up, no reconnect, and wake-word termination need device
-validation.
-`tests/app_model/voice_assistant_reconnect_coordinator_test.cc` exercises recovery
-ordering, generation gates, backoff, and cancellation through a fake transport.
-Neither target instantiates `VoiceAssistantService` or the ESP/FreeRTOS transport.
-They do not validate production Stop/Deinit cancellation, release of a blocked
-open attempt, or decoder reset at the recovery boundary. Those behaviors require
-firmware and hardware validation. Product behavior and hardware gates are documented
-in [Voice assistant integration](voice-assistant.md) and
-[Voice AEC integration](voice-aec-integration.md).
+[`contracts/rodak-realtime-voice/v1/`](../contracts/rodak-realtime-voice/v1/README.md) holds one JSON
+Schema per control event, a `control-message` union that rejects legacy XiaoZhi keys, and a RAV1
+frame schema (fixtures store the binary frame as hex). `python3 tools/check_aiot_contract.py` checks
+it together with the AIoT contract. `tests/app_model/voice_contract_fixture_test.cc` feeds the
+server-event and RAV1 fixtures to the firmware parsers and compares the device's own `session.open`,
+`wake.detected`, `input.start` and `playback.abort` with the fixtures byte for byte (as JSON).
+
+Other anchors: `tests/app_model/realtime_voice_contract_test.cc` (descriptor validation, VAD
+negotiation, RAV1 parsing, generation isolation, playback epochs, reconnect policy, announce flags)
+and `voice_assistant_reconnect_coordinator_test.cc`. Neither instantiates `VoiceAssistantService` or
+the ESP/FreeRTOS transport. The announce state machine, Stop/Deinit cancellation and decoder reset
+need device validation; see [voice assistant](voice-assistant.md) and
+[voice AEC integration](voice-aec-integration.md). Rodak's gates are
+`tests/main-integration/realtime-voice-gateway.test.ts`, `voice-announce.test.ts` and
+`proactive-voice.test.ts`.
+
+## 10. Changelog
+
+| Date | Change |
+| --- | --- |
+| 2026-11-20 | Added the reading guide and `contracts/rodak-realtime-voice/v1/`. Shortened §6 to the rules both sides rely on; firmware timing now lives in [voice assistant](voice-assistant.md). Corrected the descriptor example to Rodak's emitted value and the `session.end` reasons (`goodbye-intent`, not `shutdown`). |
+| 2026-11-05 | Server-initiated announce (§8). |
+| 2026-10-21 | Session-scoped voice MCP volume tools removed ([archive](archive/2026-10-21-voice-volume-mcp.md)). |

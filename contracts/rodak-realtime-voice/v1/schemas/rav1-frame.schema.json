@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/rav1-frame.schema.json",
+  "title": "RAV1 binary audio frame",
+  "description": "Hex dump of one binary WebSocket message: 'RAV1' (52415631), 4-byte big-endian non-zero sequence, 4-byte big-endian payload length N, then N bytes of one Opus packet. N equals the remaining length and is at most limits.maxAudioFrameBytes.",
+  "type": "string",
+  "pattern": "^52415631(?!00000000)[0-9a-f]{8}[0-9a-f]{8}([0-9a-f]{2})*$",
+  "x-rav1": {
+    "maxPayloadBytes": 65536
+  }
+}

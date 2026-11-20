@@ -29,6 +29,7 @@ add_executable(rodakos_app_model_tests
     device_pairing_policy_test.cc
     device_pairing_protocol_test.cc
     contract_fixture_test.cc
+    voice_contract_fixture_test.cc
     realtime_voice_contract_test.cc
     voice_assistant_reconnect_coordinator_test.cc
     battery_level_model_test.cc
@@ -87,7 +88,8 @@ target_include_directories(rodakos_app_model_tests BEFORE PRIVATE
 
 target_compile_features(rodakos_app_model_tests PRIVATE cxx_std_17)
 target_compile_definitions(rodakos_app_model_tests PRIVATE
-    RODAK_AIOT_CONTRACT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/rodak-aiot/v1")
+    RODAK_AIOT_CONTRACT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/rodak-aiot/v1"
+    RODAK_VOICE_CONTRACT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/rodak-realtime-voice/v1")
 
 set(TEST_CJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cjson")
 target_sources(rodakos_app_model_tests PRIVATE "${TEST_CJSON_DIR}/cJSON.c")

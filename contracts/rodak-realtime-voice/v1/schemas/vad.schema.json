@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/vad.schema.json",
+  "title": "vad (device -> server)",
+  "description": "Device VAD boundary. Suppressed when the negotiated strategy is server-authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "vad"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "state": {
+      "enum": [
+        "start",
+        "end"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "triggerMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "playbackEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    }
+  },
+  "required": [
+    "event",
+    "sessionId",
+    "state",
+    "source",
+    "sequence",
+    "triggerMs"
+  ]
+}

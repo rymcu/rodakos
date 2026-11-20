@@ -135,7 +135,7 @@ jobs:
               2>&1 | tee "$RODAKOS_CHECKS/$suite-tests.log"
           done
 
-      - name: Validate Rodak AIoT v1 machine-readable contract
+      - name: Validate Rodak AIoT and realtime voice machine-readable contracts
         run: |
           python3 -m venv /opt/rodakos-contract-python
           /opt/rodakos-contract-python/bin/python -m pip install jsonschema==4.23.0 PyYAML==6.0.2 cryptography==44.0.0

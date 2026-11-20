@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/output-start.schema.json",
+  "title": "output.start (server -> device)",
+  "description": "Starts a reply. playbackEpoch increases for each explicit output.start. RAV1 audio follows.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "output.start"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "playbackEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    }
+  },
+  "required": [
+    "event",
+    "sessionId"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "event": "error",
+  "code": "invalid-canonical-event",
+  "message": "控制帧无效",
+  "retryable": false
+}

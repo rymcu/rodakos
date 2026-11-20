@@ -1,0 +1,21 @@
+{
+  "event": "session.ready",
+  "sessionId": "rv-7f3c2a9e1b4d4c6a",
+  "protocol": "rodak-realtime-voice",
+  "protocolVersion": 1,
+  "transport": "websocket",
+  "generation": 7,
+  "vadStrategy": "hybrid-fallback",
+  "uplink": {
+    "codec": "opus",
+    "sampleRateHz": 16000,
+    "channels": 1,
+    "frameDurationMs": 60
+  },
+  "downlink": {
+    "codec": "opus",
+    "sampleRateHz": 24000,
+    "channels": 1,
+    "frameDurationMs": 60
+  }
+}

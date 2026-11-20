@@ -372,7 +372,7 @@ and [navigation host coverage](../tests/navigation_ui/README.md).
 - [Home layout and folder design](home-layout-design.md)
 - [Rodak AIoT v1 contract](rodak-aiot-contract-v1.md), [MQTT command semantics](mqtt-command-semantics.md),
   [AIoT implementation notes](aiot-implementation-notes.md), [machine-readable contract](../contracts/rodak-aiot/v1/README.md)
-- [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md)
+- [Rodak realtime voice v1 contract](rodak-realtime-voice-contract-v1.md), [machine-readable contract](../contracts/rodak-realtime-voice/v1/README.md)
 - [Voice assistant integration](voice-assistant.md)
 - [Voice task retirement and software evidence](voice-task-retirement.md)
 - [Serial provisioning](serial-provisioning.md)

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/session-ready.schema.json",
+  "title": "session.ready (server -> device)",
+  "description": "Exactly one per connection, with the generation of the matching session.open. vadStrategy must be one the device offered; absent means server-authoritative (Rodak native adapter, realtime-voice-native-session-adapter.ts:247-267).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "session.ready"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "protocol": {
+      "const": "rodak-realtime-voice"
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "transport": {
+      "const": "websocket"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "vadStrategy": {
+      "enum": [
+        "device-authoritative",
+        "server-authoritative",
+        "hybrid-fallback"
+      ]
+    },
+    "uplink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "const": 16000
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "const": 60
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    },
+    "downlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "const": "opus"
+        },
+        "sampleRateHz": {
+          "enum": [
+            8000,
+            12000,
+            16000,
+            24000,
+            48000
+          ]
+        },
+        "channels": {
+          "const": 1
+        },
+        "frameDurationMs": {
+          "enum": [
+            5,
+            10,
+            20,
+            40,
+            60
+          ]
+        }
+      },
+      "required": [
+        "codec",
+        "sampleRateHz",
+        "channels",
+        "frameDurationMs"
+      ]
+    }
+  },
+  "required": [
+    "event",
+    "sessionId",
+    "protocol",
+    "protocolVersion",
+    "transport",
+    "generation",
+    "uplink",
+    "downlink"
+  ]
+}
