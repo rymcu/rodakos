@@ -331,6 +331,11 @@ bool ESP32WiFiAdapter::IsEventTaskContext() const {
 }
 
 bool ESP32WiFiAdapter::HasActiveAttemptLocked() const {
+    // A failed attempt was already torn down by the disconnect event that failed it.
+    if (status_ == WiFiStatus::kFailed && target_ssid_.empty() && connected_ssid_.empty() &&
+        !connect_command_pending_ && sta_connected_generation_ == 0 && !connect_callback_) {
+        return false;
+    }
     return status_ != WiFiStatus::kDisconnected ||
            connect_command_pending_ ||
            sta_connected_generation_ != 0 ||
@@ -1361,6 +1366,12 @@ void ESP32WiFiAdapter::HandleWiFiEvent(esp_event_base_t event_base,
                             auth_rejected_ssid_ = auth_rejected ? target_ssid_ : std::string();
                             callback = std::move(connect_callback_);
                             connect_callback_notified_ = false;
+                            // This disconnect event ends the attempt: the station is no longer
+                            // associated and the driver posts no further event. Clearing the
+                            // target lets the next Connect or scan start at once, instead of
+                            // waiting 2 s on a disconnect barrier that can never complete.
+                            target_ssid_.clear();
+                            connect_command_pending_ = false;
                         }
                     }
                 }
