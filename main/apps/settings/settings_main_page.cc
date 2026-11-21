@@ -245,6 +245,20 @@ void SettingsApp::CreateMainPage() {
         }
     }, LV_EVENT_RELEASED, this);
 
+    brightness_sync_timer_ = lv_timer_create([](lv_timer_t* timer) {
+        auto* self = static_cast<SettingsApp*>(lv_timer_get_user_data(timer));
+        auto* backlight = self->context_ != nullptr ? self->context_->services().backlight() : nullptr;
+        if (backlight == nullptr || self->brightness_slider_ == nullptr ||
+            lv_obj_has_state(self->brightness_slider_, LV_STATE_PRESSED)) {
+            return;
+        }
+        const int value = backlight->GetBrightness();
+        if (value != lv_slider_get_value(self->brightness_slider_)) {
+            lv_slider_set_value(self->brightness_slider_, value, LV_ANIM_OFF);
+            UpdateBrightnessLabel(self->brightness_label_, lv_slider_get_value(self->brightness_slider_));
+        }
+    }, 500, this);
+
     auto* theme_row = CreateRow(display, 1, ICON_PALETTE, "主题", true, nullptr);
     lv_obj_add_event_cb(theme_row, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
