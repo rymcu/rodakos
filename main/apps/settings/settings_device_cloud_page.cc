@@ -871,16 +871,87 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
     lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
     lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
     lv_obj_center(save_label);
+    cloud_url_original_ = config.provisioning_url;
+    cloud_url_bound_ = config.aiot_registered && config.aiot_activated && !config.unbind_pending;
     lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        const bool saved = self->SaveCloudProvisioningUrl(
-            TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_)));
-        if (saved) {
+        const std::string url = TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_));
+        const std::string effective =
+            url.empty() ? rodakos::DeviceCloudConfigService::DefaultProvisioningUrl() : url;
+        // Saving a different address drops the current binding; say so before doing it.
+        if (self->cloud_url_bound_ && effective != self->cloud_url_original_) {
+            self->ShowCloudUrlChangeConfirm(effective);
+            return;
+        }
+        if (self->SaveCloudProvisioningUrl(url)) {
             self->CloseCloudProvisioningUrlDialog();
         }
     }, LV_EVENT_CLICKED, this);
 
     soft_keyboard_.Show(cloud_url_textarea_);
+}
+
+// Replaces the address editor with a confirmation: old and new server, and what changing means.
+void SettingsApp::ShowCloudUrlChangeConfirm(const std::string& url) {
+    if (cloud_url_dialog_ == nullptr) return;
+    soft_keyboard_.Hide();
+    cloud_url_pending_ = url;
+    lv_obj_clean(cloud_url_dialog_);
+    cloud_url_textarea_ = nullptr;
+
+    auto* box = lv_obj_create(cloud_url_dialog_);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, 296, 196);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_set_style_pad_all(box, 14, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto* title = CreateSettingLabel(box, "更换服务器？");
+    lv_obj_set_style_text_font(title, &phone_font_18, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    const std::string hosts = "原来  " + HostOf(cloud_url_original_) + "\n新的  " + HostOf(url);
+    auto* host_label = CreateSettingLabel(box, hosts.c_str());
+    lv_obj_set_width(host_label, 268);
+    lv_label_set_long_mode(host_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(host_label, &phone_font_12, 0);
+    lv_obj_align(host_label, LV_ALIGN_TOP_LEFT, 0, 30);
+
+    auto* warning = CreateSettingLabel(box, "设备会断开当前服务器，并清除现有绑定。之后需要在新服务器上重新配对。", true);
+    lv_obj_set_width(warning, 268);
+    lv_label_set_long_mode(warning, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(warning, &phone_font_12, 0);
+    lv_obj_set_style_text_color(warning, rodakos_theme_warning(), 0);
+    lv_obj_align(warning, LV_ALIGN_TOP_LEFT, 0, 68);
+
+    auto make_button = [&](const char* text, bool primary, lv_align_t align) {
+        auto* button = lv_btn_create(box);
+        lv_obj_set_size(button, 128, 36);
+        lv_obj_align(button, align, 0, 0);
+        lv_obj_set_style_bg_color(button, primary ? rodakos_theme_error() : rodakos_theme_bg_tertiary(), 0);
+        lv_obj_set_style_radius(button, 7, 0);
+        lv_obj_set_style_shadow_width(button, 0, 0);
+        auto* label = lv_label_create(button);
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_color(label, primary ? lv_color_white() : rodakos_theme_text_primary(), 0);
+        lv_obj_set_style_text_font(label, &phone_font_14, 0);
+        lv_obj_center(label);
+        return button;
+    };
+    auto* cancel = make_button("取消", false, LV_ALIGN_BOTTOM_LEFT);
+    lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseCloudProvisioningUrlDialogAsync();
+    }, LV_EVENT_CLICKED, this);
+    auto* confirm = make_button("更换", true, LV_ALIGN_BOTTOM_RIGHT);
+    lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        if (self->SaveCloudProvisioningUrl(self->cloud_url_pending_)) {
+            self->CloseCloudProvisioningUrlDialogAsync();
+        }
+    }, LV_EVENT_CLICKED, this);
 }
 
 void SettingsApp::CloseCloudProvisioningUrlDialog() {
@@ -890,6 +961,7 @@ void SettingsApp::CloseCloudProvisioningUrlDialog() {
     }
     cloud_url_dialog_ = nullptr;
     cloud_url_textarea_ = nullptr;
+    cloud_url_pending_.clear();
 }
 
 void SettingsApp::CloseCloudProvisioningUrlDialogAsync() {
@@ -909,7 +981,7 @@ bool SettingsApp::SaveCloudProvisioningUrl(const std::string& url) {
     const auto result = device_cloud->SaveProvisioningUrl(url);
     if (result != rodakos::ProvisioningUrlSaveResult::kSaved &&
         result != rodakos::ProvisioningUrlSaveResult::kUnchanged) {
-        ui_->ShowToastUnlocked("Failed to save provisioning endpoint");
+        ui_->ShowToastUnlocked("服务地址保存失败");
         return false;
     }
     ui_->ShowToastUnlocked(result == rodakos::ProvisioningUrlSaveResult::kUnchanged
