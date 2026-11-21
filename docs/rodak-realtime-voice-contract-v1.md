@@ -89,7 +89,9 @@ limit.
 Allowed capability names are `session`, `audio-input`, `audio-output`,
 `speech-boundaries`, `interrupt`, `assistant-events`, and `mcp`. Allowed event
 names are the twelve names shown above. `features` is an array of server-defined
-strings and must not contain legacy markers.
+strings and must not contain legacy markers. Rodak still lists the `mcp` capability and
+event for compatibility. It sends `mcp` events only when `session.open` has `features.mcp: true`,
+so it sends none to RodakOS.
 
 The VAD strategies are:
 
@@ -132,7 +134,8 @@ The client sends one `session.open` per connection generation. The server must
 answer one matching `session.ready`. A duplicate or delayed ready event is an
 error. It cannot reset the session's playback or audio counters.
 
-`session.open` has this shape (the `features` object reflects device support):
+`session.open` has this shape. The device always sends `features.mcp: false`; this is a
+compatibility flag only:
 
 ```json
 {
@@ -160,11 +163,6 @@ must use the supported values above. `vadStrategy` is optional and defaults to
 `server-authoritative`, but a supplied value must have been offered by the
 descriptor.
 
-`features.mcp` is always `false`: the firmware registers no MCP tools. Device control for
-Rodak's models uses MQTT shadow effects ([volume](mqtt-volume-effects.md),
-[light](mqtt-light-effects.md)). The session-scoped volume tools removed on 2026-10-21 are kept
-as a [historical contract](archive/2026-10-21-voice-volume-mcp.md).
-
 ## 3. Control events
 
 All JSON control messages are UTF-8 objects with an `event` field. Events after
@@ -178,11 +176,9 @@ a schema in [`contracts/rodak-realtime-voice/v1/schemas/`](../contracts/rodak-re
 | device → server | `input.stop` | `sessionId` |
 | device → server | `playback.abort` | `sessionId`, `reason`: `user`, `wake-word`, or `vad_detected`, and an optional `playbackEpoch` |
 | device → server | `vad` | `sessionId`, `state` (`start`/`end`), `source`, positive `sequence`, `triggerMs`, optional epoch |
-| device → server | `mcp` | `sessionId`, object `payload` |
 | server → device | `output.start` | `sessionId`, optional `text` and `playbackEpoch` |
 | server → device | `output.stop` | `sessionId`, optional `reason` and `playbackEpoch` |
 | server → device | `session.end` | `sessionId`, optional `reason` |
-| server → device | `mcp` | `sessionId`, object `payload` |
 | server → device | `error` | optional `sessionId`, non-empty `code`, non-empty `message`, boolean `retryable` |
 
 The initial wake turn is `wake.detected` followed by
@@ -200,11 +196,7 @@ end and re-arms local wake. Rodak currently sends these reasons: `goodbye-intent
 goodbye), `wake-arbitration-lost` (§6), `announce-finished` and `announce-expired` (§8). A new
 reason MUST NOT require device changes.
 
-An MCP `payload` must be a JSON object. Scalar and array payloads are rejected.
-Outer control JSON is bounded to twelve nesting levels before parsing. The transport still
-validates the `mcp` envelope (current session/generation, object payload, no duplicate outer
-fields) so a malformed frame fails the same way as other control events, but the service
-discards valid `mcp` events: there is no dispatcher, response or side effect.
+Outer control JSON is bounded to twelve nesting levels before parsing.
 An `error` without all three error fields is rejected. Control messages that
 exceed the effective transport or negotiated control limit are discarded and
 are not delivered to the voice state machine.
@@ -369,6 +361,7 @@ events and RAV1 frames against `contracts/rodak-realtime-voice/v1/`.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-21 | Removed the `mcp` event rows, payload rules, `mcp` schema and fixtures. `mcp` stays only as a legacy descriptor/`session.open` marker. |
 | 2026-11-20 | Added the reading guide and `contracts/rodak-realtime-voice/v1/`. Shortened §6 to the rules both sides rely on; firmware timing now lives in [voice assistant](voice-assistant.md). Corrected the descriptor example to Rodak's emitted value and the `session.end` reasons (`goodbye-intent`, not `shutdown`). |
 | 2026-11-05 | Server-initiated announce (§8). |
 | 2026-10-21 | Session-scoped voice MCP volume tools removed ([archive](archive/2026-10-21-voice-volume-mcp.md)). |
