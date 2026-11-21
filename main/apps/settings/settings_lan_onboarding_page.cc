@@ -22,7 +22,6 @@ constexpr lv_coord_t kButtonHeight = 36;
 constexpr lv_coord_t kHalfButton = 148;
 constexpr lv_coord_t kContentTop = 26;
 constexpr lv_coord_t kServerRowHeight = 32;
-constexpr size_t kMaxServerRows = 4;
 
 lv_obj_t* CreateActionButton(lv_obj_t* parent, const char* text, bool primary, lv_align_t align,
                              lv_coord_t width = kHalfButton, lv_coord_t y = 0) {
@@ -95,7 +94,9 @@ void SettingsApp::UpdateLanOnboarding() {
     if (onboarding == nullptr || lan_onboarding_overlay_ == nullptr) return;
     const auto snapshot = onboarding->Snapshot();
     const int64_t now_ms = esp_timer_get_time() / 1000;
-    if (snapshot.revision == lan_onboarding_revision_ &&
+    // A lockout ends without a new snapshot; redraw once so 「重新开始」 appears on time.
+    const bool lock_expired = lan_onboarding_locked_ && snapshot.locked_until_ms <= now_ms;
+    if (snapshot.revision == lan_onboarding_revision_ && !lock_expired &&
         snapshot.phase != rodakos::LanOnboardingPhase::kShowCode) {
         return;
     }
@@ -108,6 +109,8 @@ void SettingsApp::UpdateLanOnboarding() {
         return;
     }
     lan_onboarding_revision_ = snapshot.revision;
+    lan_onboarding_locked_ = snapshot.phase == rodakos::LanOnboardingPhase::kFailed &&
+                             snapshot.locked_until_ms > now_ms;
     lan_onboarding_countdown_ = nullptr;
     if (lan_onboarding_body_ != nullptr) lv_obj_delete(lan_onboarding_body_);
     lan_onboarding_body_ = lv_obj_create(lan_onboarding_overlay_);
@@ -143,10 +146,21 @@ void SettingsApp::UpdateLanOnboarding() {
             } else {
                 lv_label_set_text(message, "选择要连接的电脑：");
             }
-            lv_coord_t y = kContentTop + 22;
-            for (size_t index = 0; index < lan_onboarding_servers_.size() && index < kMaxServerRows;
-                 ++index) {
-                auto* button = CreateActionButton(lan_onboarding_body_,
+            // Every discovered server is reachable: the list scrolls between the prompt and the
+            // fixed bottom buttons instead of dropping rows past the fourth.
+            const lv_coord_t list_top = kContentTop + 22;
+            const lv_coord_t list_height =
+                lv_obj_get_content_height(lan_onboarding_body_) - list_top - kButtonHeight - 6;
+            auto* list = lv_obj_create(lan_onboarding_body_);
+            lv_obj_remove_style_all(list);
+            lv_obj_set_size(list, content_width, list_height);
+            lv_obj_align(list, LV_ALIGN_TOP_LEFT, 0, list_top);
+            lv_obj_set_scroll_dir(list, LV_DIR_VER);
+            lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+            lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+            lv_coord_t y = 0;
+            for (size_t index = 0; index < lan_onboarding_servers_.size(); ++index) {
+                auto* button = CreateActionButton(list,
                                                   ServerLabel(lan_onboarding_servers_[index]).c_str(),
                                                   index == 0, LV_ALIGN_TOP_LEFT, content_width, y);
                 lv_obj_set_height(button, kServerRowHeight);
