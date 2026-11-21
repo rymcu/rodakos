@@ -6,6 +6,8 @@
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 
+#include <algorithm>
+
 // 锁屏与控制中心: two 52 px rows in one group. The whole row toggles its switch, and each row
 // says in one line what the setting does.
 namespace {
@@ -31,35 +33,51 @@ void RestoreSwitch(lv_obj_t* sw, bool enabled) {
     }
 }
 
-// Returns the switch. Taps anywhere on the row are forwarded to it.
-lv_obj_t* CreateToggleRow(lv_obj_t* list, int index, const char* icon, const char* title,
-                          const char* detail, bool enabled) {
+// Creates one row at `y` and returns the switch; `y` advances by the row height. The detail
+// line wraps below the title, and the row grows to fit it instead of hiding the rest.
+// Taps anywhere on the row are forwarded to the switch.
+lv_obj_t* CreateToggleRow(lv_obj_t* list, lv_coord_t& y, bool first, const char* icon,
+                          const char* title, const char* detail, bool enabled) {
+    constexpr lv_coord_t kTextX = 28;
+    constexpr lv_coord_t kSwitchWidth = 44;
+    constexpr lv_coord_t kTextWidth = kGridWidth - 24 - kTextX - kSwitchWidth - 12;
+    constexpr lv_coord_t kPadV = 8;
+
     auto* row = lv_obj_create(list);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, kGridWidth, kRowHeight);
-    lv_obj_set_pos(row, 0, kRowHeight * index);
+    lv_obj_set_width(row, kGridWidth);
+    lv_obj_set_pos(row, 0, y);
     lv_obj_set_style_pad_hor(row, 12, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-    if (index > 0) {
+    if (!first) {
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
         lv_obj_set_style_border_width(row, 1, 0);
         lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
     }
 
-    CreateSettingIcon(row, icon);
     auto* title_label = CreateSettingLabel(row, title);
-    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 28, 8);
+    lv_obj_set_pos(title_label, kTextX, kPadV);
+    const lv_coord_t title_height = lv_font_get_line_height(&phone_font_14);
+
     auto* detail_label = CreateSettingLabel(row, detail, true);
     lv_obj_set_style_text_font(detail_label, &phone_font_12, 0);
-    lv_obj_set_width(detail_label, kGridWidth - 24 - 28 - 56);
-    lv_label_set_long_mode(detail_label, LV_LABEL_LONG_DOT);
-    lv_obj_align(detail_label, LV_ALIGN_BOTTOM_LEFT, 28, -7);
+    lv_obj_set_width(detail_label, kTextWidth);
+    lv_label_set_long_mode(detail_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(detail_label, kTextX, kPadV + title_height + 2);
+    lv_obj_update_layout(detail_label);
 
+    const lv_coord_t height = std::max<lv_coord_t>(
+        kRowHeight, kPadV + title_height + 2 + lv_obj_get_height(detail_label) + kPadV);
+    lv_obj_set_height(row, height);
+    y += height;
+
+    // Icon and switch stay vertically centred on the whole row.
+    CreateSettingIcon(row, icon);
     auto* sw = lv_switch_create(row);
-    lv_obj_set_size(sw, 44, 24);
+    lv_obj_set_size(sw, kSwitchWidth, 24);
     lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
     RestoreSwitch(sw, enabled);
     StyleSwitch(sw);
@@ -87,7 +105,7 @@ void SettingsApp::CreateSystemShellPage() {
 
     auto* list = lv_obj_create(system_shell_body_);
     lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, kGridWidth, kRowHeight * 2);
+    lv_obj_set_width(list, kGridWidth);
     lv_obj_set_pos(list, kGridX, 8);
     lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
@@ -95,7 +113,8 @@ void SettingsApp::CreateSystemShellPage() {
     lv_obj_set_style_clip_corner(list, true, 0);
     lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* lock_switch = CreateToggleRow(list, 0, ICON_LOCK, "开机后锁屏",
+    lv_coord_t y = 0;
+    auto* lock_switch = CreateToggleRow(list, y, true, ICON_LOCK, "开机后锁屏",
                                         "开机后先显示锁屏，上滑解锁", preferences.lock_on_boot);
     lv_obj_add_event_cb(lock_switch, [](lv_event_t* event) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(event));
@@ -107,9 +126,10 @@ void SettingsApp::CreateSystemShellPage() {
         }
     }, LV_EVENT_VALUE_CHANGED, this);
 
-    auto* gesture_switch = CreateToggleRow(list, 1, ICON_ARROW_DOWN, "下滑打开控制中心",
-                                           "从屏幕顶部下滑；关闭后可用按键打开",
+    auto* gesture_switch = CreateToggleRow(list, y, false, ICON_ARROW_DOWN, "下滑打开控制中心",
+                                           "从屏幕顶部向下滑。关闭后仍可用按键打开控制中心",
                                            preferences.control_center_gesture_enabled);
+    lv_obj_set_height(list, y);
     lv_obj_add_event_cb(gesture_switch, [](lv_event_t* event) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(event));
         auto* sw = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
