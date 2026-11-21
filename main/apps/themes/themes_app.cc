@@ -326,6 +326,8 @@ void ThemesApp::CreatePresetRow(lv_obj_t* parent) {
     lv_obj_align(row, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // LVGL only searches children inside the parent's hit area, so the row reaches the card edges too.
+    lv_obj_set_ext_click_area(row, 8);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     for (size_t i = 0; i < kThemePresetOptions.size(); ++i) {
@@ -333,7 +335,9 @@ void ThemesApp::CreatePresetRow(lv_obj_t* parent) {
         auto* button = lv_btn_create(row);
         preset_buttons_[i] = button;
         lv_obj_set_user_data(button, const_cast<ThemePresetOption*>(&option));
+        // The swatch stays 42x26; the hit area reaches the full 44 px card height.
         lv_obj_set_size(button, 42, 26);
+        lv_obj_set_ext_click_area(button, 9);
         lv_obj_set_style_radius(button, 6, 0);
         lv_obj_set_style_shadow_width(button, 0, 0);
         lv_obj_set_style_pad_all(button, 0, 0);
@@ -550,7 +554,8 @@ void ThemesApp::RefreshTrustPage() {
         publisher.trusted ? "已信任此发布端" : "尚未信任");
     lv_obj_set_style_text_color(publisher_status_label_, publisher.trusted ?
         rodakos_theme_success() : rodakos_theme_text_secondary(), 0);
-    lv_label_set_text(publisher_error_label_, publisher.error.c_str());
+    lv_label_set_text(publisher_error_label_, publisher.error.empty() ? "" :
+        publisher.trusted ? "本次读取失败，仍使用已信任的发布端。" : "读取发布端失败，请稍后点「刷新」。");
     if (publisher.loading) lv_obj_add_state(refresh_button_, LV_STATE_DISABLED);
     else lv_obj_remove_state(refresh_button_, LV_STATE_DISABLED);
     if (publisher.loading || publisher.trusted || publisher.key_id.empty() ||

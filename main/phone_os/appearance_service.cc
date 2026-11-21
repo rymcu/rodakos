@@ -663,7 +663,20 @@ bool AppearanceService::FetchPublisher() {
       if (ok) {
           publisher_.key_id = key_id; publisher_.public_key = public_key; publisher_.fingerprint = AppearanceKeyFingerprint(key_id); publisher_origin_ = origin;
           publisher_.trusted = key_id == trusted_key_id_ && origin == trusted_origin_;
-      } else { publisher_.error = "publisher_unavailable"; publisher_.trusted = false; }
+      } else {
+          // A failed read says nothing about the stored trust: keep the last good key and
+          // fingerprint, and report the failure on its own.
+          publisher_.error = "publisher_unavailable";
+          publisher_.trusted = !publisher_.key_id.empty() && publisher_.key_id == trusted_key_id_ &&
+                               publisher_origin_ == trusted_origin_;
+          if (publisher_.key_id.empty() && !trusted_key_id_.empty()) {
+              publisher_.key_id = trusted_key_id_;
+              publisher_.public_key = trusted_public_key_;
+              publisher_.fingerprint = AppearanceKeyFingerprint(trusted_key_id_);
+              publisher_origin_ = trusted_origin_;
+              publisher_.trusted = true;
+          }
+      }
     }
     NotifyState(); return ok;
 }
