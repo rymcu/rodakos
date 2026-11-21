@@ -404,7 +404,7 @@ RODAK_TEST("loading, errors and an already trusted key disable confirmation") {
     f.appearance.publisher.loading = false;
     f.appearance.publisher.error = "publisher_unavailable";
     lv_test_wait(800);
-    RODAK_CHECK_EQ(Text(f.app.publisher_error_label_), std::string("publisher_unavailable"));
+    RODAK_CHECK_EQ(Text(f.app.publisher_error_label_), std::string("读取发布端失败，请稍后点「刷新」。"));
     RODAK_CHECK(lv_obj_has_state(f.app.confirm_button_, LV_STATE_DISABLED));
     RODAK_CHECK_FALSE(lv_obj_has_state(f.app.refresh_button_, LV_STATE_DISABLED));
     f.Touch(f.app.confirm_button_);
