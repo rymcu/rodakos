@@ -16,22 +16,26 @@ target_link_libraries(rodakos_web_file_upload_tests PRIVATE Threads::Threads)
 target_link_options(rodakos_web_file_upload_tests PRIVATE
     -Wl,--wrap=fopen -Wl,--wrap=fwrite -Wl,--wrap=ferror -Wl,--wrap=fflush -Wl,--wrap=fclose -Wl,--wrap=remove
 )
-# Same symbols the IDF build's target_add_binary_data(... TEXT) provides, from the real page.
-set(WEB_PAGE "${CMAKE_CURRENT_SOURCE_DIR}/../../main/phone_os/web_files_page.html")
-set(WEB_PAGE_ASM "${CMAKE_CURRENT_BINARY_DIR}/web_files_page.S")
-file(WRITE "${WEB_PAGE_ASM}"
-    ".section .rodata
-.global _binary_web_files_page_html_start
-.global _binary_web_files_page_html_end
+# Same symbols the IDF build's target_add_binary_data(... TEXT) provides, from the real pages.
+function(embed_text_page name)
+    set(page "${CMAKE_CURRENT_SOURCE_DIR}/../../main/phone_os/${name}.html")
+    set(asm "${CMAKE_CURRENT_BINARY_DIR}/${name}.S")
+    file(WRITE "${asm}"
+        ".section .rodata
+.global _binary_${name}_html_start
+.global _binary_${name}_html_end
 "
-    "_binary_web_files_page_html_start:
-.incbin \"${WEB_PAGE}\"
+        "_binary_${name}_html_start:
+.incbin \"${page}\"
 .byte 0
-_binary_web_files_page_html_end:
+_binary_${name}_html_end:
 "
-    ".section .note.GNU-stack,\"\",@progbits
+        ".section .note.GNU-stack,\"\",@progbits
 ")
-set_property(SOURCE "${WEB_PAGE_ASM}" APPEND PROPERTY OBJECT_DEPENDS "${WEB_PAGE}")
-target_sources(rodakos_web_file_upload_tests PRIVATE "${WEB_PAGE_ASM}")
+    set_property(SOURCE "${asm}" APPEND PROPERTY OBJECT_DEPENDS "${page}")
+    target_sources(rodakos_web_file_upload_tests PRIVATE "${asm}")
+endfunction()
+embed_text_page(web_files_page)
+embed_text_page(camera_chart_page)
 add_test(NAME rodakos_web_file_upload COMMAND rodakos_web_file_upload_tests)
 set_tests_properties(rodakos_web_file_upload PROPERTIES TIMEOUT 10)

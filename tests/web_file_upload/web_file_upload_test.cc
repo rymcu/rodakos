@@ -341,3 +341,14 @@ RODAK_TEST("web files refuses every operation inside a system folder") {
     // A user folder whose name only starts with a system name is still allowed.
     RODAK_CHECK(call(S::MkdirHandler, "path=%2Frodakos-backup").empty());
 }
+
+RODAK_TEST("web files serves the printable camera calibration chart without an access code") {
+    AccessFixture f;
+    httpd_req_t req;
+    req.user_ctx = &f.service;
+    RODAK_CHECK_EQ(rodakos::WebFileSystemService::CalibrationChartHandler(&req), ESP_OK);
+    RODAK_CHECK(req.response_status.empty());
+    RODAK_CHECK(req.response_body.find("RODAKCAL:V2") != std::string::npos);
+    RODAK_CHECK(req.response_body.find("<svg") != std::string::npos);
+    RODAK_CHECK(req.response_body.find('\0') == std::string::npos);
+}

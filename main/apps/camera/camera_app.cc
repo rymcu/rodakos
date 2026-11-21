@@ -177,6 +177,28 @@ bool CameraApp::CreateUi(int lock_timeout_ms) {
         self->NavigateHome();
     }, this);
 
+    // "校准" sits left of the home button; checked while the calibration page is open.
+    calibration_button_ = lv_btn_create(root_);
+    lv_obj_set_size(calibration_button_, 52, 28);
+    lv_obj_align(calibration_button_, LV_ALIGN_TOP_RIGHT, -46, 6);
+    lv_obj_set_style_bg_color(calibration_button_, rodakos_theme_bg_tertiary(), 0);
+    lv_obj_set_style_bg_color(calibration_button_, rodakos_theme_primary(), LV_STATE_CHECKED);
+    lv_obj_set_style_radius(calibration_button_, 6, 0);
+    lv_obj_set_style_shadow_width(calibration_button_, 0, 0);
+    lv_obj_set_style_pad_all(calibration_button_, 0, 0);
+    {
+        auto* label = lv_label_create(calibration_button_);
+        lv_label_set_text(label, "校准");
+        lv_obj_set_style_text_font(label, &phone_font_14, 0);
+        lv_obj_set_style_text_color(label, rodakos_theme_text_primary(), 0);
+        lv_obj_center(label);
+    }
+    lv_obj_add_event_cb(calibration_button_, [](lv_event_t* e) {
+        auto* self = static_cast<CameraApp*>(lv_event_get_user_data(e));
+        if (self->calibration_layer_ != nullptr) self->CloseCalibration();
+        else self->OpenCalibration();
+    }, LV_EVENT_CLICKED, this);
+
     preview_box_ = lv_obj_create(root_);
     lv_obj_remove_style_all(preview_box_);
     lv_obj_set_size(preview_box_, kPreviewBoxWidth, kPreviewBoxHeight);
@@ -292,6 +314,8 @@ void CameraApp::OnDestroy() {
 
     preview_paused_for_transition_ = false;
     capture_guard_.reset();
+    // Joins the calibration worker before the camera service pointer goes away.
+    calibration_.reset();
     camera_ = nullptr;
     audio_focus_ = nullptr;
     context_ = nullptr;
@@ -303,6 +327,7 @@ void CameraApp::DestroyUi() {
         // Timer callbacks own `this` until removed. A teardown timeout cannot abandon them.
         PhoneUiLock lock(*ui_, 0);
         if (lock.locked()) {
+            CloseCalibration();
             if (capture_result_timer_ != nullptr) {
                 lv_timer_delete(capture_result_timer_);
                 capture_result_timer_ = nullptr;
@@ -326,6 +351,8 @@ void CameraApp::DestroyUi() {
     placeholder_label_ = nullptr;
     status_label_ = nullptr;
     capture_button_ = nullptr;
+    calibration_button_ = nullptr;
+    if (calibration_) calibration_->Stop();
     std::vector<uint8_t>().swap(preview_pixels_);
     std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
     displayed_sequence_ = 0;
@@ -575,9 +602,21 @@ void CameraApp::UpdatePreview() {
     const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / frame.height;
     // Fill the widescreen preview box. The sensor is 4:3, so this crops a
     // small amount from the top and bottom instead of leaving wide side bars.
-    const int32_t scale = std::max<int32_t>(1, std::max(scale_w, scale_h));
+    // Calibration shows the whole frame instead, left-aligned, so nothing it measures is cut off
+    // and the right-hand column is free for the result panel.
+    const bool fit_whole_frame = calibration_layer_ != nullptr;
+    // Calibration uses the same 0.7x as camera_calibration_page.cc (kCalibrationScale).
+    const int32_t scale = std::max<int32_t>(1, fit_whole_frame ? LV_SCALE_NONE * 7 / 10
+                                                               : std::max(scale_w, scale_h));
     lv_image_set_scale(preview_image_, static_cast<uint32_t>(scale));
-    lv_obj_center(preview_image_);
+    if (fit_whole_frame) {
+        // LVGL scales around the centre of the unscaled image; offset so the scaled image's
+        // left edge sits at x=0 of the preview box.
+        const lv_coord_t scaled_w = static_cast<lv_coord_t>(frame.width * scale / LV_SCALE_NONE);
+        lv_obj_align(preview_image_, LV_ALIGN_LEFT_MID, (scaled_w - frame.width) / 2, 0);
+    } else {
+        lv_obj_center(preview_image_);
+    }
 
     if (placeholder_label_ != nullptr) {
         lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
@@ -626,7 +665,17 @@ void CameraApp::ReleaseAudioResources() {
 }
 
 void CameraApp::NavigateBack() {
+    if (calibration_layer_ != nullptr) {
+        CloseCalibration();
+        return;
+    }
     NavigateHome();
+}
+
+bool CameraApp::OnBackRequested() {
+    if (calibration_layer_ == nullptr) return false;
+    CloseCalibration();
+    return true;
 }
 
 void CameraApp::NavigateHome() {

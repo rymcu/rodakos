@@ -3,6 +3,7 @@
 #include "phone_os/phone_app.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/audio_focus_service.h"
+#include "phone_os/camera_calibration_service.h"
 
 #include <memory>
 #include <string>
@@ -24,6 +25,8 @@ public:
     void OnResume() override;
     void OnPause() override;
     void OnDestroy() override;
+    // Closes the calibration page first; otherwise leaves the app.
+    bool OnBackRequested() override;
 
     void CapturePhoto();
 
@@ -47,6 +50,9 @@ private:
     void ReleaseAudioResources();
     void NavigateBack();
     void NavigateHome();
+    void OpenCalibration();
+    void CloseCalibration();
+    void UpdateCalibration();
 
     PhoneAppContext* context_ = nullptr;
     PhoneUi* ui_ = nullptr;
@@ -70,6 +76,21 @@ private:
     void* home_return_reserve_ = nullptr;
     size_t home_return_reserve_size_ = 0;
     std::shared_ptr<CameraCaptureGuard> capture_guard_;
+    // Calibration page: drawn over the preview box, worker created on first open.
+    std::unique_ptr<rodakos::CameraCalibrationService> calibration_;
+    lv_obj_t* calibration_button_ = nullptr;
+    lv_obj_t* calibration_layer_ = nullptr;
+    lv_obj_t* calibration_center_box_ = nullptr;
+    lv_obj_t* calibration_qr_box_ = nullptr;
+    lv_obj_t* calibration_region_box_ = nullptr;
+    lv_obj_t* calibration_panel_ = nullptr;
+    lv_obj_t* calibration_status_ = nullptr;
+    lv_obj_t* calibration_score_ = nullptr;
+    lv_obj_t* calibration_bar_ = nullptr;
+    lv_obj_t* calibration_best_mark_ = nullptr;
+    lv_obj_t* calibration_hint_ = nullptr;
+    lv_timer_t* calibration_timer_ = nullptr;
+    uint32_t calibration_revision_ = 0;
 };
 
 void RegisterCameraApp(PhoneAppRegistry& registry);

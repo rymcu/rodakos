@@ -11,7 +11,7 @@ fi
 export RODAKOS_IDF_PATH="$rodak_idf_source"
 mkdir -p "$rodak_checks"
 for rodak_suite in app_model home_ui assistant_ui ota_security codec_volume mqtt_event_patch mqtt_volume_service mqtt_cloud_integration websocket_redirect_patch \
-    serial_provisioning setup_qr_decoder server_trust server_trust_nvs_storage lan_trust_setup wifi_adapter \
+    serial_provisioning setup_qr_decoder camera_calibration server_trust server_trust_nvs_storage lan_trust_setup wifi_adapter \
     voice_wake_service voice_volume_service voice_audio_frontend_identity voice_identity_integration \
     voice_prepare_priority_observer voice_prepare_priority_transport voice_prepare_priority_diagnostic \
     file_path_lease web_file_upload file_directory audio_playback_service music_ui themes_ui file_writer \

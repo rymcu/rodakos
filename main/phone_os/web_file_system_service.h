@@ -56,6 +56,7 @@ private:
     static uint32_t (*peer_address_override_)(httpd_req_t* req);
 
     static esp_err_t IndexHandler(httpd_req_t* req);
+    static esp_err_t CalibrationChartHandler(httpd_req_t* req);
     static esp_err_t ListHandler(httpd_req_t* req);
     static esp_err_t DownloadHandler(httpd_req_t* req);
     static esp_err_t UploadHandler(httpd_req_t* req);
