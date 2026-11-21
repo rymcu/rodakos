@@ -80,10 +80,26 @@ RODAK_TEST("Depth bounds skip deeper directories but never suppress a failure in
     auto shallow=ScanImagesWithFileServiceDetailed(&fs,"/",0);
     RODAK_CHECK(shallow.status == ImageScanStatus::kReady);
     RODAK_CHECK_EQ(shallow.paths.size(), 2U);
-    RODAK_CHECK_EQ(shallow.paths.front(), "/A.png");
+    RODAK_CHECK_EQ(shallow.paths.front(), "/z.JPG");
     RODAK_CHECK_EQ(std::count(fs.reads.begin(),fs.reads.end(),"/child"),0);
     RODAK_CHECK(ScanImagesWithFileServiceDetailed(&fs,"/",1).status == ImageScanStatus::kReadFailed);
     RODAK_CHECK(ScanImagesWithFileServiceDetailed(&fs,"/",-1).status == ImageScanStatus::kReadFailed);
+}
+
+RODAK_TEST("Photo scan sorts across albums by newest time and descending case-insensitive filename") {
+    photo_test::Files fs;
+    fs.Album("/photos");
+    fs.directories["/"].push_back({"DCIM", "/DCIM", true, 0, 0});
+    fs.Image("/photos", "/photos/A.jpg", 300);
+    fs.Image("/photos", "/photos/m.jpg", 200);
+    fs.Image("/DCIM", "/DCIM/Z.jpg", 200);
+    fs.Image("/DCIM", "/DCIM/zz.jpg", 100);
+    fs.Image("/DCIM", "/photos/A.jpg", 50);
+
+    const auto result = ScanPhotoLibrary(&fs);
+    const std::vector<std::string> expected = {"/photos/A.jpg", "/DCIM/Z.jpg", "/photos/m.jpg", "/DCIM/zz.jpg"};
+    RODAK_CHECK(result.status == ImageScanStatus::kReady);
+    RODAK_CHECK(result.paths == expected);
 }
 
 RODAK_TEST("JPEG display and thumbnail use the production loader and release native buffers") {

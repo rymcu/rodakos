@@ -51,9 +51,11 @@ public:
     bool ListDirectory(const std::string& path, std::vector<rodakos::FileEntry>& entries) override {
         reads.push_back(path); entries.clear();
         if (!mounted) { errno = ENODEV; return false; }
-        if (failures.contains(path)) { errno = failures[path]; return false; }
-        if (!directories.contains(path)) { errno = ENOENT; return false; }
-        entries = directories[path]; return true;
+        const auto failure = failures.find(path);
+        if (failure != failures.end()) { errno = failure->second; return false; }
+        const auto directory = directories.find(path);
+        if (directory == directories.end()) { errno = ENOENT; return false; }
+        entries = directory->second; return true;
     }
     bool ReadFile(const std::string&, std::vector<uint8_t>&) override { return false; }
     bool WriteFile(const std::string&, const std::vector<uint8_t>&, bool) override { return false; }
@@ -67,8 +69,9 @@ public:
         directories["/"].push_back({"photos", path, true, 0, 0});
         directories[path] = {};
     }
-    void Image(const std::string& directory, const std::string& path) {
-        directories[directory].push_back({std::filesystem::path(path).filename().string(), path, false, 20, 0});
+    void Image(const std::string& directory, const std::string& path, uint64_t modified_time = 0) {
+        directories[directory].push_back(
+            {std::filesystem::path(path).filename().string(), path, false, 20, modified_time});
     }
 };
 }
