@@ -14,6 +14,8 @@ public:
         ++home_count;
         return true;
     }
+    // Without a recorded caller the production navigation falls back to ReturnHome().
+    bool ReturnToCaller() { return ReturnHome(); }
     bool RefreshTheme() {
         ++refresh_count;
         return true;
