@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <functional>
@@ -8,6 +9,7 @@
 #include <cstdint>
 
 namespace camera_host {
+extern std::array<std::array<uint8_t, 256>, 2> sensor_registers;
 extern std::atomic<bool> fail_mount, fail_directory, fail_write, fail_flush, fail_close;
 extern std::atomic<bool> fail_encoder_open, fail_encoder_process, fail_allocation, empty_encoded;
 extern std::atomic<bool> collide_on_create;

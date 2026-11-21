@@ -1011,3 +1011,21 @@ RODAK_TEST("failed preview replacement preserves the old task until real IDF cor
     RODAK_CHECK_EQ(retirement_host::Snapshot().task_deletes, 1u);
     RODAK_CHECK_EQ(retirement_host::Snapshot().live_task_buffers, 0u);
 }
+
+RODAK_TEST("camera writes mirror off into the sensor mode register and applies a new orientation on the next stream") {
+    Fixture f;
+    // The driver's 320x240 table leaves CISCTL_MODE1 (page 0, 0x14) at 0x11: mirror on.
+    camera_host::sensor_registers[0][0x14] = 0x11;
+    RODAK_CHECK_FALSE(f.camera->horizontal_mirror());
+    RODAK_CHECK_FALSE(f.camera->vertical_flip());
+    f.Preview();
+    RODAK_CHECK_EQ(static_cast<int>(camera_host::sensor_registers[0][0x14]), 0x10);
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+
+    f.camera->SetOrientation(true, true);
+    f.Preview();
+    RODAK_CHECK_EQ(static_cast<int>(camera_host::sensor_registers[0][0x14]), 0x13);
+    f.camera->StopPreview();
+    camera_host::JoinTasks();
+}
