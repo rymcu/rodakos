@@ -60,12 +60,11 @@ RODAK_TEST("Voice contract fixture: server control events pass the firmware vali
     for (const char* fixture :
          {"valid/output-start.reply.json", "valid/output-stop.reply.json", "valid/session-end.goodbye.json",
           "valid/session-end.announce-finished.json", "valid/error.retryable.json",
-          "valid/error.no-session.json", "valid/mcp.object.json"}) {
+          "valid/error.no-session.json"}) {
         RODAK_CHECK(ValidServerControl(fixture));
     }
     for (const char* fixture :
-         {"invalid/output-stop.empty-reason.json", "invalid/error.no-retryable.json",
-          "invalid/mcp.array-payload.json"}) {
+         {"invalid/output-stop.empty-reason.json", "invalid/error.no-retryable.json"}) {
         RODAK_CHECK_FALSE(ValidServerControl(fixture));
     }
 }

@@ -161,13 +161,11 @@ uplink is fixed at 16 kHz mono/60 ms. The device and server negotiate the downli
 and control messages use the descriptor's negotiated limits, with defaults of 8 KiB and 64 KiB.
 The device caps audio payloads at 64 KiB and currently buffers inbound text at 64 KiB. See the canonical
 [voice contract](rodak-realtime-voice-contract-v1.md) for event schemas,
-generation/session/epoch gates, MCP, error handling, and the complete RAV1 layout.
+generation/session/epoch gates, error handling, and the complete RAV1 layout.
 
-The firmware ships no MCP tools: `session.open` always advertises `features.mcp: false`, and
-the device discards inbound `mcp` events without a response or side effect. Device control for Rodak's
-models goes through MQTT shadow effects ([volume](mqtt-volume-effects.md),
-[light](mqtt-light-effects.md)). The archive keeps the removed session-scoped volume tools as a
-[historical contract](archive/2026-10-21-voice-volume-mcp.md).
+Device control for Rodak's models goes through MQTT shadow effects ([volume](mqtt-volume-effects.md),
+[light](mqtt-light-effects.md)), not the voice session. The archive keeps the removed
+session-scoped volume tools as a [historical contract](archive/2026-10-21-voice-volume-mcp.md).
 
 VAD authority is negotiated with `vadStrategies` and `preferredVadStrategy`.
 When the server selects `server-authoritative`, the device keeps streaming audio
