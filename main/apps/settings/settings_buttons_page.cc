@@ -183,7 +183,7 @@ void SettingsApp::UpdateButtonBindingsPage() {
             if (binding.custom) {
                 lv_obj_set_style_text_color(action_label, rodakos_theme_primary(), 0);
             }
-            lv_obj_set_width(action_label, 200);
+            lv_obj_set_size(action_label, 200, lv_font_get_line_height(&phone_font_14));
             lv_label_set_long_mode(action_label, LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(action_label, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(action_label, LV_ALIGN_RIGHT_MID, -16, 0);
@@ -247,7 +247,7 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
     const std::string heading = (state != nullptr ? ButtonTitle(*state) : binding.title) +
                                 " · " + EventText(binding.event);
     auto* title = CreateSettingLabel(dialog_box, heading.c_str());
-    lv_obj_set_width(title, kDialogWidth - 24);
+    lv_obj_set_size(title, kDialogWidth - 24, lv_font_get_line_height(&phone_font_14));
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(title, 12, 10);
 
@@ -286,7 +286,7 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
             ? "恢复默认（" + ActionText(default_action, registry) + "）"
             : ActionText(choice.action, registry);
         auto* label = CreateSettingLabel(row, text.c_str(), choice.reset);
-        lv_obj_set_width(label, kListWidth - 56);
+        lv_obj_set_size(label, kListWidth - 56, lv_font_get_line_height(&phone_font_14));
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
         if (selected) {
