@@ -153,6 +153,10 @@ void SettingsApp::DestroyUi() {
         lv_timer_delete(cloud_pairing_timer_);
         cloud_pairing_timer_ = nullptr;
     }
+    if (brightness_sync_timer_ != nullptr) {
+        lv_timer_delete(brightness_sync_timer_);
+        brightness_sync_timer_ = nullptr;
+    }
     if (root_ != nullptr && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
     }
@@ -227,6 +231,8 @@ void SettingsApp::ResetUiPointers() {
     setup_qr_overlay_ = nullptr;
     setup_qr_body_ = nullptr;
     setup_qr_progress_ = nullptr;
+    setup_qr_wifi_label_ = nullptr;
+    setup_qr_retry_button_ = nullptr;
     setup_qr_timer_ = nullptr;
     setup_qr_preview_image_ = nullptr;
     setup_qr_preview_placeholder_ = nullptr;

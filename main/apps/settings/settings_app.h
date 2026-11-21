@@ -108,6 +108,7 @@ private:
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
     bool SaveCloudProvisioningUrl(const std::string& url);
+    void ShowCloudUrlChangeConfirm(const std::string& url);
     void ShowLanOnboarding();
     void CloseLanOnboarding();
     void UpdateLanOnboarding();
@@ -120,6 +121,8 @@ private:
     void DetachSetupQrPreview();
     void ReleaseSetupQrPreviewPixels();
     void UpdateSetupQr();
+    void UpdateSetupQrWifiResult();
+    void RetrySetupQrWifi();
     void ShowUsbDiskDialog();
     void CloseUsbDiskDialog();
     void EnterUsbDiskMode();
@@ -161,6 +164,8 @@ private:
     lv_obj_t* main_body_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
     lv_obj_t* brightness_slider_ = nullptr;
+    // The Control Center changes the backlight without pausing Settings; this keeps the slider in step.
+    lv_timer_t* brightness_sync_timer_ = nullptr;
     lv_obj_t* home_wifi_value_ = nullptr;
     lv_obj_t* home_cloud_value_ = nullptr;
     lv_obj_t* home_time_zone_value_ = nullptr;
@@ -231,6 +236,9 @@ private:
     lv_timer_t* cloud_pairing_timer_ = nullptr;
     lv_obj_t* cloud_url_dialog_ = nullptr;
     lv_obj_t* cloud_url_textarea_ = nullptr;
+    std::string cloud_url_original_;
+    std::string cloud_url_pending_;
+    bool cloud_url_bound_ = false;
     std::string cloud_pairing_error_;
     std::string cloud_pairing_code_;
     std::shared_ptr<SettingsCloudRefreshGuard> cloud_refresh_guard_;
@@ -241,6 +249,7 @@ private:
     lv_obj_t* lan_onboarding_countdown_ = nullptr;
     lv_timer_t* lan_onboarding_timer_ = nullptr;
     uint32_t lan_onboarding_revision_ = 0;
+    bool lan_onboarding_locked_ = false;
     std::vector<rodakos::DiscoveredRodakServer> lan_onboarding_servers_;
 
     // 扫码配网全屏页
@@ -249,6 +258,10 @@ private:
     lv_obj_t* setup_qr_progress_ = nullptr;
     lv_timer_t* setup_qr_timer_ = nullptr;
     uint32_t setup_qr_revision_ = 0;
+    lv_obj_t* setup_qr_wifi_label_ = nullptr;
+    lv_obj_t* setup_qr_retry_button_ = nullptr;
+    std::string setup_qr_completed_ssid_;
+    bool setup_qr_connect_started_ = false;
     lv_obj_t* setup_qr_preview_image_ = nullptr;
     lv_obj_t* setup_qr_preview_placeholder_ = nullptr;
     lv_image_dsc_t setup_qr_preview_dsc_ = {};
