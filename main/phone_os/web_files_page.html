@@ -48,10 +48,11 @@ progress{width:100%;height:14px;margin-top:10px}
   <div id="login-error" class="err" role="alert"></div>
   <button class="primary" id="enter" type="submit">进入</button>
   <p class="muted">只能从同一局域网访问。</p>
+  <p class="muted"><a href="/calibration-chart" target="_blank" rel="noopener" style="color:var(--link)">打印相机校准图</a>（不需要访问码）</p>
 </form>
 
 <section id="files" hidden>
-  <div class="top"><h1>SD 卡 <span class="path" id="path">/</span></h1><button id="logout" type="button">退出</button></div>
+  <div class="top"><h1>SD 卡 <span class="path" id="path">/</span></h1><div style="display:flex;gap:8px;align-items:center"><a href="/calibration-chart" target="_blank" rel="noopener" style="color:var(--link)">相机校准图</a><button id="logout" type="button">退出</button></div></div>
   <div class="bar"><button id="up" type="button">上一级</button><button id="refresh" type="button">刷新</button></div>
   <div class="bar"><input id="file" type="file" aria-label="选择文件"><button class="primary" id="upload" type="button">上传文件</button><button id="mkdir" type="button">新建文件夹</button></div>
   <progress id="bar" value="0" max="100" hidden></progress>

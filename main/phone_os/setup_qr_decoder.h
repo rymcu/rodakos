@@ -31,12 +31,24 @@ public:
                       std::string& payload);
     bool DecodeGray(const uint8_t* gray, int width, int height, int stride, std::string& payload);
 
+    // Where the decoded code sits in the image, for the camera calibration page.
+    struct Location {
+        // quirc corners: top-left, top-right, bottom-right, bottom-left of the code's own grid.
+        int corner_x[4] = {};
+        int corner_y[4] = {};
+        // The code only decoded after quirc_flip, so the image is a mirror image of the code.
+        bool mirrored = false;
+    };
+    // Same as DecodeGray, and also reports where the code was and whether it was mirrored.
+    bool DecodeGray(const uint8_t* gray, int width, int height, int stride, std::string& payload,
+                    Location& location);
+
     // Frees the quirc buffers; the next Decode* allocates them again.
     void Release();
 
 private:
     uint8_t* Begin(int width, int height);
-    bool Finish(std::string& payload);
+    bool Finish(std::string& payload, Location* location = nullptr);
 
     quirc* quirc_ = nullptr;
     std::unique_ptr<quirc_code> code_;

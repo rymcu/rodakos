@@ -15,6 +15,8 @@ add_executable(rodakos_camera_ui_tests
     "${RODAKOS_ROOT}/tests/home_ui/test_main.cc"
     "${RODAKOS_ROOT}/tests/home_ui/fakes/test_fonts.cc"
     "${RODAKOS_ROOT}/main/apps/camera/camera_app.cc"
+    "${RODAKOS_ROOT}/main/apps/camera/camera_calibration_page.cc"
+    "${RODAKOS_ROOT}/main/phone_os/camera_calibration.cc"
     "${RODAKOS_ROOT}/main/phone_os/phone_app_registry.cc"
     "${RODAKOS_ROOT}/main/phone_os/deferred_navigation.cc"
     "${RODAKOS_ROOT}/main/phone_os/phone_app_host.cc"

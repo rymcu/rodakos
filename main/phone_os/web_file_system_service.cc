@@ -29,6 +29,8 @@ constexpr int kMaxUploadReceiveTimeouts = 90;
 // instead of a C++ string with two layers of escaping.
 extern const char kWebFilesPageStart[] asm("_binary_web_files_page_html_start");
 extern const char kWebFilesPageEnd[] asm("_binary_web_files_page_html_end");
+extern const char kCameraChartPageStart[] asm("_binary_camera_chart_page_html_start");
+extern const char kCameraChartPageEnd[] asm("_binary_camera_chart_page_html_end");
 
 bool IsHex(char ch) {
     return std::isxdigit(static_cast<unsigned char>(ch)) != 0;
@@ -299,7 +301,7 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
     config.ctrl_port = 32768;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.lru_purge_enable = true;
-    // Eight routes today; the default limit is also 8, so leave room for the next one.
+    // Nine routes today; leave room for the next ones.
     config.max_uri_handlers = 12;
     config.stack_size = 6144;
 
@@ -317,6 +319,7 @@ bool WebFileSystemService::Start(const std::string& ip_address) {
         esp_err_t (*handler)(httpd_req_t* req);
     } routes[] = {
         {"/", HTTP_GET, IndexHandler},
+        {"/calibration-chart", HTTP_GET, CalibrationChartHandler},
         {"/api/list", HTTP_GET, ListHandler},
         {"/api/download", HTTP_GET, DownloadHandler},
         {"/api/upload", HTTP_POST, UploadHandler},
@@ -531,6 +534,13 @@ esp_err_t WebFileSystemService::IndexHandler(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     // TEXT embedding appends a NUL terminator; do not send it.
     return httpd_resp_send(req, kWebFilesPageStart, kWebFilesPageEnd - kWebFilesPageStart - 1);
+}
+
+esp_err_t WebFileSystemService::CalibrationChartHandler(httpd_req_t* req) {
+    // Public, like the index: a printable test chart with no file data in it.
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+    return httpd_resp_send(req, kCameraChartPageStart, kCameraChartPageEnd - kCameraChartPageStart - 1);
 }
 
 esp_err_t WebFileSystemService::ListHandler(httpd_req_t* req) {

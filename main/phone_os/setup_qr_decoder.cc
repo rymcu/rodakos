@@ -45,20 +45,30 @@ uint8_t* SetupQrDecoder::Begin(int width, int height) {
     return quirc_begin(quirc_, nullptr, nullptr);
 }
 
-bool SetupQrDecoder::Finish(std::string& payload) {
+bool SetupQrDecoder::Finish(std::string& payload, Location* location) {
     quirc_end(quirc_);
     const int count = quirc_count(quirc_);
     bool found = false;
     for (int index = 0; index < count && !found; ++index) {
         quirc_extract(quirc_, index, code_.get());
+        bool mirrored = false;
         if (quirc_decode(code_.get(), data_.get()) != QUIRC_SUCCESS) {
-            // quirc reads mirrored codes only after flipping the grid.
+            // quirc reads mirrored codes only after flipping the grid. quirc_flip transposes the
+            // cell bitmap and leaves the corners as found in the image.
             quirc_flip(code_.get());
             if (quirc_decode(code_.get(), data_.get()) != QUIRC_SUCCESS) continue;
+            mirrored = true;
         }
         const size_t length = static_cast<size_t>(data_->payload_len);
         if (data_->payload_len <= 0 || length > kSetupQrMaxPayloadBytes) continue;
         payload.assign(reinterpret_cast<const char*>(data_->payload), length);
+        if (location != nullptr) {
+            for (int corner = 0; corner < 4; ++corner) {
+                location->corner_x[corner] = code_->corners[corner].x;
+                location->corner_y[corner] = code_->corners[corner].y;
+            }
+            location->mirrored = mirrored;
+        }
         found = true;
     }
     // The payload can hold a WiFi password; do not leave a copy in the reusable buffer.
@@ -68,7 +78,14 @@ bool SetupQrDecoder::Finish(std::string& payload) {
 
 bool SetupQrDecoder::DecodeGray(const uint8_t* gray, int width, int height, int stride,
                                 std::string& payload) {
+    Location ignored;
+    return DecodeGray(gray, width, height, stride, payload, ignored);
+}
+
+bool SetupQrDecoder::DecodeGray(const uint8_t* gray, int width, int height, int stride,
+                                std::string& payload, Location& location) {
     payload.clear();
+    location = Location{};
     if (gray == nullptr || stride < width) return false;
     uint8_t* image = Begin(width, height);
     if (image == nullptr) return false;
@@ -76,7 +93,7 @@ bool SetupQrDecoder::DecodeGray(const uint8_t* gray, int width, int height, int 
         std::memcpy(image + static_cast<size_t>(y) * width,
                     gray + static_cast<size_t>(y) * stride, static_cast<size_t>(width));
     }
-    return Finish(payload);
+    return Finish(payload, &location);
 }
 
 bool SetupQrDecoder::DecodeRgb565(const uint8_t* rgb565, int width, int height, int stride,
