@@ -167,7 +167,7 @@ struct Fixture {
         auto* root = lv_obj_get_child(lv_screen_active(), 0);
         auto* header = lv_obj_get_child(root, 0);
         RODAK_CHECK_EQ(lv_obj_get_child_count(header), 3U);
-        RODAK_CHECK_EQ(std::string(lv_label_get_text(lv_obj_get_child(header, 1))), "Camera");
+        RODAK_CHECK_EQ(std::string(lv_label_get_text(lv_obj_get_child(header, 1))), "相机");
         lv_obj_send_event(lv_obj_get_child(header, index), LV_EVENT_CLICKED, nullptr);
     }
 };
@@ -356,7 +356,8 @@ RODAK_TEST("Camera Home shows rejection when full and a new click can recover") 
     f.LaunchCamera();
     Completion retained[DeferredNavigation::kCapacity];
     for (auto& result : retained) RODAK_CHECK(f.Enqueue("camera", result));
-    f.ClickCameraHeader(2);
+    // The Camera header has no Home icon; its back arrow requests Home through the same queue.
+    f.ClickCameraHeader(0);
     auto* toast = lv_obj_get_child(lv_screen_active(), -1);
     RODAK_CHECK(toast != nullptr);
     RODAK_CHECK_EQ(std::string(lv_label_get_text(toast)), "返回桌面失败，请重试");
@@ -364,7 +365,7 @@ RODAK_TEST("Camera Home shows rejection when full and a new click can recover") 
     Pump(2400);
     for (const auto& result : retained) RODAK_CHECK_EQ(result.calls, 1);
     RODAK_CHECK_EQ(f.system->GetAppHostState().current_app_id, "camera");
-    f.ClickCameraHeader(2);
+    f.ClickCameraHeader(0);
     Pump(500);
     f.CheckHome();
 }
