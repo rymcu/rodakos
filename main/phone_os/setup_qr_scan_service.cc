@@ -297,9 +297,9 @@ void SetupQrScanService::RunSave() {
     });
     ESP_LOGI(TAG, "QR provisioning save: %s", SetupQrApplyStatusCode(status));
 
+    bool connect_started = false;
     if (IsSetupQrApplySuccess(status) && wifi_ != nullptr) {
         // Same as USB provisioning: a fresh association also starts the cloud client on IP.
-        bool connect_started = false;
         if (wifi_->DisconnectAndWait(2000)) {
             for (int attempt = 0; attempt < 3 && !connect_started; ++attempt) {
                 connect_started = wifi_->Connect(payload.ssid, payload.password, [](WiFiStatus) {});
@@ -314,6 +314,7 @@ void SetupQrScanService::RunSave() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (cancel_generation_.load() == generation) {
             snapshot_.result = status;
+            snapshot_.wifi_connect_started = connect_started;
             snapshot_.phase = IsSetupQrApplySuccess(status) ? SetupQrScanPhase::kCompleted
                                                             : SetupQrScanPhase::kFailed;
             snapshot_.code = SetupQrApplyStatusCode(status);

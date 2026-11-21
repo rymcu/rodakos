@@ -183,6 +183,7 @@ void SettingsApp::UpdateSetupQr() {
     const auto snapshot = scan->Snapshot();
     using Phase = rodakos::SetupQrScanPhase;
     if (snapshot.revision == setup_qr_revision_) {
+        if (snapshot.phase == Phase::kCompleted) UpdateSetupQrWifiResult();
         if (snapshot.phase == Phase::kScanning) {
             UpdateSetupQrPreview();
             if (setup_qr_progress_ != nullptr) {
@@ -194,6 +195,8 @@ void SettingsApp::UpdateSetupQr() {
     }
     setup_qr_revision_ = snapshot.revision;
     setup_qr_progress_ = nullptr;
+    setup_qr_wifi_label_ = nullptr;
+    setup_qr_retry_button_ = nullptr;
     DetachSetupQrPreview();
     if (setup_qr_body_ != nullptr) lv_obj_delete(setup_qr_body_);
     ReleaseSetupQrPreviewPixels();
@@ -297,14 +300,28 @@ void SettingsApp::UpdateSetupQr() {
         }
         case Phase::kCompleted: {
             close_text = "完成";
-            const char* text = "Wi-Fi 已保存，正在连接。";
             if (snapshot.result == rodakos::SetupQrApplyStatus::kServerChanged) {
-                text = "已保存，正在重启…";
-            } else if (snapshot.result == rodakos::SetupQrApplyStatus::kServerUnchanged) {
-                text = "Wi-Fi 已保存。服务器未变化，绑定保持不变。";
+                auto* message = CreateWrappedLabel(setup_qr_body_, "已保存，正在重启…", content_width, false);
+                lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, kContentTop);
+                break;
             }
-            auto* message = CreateWrappedLabel(setup_qr_body_, text, content_width, false);
+            // Two separate facts: what was saved, and whether WiFi actually came up.
+            const std::string saved =
+                snapshot.result == rodakos::SetupQrApplyStatus::kServerUnchanged
+                    ? "已保存 Wi-Fi「" + snapshot.ssid + "」。服务器未变化，绑定保持不变。"
+                    : "已保存 Wi-Fi「" + snapshot.ssid + "」。";
+            auto* message = CreateWrappedLabel(setup_qr_body_, saved.c_str(), content_width, false);
             lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, kContentTop);
+            setup_qr_wifi_label_ = CreateWrappedLabel(setup_qr_body_, "", content_width, true);
+            lv_obj_align(setup_qr_wifi_label_, LV_ALIGN_TOP_LEFT, 0, kContentTop + 48);
+            setup_qr_completed_ssid_ = snapshot.ssid;
+            setup_qr_connect_started_ = snapshot.wifi_connect_started;
+            primary = CreateQrActionButton(setup_qr_body_, "重试连接", true, LV_ALIGN_BOTTOM_LEFT);
+            setup_qr_retry_button_ = primary;
+            lv_obj_add_event_cb(primary, [](lv_event_t* e) {
+                static_cast<SettingsApp*>(lv_event_get_user_data(e))->RetrySetupQrWifi();
+            }, LV_EVENT_CLICKED, this);
+            UpdateSetupQrWifiResult();
             break;
         }
         case Phase::kFailed: {
@@ -429,4 +446,52 @@ void SettingsApp::ShowSetupQrManualEntry() {
             static_cast<SettingsApp*>(user_data)->CloseSetupQr();
         }, self);
     }, LV_EVENT_CLICKED, this);
+}
+
+// 连接结果 line on the completed page, refreshed with the page timer from the live adapter state.
+void SettingsApp::UpdateSetupQrWifiResult() {
+    if (setup_qr_wifi_label_ == nullptr) return;
+    auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
+    const WiFiStatus status = wifi != nullptr ? wifi->GetStatus() : WiFiStatus::kFailed;
+    const bool connected = status == WiFiStatus::kConnected && wifi != nullptr &&
+                           wifi->GetConnectedSSID() == setup_qr_completed_ssid_;
+    const bool rejected = wifi != nullptr && wifi->AuthRejectedSSID() == setup_qr_completed_ssid_;
+    std::string text;
+    lv_color_t color = rodakos_theme_text_secondary();
+    bool can_retry = false;
+    if (connected) {
+        text = "连接结果：已连接";
+        color = rodakos_theme_success();
+    } else if (rejected) {
+        text = "连接结果：密码错误。请检查二维码里的密码。";
+        color = rodakos_theme_error();
+        can_retry = true;
+    } else if (!setup_qr_connect_started_ || status == WiFiStatus::kFailed) {
+        text = "连接结果：没有连上。确认路由器在附近后点「重试连接」。";
+        color = rodakos_theme_error();
+        can_retry = true;
+    } else {
+        text = "连接结果：正在连接…";
+    }
+    lv_label_set_text(setup_qr_wifi_label_, text.c_str());
+    lv_obj_set_style_text_color(setup_qr_wifi_label_, color, 0);
+    if (setup_qr_retry_button_ != nullptr) {
+        if (can_retry) lv_obj_clear_flag(setup_qr_retry_button_, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(setup_qr_retry_button_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void SettingsApp::RetrySetupQrWifi() {
+    auto* wifi = context_ != nullptr ? context_->services().wifi() : nullptr;
+    std::string ssid;
+    std::string password;
+    if (wifi == nullptr || !wifi_config_.LoadCredentials(ssid, password) ||
+        ssid != setup_qr_completed_ssid_) {
+        ui_->ShowToastUnlocked("没有找到已保存的 Wi-Fi");
+        return;
+    }
+    setup_qr_connect_started_ = wifi->Connect(ssid, password, [](WiFiStatus) {});
+    password.assign(password.size(), '\0');
+    if (!setup_qr_connect_started_) ui_->ShowToastUnlocked("暂时无法连接，请稍后再试");
+    UpdateSetupQrWifiResult();
 }

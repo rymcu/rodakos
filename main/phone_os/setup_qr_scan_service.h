@@ -46,6 +46,9 @@ struct SetupQrScanSnapshot {
     // Saving would change the bootstrap URL, which restarts the device (see RunSave).
     bool will_restart = false;
     SetupQrApplyStatus result = SetupQrApplyStatus::kStorageFailed;
+    // After a successful save: whether the WiFi reconnect was started. The credentials stay saved
+    // either way; the UI shows the live link state and offers a retry when this is false.
+    bool wifi_connect_started = false;
     // Stable code (qr_* error or apply status) for logs and UI mapping.
     std::string code;
     uint32_t frames_scanned = 0;
