@@ -52,6 +52,11 @@ constexpr int kMaxPhotoNameSuffix = 9999;
 constexpr const char* kGpioLogTag = "gpio";
 // Keep this fallback inside libstdc++'s small-string storage.
 constexpr const char* kAllocationError = "Camera OOM";
+// Orientation is always written explicitly when a stream opens. The GC0308 320x240 register
+// table from esp_cam_sensor sets CISCTL_MODE1 (0x14) to 0x11, which turns the sensor mirror ON
+// and made the image left-right reversed. RodakOS writes mirror OFF by default (see
+// CameraService::horizontal_mirror_), which fixes the preview, photos, the JPEG stream and QR
+// scanning together, at no CPU cost.
 
 class SemaphoreLock {
 public:
@@ -212,17 +217,6 @@ const char* PixelFormatName(uint32_t pixelformat) {
     }
 }
 
-#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
-constexpr std::array<uint8_t, 26> kGc0308Page0Registers = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x0f, 0x14, 0x1a, 0x20, 0x21, 0x22, 0x24, 0x25,
-    0x2e, 0x50, 0x70, 0xb1, 0xb2, 0xb3, 0xb6, 0xd0, 0xd2, 0xd3, 0xf2, 0xf7, 0xf8
-};
-constexpr std::array<uint8_t, 31> kGc0308Page1Registers = {
-    0x02, 0x04, 0x05, 0x06, 0x08, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
-    0x19, 0x1a, 0x32, 0x35, 0x36, 0x37, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-    0x62, 0x63, 0x64, 0x65, 0x66
-};
-
 bool SensorRegisterIoctl(int fd, unsigned long request, uint32_t command,
                          esp_cam_sensor_reg_val_t& sensor_register) {
     v4l2_ext_control control = {};
@@ -255,6 +249,30 @@ bool ReadSensorRegister(int fd, uint8_t address, uint8_t& value) {
     value = static_cast<uint8_t>(sensor_register.value);
     return true;
 }
+
+bool WriteSensorRegister(int fd, uint8_t address, uint8_t value) {
+    esp_cam_sensor_reg_val_t sensor_register = {};
+    sensor_register.regaddr = address;
+    sensor_register.value = value;
+    return SensorRegisterIoctl(fd, VIDIOC_S_EXT_CTRLS, ESP_CAM_SENSOR_IOC_S_REG,
+                               sensor_register);
+}
+
+// GC0308 page 0 register 0x14 (CISCTL_MODE1): bit 0 mirrors left-right, bit 1 flips vertically.
+constexpr uint8_t kGc0308ModeRegister = 0x14;
+constexpr uint8_t kGc0308MirrorBit = 0x01;
+constexpr uint8_t kGc0308FlipBit = 0x02;
+
+#ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
+constexpr std::array<uint8_t, 26> kGc0308Page0Registers = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x0f, 0x14, 0x1a, 0x20, 0x21, 0x22, 0x24, 0x25,
+    0x2e, 0x50, 0x70, 0xb1, 0xb2, 0xb3, 0xb6, 0xd0, 0xd2, 0xd3, 0xf2, 0xf7, 0xf8
+};
+constexpr std::array<uint8_t, 31> kGc0308Page1Registers = {
+    0x02, 0x04, 0x05, 0x06, 0x08, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x19, 0x1a, 0x32, 0x35, 0x36, 0x37, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x62, 0x63, 0x64, 0x65, 0x66
+};
 
 template <size_t N>
 void LogGc0308RegisterPage(int fd, const char* phase, uint8_t page,
@@ -876,6 +894,8 @@ void CameraService::PreviewTask() {
                         ESP_LOGI(TAG, "Camera first frame ready: %dx%d stride=%d elapsed_ms=%" PRId64,
                                  active_width_, active_height_, active_stride_,
                                  (esp_timer_get_time() - started_at_us) / 1000);
+                        // Stream start may reload the sensor table; make sure orientation holds.
+                        ApplyOrientation();
 #ifdef RODAKOS_CAMERA_SENSOR_DIAGNOSTICS
                         LogGc0308RegisterSnapshot(fd_, "first-frame");
 #endif
@@ -930,6 +950,38 @@ void CameraService::PreviewTask() {
     // No service access follows logical completion. Retirement still waits for
     // this function's local state and its caller's complete return.
     MarkPreviewStopped();
+}
+
+// Takes effect the next time a stream opens; the open stream belongs to the preview task.
+void CameraService::SetOrientation(bool horizontal_mirror, bool vertical_flip) {
+    horizontal_mirror_.store(horizontal_mirror);
+    vertical_flip_.store(vertical_flip);
+}
+
+// Sensor-side mirror and flip, written straight to the GC0308 mode register. The V4L2
+// HFLIP/VFLIP controls report success on this driver but do not change the register, so the
+// value is read back and logged to prove what the sensor actually uses.
+void CameraService::ApplyOrientation() {
+#ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
+    if (fd_ < 0) return;
+    uint8_t mode = 0;
+    if (!SelectSensorRegisterPage(fd_, 0) || !ReadSensorRegister(fd_, kGc0308ModeRegister, mode)) {
+        ESP_LOGW(TAG, "Camera orientation not applied: mode register unreadable (%s)", ErrnoName());
+        return;
+    }
+    uint8_t wanted = static_cast<uint8_t>(mode & ~(kGc0308MirrorBit | kGc0308FlipBit));
+    if (horizontal_mirror_.load()) wanted |= kGc0308MirrorBit;
+    if (vertical_flip_.load()) wanted |= kGc0308FlipBit;
+    uint8_t applied = mode;
+    if (wanted != mode &&
+        (!WriteSensorRegister(fd_, kGc0308ModeRegister, wanted) ||
+         !ReadSensorRegister(fd_, kGc0308ModeRegister, applied))) {
+        ESP_LOGW(TAG, "Camera orientation write failed: %s", ErrnoName());
+        return;
+    }
+    ESP_LOGI(TAG, "Camera orientation: mirror=%d flip=%d reg14 0x%02x -> 0x%02x",
+             horizontal_mirror_.load() ? 1 : 0, vertical_flip_.load() ? 1 : 0, mode, applied);
+#endif
 }
 
 bool CameraService::OpenStream(int width, int height) {
@@ -1014,6 +1066,8 @@ bool CameraService::OpenStream(int width, int height) {
     }
     ESP_LOGW(TAG, "RODAKOS_RELEASE_FAULT_INJECTION_ACTIVE camera_test_pattern=1");
 #endif
+
+    ApplyOrientation();
 
     v4l2_requestbuffers req = {};
     req.count = kBufferCount;

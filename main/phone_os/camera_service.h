@@ -72,6 +72,10 @@ public:
     CameraState GetState() const;
     bool IsAvailable() const;
     std::string last_error() const;
+    // Sensor mirror / flip, applied when the next stream opens.
+    void SetOrientation(bool horizontal_mirror, bool vertical_flip);
+    bool horizontal_mirror() const { return horizontal_mirror_.load(); }
+    bool vertical_flip() const { return vertical_flip_.load(); }
 
 private:
     struct VideoBuffer {
@@ -114,6 +118,9 @@ private:
     std::atomic_bool streamoff_retry_required_{false};
     // STREAMOFF is valid only after STREAMON completed successfully.
     bool stream_started_ = false;
+    void ApplyOrientation();
+    std::atomic<bool> horizontal_mirror_{false};
+    std::atomic<bool> vertical_flip_{false};
     uint8_t jpeg_stream_fps_ = 0;
     JpegFrameCallback jpeg_stream_callback_;
     int fd_ = -1;
