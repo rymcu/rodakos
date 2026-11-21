@@ -33,11 +33,29 @@ after a rescan. Worker-creation failure remains a visible, retryable error.
 - MP3 reads distinguish errors from end-of-input. Incomplete frames and decoder failures cannot
   claim completion. Standard ID3 and APE metadata are handled separately from audio frames;
   host tests use the pinned Helix decoder, not a fake successful decoder.
+- A single MP3 frame that Helix rejects (for example `ERR_MP3_INVALID_SCALEFACT` from a bad
+  bit-reservoir claim) is dropped, about 26 ms of audio, and playback continues. More than eight
+  consecutive bad frames still end the track with "MP3 decode failed". The MP3 PCM staging buffer
+  prefers PSRAM, because internal RAM is fragmented once wake listening is resident.
 - Failed hardware resume cancels the paused worker and retains its error so a new request can
   retry. Stop and automatic next-track handling are coordinated; observing state does not start
   another track. Shutdown retains task-owned state until in-flight I/O exits.
 - A rejected volume change restores the slider and displayed percentage from the shared output
   configuration. The configuration itself retains the existing volume-receipt boundary.
+
+## Shared I2S bus and wake listening
+
+ES8311 playback and ES7210 capture share one I2S clock. Always-on wake capture holds it at 16 kHz,
+and esp_codec_dev refuses a playback open at any other rate (`conflict sample_rate`), which surfaced
+as "Codec open failed" for 44.1 kHz songs. Music therefore takes the bus instead of resampling:
+
+- Every playback output open first calls `VoiceWakeService::ReleaseInputForMedia()`, which closes
+  the wake microphone synchronously.
+- While a track is loading or playing, or the playback output is open, the wake supervisor keeps
+  wake listening paused. "你好达克" is not available during music.
+- Pausing closes the playback output at the worker's next pause poll; Resume reopens it with the
+  retained format and continues from the paused position. Completion, stop and errors also close
+  it. Wake listening re-arms on the next supervisor tick, about one second later.
 
 The service deliberately waits for in-flight storage/audio I/O during destruction. This avoids
 freeing state underneath a task; it does not promise a bounded shutdown when a hardware driver
@@ -56,8 +74,9 @@ durable device-effect contract. No remote music or backlight MCP endpoint is int
 
 Exact source/build identity and dated results are recorded in
 [release evidence](ota-release-readiness.md). Real SD removal/slow-card and low-memory runs,
-physical music/Recorder/voice preemption and resume, and audible playback remain open in the
-  [roadmap](roadmap.md). Photos, File Manager, Camera and Recorder still need physical SD,
+physical music/Recorder/voice preemption, and audible playback remain open in the
+  [roadmap](roadmap.md). On 2026-11-21 a BigSmart device played 44.1 kHz stereo MP3s through
+  pause, wake detection while paused, and resume from the paused position. Photos, File Manager, Camera and Recorder still need physical SD,
   touch, audio and resource acceptance. Recorder's final header/flush/close errors and Camera's
   failed completion delivery are covered by the host software suites; those tests do not replace
   device-side recovery or acoustic validation.

@@ -304,3 +304,58 @@ RODAK_TEST("valid MP3 frames crossing the input buffer boundary still complete")
         RODAK_CHECK_EQ(f.output.write_calls.load(), 40u);
     }
 }
+
+namespace {
+// Side-info claims 4095 Huffman bits in granule 0 while the frame carries about 3168, so Helix
+// returns ERR_MP3_INVALID_SCALEFACT for this frame only.
+void CorruptMp3Frame(Bytes& bytes, unsigned frame) {
+    bytes[frame * 417 + 6] = 0x3f; bytes[frame * 417 + 7] = 0xff;
+}
+}
+
+RODAK_TEST("an isolated undecodable MP3 frame is skipped and playback completes") {
+    auto bytes = Mp3(); CorruptMp3Frame(bytes, 3);
+    Fixture f; File file(bytes, ".mp3");
+    RODAK_CHECK_EQ(f.Play(file).status, AudioPlaybackStatus::kCompleted);
+    RODAK_CHECK_EQ(f.output.write_calls.load(), 7u);
+}
+
+RODAK_TEST("a run of undecodable MP3 frames still reports a decode error") {
+    auto bytes = Mp3(12);
+    for (unsigned frame = 1; frame < 11; ++frame) CorruptMp3Frame(bytes, frame);
+    Fixture f; File file(bytes, ".mp3");
+    CheckError(f.Play(file));
+    RODAK_CHECK_FALSE(f.output.IsOpenForOwner("audio-playback"));
+}
+
+RODAK_TEST("pause releases the output and resume reopens it at the paused position") {
+    Fixture f; File file(Wav(), ".wav");
+    f.output.write_hook = [&]() { f.audio.Pause(); };
+    RODAK_CHECK(f.audio.PlayFile(file.path.string()));
+    // The worker closes the output at its next pause poll, after Pause() already set kPaused.
+    for (unsigned i = 0; i < 1000 && f.output.close_calls.load() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    RODAK_CHECK_FALSE(f.output.IsOpenForOwner("audio-playback"));
+    const auto paused = f.audio.GetState();
+    RODAK_CHECK_EQ(paused.status, AudioPlaybackStatus::kPaused);
+    f.output.write_hook = {};
+    f.audio.Resume();
+    RODAK_CHECK_EQ(f.output.open_calls.load(), 2u);
+    const auto done = f.Wait();
+    RODAK_CHECK_EQ(done.status, AudioPlaybackStatus::kCompleted);
+    RODAK_CHECK_EQ(f.output.written.size(), 8192u);
+    RODAK_CHECK_FALSE(f.output.IsOpenForOwner("audio-playback"));
+}
+
+RODAK_TEST("every playback output open first runs the capture release hook") {
+    Fixture f; File file(Mp3(), ".mp3");
+    std::atomic<unsigned> hook_calls{0};
+    f.audio.SetBeforeOutputOpen([&]() {
+        RODAK_CHECK_FALSE(f.output.IsOpenForOwner("audio-playback"));
+        ++hook_calls;
+    });
+    RODAK_CHECK_EQ(f.Play(file).status, AudioPlaybackStatus::kCompleted);
+    RODAK_CHECK_EQ(hook_calls.load(), f.output.open_calls.load());
+    RODAK_CHECK(hook_calls.load() >= 1u);
+    RODAK_CHECK_FALSE(f.output.IsOpenForOwner("audio-playback"));
+}

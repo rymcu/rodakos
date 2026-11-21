@@ -350,7 +350,10 @@ On hardware, verify:
   that order, and never replays pre-failure microphone or TTS data.
 - server `retryable: false`, close `1000`/`1002`/`4001`, explicit stop, and deinitialization do not
   retry, while close `1011`/`1012`/`1013` retries only after the interaction is established.
-- music pauses and resumes, while Recorder can temporarily preempt wake monitoring.
+- music pauses and resumes, while Recorder can temporarily preempt wake monitoring. Music
+  playback itself releases wake capture, because the shared I2S bus cannot run 16 kHz capture and
+  44.1 kHz playback at once; wake re-arms when music pauses or stops (see
+  [music playback](music-playback.md)).
 - disabling wake monitoring closes the ADC owner and does not reconnect to the cloud.
 
 Normal refresh must write only `otadata` and `ota_0` after `-VerifyOnly` passes. Never erase or

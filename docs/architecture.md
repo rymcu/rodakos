@@ -220,7 +220,9 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   6 × 480 B, and the next capture open regrew it. Each size change frees and reallocates the ring
   in internal RAM. After a spoken reply, the regrown buffers split the contiguous block the voice
   WebSocket task needs, so the next wake failed with "Device memory low". Playback accepts only
-  1–2 channel 16-bit PCM. It stages conversions in a reusable PSRAM buffer.
+  1–2 channel 16-bit PCM. It stages conversions in a reusable PSRAM buffer. Both sides must also
+  share one sample rate, so media playback releases wake capture before it opens the bus; see
+  [music playback](music-playback.md).
 - MQTT desired-volume application checks the setter result and reports the retained configuration
   on failure. A source-verified build overlay for esp_codec_dev 1.5.7 propagates the selected
   codec/software-volume driver's exact error and only commits the dependency cache on success.

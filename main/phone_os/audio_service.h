@@ -3,7 +3,9 @@
 #include <cstdio>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <utility>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -44,6 +46,8 @@ public:
 
     bool Init();
     void Deinit();
+    // Runs before every playback open of the shared I2S bus. Set once during boot.
+    void SetBeforeOutputOpen(std::function<void()> hook) { before_output_open_ = std::move(hook); }
 
     bool PlayFile(const std::string& path, const std::string& title = "");
     void Stop();
@@ -64,6 +68,7 @@ public:
 
 private:
     bool InitLocked();
+    bool OpenOutput(uint32_t sample_rate, uint16_t channels, uint16_t bits_per_sample);
     static void PlaybackTaskEntry(void* arg);
     void PlaybackTask();
     bool PlayWavFile(FILE* fp, const std::string& path, bool& stopped);
@@ -90,6 +95,7 @@ private:
     bool playback_hardware_suspended_ = false;
     bool playback_abort_error_ = false;
     AudioPlaybackState state_;
+    std::function<void()> before_output_open_;
 };
 
 }  // namespace rodakos

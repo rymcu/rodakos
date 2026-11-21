@@ -20,6 +20,7 @@ constexpr const char* kOutputOwner = "audio-playback";
 constexpr size_t kPlaybackBufferSize = 4096;
 constexpr int kMp3ReadBufferSize = 16 * 1024;
 constexpr int kMp3RefillThreshold = 2 * MAINBUF_SIZE;
+constexpr int kMp3MaxConsecutiveBadFrames = 8;
 constexpr uint32_t kTaskStackWords = 6144;
 
 class OperationLock {
@@ -385,6 +386,13 @@ bool AudioService::PlayFile(const std::string& path, const std::string& title) {
     return true;
 }
 
+bool AudioService::OpenOutput(uint32_t sample_rate, uint16_t channels, uint16_t bits_per_sample) {
+    // Capture and playback share one I2S clock, so a resident 16 kHz capture makes the codec
+    // refuse any other playback rate. The hook lets the capture owner release the bus first.
+    if (before_output_open_) before_output_open_();
+    return output_.OpenForOwner(kOutputOwner, sample_rate, channels, bits_per_sample);
+}
+
 void AudioService::Stop() {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -434,7 +442,7 @@ bool AudioService::SuspendPlaybackHardware() {
             }
             if (mutex_ != nullptr) {
                 xSemaphoreTake(mutex_, portMAX_DELAY);
-                playback_hardware_suspended_ = was_open;
+                playback_hardware_suspended_ = playback_hardware_suspended_ || was_open;
                 xSemaphoreGive(mutex_);
             }
             return true;
@@ -484,7 +492,7 @@ void AudioService::Resume() {
     }
     if (reopen_output &&
         (sample_rate == 0 || channels == 0 || bits_per_sample == 0 ||
-         !output_.OpenForOwner(kOutputOwner, sample_rate, channels, bits_per_sample))) {
+         !OpenOutput(sample_rate, channels, bits_per_sample))) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (stop_requested_ || !playback_task_active_) {
             xSemaphoreGive(mutex_);
@@ -597,7 +605,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         return false;
     }
 
-    if (!output_.OpenForOwner(kOutputOwner, wav.sample_rate, wav.channels, wav.bits_per_sample)) {
+    if (!OpenOutput(wav.sample_rate, wav.channels, wav.bits_per_sample)) {
         SetState(AudioPlaybackStatus::kError, "Codec open failed");
         return false;
     }
@@ -678,7 +686,9 @@ void AudioService::FinishPlayback(bool ok, bool stopped) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     // Publish the terminal result only after its output ownership is released.
     // Stop can be admitted by the final write, after the loop's last poll.
-    if (!ok || stopped || stop_requested_ || playback_abort_error_) output_.CloseForOwner(kOutputOwner);
+    // Completion also closes: an idle open output pins the shared I2S bus at the song's rate and
+    // keeps wake capture locked out. The next track reopens it through OpenOutput().
+    output_.CloseForOwner(kOutputOwner);
     if (playback_abort_error_) {
         state_.status = AudioPlaybackStatus::kError;
     } else if (stopped || stop_requested_) {
@@ -713,15 +723,11 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         return false;
     }
 
-    auto* read_buffer = static_cast<unsigned char*>(
-        heap_caps_malloc(kMp3ReadBufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (read_buffer == nullptr) {
-        read_buffer = static_cast<unsigned char*>(
-            heap_caps_malloc(kMp3ReadBufferSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    }
-    auto* pcm_buffer = static_cast<short*>(
-        heap_caps_malloc(MAX_NCHAN * MAX_NGRAN * MAX_NSAMP * sizeof(short),
-                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    auto* read_buffer = AllocateAudioBuffer(kMp3ReadBufferSize);
+    // The output adapter copies PCM into its own frame buffer before any DMA, so this staging
+    // buffer may live in PSRAM. Internal RAM is fragmented once wake listening is resident.
+    auto* pcm_buffer = reinterpret_cast<short*>(
+        AllocateAudioBuffer(MAX_NCHAN * MAX_NGRAN * MAX_NSAMP * sizeof(short)));
     if (read_buffer == nullptr || pcm_buffer == nullptr) {
         if (read_buffer != nullptr) {
             heap_caps_free(read_buffer);
@@ -738,6 +744,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     bool eof_reached = false;
     bool failed = false;
     bool codec_ready = false;
+    int consecutive_bad_frames = 0;
     bool force_refill = false;
     size_t read_offset = 0;
     MP3FrameInfo output_format = {};
@@ -886,12 +893,21 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
             if (decode_ret == ERR_MP3_MAINDATA_UNDERFLOW && bytes_left >= 0 && bytes_left < frame_bytes) {
                 continue;
             }
+            // Some encoders write a frame whose bit reservoir Helix rejects while every other
+            // frame is valid. Drop such a frame (about 26 ms) instead of ending the song; a run
+            // of them still means the stream is not decodable.
+            if (decode_ret != ERR_MP3_INDATA_UNDERFLOW && bytes_left >= 0 && bytes_left < frame_bytes &&
+                ++consecutive_bad_frames <= kMp3MaxConsecutiveBadFrames) {
+                ESP_LOGW(TAG, "Skipped undecodable MP3 frame: %d", decode_ret);
+                continue;
+            }
             ESP_LOGW(TAG, "MP3 decode failed: %d", decode_ret);
             SetState(AudioPlaybackStatus::kError, "MP3 decode failed");
             failed = true;
             break;
         }
 
+        consecutive_bad_frames = 0;
         MP3GetLastFrameInfo(decoder, &frame_info);
         if (bytes_left < 0 || bytes_left >= frame_bytes || frame_info.outputSamps <= 0 ||
             frame_info.outputSamps > MAX_NCHAN * MAX_NGRAN * MAX_NSAMP || frame_info.samprate <= 0 ||
@@ -904,10 +920,9 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
         }
 
         if (!codec_ready) {
-            if (!output_.OpenForOwner(kOutputOwner,
-                                      static_cast<uint32_t>(frame_info.samprate),
-                                      static_cast<uint16_t>(frame_info.nChans),
-                                      static_cast<uint16_t>(frame_info.bitsPerSample))) {
+            if (!OpenOutput(static_cast<uint32_t>(frame_info.samprate),
+                            static_cast<uint16_t>(frame_info.nChans),
+                            static_cast<uint16_t>(frame_info.bitsPerSample))) {
                 SetState(AudioPlaybackStatus::kError, "Codec open failed");
                 failed = true;
                 break;
@@ -971,6 +986,14 @@ bool AudioService::ShouldStopOrPause(bool& should_pause) {
         should_stop = stop_requested_;
         should_pause = pause_requested_;
         playback_io_idle_ = should_pause;
+        // A paused but open output pins the shared I2S bus at the song's rate and keeps wake
+        // capture locked out. Resume() reopens it. Closing under mutex_ keeps Resume() from
+        // reading a stale suspended flag; FinishPlayback() uses the same lock order.
+        if (should_pause && !should_stop && !playback_hardware_suspended_ &&
+            output_.IsOpenForOwner(kOutputOwner)) {
+            output_.CloseForOwner(kOutputOwner);
+            playback_hardware_suspended_ = true;
+        }
         xSemaphoreGive(mutex_);
     }
     return should_stop;

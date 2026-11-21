@@ -661,6 +661,13 @@ extern "C" void app_main(void) {
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
     unified_mqtt_service.SetVoiceWakeService(&voice_wake_service);
+    voice_wake_service.SetMediaPlaybackProbe([] {
+        const auto status = audio_service.GetState().status;
+        return status == rodakos::AudioPlaybackStatus::kLoading ||
+               status == rodakos::AudioPlaybackStatus::kPlaying ||
+               audio_output_service.IsOpenForOwner("audio-playback");
+    });
+    audio_service.SetBeforeOutputOpen([] { voice_wake_service.ReleaseInputForMedia(); });
     // 服务端发起播报：不打断正在进行的交互；放音乐时只有 urgent 才插播（焦点会暂停并恢复音乐）。
     // 会话建立要等网络，放到 wake_notify 任务上做，MQTT 线程只排队。
     unified_mqtt_service.SetVoiceAnnounceHandler([](uint32_t announce_seq, bool urgent) -> std::string {
