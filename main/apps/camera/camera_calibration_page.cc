@@ -1,8 +1,8 @@
 // Camera calibration page: an overlay on the Camera app's own preview.
 //
 // The Camera app keeps the preview lease; CameraCalibrationService only reads frames. Boxes are
-// drawn in preview-box coordinates: the 320x240 frame is scaled to fill the 312x184 box and
-// centred, so it is cropped top and bottom (see CameraApp::UpdatePreview).
+// drawn in preview-box coordinates. While calibrating, the viewfinder widens over the shutter rail
+// to the full 320x200 so the result panel fits beside the 0.7x frame (see CameraApp::UpdatePreview).
 #include "apps/camera/camera_app.h"
 
 #include "phone_os/phone_app_context.h"
@@ -22,8 +22,9 @@
 namespace {
 
 constexpr const char* TAG = "CameraCalibrationPage";
-constexpr lv_coord_t kBoxWidth = 312;
-constexpr lv_coord_t kBoxHeight = 184;
+constexpr lv_coord_t kBoxWidth = 320;
+constexpr lv_coord_t kBoxHeight = 200;
+constexpr lv_coord_t kViewfinderWidth = 266;
 // While calibrating, the whole 4:3 frame is shown left-aligned at 224x168 (0.7x), vertically
 // centred, and the result panel takes the column to its right, so it never covers what is being
 // measured. The column is 84 px: four CJK characters per line, since phone_font_12 falls back to
@@ -104,6 +105,8 @@ void CameraApp::OpenCalibration() {
         UpdateStatus("校准启动失败", true);
         return;
     }
+    lv_obj_set_width(preview_box_, kBoxWidth);
+    lv_obj_move_foreground(preview_box_);
 
     // Layer over the preview: outlines plus a translucent result panel at the bottom.
     calibration_layer_ = lv_obj_create(preview_box_);
@@ -173,16 +176,16 @@ void CameraApp::OpenCalibration() {
     lv_label_set_long_mode(calibration_hint_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(calibration_hint_, LV_TEXT_ALIGN_CENTER, 0);
 
-    // Taking photos is not part of calibration; hide the shutter so it cannot cover the panel.
-    if (capture_button_ != nullptr) lv_obj_add_flag(capture_button_, LV_OBJ_FLAG_HIDDEN);
+    // Taking photos is not part of calibration; the widened viewfinder covers the shutter rail.
+    if (rail_ != nullptr) lv_obj_add_flag(rail_, LV_OBJ_FLAG_HIDDEN);
     if (calibration_button_ != nullptr) lv_obj_add_state(calibration_button_, LV_STATE_CHECKED);
     calibration_revision_ = 0;
     lv_label_set_text(calibration_status_, "正在准备…");
     calibration_timer_ = lv_timer_create([](lv_timer_t* timer) {
         static_cast<CameraApp*>(lv_timer_get_user_data(timer))->UpdateCalibration();
     }, kRefreshMs, this);
-    // The bottom status line would overlap the frame; the panel carries the messages instead.
-    if (status_label_ != nullptr) lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+    // The result pill would overlap the frame; the panel carries the messages instead.
+    HideStatus();
     displayed_sequence_ = 0;  // Re-place the preview image in calibration layout on the next frame.
     ESP_LOGI(TAG, "Calibration page opened");
 }
@@ -206,15 +209,12 @@ void CameraApp::CloseCalibration() {
     calibration_bar_ = nullptr;
     calibration_best_mark_ = nullptr;
     calibration_hint_ = nullptr;
-    if (capture_button_ != nullptr && lv_obj_is_valid(capture_button_)) {
-        lv_obj_clear_flag(capture_button_, LV_OBJ_FLAG_HIDDEN);
+    if (rail_ != nullptr && lv_obj_is_valid(rail_)) lv_obj_clear_flag(rail_, LV_OBJ_FLAG_HIDDEN);
+    if (preview_box_ != nullptr && lv_obj_is_valid(preview_box_)) {
+        lv_obj_set_width(preview_box_, kViewfinderWidth);
     }
     if (calibration_button_ != nullptr && lv_obj_is_valid(calibration_button_)) {
         lv_obj_clear_state(calibration_button_, LV_STATE_CHECKED);
-    }
-    if (status_label_ != nullptr && lv_obj_is_valid(status_label_)) {
-        lv_obj_clear_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-        if (preview_ready_) UpdateStatus("Ready");
     }
     displayed_sequence_ = 0;  // Back to the filled preview on the next frame.
 }

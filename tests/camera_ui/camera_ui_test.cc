@@ -20,6 +20,7 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "esp_lvgl_port.h"
 #include "settings.h"
@@ -123,6 +124,7 @@ struct Fixture {
         Pump(180);
     }
     std::string Status() { return lv_label_get_text(app().status_label_); }
+    bool StatusVisible() { return !lv_obj_has_flag(app().status_label_, LV_OBJ_FLAG_HIDDEN); }
     bool Disabled() { return lv_obj_has_state(app().capture_button_, LV_STATE_DISABLED); }
     void Click() { lv_obj_send_event(app().capture_button_, LV_EVENT_CLICKED, nullptr); }
     void Complete() {
@@ -141,7 +143,8 @@ RODAK_TEST("capture completion does not need a worker LVGL lock or async allocat
     f.Click();
     RODAK_CHECK(f.Disabled());
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "/photos/test.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
+    RODAK_CHECK(f.StatusVisible());
     RODAK_CHECK_FALSE(f.Disabled());
     RODAK_CHECK_EQ(camera_test::worker_lock_attempts.load(), 0);
     RODAK_CHECK_EQ(camera_test::worker_async_attempts.load(), 0);
@@ -159,13 +162,15 @@ RODAK_TEST("storage failure is shown and a second click can save successfully") 
     f.Create();
     f.Click();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "SD card is not available");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
     RODAK_CHECK_FALSE(f.Disabled());
-    Pump(2000);
     SaveScreenshot("camera-storage-error.ppm");
+    // The error pill retires on its own after a few seconds.
+    Pump(4200);
+    RODAK_CHECK_FALSE(f.StatusVisible());
     f.Click();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "/photos/retry.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
     RODAK_CHECK_EQ(f.camera.captures.load(), 2U);
 }
 
@@ -182,9 +187,9 @@ RODAK_TEST("slow capture accepts only one task and retains its result until UI p
     camera_test::JoinTasks();
     RODAK_CHECK(f.app().CaptureInFlight());
     RODAK_CHECK(f.Disabled());
-    RODAK_CHECK_EQ(f.Status(), "Saving photo...");
+    RODAK_CHECK_EQ(f.Status(), "正在保存…");
     Pump(140);
-    RODAK_CHECK_EQ(f.Status(), "/photos/slow.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
     RODAK_CHECK_FALSE(f.Disabled());
     lv_label_set_text(f.app().status_label_, "Keep current message");
     Pump(500);
@@ -198,11 +203,11 @@ RODAK_TEST("task creation failure leaves the button retryable") {
     f.Click();
     RODAK_CHECK_FALSE(f.app().CaptureInFlight());
     RODAK_CHECK_FALSE(f.Disabled());
-    RODAK_CHECK_EQ(f.Status(), "Failed to start capture task");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，请重试");
     camera_test::fail_task_creation = false;
     f.Click();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "/photos/test.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
 }
 
 RODAK_TEST("preview failure does not remove the separate capture result consumer") {
@@ -217,10 +222,21 @@ RODAK_TEST("preview failure does not remove the separate capture result consumer
     f.app().UpdatePreview();
     RODAK_CHECK(f.app().preview_timer_ == nullptr);
     RODAK_CHECK(f.app().capture_result_timer_ != nullptr);
+    RODAK_CHECK(f.app().notice_ != nullptr);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app().notice_title_)), "相机没有画面");
     gate->Release();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "SD write failed");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
     RODAK_CHECK(f.Disabled());
+    RODAK_CHECK(lv_obj_has_state(f.app().calibration_button_, LV_STATE_DISABLED));
+    SaveScreenshot("camera-preview-failed.ppm");
+    f.camera.running = true;
+    f.camera.preview_error.clear();
+    lv_obj_send_event(f.app().retry_button_, LV_EVENT_CLICKED, nullptr);
+    Pump(180);
+    RODAK_CHECK(f.app().notice_ == nullptr);
+    RODAK_CHECK(f.app().preview_timer_ != nullptr);
+    RODAK_CHECK_FALSE(f.Disabled());
 }
 
 RODAK_TEST("theme recreation rejects the old worker result and preserves the new instance") {
@@ -236,7 +252,7 @@ RODAK_TEST("theme recreation rejects the old worker result and preserves the new
     RODAK_CHECK_FALSE(f.host.RefreshCurrentTheme(f.context));
     RODAK_CHECK(f.host.RecreateCurrent(f.descriptor, f.context));
     Pump(180);
-    RODAK_CHECK_EQ(f.Status(), "Ready");
+    RODAK_CHECK_FALSE(f.StatusVisible());
     RODAK_CHECK_FALSE(f.Disabled());
     f.Click();
     Await([&] { return f.camera.completed.load() == 1; });
@@ -244,11 +260,11 @@ RODAK_TEST("theme recreation rejects the old worker result and preserves the new
         Pump(140);
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    RODAK_CHECK_EQ(f.Status(), "/photos/new-theme.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
     gate->Release();
     f.Complete();
     RODAK_CHECK(old_guard.expired());
-    RODAK_CHECK_EQ(f.Status(), "/photos/new-theme.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
     RODAK_CHECK_FALSE(f.Disabled());
 }
 
@@ -282,11 +298,11 @@ RODAK_TEST("stale generation cannot finish a later capture in the same app") {
     f.Click();
     RODAK_CHECK(gate->Wait());
     f.app().OnCaptureComplete(true, "/photos/stale.jpg", "", 1);
-    RODAK_CHECK_EQ(f.Status(), "Saving photo...");
+    RODAK_CHECK_EQ(f.Status(), "正在保存…");
     RODAK_CHECK(f.Disabled());
     gate->Release();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "/photos/second.jpg");
+    RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
 }
 
 RODAK_TEST("result timer allocation failure fails creation and cleans the partial UI") {
@@ -320,6 +336,9 @@ RODAK_TEST("unavailable camera cannot start a capture and releases the audio foc
     RODAK_CHECK_EQ(f.focus.releases, 1);
     f.app().CapturePhoto();
     RODAK_CHECK_EQ(f.camera.captures.load(), 0U);
+    RODAK_CHECK(f.app().notice_ != nullptr);
+    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app().retry_button_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(lv_obj_has_state(f.app().calibration_button_, LV_STATE_DISABLED));
     Pump(2000);
     SaveScreenshot("camera-unavailable.ppm");
 }
@@ -340,21 +359,30 @@ RODAK_TEST("home return reserve follows the preview lifecycle") {
     RODAK_CHECK_EQ(f.app().home_return_reserve_size_, 12288U);
 }
 
-RODAK_TEST("long saved paths stay on one status line below the capture button") {
+RODAK_TEST("viewfinder shows the whole frame and the result pill stays inside it") {
     Fixture f;
     f.ui.SetThemeName("light");
-    f.camera.Outcomes({{true, "/photos/a-very-long-folder-name/camera-capture-with-a-very-long-name-20261006.jpg", "", {}}});
     f.Create();
+    lv_area_t box{}, rail{}, button{};
+    lv_obj_get_coords(f.app().preview_box_, &box);
+    lv_obj_get_coords(f.app().rail_, &rail);
+    lv_obj_get_coords(f.app().capture_button_, &button);
+    RODAK_CHECK_EQ(lv_area_get_width(&box), 266);
+    RODAK_CHECK_EQ(lv_area_get_height(&box), 200);
+    RODAK_CHECK(button.x1 >= rail.x1 && button.x2 <= rail.x2);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(lv_obj_get_child(f.app().calibration_button_, 0))), ICON_SETTINGS);
     f.Click();
     f.Complete();
-    Pump(2000);
-    lv_area_t status{}, button{};
+    lv_obj_update_layout(lv_screen_active());
+    lv_area_t status{};
     lv_obj_get_coords(f.app().status_label_, &status);
-    lv_obj_get_coords(f.app().capture_button_, &button);
-    RODAK_CHECK(status.y1 > button.y2);
-    RODAK_CHECK(status.y2 < 240);
-    RODAK_CHECK_EQ(lv_obj_get_height(f.app().status_label_), 20);
-    SaveScreenshot("camera-long-path.ppm");
+    RODAK_CHECK(status.x1 >= box.x1 && status.x2 <= box.x2);
+    RODAK_CHECK(status.y1 >= box.y1 && status.y2 <= box.y2);
+    RODAK_CHECK(status.x2 < button.x1);
+    SaveScreenshot("camera-saved.ppm");
+    // The saved pill retires after about two seconds.
+    Pump(2200);
+    RODAK_CHECK_FALSE(f.StatusVisible());
 }
 
 RODAK_TEST("teardown waits for LVGL ownership instead of leaving live callbacks") {
