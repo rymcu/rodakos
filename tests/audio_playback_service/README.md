@@ -27,7 +27,7 @@ CTest 名称为 `rodakos_audio_playback_service`，可执行文件为
 `assembly.h` 中与 CPU 相关的整数乘法高位、绝对值、前导零、64 位累加及移位 intrinsic，
 使解码源码可在 x86-64 上构建；这不验证 ESP32-S3 指令实现或实际 DSP 性能。
 
-17 项测试覆盖：
+21 项测试覆盖：
 
 - 完整 WAV 播放；RIFF/实际长度、chunk 大小、零数据、采样率/字节率和 stereo 帧对齐。
 - WAV/MP3 已产生进度后的短读、I/O 错误、截断帧、解码错误和输出失败；失败不成为 Completed，
@@ -38,6 +38,9 @@ CTest 名称为 `rodakos_audio_playback_service`，可执行文件为
 - 硬件 Resume 失败终止暂停线程，保留错误并可重试；Resume 打开期间 Stop 不被迟到结果覆盖。
 - 在 MP3 任务启动前暂停，元数据处理后仍能恢复；Deinit 等待在途输出结束后才释放服务和硬件。
 - 输入缓冲末尾不足完整 header/CRC/side-info 时不会调用 Helix；合法跨缓冲帧仍能完成。
+- 单个 Helix 拒绝的帧（side-info 声明超出帧长的 Huffman 位数）被跳过并完成；连续坏帧仍报错。
+- 暂停在下一次轮询时释放输出所有权，Resume 重新打开并从暂停位置完成；每次打开输出前都会先
+  调用采集释放 hook。
 
 MP3 fixture 由测试代码自行构造：MPEG-1 Layer III、128 kbps、44.1 kHz、mono，417 字节帧，
 零 side-info/main data 描述静音。reservoir 用例只改变第一帧的 `main_data_begin`，其后的完整帧

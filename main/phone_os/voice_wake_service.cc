@@ -16,6 +16,7 @@ namespace {
 constexpr const char* TAG = "VoiceWakeService";
 constexpr uint32_t kSupervisorTaskStackBytes = 6144;
 constexpr TickType_t kSupervisorIntervalTicks = pdMS_TO_TICKS(1000);
+constexpr TickType_t kMediaReleaseGraceTicks = pdMS_TO_TICKS(3000);
 constexpr TickType_t kAssistantSessionTimeoutTicks = pdMS_TO_TICKS(120000);
 constexpr TickType_t kHealthLogIntervalTicks = pdMS_TO_TICKS(60000);
 
@@ -532,6 +533,8 @@ void VoiceWakeService::LogHealthIfDueLocked() {
 }
 
 void VoiceWakeService::SupervisorTick() {
+    // Probe outside the wake mutex: it takes the audio service locks.
+    const bool media_active = media_playback_probe_ && media_playback_probe_();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     if (!initialized_ || service_stopping_ || !task_running_) {
         xSemaphoreGive(mutex_);
@@ -599,8 +602,30 @@ void VoiceWakeService::SupervisorTick() {
     }
 
     assistant_active_since_ticks_ = 0;
+    // A release can land just before playback opens the bus and flips the probe; keep the
+    // microphone closed through that window.
+    const bool media_hold = media_active ||
+        (media_release_ticks_ != 0 && (xTaskGetTickCount() - media_release_ticks_) < kMediaReleaseGraceTicks);
+    if (media_hold) {
+        if (listening_) StopRuntimeLocked("Paused for music");
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    media_release_ticks_ = 0;
     if (!listening_) {
         StartRuntimeLocked();
+    }
+    xSemaphoreGive(mutex_);
+}
+
+void VoiceWakeService::ReleaseInputForMedia() {
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    media_release_ticks_ = xTaskGetTickCount();
+    if (media_release_ticks_ == 0) media_release_ticks_ = 1;
+    if (listening_) {
+        StopRuntimeLocked("Paused for music");
+        ESP_LOGI(TAG, "Wake listening paused for media playback");
     }
     xSemaphoreGive(mutex_);
 }

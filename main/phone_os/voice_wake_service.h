@@ -95,6 +95,12 @@ public:
 
     void NotifyWakeWordDetected(const std::string& wake_word);
 
+    // Media playback shares the capture I2S bus at its own sample rate. The probe reports whether
+    // playback holds or is about to hold that bus; set it once during boot.
+    void SetMediaPlaybackProbe(std::function<bool()> probe) { media_playback_probe_ = std::move(probe); }
+    // Synchronously releases the microphone before media playback opens the shared bus.
+    void ReleaseInputForMedia();
+
 private:
     static void SupervisorTask(void* arg);
 
@@ -120,6 +126,8 @@ private:
 
     VoiceAssistantService& assistant_;
     VoiceWakeRuntime& runtime_;
+    std::function<bool()> media_playback_probe_;
+    TickType_t media_release_ticks_ = 0;
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
     bool destroying_ = false;
