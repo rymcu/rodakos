@@ -408,7 +408,11 @@ void SortPaths(std::vector<ImageCandidate>& images, ImageScanResult& result) {
         return left.path < right.path;
     });
     result.paths.reserve(images.size());
-    for (auto& image : images) result.paths.push_back(std::move(image.path));
+    result.modified_times.reserve(images.size());
+    for (auto& image : images) {
+        result.paths.push_back(std::move(image.path));
+        result.modified_times.push_back(image.modified_time);
+    }
 }
 }  // namespace
 

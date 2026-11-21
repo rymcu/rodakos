@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
@@ -64,6 +65,8 @@ struct ImageScanResult {
     ImageScanStatus status = ImageScanStatus::kReady;
     std::vector<std::string> paths;
     std::string failed_path;
+    // Parallel to paths: each file's modification time in Unix seconds, 0 when unknown.
+    std::vector<uint64_t> modified_times;
 };
 
 enum class ImageLoadStatus { kLoaded, kUnsupported, kReadFailed, kInsufficientMemory, kDecodeFailed };

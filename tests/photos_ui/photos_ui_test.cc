@@ -43,9 +43,6 @@ size_t ObjectCount(lv_obj_t* root) {
     }
     return count;
 }
-lv_obj_t* HeaderBackButton(lv_obj_t* title) {
-    return lv_obj_get_child(lv_obj_get_parent(title), 0);
-}
 void AssertIconButton(lv_obj_t* button, const char* icon) {
     RODAK_CHECK(lv_obj_check_type(button, &lv_button_class));
     auto* label = lv_obj_get_child(button, 0);
@@ -115,16 +112,18 @@ RODAK_TEST("Photos retains distinct service mount read and empty states with an 
     f.services.SetFileService(nullptr); f.Start();
     RODAK_CHECK(Label(lv_screen_active(),"存储服务不可用")!=nullptr);
     f.services.SetFileService(&f.fs); f.fs.mounted=false; f.fs.mount_ok=false;
-    Click(f.app.preview_retry_button_);
-    RODAK_CHECK(Label(lv_screen_active(),"SD 卡不可用")!=nullptr);
+    Click(f.app.retry_button_);
+    RODAK_CHECK(Label(lv_screen_active(),"读不到 SD 卡")!=nullptr);
     f.fs.mount_ok=true; f.fs.failures["/"]=EIO;
     Click(f.app.refresh_button_);
     RODAK_CHECK(Label(lv_screen_active(),"无法读取相册")!=nullptr);
-    RODAK_CHECK(Label(lv_screen_active(),"暂无照片 · 将图片放入 /photos")==nullptr);
+    RODAK_CHECK(Label(lv_screen_active(),"还没有照片")==nullptr);
     SaveScreenshot("photos-read-error.ppm");
     f.fs.failures.clear(); Click(f.app.refresh_button_);
-    RODAK_CHECK(Label(lv_screen_active(),"暂无照片 · 将图片放入 /photos")!=nullptr);
+    RODAK_CHECK(Label(lv_screen_active(),"还没有照片")!=nullptr);
+    RODAK_CHECK(lv_obj_has_flag(f.app.retry_button_, LV_OBJ_FLAG_HIDDEN));
     RODAK_CHECK(Label(lv_screen_active(),"相册")!=nullptr);
+    SaveScreenshot("photos-empty.ppm");
 }
 
 RODAK_TEST("Photos failed rescan clears stale tiles and nested I/O errors never look empty") {
@@ -153,96 +152,124 @@ RODAK_TEST("Photos large libraries keep a bounded tile page and retain original 
     f.Start();
 
     RODAK_CHECK_EQ(f.app.photos_.size(), 41U);
-    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 6U);
-    RODAK_CHECK(Label(lv_screen_active(), "1 / 7") != nullptr);
-    RODAK_CHECK(ObjectCount(f.app.root_) <= 34U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 8U);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.title_label_)), "相册 · 41");
+    // Six pages fit the dot indicator; the numeric label stays hidden.
+    RODAK_CHECK(!lv_obj_has_flag(f.app.page_indicator_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(lv_obj_has_flag(f.app.page_label_, LV_OBJ_FLAG_HIDDEN));
+    // Header 5, grid area 1 + 8 tiles x 2, page bar 1 + 2 buttons x 2 + dots + label.
+    RODAK_CHECK(ObjectCount(f.app.root_) <= 31U);
     RODAK_CHECK(!lv_obj_has_flag(f.app.image_area_, LV_OBJ_FLAG_SCROLLABLE));
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.filename_label_)), "相册");
-    auto* back = HeaderBackButton(f.app.filename_label_);
-    AssertIconButton(back, ICON_ARROW_LEFT);
+    AssertIconButton(f.app.back_button_, ICON_ARROW_LEFT);
     AssertIconButton(f.app.refresh_button_, ICON_REFRESH);
-    AssertHeaderHitArea(back);
+    AssertHeaderHitArea(f.app.back_button_);
     AssertHeaderHitArea(f.app.refresh_button_);
-    AssertIconButton(f.app.previous_page_button_, ICON_CHEVRON_LEFT);
-    AssertIconButton(f.app.next_page_button_, ICON_CHEVRON_RIGHT);
-    for (auto* button : {f.app.previous_page_button_, f.app.next_page_button_}) {
-        RODAK_CHECK(lv_obj_get_width(button) >= 72 && lv_obj_get_height(button) >= 40);
+    AssertIconButton(f.app.previous_button_, ICON_CHEVRON_LEFT);
+    AssertIconButton(f.app.next_button_, ICON_CHEVRON_RIGHT);
+    for (auto* button : {f.app.previous_button_, f.app.next_button_}) {
+        RODAK_CHECK(lv_obj_get_width(button) >= 64 && lv_obj_get_height(button) >= 40);
     }
     for (const auto& tile : f.app.thumbnail_items_) {
-        RODAK_CHECK_EQ(lv_obj_get_width(tile.button), 68);
-        RODAK_CHECK_EQ(lv_obj_get_height(tile.button), 68);
+        RODAK_CHECK_EQ(lv_obj_get_width(tile.button), 78);
+        RODAK_CHECK_EQ(lv_obj_get_height(tile.button), 78);
     }
     RODAK_CHECK_EQ(lv_obj_get_x(f.app.thumbnail_items_[1].button) -
-                   lv_obj_get_x(f.app.thumbnail_items_[0].button), 76);
-    RODAK_CHECK_EQ(lv_obj_get_y(f.app.thumbnail_items_[3].button) -
-                   lv_obj_get_y(f.app.thumbnail_items_[0].button), 76);
-    RODAK_CHECK(lv_obj_has_state(f.app.previous_page_button_, LV_STATE_DISABLED));
-    RODAK_CHECK(!lv_obj_has_state(f.app.next_page_button_, LV_STATE_DISABLED));
+                   lv_obj_get_x(f.app.thumbnail_items_[0].button), 80);
+    RODAK_CHECK_EQ(lv_obj_get_y(f.app.thumbnail_items_[4].button) -
+                   lv_obj_get_y(f.app.thumbnail_items_[0].button), 80);
+    RODAK_CHECK(lv_obj_has_state(f.app.previous_button_, LV_STATE_DISABLED));
+    RODAK_CHECK(!lv_obj_has_state(f.app.next_button_, LV_STATE_DISABLED));
 
-    Click(f.app.next_page_button_);
+    Click(f.app.next_button_);
     RODAK_CHECK_EQ(f.app.current_page_, 1U);
-    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 6U);
-    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 6U);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.thumbnail_items_[0].label)), "photo-34.jpg");
-    RODAK_CHECK(Label(lv_screen_active(), "2 / 7") != nullptr);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 8U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 8U);
 
-    for (size_t page = 2; page < 7; ++page) Click(f.app.next_page_button_);
-    RODAK_CHECK_EQ(f.app.current_page_, 6U);
-    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 5U);
-    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 36U);
-    RODAK_CHECK(lv_obj_has_state(f.app.next_page_button_, LV_STATE_DISABLED));
-    RODAK_CHECK(Label(lv_screen_active(), "7 / 7") != nullptr);
+    for (size_t page = 2; page < 6; ++page) Click(f.app.next_button_);
+    RODAK_CHECK_EQ(f.app.current_page_, 5U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_.size(), 1U);
+    RODAK_CHECK_EQ(f.app.thumbnail_items_[0].photo_index, 40U);
+    RODAK_CHECK(lv_obj_has_state(f.app.next_button_, LV_STATE_DISABLED));
 
+    Click(f.app.previous_button_);
     Click(f.app.thumbnail_items_[0].image);
-    RODAK_CHECK_EQ(f.app.current_photo_index_, 36U);
-    RODAK_CHECK(Label(lv_screen_active(), "photo-04.jpg") != nullptr);
+    RODAK_CHECK_EQ(f.app.current_photo_index_, 32U);
+    RODAK_CHECK(Label(lv_screen_active(), "photo-08.jpg") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "33 / 41") != nullptr);
     RODAK_CHECK(f.app.refresh_button_ == nullptr);
     RODAK_CHECK(lv_label_get_long_mode(f.app.filename_label_) == LV_LABEL_LONG_DOT);
-    RODAK_CHECK_EQ(lv_obj_get_height(f.app.filename_label_), lv_font_get_line_height(&phone_font_18));
-    AssertIconButton(HeaderBackButton(f.app.filename_label_), ICON_ARROW_LEFT);
-    AssertIconButton(f.app.previous_page_button_, ICON_CHEVRON_LEFT);
-    AssertIconButton(f.app.next_page_button_, ICON_CHEVRON_RIGHT);
-    RODAK_CHECK(Label(lv_screen_active(), "37 / 41") != nullptr);
+    AssertIconButton(f.app.back_button_, ICON_ARROW_LEFT);
+    AssertIconButton(f.app.previous_button_, ICON_CHEVRON_LEFT);
+    AssertIconButton(f.app.next_button_, ICON_CHEVRON_RIGHT);
     RODAK_CHECK(ObjectCount(f.app.root_) <= 16U);
     RODAK_CHECK(f.app.thumbnail_items_.empty());
     RODAK_CHECK(f.app.thumbnail_timer_ == nullptr);
     RODAK_CHECK_EQ(photo_test::decoded_buffers, 1);
-    Swipe(160, 115, 40);
-    RODAK_CHECK_EQ(f.app.current_photo_index_, 35U);
+    Swipe(160, 120, 40);
+    RODAK_CHECK_EQ(f.app.current_photo_index_, 31U);
     RODAK_CHECK(f.app.OnBackRequested());
     RODAK_CHECK(f.app.current_image_ == nullptr);
     RODAK_CHECK_EQ(photo_test::decoded_buffers, 0);
     Pump();
-    RODAK_CHECK_EQ(f.app.current_page_, 5U);
-    RODAK_CHECK(Label(f.app.root_, "6 / 7") != nullptr);
+    RODAK_CHECK_EQ(f.app.current_page_, 3U);
     RODAK_CHECK(!f.app.OnBackRequested());
 }
 
-RODAK_TEST("Photos thumbnail failures stay visible and explicit retry clears them after recovery") {
+RODAK_TEST("Photos uses a numeric page label beyond eight pages") {
+    Fixture f;
+    f.fs.Album(f.files.root.string());
+    for (size_t i = 0; i < 73; ++i) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "p-%02zu.jpg", i);
+        f.fs.Image(f.files.root.string(), f.files.Save(name, {1, 2, 3}));
+    }
+    f.Start();
+    RODAK_CHECK(lv_obj_has_flag(f.app.page_indicator_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(Label(lv_screen_active(), "1 / 10") != nullptr);
+}
+
+RODAK_TEST("Photos fullscreen tap hides and restores the overlay without leaving the photo") {
+    Fixture f; f.Album(); f.Start();
+    Click(f.app.thumbnail_items_[0].button);
+    RODAK_CHECK(f.app.current_view_ == PhotosApp::ViewMode::kFullScreen);
+    RODAK_CHECK(!lv_obj_has_flag(f.app.top_bar_, LV_OBJ_FLAG_HIDDEN));
+    lv_test_mouse_click_at(160, 120); Pump();
+    RODAK_CHECK(lv_obj_has_flag(f.app.top_bar_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(lv_obj_has_flag(f.app.bottom_bar_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(lv_obj_has_flag(f.app.previous_button_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(f.app.current_image_ != nullptr);
+    SaveScreenshot("photos-fullscreen-clean.ppm");
+    lv_test_mouse_click_at(160, 120); Pump();
+    RODAK_CHECK(!lv_obj_has_flag(f.app.top_bar_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(photo_test::decoded_buffers, 1);
+}
+
+RODAK_TEST("Photos thumbnail failures show the format and keep successful tiles") {
     Fixture f; f.Album(true);
     f.fs.Image(f.files.root.string(), f.files.Jpeg("good.jpg"));
     f.Start();
-    RODAK_CHECK(Label(lv_screen_active(),"重试缩略图")!=nullptr);
     RODAK_CHECK(f.app.thumbnail_items_[0].state == PhotosApp::ThumbnailState::kFailed);
-    RODAK_CHECK(Label(f.app.thumbnail_items_[0].button, "broken.jpg") != nullptr);
-    const auto* successful = f.app.thumbnail_items_[1].thumbnail.get();
-    RODAK_CHECK(successful != nullptr);
-    const auto reads = f.fs.reads.size();
-    const int decodes = photo_test::scoped_decodes;
+    RODAK_CHECK(f.app.thumbnail_items_[0].placeholder != nullptr);
+    RODAK_CHECK(Label(f.app.thumbnail_items_[0].button, "JPG") != nullptr);
+    RODAK_CHECK(f.app.thumbnail_items_[1].thumbnail != nullptr);
+    RODAK_CHECK(f.app.thumbnail_items_[1].placeholder == nullptr);
+    SaveScreenshot("photos-grid.ppm");
+    // A failed tile still opens; the viewer explains the failure and repairs it on retry.
+    Click(f.app.thumbnail_items_[0].button);
+    RODAK_CHECK(Label(lv_screen_active(), "打不开这张照片") != nullptr);
+    RODAK_CHECK(Label(lv_screen_active(), "文件已损坏") != nullptr);
     f.files.Jpeg("broken.jpg");
-    Click(f.app.preview_retry_button_);
-    RODAK_CHECK(f.app.thumbnail_items_[0].thumbnail!=nullptr);
-    RODAK_CHECK(f.app.thumbnail_items_[1].thumbnail.get() == successful);
-    RODAK_CHECK_EQ(f.fs.reads.size(), reads);
-    RODAK_CHECK_EQ(photo_test::scoped_decodes, decodes + 1);
-    RODAK_CHECK(Label(lv_screen_active(),"重试缩略图")==nullptr);
-    RODAK_CHECK_EQ(photo_test::decoded_buffers,2);
+    Click(f.app.retry_button_);
+    RODAK_CHECK(f.app.current_image_ != nullptr);
+    f.app.BackToGrid(); Pump();
+    RODAK_CHECK(f.app.thumbnail_items_[0].thumbnail != nullptr);
+    RODAK_CHECK(f.app.thumbnail_items_[0].placeholder == nullptr);
 }
 
 RODAK_TEST("Photos swipes turn once on release without opening a tile or wrapping") {
     Fixture f;
     f.fs.Album(f.files.root.string());
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 9; ++i) {
         f.fs.Image(f.files.root.string(), f.files.Jpeg("photo-" + std::to_string(i) + ".jpg"));
     }
     f.Start();
@@ -259,31 +286,28 @@ RODAK_TEST("Photos swipes turn once on release without opening a tile or wrappin
     RODAK_CHECK(f.app.current_view_ == PhotosApp::ViewMode::kGrid);
     RODAK_CHECK_EQ(f.app.current_page_, 1U);
     Click(f.app.thumbnail_items_[0].image);
-    RODAK_CHECK_EQ(f.app.current_photo_index_, 6U);
-    RODAK_CHECK(lv_obj_has_state(f.app.next_page_button_, LV_STATE_DISABLED));
+    RODAK_CHECK_EQ(f.app.current_photo_index_, 8U);
+    RODAK_CHECK(lv_obj_has_state(f.app.next_button_, LV_STATE_DISABLED));
     Swipe(160, 115, -40);
-    RODAK_CHECK_EQ(f.app.current_photo_index_, 6U);
-    Click(HeaderBackButton(f.app.filename_label_));
+    RODAK_CHECK_EQ(f.app.current_photo_index_, 8U);
+    Click(f.app.back_button_);
     RODAK_CHECK_EQ(f.app.current_page_, 1U);
-    Click(HeaderBackButton(f.app.filename_label_));
+    Click(f.app.back_button_);
     RODAK_CHECK_EQ(f.navigation.home_count, 1);
 }
 
-RODAK_TEST("Photos draws loading before scanning or opening and releases thumbnails before decoding") {
+RODAK_TEST("Photos draws the viewer before decoding and releases thumbnails first") {
     Fixture f;
     f.Album();
     struct Observation {
         Fixture* fixture;
-        bool scan_drawn = false;
         bool preview_drawn = false;
     } observation{&f};
     const auto observe = [](lv_event_t* event) {
         auto& state = *static_cast<Observation*>(lv_event_get_user_data(event));
         const auto& fixture = *state.fixture;
-        if (Label(lv_screen_active(), "正在读取相册") != nullptr && fixture.fs.reads.empty()) {
-            state.scan_drawn = true;
-        }
-        if (Label(lv_screen_active(), "正在打开照片") != nullptr &&
+        if (fixture.app.current_view_ == PhotosApp::ViewMode::kFullScreen &&
+            Label(lv_screen_active(), "1 / 1") != nullptr &&
             fixture.app.thumbnail_items_.empty() && photo_test::decoded_buffers == 0) {
             state.preview_drawn = true;
         }
@@ -297,7 +321,6 @@ RODAK_TEST("Photos draws loading before scanning or opening and releases thumbna
     f.Start();
     RODAK_CHECK(!f.app.thumbnail_items_.empty());
     Click(f.app.thumbnail_items_[0].button);
-    RODAK_CHECK(observation.scan_drawn);
     RODAK_CHECK(observation.preview_drawn);
     RODAK_CHECK_EQ(photo_test::decoded_buffers, 1);
 }
@@ -305,11 +328,11 @@ RODAK_TEST("Photos draws loading before scanning or opening and releases thumbna
 RODAK_TEST("Photos timer allocation failure keeps navigation and retry usable without an automatic loop") {
     Fixture f; f.Album(); photo_test::fail_timer=true; f.Start();
     RODAK_CHECK(f.app.thumbnail_timer_==nullptr);
-    RODAK_CHECK(Label(lv_screen_active(),"重试缩略图")!=nullptr);
+    RODAK_CHECK(Label(lv_screen_active(),"缩略图没有加载")!=nullptr);
     SaveScreenshot("photos-timer-failure.ppm");
     Pump(3000);
     RODAK_CHECK_EQ(photo_test::decoded_buffers,0);
-    Click(f.app.preview_retry_button_);
+    Click(f.app.retry_button_);
     RODAK_CHECK(f.app.thumbnail_timer_!=nullptr);
     RODAK_CHECK(f.app.thumbnail_items_[0].thumbnail!=nullptr);
 }
@@ -318,7 +341,7 @@ RODAK_TEST("Photo preview retry replaces failures and back or destruction releas
     Fixture f; f.Album(); f.Start();
     auto& tile = f.app.thumbnail_items_[0];
     RODAK_CHECK(tile.thumbnail != nullptr);
-    RODAK_CHECK(lv_obj_has_flag(tile.label, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(tile.placeholder == nullptr);
     lv_image_set_inner_align(tile.image, LV_IMAGE_ALIGN_STRETCH);
     Pump();
     lv_area_t pixels;
@@ -333,12 +356,15 @@ RODAK_TEST("Photo preview retry replaces failures and back or destruction releas
     std::filesystem::remove(path);
     Click(f.app.thumbnail_items_[0].button);
     RODAK_CHECK(Label(lv_screen_active(),"无法读取照片")!=nullptr);
-    RODAK_CHECK(Label(lv_screen_active(),"one.jpg")!=nullptr);
-    RODAK_CHECK(ObjectCount(f.app.root_) <= 16U);
+    RODAK_CHECK(Label(lv_screen_active(),"1 / 1")!=nullptr);
+    // A failed photo keeps the bars visible even after a tap.
+    lv_test_mouse_click_at(160, 200); Pump();
+    RODAK_CHECK(!lv_obj_has_flag(f.app.top_bar_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(ObjectCount(f.app.root_) <= 21U);
     SaveScreenshot("photos-preview-error.ppm");
     RODAK_CHECK(f.app.current_image_==nullptr);
     RODAK_CHECK_EQ(photo_test::decoded_buffers,0);
-    f.files.Jpeg("one.jpg"); Click(f.app.preview_retry_button_);
+    f.files.Jpeg("one.jpg"); Click(f.app.retry_button_);
     RODAK_CHECK(f.app.current_image_!=nullptr);
     RODAK_CHECK_EQ(photo_test::decoded_buffers,1);
     SaveScreenshot("photos-preview-recovered.ppm");
@@ -354,9 +380,9 @@ RODAK_TEST("Photo preview allocation failure exposes the precise resource status
     Fixture f; f.Album(); f.Start();
     photo_test::fail_allocations=2;
     Click(f.app.thumbnail_items_[0].button);
-    RODAK_CHECK(Label(lv_screen_active(),"图片内存不足")!=nullptr);
+    RODAK_CHECK(Label(lv_screen_active(),"图片太大，内存不够")!=nullptr);
     RODAK_CHECK_EQ(photo_test::decoded_buffers,0);
-    Click(f.app.preview_retry_button_);
+    Click(f.app.retry_button_);
     RODAK_CHECK(f.app.current_image_!=nullptr);
 }
 
@@ -367,16 +393,6 @@ RODAK_TEST("Photos cancels queued navigation and thumbnail work when destroyed")
     RODAK_CHECK_EQ(f.navigation.home_count,0);
     RODAK_CHECK_EQ(photo_test::decoded_buffers,0);
     RODAK_CHECK(photo_test::image_buffers.empty());
-}
-
-RODAK_TEST("Returning from a repaired fullscreen image clears old thumbnail failure guidance") {
-    Fixture f; f.Album(true); f.Start();
-    RODAK_CHECK(Label(lv_screen_active(),"重试缩略图")!=nullptr);
-    Click(f.app.thumbnail_items_[0].button);
-    f.files.Jpeg("broken.jpg"); Click(f.app.preview_retry_button_);
-    f.app.BackToGrid(); Pump();
-    RODAK_CHECK(f.app.thumbnail_items_[0].thumbnail!=nullptr);
-    RODAK_CHECK(Label(lv_screen_active(),"重试缩略图")==nullptr);
 }
 
 RODAK_TEST("Photos failed Home scheduling is visible and can be explicitly retried") {

@@ -10,12 +10,13 @@ behavior, not actual JPEG compression quality or the device decoder.
 The JPEG display/thumbnail case also requires both decodes to run inside
 `ScreenJpegAllocationScope` (a thread-local host recorder); it fails against the pre-082 loader.
 
-The 28 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
+The 29 cases cover missing service, mount/read/missing-directory errors, truly empty albums,
 strict recursive failure propagation, optional-album fallback, recursion limits, supported formats,
 and newest-first sorting across albums with filename tie-breaking and duplicate removal;
 visible error/retry and repaired thumbnail state; timer/Home scheduling failure;
-fixed six-tile paging, header/pager icons and hit areas, center hit-testing, swipe click suppression and page/photo
-bounds; loading frames before reads; failed thumbnail names and page-local retry; header and system
+fixed eight-tile 4x2 paging with dot or numeric page indicators, header/pager icons and hit areas,
+center hit-testing, swipe click suppression and page/photo bounds; viewer drawn before decoding;
+fullscreen overlay tap toggling; failed thumbnail format placeholders and viewer retry; header and system
 Back with page restoration; thumbnail and full-image residency, rescan and destruction ownership;
 and actual PNG/BMP decode paths. BMP cases include
 24/32-bit direct pixels, RGB565 bitfields, invalid magic/offsets/dimensions, truncated pixel ranges,
