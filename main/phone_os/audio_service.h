@@ -36,6 +36,10 @@ struct AudioPlaybackState {
     size_t bytes_played = 0;
     size_t data_bytes = 0;
     int progress_percent = 0;
+    // Elapsed and total track time. duration_ms is 0 when the length is unknown; for MP3 without
+    // a Xing/Info frame it is estimated from the first frame's bitrate.
+    uint32_t position_ms = 0;
+    uint32_t duration_ms = 0;
     int volume = 60;
 };
 
@@ -77,6 +81,7 @@ private:
     void SetState(AudioPlaybackStatus status, const char* message = nullptr);
     void FinishPlayback(bool ok, bool stopped);
     void UpdateProgress(size_t bytes_played, size_t data_bytes);
+    void UpdatePosition(uint32_t position_ms, uint32_t duration_ms);
     void MarkPlaybackTaskStarting();
     void StorePlaybackTaskHandle(TaskHandle_t task);
     void ClearPlaybackTask();

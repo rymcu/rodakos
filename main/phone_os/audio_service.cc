@@ -44,6 +44,11 @@ struct WavInfo {
     long data_offset = 0;
 };
 
+uint32_t BytesToMs(size_t bytes, const WavInfo& wav) {
+    const uint64_t rate = static_cast<uint64_t>(wav.sample_rate) * wav.channels * (wav.bits_per_sample / 8);
+    return rate == 0 ? 0 : static_cast<uint32_t>(std::min<uint64_t>(bytes * 1000ULL / rate, UINT32_MAX));
+}
+
 uint16_t ReadLe16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
 }
@@ -241,6 +246,29 @@ bool FindMp3AudioEnd(FILE* fp, size_t file_size, size_t& audio_end) {
         break;
     }
     return fseek(fp, 0, SEEK_SET) == 0;
+}
+
+uint32_t ReadBe32(const unsigned char* data) {
+    return (static_cast<uint32_t>(data[0]) << 24) | (static_cast<uint32_t>(data[1]) << 16) |
+           (static_cast<uint32_t>(data[2]) << 8) | data[3];
+}
+
+// Encoders put a Xing (VBR) or Info (CBR) tag in the first frame's audio area; its frame count
+// gives the exact length. Without one, the first frame's bitrate gives a CBR estimate.
+uint32_t Mp3DurationMs(const unsigned char* tag, int tag_bytes, const MP3FrameInfo& info,
+                       size_t audio_bytes) {
+    const int channels = info.nChans > 0 ? info.nChans : 1;
+    const uint64_t samples_per_frame = static_cast<uint64_t>(info.outputSamps / channels);
+    if (tag_bytes >= 12 && info.samprate > 0 &&
+        (std::memcmp(tag, "Xing", 4) == 0 || std::memcmp(tag, "Info", 4) == 0) &&
+        (ReadBe32(tag + 4) & 1U) != 0) {
+        const uint64_t frames = ReadBe32(tag + 8);
+        return static_cast<uint32_t>(std::min<uint64_t>(
+            frames * samples_per_frame * 1000 / static_cast<uint64_t>(info.samprate), UINT32_MAX));
+    }
+    if (info.bitrate <= 0) return 0;
+    return static_cast<uint32_t>(std::min<uint64_t>(
+        static_cast<uint64_t>(audio_bytes) * 8000 / static_cast<uint64_t>(info.bitrate), UINT32_MAX));
 }
 
 uint8_t* AllocateAudioBuffer(size_t size) {
@@ -666,6 +694,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         }
         played += bytes_read;
         UpdateProgress(played, wav.data_size);
+        UpdatePosition(BytesToMs(played, wav), BytesToMs(wav.data_size, wav));
     }
 
     heap_caps_free(buffer);
@@ -675,6 +704,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
 
     if (!failed && !stopped) {
         UpdateProgress(wav.data_size, wav.data_size);
+        UpdatePosition(BytesToMs(wav.data_size, wav), BytesToMs(wav.data_size, wav));
     }
     ESP_LOGI(TAG, "WAV playback peak: %u/%u", static_cast<unsigned>(peak),
              static_cast<unsigned>(INT16_MAX));
@@ -745,6 +775,8 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
     bool failed = false;
     bool codec_ready = false;
     int consecutive_bad_frames = 0;
+    uint64_t samples_played = 0;
+    uint32_t duration_ms = 0;
     bool force_refill = false;
     size_t read_offset = 0;
     MP3FrameInfo output_format = {};
@@ -929,6 +961,9 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
             }
             codec_ready = true;
             output_format = frame_info;
+            duration_ms = Mp3DurationMs(frame_start + header_bytes + side_info_bytes,
+                                        frame_bytes - header_bytes - side_info_bytes, frame_info,
+                                        audio_end - (read_offset - static_cast<size_t>(frame_bytes)));
 
             if (mutex_ != nullptr) {
                 xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -958,6 +993,8 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
             const size_t consumed = file_offset > buffered ? file_offset - buffered : 0;
             UpdateProgress(std::min(consumed, file_size), file_size);
         }
+        samples_played += static_cast<uint64_t>(frame_info.outputSamps / frame_info.nChans);
+        UpdatePosition(static_cast<uint32_t>(samples_played * 1000 / frame_info.samprate), duration_ms);
     }
 
     if (codec_ready && (failed || stopped)) {
@@ -1008,6 +1045,14 @@ void AudioService::SetState(AudioPlaybackStatus status, const char* message) {
         }
         xSemaphoreGive(mutex_);
     }
+}
+
+void AudioService::UpdatePosition(uint32_t position_ms, uint32_t duration_ms) {
+    if (mutex_ == nullptr) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    state_.position_ms = position_ms;
+    state_.duration_ms = std::max(duration_ms, position_ms);
+    xSemaphoreGive(mutex_);
 }
 
 void AudioService::UpdateProgress(size_t bytes_played, size_t data_bytes) {

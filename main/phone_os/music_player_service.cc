@@ -374,6 +374,16 @@ bool MusicPlayerService::PlayTrack(size_t index, uint64_t library_revision) {
     return PlayTrackLocked(index, library_revision);
 }
 
+bool MusicPlayerService::RetryTrack(const std::string& path) {
+    if (mutex_ == nullptr || path.empty()) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const int index = FindTrackIndexByPath(tracks_, path);
+    const uint64_t revision = library_revision_;
+    if (index < 0) operation_error_ = "Music library changed; choose a song again";
+    xSemaphoreGive(mutex_);
+    return index >= 0 && PlayTrack(static_cast<size_t>(index), revision);
+}
+
 bool MusicPlayerService::PlayTrackLocked(size_t index, uint64_t library_revision) {
     MusicTrack track;
     int mode_value = 0;
