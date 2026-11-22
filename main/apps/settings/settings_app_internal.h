@@ -1,5 +1,6 @@
 #pragma once
 
+#include "phone_ui/rodakos_list.h"
 #include "phone_ui/rodakos_theme.h"
 
 #include <lvgl.h>
@@ -20,32 +21,26 @@ void UpdateBrightnessLabel(lv_obj_t* label, int value);
 lv_obj_t* CreateSettingLabel(lv_obj_t* parent, const char* text, bool secondary = false);
 lv_obj_t* CreateSettingIcon(lv_obj_t* parent, const char* icon);
 
-// Shared Settings grid on the 320x200 body: lists at x=10, 300 px wide, 38 px rows.
-inline constexpr lv_coord_t kGridX = 10;
-inline constexpr lv_coord_t kGridWidth = 300;
-inline constexpr lv_coord_t kRowHeight = 38;
-inline constexpr lv_coord_t kGroupLabelHeight = 20;
-inline constexpr lv_coord_t kGroupGap = 4;
+// Grid and grouped-list helpers are shared with other apps; see phone_ui/rodakos_list.h.
+using rodakos_ui::kGridX;
+using rodakos_ui::kGridWidth;
+using rodakos_ui::kRowHeight;
+using rodakos_ui::kGroupLabelHeight;
+using rodakos_ui::kGroupGap;
+using rodakos_ui::kListRadius;
+using rodakos_ui::CreateGroupCaption;
+using rodakos_ui::CreateGroupList;
+using rodakos_ui::CreateListRow;
+using rodakos_ui::CreateRowChevron;
+using rodakos_ui::CreateRowValue;
+
 inline constexpr lv_coord_t kButtonRadius = 7;
-inline constexpr lv_coord_t kListRadius = 8;
 // Bottom action row of a page body that does not scroll.
 inline constexpr lv_coord_t kActionY = 150;
 inline constexpr lv_coord_t kActionHeight = 40;
 inline constexpr lv_coord_t kDialogButtonHeight = 36;
 
 enum class SettingButtonStyle { kPrimary, kSecondary, kDanger, kDangerOutline };
-
-// Small grey caption above a group; advances `y` by kGroupLabelHeight.
-lv_obj_t* CreateGroupCaption(lv_obj_t* parent, const char* text, lv_coord_t& y);
-// Rounded list background; rows go inside with CreateListRow.
-lv_obj_t* CreateGroupList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width,
-                          lv_coord_t height);
-// Pressed highlight, and a divider above every row but the first.
-lv_obj_t* CreateListRow(lv_obj_t* list, int index, lv_coord_t width = kGridWidth,
-                        lv_coord_t height = kRowHeight, bool clickable = true);
-lv_obj_t* CreateRowChevron(lv_obj_t* row);
-// Right-aligned 12 px value; leaves room for the chevron when `chevron` is set.
-lv_obj_t* CreateRowValue(lv_obj_t* row, lv_coord_t width, bool chevron);
 
 lv_obj_t* CreateSettingButton(lv_obj_t* parent, const char* text, SettingButtonStyle style,
                               lv_coord_t width, lv_coord_t height = kActionHeight,
