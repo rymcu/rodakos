@@ -852,6 +852,7 @@ VoiceAssistantState VoiceAssistantService::GetState() {
     state.focus_active = focus_active_;
     state.transport_active = transport_active_;
     state.recorder_active = recorder_active_;
+    state.announce = announce_;
     state.focus_token = focus_token_;
     state.message = message_;
     state.last_wake_word = last_wake_word_;

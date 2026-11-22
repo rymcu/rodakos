@@ -331,7 +331,14 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
 
     // AEC/VAD frontends may report a wake phrase while TTS is active. Treat it
     // as a barge-in on the existing session instead of opening a second one.
-    const VoiceAssistantPhase assistant_phase = assistant_.GetPhaseSnapshot();
+    const auto assistant_snapshot = assistant_.GetState();
+    if (assistant_snapshot.announce) {
+        // 播报会话不开麦，唤醒词是唯一的打断入口：结束播报（音乐随之停止），再照常开一轮对话。
+        ESP_LOGI(TAG, "Wake word ended announce: %s", detected.c_str());
+        assistant_.StopInteraction();
+    }
+    const VoiceAssistantPhase assistant_phase =
+        assistant_snapshot.announce ? VoiceAssistantPhase::kIdle : assistant_snapshot.phase;
     if (assistant_phase == VoiceAssistantPhase::kSpeaking) {
         // The phase snapshot may have waited while Stop or an identity change invalidated
         // this callback. Keep that generation current through the short setter.
@@ -592,6 +599,13 @@ void VoiceWakeService::SupervisorTick() {
                 assistant_.StopInteraction();
                 return;
             }
+        }
+        if (assistant_state.announce && !assistant_state.stopping) {
+            // 播报（含长时间音乐推送）期间保持唤醒监听，否则整段播报无法打断。
+            if (!listening_) StartRuntimeLocked();
+            SetStatusLocked(VoiceWakeStatus::kAssistantActive, "Announcing");
+            xSemaphoreGive(mutex_);
+            return;
         }
         if (listening_) {
             StopRuntimeLocked("Assistant active");
