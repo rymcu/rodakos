@@ -525,6 +525,16 @@ bool VoiceAssistantService::IsIdleForAnnounce() {
     return idle;
 }
 
+bool VoiceAssistantService::IsAnnouncing() {
+    if (mutex_ == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool announcing = announce_ && !stopping_;
+    xSemaphoreGive(mutex_);
+    return announcing;
+}
+
 bool VoiceAssistantService::DeferAnnounceUntilIdle(uint32_t announce_seq) {
     if (mutex_ == nullptr || announce_seq == 0) {
         return false;

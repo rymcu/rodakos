@@ -54,6 +54,8 @@ public:
     bool StartAnnounce(uint32_t announce_seq);
     // 空闲、可以马上开一个播报会话（只是快照，StartAnnounce 仍会复核）。
     bool IsIdleForAnnounce();
+    // 当前交互是服务端发起的只放音播报（快照）。唤醒回调只读这一位，不复制完整状态。
+    bool IsAnnouncing();
     // 正在对话（例如语音点歌后还在播"正在播放"）时，把播报留到这轮交互结束再开；
     // 同一时间只留最新一条。返回 false 表示服务不可用。
     bool DeferAnnounceUntilIdle(uint32_t announce_seq);
