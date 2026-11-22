@@ -41,13 +41,7 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
 
     // Status card: state, address and access code on separate static lines (easier to copy than
     // a scrolling URL), then the upload in progress or the last upload.
-    auto* card = lv_obj_create(body_);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 300, 138);
-    lv_obj_set_pos(card, 10, 4);
-    lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, 8, 0);
+    auto* card = CreateGroupList(body_, kGridX, 4, kGridWidth, 138);
     lv_obj_set_style_pad_hor(card, 12, 0);
     lv_obj_set_style_pad_ver(card, 8, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
@@ -94,14 +88,9 @@ void SettingsWebFilesPage::Create(lv_obj_t* reference_body,
     lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
 
     // One button whose action follows the state: 开启 when stopped, 关闭 when running.
-    start_btn_ = lv_btn_create(body_);
-    lv_obj_set_size(start_btn_, 300, 40);
-    lv_obj_set_pos(start_btn_, 10, 150);
-    lv_obj_set_style_radius(start_btn_, 7, 0);
-    lv_obj_set_style_shadow_width(start_btn_, 0, 0);
-    toggle_label_ = lv_label_create(start_btn_);
-    lv_obj_set_style_text_font(toggle_label_, &phone_font_14, 0);
-    lv_obj_center(toggle_label_);
+    start_btn_ = CreateSettingButton(body_, "", SettingButtonStyle::kPrimary, kGridWidth, kActionHeight,
+                                     &toggle_label_);
+    lv_obj_set_pos(start_btn_, kGridX, kActionY);
     lv_obj_add_event_cb(start_btn_, [](lv_event_t* e) {
         auto* self = static_cast<SettingsWebFilesPage*>(lv_event_get_user_data(e));
         if (self == nullptr || self->context_ == nullptr) return;
@@ -206,8 +195,8 @@ void SettingsWebFilesPage::Update() {
     if (start_btn_ != nullptr) {
         const bool running = state.running && !stopping;
         lv_label_set_text(toggle_label_, stopping ? "正在关闭…" : running ? "关闭" : "开启");
-        lv_obj_set_style_bg_color(start_btn_, running ? rodakos_theme_bg_tertiary() : rodakos_theme_primary(), 0);
-        lv_obj_set_style_text_color(toggle_label_, running ? rodakos_theme_text_primary() : lv_color_white(), 0);
+        StyleSettingButton(start_btn_, toggle_label_,
+                           running ? SettingButtonStyle::kSecondary : SettingButtonStyle::kPrimary);
         if (stopping) lv_obj_add_state(start_btn_, LV_STATE_DISABLED);
         else lv_obj_clear_state(start_btn_, LV_STATE_DISABLED);
     }

@@ -29,17 +29,11 @@ constexpr lv_coord_t kPreviewHeight = 150;
 constexpr uint32_t kRefreshMs = 150;
 
 lv_obj_t* CreateQrActionButton(lv_obj_t* parent, const char* text, bool primary, lv_align_t align) {
-    auto* button = lv_btn_create(parent);
-    lv_obj_set_size(button, kButtonWidth, kButtonHeight);
+    auto* button = rodakos_settings::CreateSettingButton(
+        parent, text,
+        primary ? rodakos_settings::SettingButtonStyle::kPrimary : rodakos_settings::SettingButtonStyle::kSecondary,
+        kButtonWidth, kButtonHeight);
     lv_obj_align(button, align, 0, 0);
-    lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(button, 7, 0);
-    lv_obj_set_style_shadow_width(button, 0, 0);
-    auto* label = lv_label_create(button);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, primary ? lv_color_white() : rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(label, &phone_font_14, 0);
-    lv_obj_center(label);
     return button;
 }
 
@@ -419,19 +413,15 @@ void SettingsApp::ShowSetupQrManualEntry() {
         lv_obj_align(item, LV_ALIGN_TOP_LEFT, 0, y);
         lv_obj_set_style_bg_color(item, rodakos_theme_bg_secondary(), 0);
         lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(item, 8, 0);
+        lv_obj_set_style_radius(item, kListRadius, 0);
         lv_obj_set_style_pad_hor(item, 12, 0);
+        lv_obj_set_style_bg_color(item, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
         auto* name = CreateSettingLabel(item, row.name, false);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        auto* value = CreateSettingLabel(item, row.value.c_str(), true);
-        lv_obj_set_width(value, 150);
-        lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_style_text_font(value, &phone_font_12, 0);
-        lv_obj_align(value, LV_ALIGN_RIGHT_MID, row.enabled ? -16 : 0, 0);
+        auto* value = CreateRowValue(item, 150, row.enabled);
+        lv_label_set_text(value, row.value.c_str());
         if (row.enabled) {
-            auto* arrow = CreateSettingLabel(item, ">", true);
-            lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+            CreateRowChevron(item);
             lv_obj_add_event_cb(item, row.action, LV_EVENT_CLICKED, this);
         } else {
             lv_obj_add_state(item, LV_STATE_DISABLED);

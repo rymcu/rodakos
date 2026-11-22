@@ -1,5 +1,6 @@
 #include "phone_ui/rodakos_theme.h"
 #include <esp_log.h>
+#include <cmath>
 #include <cstring>
 
 static const char* TAG = "Theme";
@@ -280,6 +281,27 @@ lv_color_t rodakos_theme_divider(void) {
 
 lv_color_t rodakos_theme_overlay(void) {
     return lv_color_hex(current_theme->overlay);
+}
+
+lv_color_t rodakos_theme_text_on(uint32_t background) {
+    const auto channel = [](uint32_t value) {
+        const float normalized = static_cast<float>(value & 255) / 255.0F;
+        return normalized <= 0.04045F ? normalized / 12.92F
+            : std::pow((normalized + 0.055F) / 1.055F, 2.4F);
+    };
+    const float luminance = 0.2126F * channel(background >> 16) +
+                            0.7152F * channel(background >> 8) +
+                            0.0722F * channel(background);
+    // 0.179 is where black and white text have equal contrast against the background.
+    return lv_color_hex(luminance > 0.179F ? 0x000000 : 0xffffff);
+}
+
+lv_color_t rodakos_theme_on_primary(void) {
+    return rodakos_theme_text_on(current_theme->primary);
+}
+
+lv_color_t rodakos_theme_on_error(void) {
+    return rodakos_theme_text_on(current_theme->error);
 }
 
 lv_color_t rodakos_theme_icon_color(int index) {

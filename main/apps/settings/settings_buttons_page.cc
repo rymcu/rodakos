@@ -16,12 +16,7 @@ namespace {
 
 using namespace rodakos_settings;
 
-constexpr lv_coord_t kGridX = 10;
-constexpr lv_coord_t kGridWidth = 300;
-constexpr lv_coord_t kRowHeight = 38;
-constexpr lv_coord_t kGroupLabelHeight = 20;
-constexpr lv_coord_t kGroupGap = 6;
-constexpr lv_coord_t kDialogWidth = 288;
+constexpr lv_coord_t kActionDialogWidth = 288;
 constexpr lv_coord_t kDialogHeight = 220;
 constexpr lv_coord_t kOptionHeight = 36;
 
@@ -82,39 +77,6 @@ std::vector<rodakos::ButtonAction> BuildButtonActionOptions(const PhoneAppRegist
     return options;
 }
 
-// One row inside a grouped list, same look as the Settings home page.
-lv_obj_t* CreateListRow(lv_obj_t* list, int index, lv_coord_t width, lv_coord_t height) {
-    auto* row = lv_obj_create(list);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, width, height);
-    lv_obj_set_pos(row, 0, height * index);
-    lv_obj_set_style_pad_hor(row, 12, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-    if (index > 0) {
-        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
-        lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
-    }
-    return row;
-}
-
-lv_obj_t* CreateGroupList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y,
-                          lv_coord_t width, lv_coord_t height) {
-    auto* list = lv_obj_create(parent);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, width, height);
-    lv_obj_set_pos(list, x, y);
-    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(list, 8, 0);
-    lv_obj_set_style_clip_corner(list, true, 0);
-    lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
-    return list;
-}
-
 // Payload of one row in the action dialog. `reset` is the 恢复默认 row.
 struct ActionChoice {
     rodakos::ButtonBinding binding;
@@ -159,10 +121,7 @@ void SettingsApp::UpdateButtonBindingsPage() {
     const PhoneAppRegistry* registry = &context_->registry();
     lv_coord_t y = 4;
     for (const auto& button : buttons->ListButtons()) {
-        auto* group_label = CreateSettingLabel(buttons_body_, ButtonTitle(button).c_str(), true);
-        lv_obj_set_style_text_font(group_label, &phone_font_12, 0);
-        lv_obj_set_pos(group_label, kGridX + 4, y + 3);
-        y += kGroupLabelHeight;
+        CreateGroupCaption(buttons_body_, ButtonTitle(button).c_str(), y);
 
         const int rows = static_cast<int>(rodakos::kButtonEvents.size());
         auto* list = CreateGroupList(buttons_body_, kGridX, y, kGridWidth, kRowHeight * rows);
@@ -186,13 +145,8 @@ void SettingsApp::UpdateButtonBindingsPage() {
             lv_obj_set_size(action_label, 200, lv_font_get_line_height(&phone_font_14));
             lv_label_set_long_mode(action_label, LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(action_label, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(action_label, LV_ALIGN_RIGHT_MID, -16, 0);
-
-            auto* arrow = lv_label_create(row);
-            lv_label_set_text(arrow, ">");
-            lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
-            lv_obj_set_style_text_font(arrow, &phone_font_14, 0);
-            lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+            lv_obj_align(action_label, LV_ALIGN_RIGHT_MID, -18, 0);
+            CreateRowChevron(row);
 
             lv_obj_add_event_cb(row, [](lv_event_t* e) {
                 auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
@@ -226,35 +180,27 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
     }
     const PhoneAppRegistry* registry = &context_->registry();
 
-    button_action_dialog_ = lv_obj_create(lv_scr_act());
-    lv_obj_remove_style_all(button_action_dialog_);
-    lv_obj_set_size(button_action_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(button_action_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(button_action_dialog_, LV_OPA_70, 0);
-    lv_obj_clear_flag(button_action_dialog_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(button_action_dialog_, LV_OBJ_FLAG_CLICKABLE);
-
-    auto* dialog_box = lv_obj_create(button_action_dialog_);
-    lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, kDialogWidth, kDialogHeight);
+    // Taller than a confirmation and with its own padding, so only the layer and box come from
+    // the shared dialog; the box is resized and its padding reset.
+    const SettingDialog dialog = CreateSettingDialog(kDialogHeight);
+    button_action_dialog_ = dialog.layer;
+    auto* dialog_box = dialog.box;
+    lv_obj_set_width(dialog_box, kActionDialogWidth);
     lv_obj_center(dialog_box);
-    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 10, 0);
-    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(dialog_box, 0, 0);
 
     const rodakos::ButtonState* state = buttons->GetButton(binding.button_id);
     const std::string heading = (state != nullptr ? ButtonTitle(*state) : binding.title) +
                                 " · " + EventText(binding.event);
     auto* title = CreateSettingLabel(dialog_box, heading.c_str());
-    lv_obj_set_size(title, kDialogWidth - 24, lv_font_get_line_height(&phone_font_14));
+    lv_obj_set_size(title, kActionDialogWidth - 24, lv_font_get_line_height(&phone_font_14));
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(title, 12, 10);
 
     constexpr lv_coord_t kListY = 34;
-    constexpr lv_coord_t kCancelHeight = 36;
+    constexpr lv_coord_t kCancelHeight = kDialogButtonHeight;
     constexpr lv_coord_t kListHeight = kDialogHeight - kListY - kCancelHeight - 16;
-    constexpr lv_coord_t kListWidth = kDialogWidth - 16;
+    constexpr lv_coord_t kListWidth = kActionDialogWidth - 16;
 
     auto* scroller = lv_obj_create(dialog_box);
     lv_obj_remove_style_all(scroller);
@@ -322,14 +268,9 @@ void SettingsApp::ShowButtonActionDialog(const rodakos::ButtonBinding& binding) 
         lv_obj_scroll_to_view(selected_row, LV_ANIM_OFF);
     }
 
-    auto* cancel = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel, kListWidth, kCancelHeight);
+    auto* cancel = CreateSettingButton(dialog_box, "取消", SettingButtonStyle::kSecondary, kListWidth,
+                                       kCancelHeight);
     lv_obj_set_pos(cancel, 8, kDialogHeight - kCancelHeight - 8);
-    lv_obj_set_style_bg_color(cancel, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel, 8, 0);
-    lv_obj_set_style_shadow_width(cancel, 0, 0);
-    auto* cancel_label = CreateSettingLabel(cancel, "取消");
-    lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
         if (self != nullptr) {

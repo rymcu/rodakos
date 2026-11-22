@@ -135,6 +135,14 @@ lv_color_t rodakos_theme_divider(void);
 lv_color_t rodakos_theme_overlay(void);
 
 /**
+ * 放在指定底色上的文字色：按 WCAG 相对亮度在黑白之间取对比度更高的一个。
+ * 主色或状态色作按钮底色时用它，不要写死白色。
+ */
+lv_color_t rodakos_theme_text_on(uint32_t background);
+lv_color_t rodakos_theme_on_primary(void);
+lv_color_t rodakos_theme_on_error(void);
+
+/**
  * 获取图标色板中的颜色
  *
  * @param index 槽位（RODAKOS_ICON_SLOT_*），越界时回退到 SYSTEM

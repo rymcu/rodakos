@@ -155,12 +155,10 @@ namespace {
 
 // The display is 320x240 landscape; the page body below the 40 px header is 320x200 and does
 // not scroll. The status card scrolls on its own if text grows; the action row is always visible.
-constexpr lv_coord_t kGridX = 10;
-constexpr lv_coord_t kGridWidth = 300;
+using namespace rodakos_settings;
+
 constexpr lv_coord_t kCardY = 6;
 constexpr lv_coord_t kCardHeight = 136;
-constexpr lv_coord_t kActionY = 150;
-constexpr lv_coord_t kActionHeight = 40;
 constexpr lv_coord_t kActionGap = 8;
 constexpr lv_coord_t kHalfWidth = (kGridWidth - kActionGap) / 2;
 
@@ -180,26 +178,16 @@ const char* ActionLabel(DeviceCloudAction action) {
 }
 
 lv_obj_t* CreateCloudButton(lv_obj_t* parent, lv_obj_t** label_out) {
-    auto* button = lv_btn_create(parent);
-    lv_obj_set_style_radius(button, 7, 0);
-    lv_obj_set_style_shadow_width(button, 0, 0);
-    auto* label = lv_label_create(button);
-    lv_obj_set_style_text_font(label, &phone_font_14, 0);
-    lv_obj_center(label);
-    *label_out = label;
-    return button;
+    // Size, text and style follow the current state; see StyleCloudButton.
+    return CreateSettingButton(parent, "", SettingButtonStyle::kSecondary, kHalfWidth, kActionHeight,
+                               label_out);
 }
 
 void StyleCloudButton(lv_obj_t* button, lv_obj_t* label, DeviceCloudAction action, bool primary) {
-    const bool danger = action == DeviceCloudAction::kUnbind;
-    lv_obj_set_style_border_width(button, danger ? 1 : 0, 0);
-    lv_obj_set_style_border_color(button, rodakos_theme_error(), 0);
-    lv_obj_set_style_bg_opa(button, danger ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(label,
-                                danger ? rodakos_theme_error()
-                                       : (primary ? lv_color_white() : rodakos_theme_text_primary()),
-                                0);
+    const SettingButtonStyle style = action == DeviceCloudAction::kUnbind ? SettingButtonStyle::kDangerOutline
+        : primary ? SettingButtonStyle::kPrimary
+                  : SettingButtonStyle::kSecondary;
+    StyleSettingButton(button, label, style);
     lv_label_set_text(label, ActionLabel(action));
 }
 
@@ -253,7 +241,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_pos(card, kGridX, kCardY);
     lv_obj_set_style_bg_color(card, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_set_style_radius(card, kListRadius, 0);
     lv_obj_set_style_pad_hor(card, 12, 0);
     lv_obj_set_style_pad_ver(card, 10, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -331,7 +319,7 @@ void SettingsApp::CreateDeviceCloudPage() {
     lv_obj_set_pos(details_card, kGridX, kCardY);
     lv_obj_set_style_bg_color(details_card, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(details_card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(details_card, 8, 0);
+    lv_obj_set_style_radius(details_card, kListRadius, 0);
     lv_obj_set_style_pad_hor(details_card, 12, 0);
     lv_obj_set_style_pad_ver(details_card, 10, 0);
     lv_obj_set_flex_flow(details_card, LV_FLEX_FLOW_COLUMN);
@@ -346,20 +334,14 @@ void SettingsApp::CreateDeviceCloudPage() {
     // Details actions: edit URL and manual pairing on the left, unbind or back on the right.
     lv_obj_t* label = nullptr;
     cloud_edit_url_button_ = CreateCloudButton(cloud_details_panel_, &label);
-    lv_obj_set_size(cloud_edit_url_button_, kHalfWidth, kActionHeight);
     lv_obj_set_pos(cloud_edit_url_button_, kGridX, kActionY);
-    lv_obj_set_style_bg_color(cloud_edit_url_button_, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(label, rodakos_theme_text_primary(), 0);
     lv_label_set_text(label, "编辑地址");
     lv_obj_add_event_cb(cloud_edit_url_button_, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowCloudProvisioningUrlDialog();
     }, LV_EVENT_CLICKED, this);
 
     cloud_manual_pair_button_ = CreateCloudButton(cloud_details_panel_, &label);
-    lv_obj_set_size(cloud_manual_pair_button_, kHalfWidth, kActionHeight);
     lv_obj_set_pos(cloud_manual_pair_button_, kGridX + kHalfWidth + kActionGap, kActionY);
-    lv_obj_set_style_bg_color(cloud_manual_pair_button_, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_text_color(label, rodakos_theme_text_primary(), 0);
     lv_label_set_text(label, "按地址连接");
     lv_obj_add_event_cb(cloud_manual_pair_button_, [](lv_event_t* e) {
         auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
@@ -368,7 +350,6 @@ void SettingsApp::CreateDeviceCloudPage() {
     }, LV_EVENT_CLICKED, this);
 
     cloud_unbind_button_ = CreateCloudButton(cloud_details_panel_, &label);
-    lv_obj_set_size(cloud_unbind_button_, kHalfWidth, kActionHeight);
     lv_obj_set_pos(cloud_unbind_button_, kGridX + kHalfWidth + kActionGap, kActionY);
     StyleCloudButton(cloud_unbind_button_, label, DeviceCloudAction::kUnbind, false);
     lv_obj_add_event_cb(cloud_unbind_button_, [](lv_event_t* e) {
@@ -536,7 +517,9 @@ void SettingsApp::UpdateDeviceCloudPage() {
 
     // ---- Action row: one primary on the left; a lone action spans the full grid ----
     const bool two = layout.secondary != DeviceCloudAction::kNone;
-    lv_obj_set_size(cloud_pairing_button_, two ? kHalfWidth : kGridWidth, kActionHeight);
+    const lv_coord_t primary_width = two ? kHalfWidth : kGridWidth;
+    lv_obj_set_size(cloud_pairing_button_, primary_width, kActionHeight);
+    lv_obj_set_width(cloud_pairing_button_label_, primary_width - 12);
     lv_obj_set_pos(cloud_pairing_button_, kGridX, kActionY);
     StyleCloudButton(cloud_pairing_button_, cloud_pairing_button_label_, layout.primary,
                      layout.primary != DeviceCloudAction::kDetails);
@@ -611,65 +594,20 @@ void SettingsApp::ShowDeviceCloudUnbindDialog() {
         return;
     }
 
-    cloud_unbind_dialog_ = lv_obj_create(lv_scr_act());
-    lv_obj_remove_style_all(cloud_unbind_dialog_);
-    lv_obj_set_size(cloud_unbind_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(cloud_unbind_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(cloud_unbind_dialog_, LV_OPA_70, 0);
-    lv_obj_clear_flag(cloud_unbind_dialog_, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* box = lv_obj_create(cloud_unbind_dialog_);
-    lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, 288, 154);
-    lv_obj_center(box);
-    lv_obj_set_style_bg_color(box, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(box, 10, 0);
-    lv_obj_set_style_pad_all(box, 14, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* title = CreateSettingLabel(box, "解除与服务的连接？");
-    lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
-
-    auto* message = CreateSettingLabel(
-        box, "解除后将无法在服务端控制此设备，需要重新配对才能恢复。", true);
-    lv_obj_set_width(message, 252);
-    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(message, LV_ALIGN_TOP_MID, 0, 34);
-
-    auto* cancel = lv_btn_create(box);
-    lv_obj_set_size(cancel, 108, 34);
-    lv_obj_align(cancel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(cancel, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel, 6, 0);
-    lv_obj_set_style_shadow_width(cancel, 0, 0);
-    auto* cancel_label = lv_label_create(cancel);
-    lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
-    lv_obj_center(cancel_label);
-    lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
-        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseDeviceCloudUnbindDialog();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* confirm = lv_btn_create(box);
-    lv_obj_set_size(confirm, 108, 34);
-    lv_obj_align(confirm, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(confirm, lv_palette_main(LV_PALETTE_RED), 0);
-    lv_obj_set_style_radius(confirm, 6, 0);
-    lv_obj_set_style_shadow_width(confirm, 0, 0);
-    auto* confirm_label = lv_label_create(confirm);
-    lv_label_set_text(confirm_label, "确认解除");
-    lv_obj_set_style_text_color(confirm_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(confirm_label, &phone_font_14, 0);
-    lv_obj_center(confirm_label);
-    lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->CloseDeviceCloudUnbindDialog();
-        self->UnbindDeviceCloud();
-    }, LV_EVENT_CLICKED, this);
+    const SettingDialog dialog = CreateSettingDialog(150);
+    cloud_unbind_dialog_ = dialog.layer;
+    CreateDialogTitle(dialog.box, "解除与服务的连接？");
+    CreateDialogMessage(dialog.box, "解除后将无法在服务端控制此设备，需要重新配对才能恢复。", 30);
+    CreateDialogButtons(dialog.box, "确认解除", SettingButtonStyle::kDanger,
+        [](lv_event_t* e) {
+            static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseDeviceCloudUnbindDialog();
+        },
+        [](lv_event_t* e) {
+            auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+            self->CloseDeviceCloudUnbindDialog();
+            self->UnbindDeviceCloud();
+        },
+        this);
 }
 
 void SettingsApp::CloseDeviceCloudUnbindDialog() {
@@ -808,30 +746,33 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
         config.provisioning_url = rodakos::DeviceCloudConfigService::DefaultProvisioningUrl();
     }
 
+    // Full-screen layer like the Wi-Fi password and NTP editors: the 120 px keyboard takes the
+    // bottom half, so the box ends at y=116 and keeps 取消 / 保存 above it.
     cloud_url_dialog_ = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(cloud_url_dialog_);
     lv_obj_set_size(cloud_url_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(cloud_url_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(cloud_url_dialog_, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(cloud_url_dialog_, rodakos_theme_bg_primary(), 0);
+    lv_obj_set_style_bg_opa(cloud_url_dialog_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(cloud_url_dialog_, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* dialog_box = lv_obj_create(cloud_url_dialog_);
     lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, 288, 152);
-    lv_obj_align(dialog_box, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_size(dialog_box, 304, 108);
+    lv_obj_set_pos(dialog_box, 8, 8);
     lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 8, 0);
-    lv_obj_set_style_pad_all(dialog_box, 12, 0);
+    lv_obj_set_style_radius(dialog_box, kListRadius, 0);
+    lv_obj_set_style_pad_hor(dialog_box, 12, 0);
+    lv_obj_set_style_pad_ver(dialog_box, 8, 0);
     lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
 
     auto* title = CreateSettingLabel(dialog_box, "服务地址");
-    lv_obj_set_style_text_font(title, &phone_font_14, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 6);
 
+    // The address is long, so the field takes the full width and the buttons share the title row.
     cloud_url_textarea_ = lv_textarea_create(dialog_box);
-    lv_obj_set_size(cloud_url_textarea_, 264, 42);
-    lv_obj_align(cloud_url_textarea_, LV_ALIGN_TOP_LEFT, 0, 28);
+    lv_obj_set_size(cloud_url_textarea_, 280, 36);
+    lv_obj_align(cloud_url_textarea_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_textarea_set_one_line(cloud_url_textarea_, true);
     lv_textarea_set_max_length(cloud_url_textarea_, 191);
     lv_textarea_set_text(cloud_url_textarea_, config.provisioning_url.c_str());
@@ -840,55 +781,41 @@ void SettingsApp::ShowCloudProvisioningUrlDialog() {
     lv_obj_set_style_text_color(cloud_url_textarea_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(cloud_url_textarea_, &phone_font_12, 0);
     lv_obj_set_style_border_width(cloud_url_textarea_, 0, 0);
-    lv_obj_set_style_radius(cloud_url_textarea_, 6, 0);
+    lv_obj_set_style_radius(cloud_url_textarea_, kButtonRadius, 0);
 
-    auto* cancel_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel_btn, 126, 30);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel_btn, 6, 0);
-    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
-
-    auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_12, 0);
-    lv_obj_center(cancel_label);
-    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->CloseCloudProvisioningUrlDialog();
+    auto* save_btn = CreateSettingButton(dialog_box, "保存", SettingButtonStyle::kPrimary, 60, 30);
+    lv_obj_align(save_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->SubmitCloudProvisioningUrlDialog();
     }, LV_EVENT_CLICKED, this);
 
-    auto* save_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(save_btn, 126, 30);
-    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(save_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(save_btn, 6, 0);
-    lv_obj_set_style_shadow_width(save_btn, 0, 0);
+    auto* cancel_btn = CreateSettingButton(dialog_box, "取消", SettingButtonStyle::kSecondary, 60, 30);
+    lv_obj_align(cancel_btn, LV_ALIGN_TOP_RIGHT, -66, 0);
+    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseCloudProvisioningUrlDialog();
+    }, LV_EVENT_CLICKED, this);
 
-    auto* save_label = lv_label_create(save_btn);
-    lv_label_set_text(save_label, "保存");
-    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(save_label, &phone_font_12, 0);
-    lv_obj_center(save_label);
     cloud_url_original_ = config.provisioning_url;
     cloud_url_bound_ = config.aiot_registered && config.aiot_activated && !config.unbind_pending;
-    lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        const std::string url = TrimCloudUrl(lv_textarea_get_text(self->cloud_url_textarea_));
-        const std::string effective =
-            url.empty() ? rodakos::DeviceCloudConfigService::DefaultProvisioningUrl() : url;
-        // Saving a different address drops the current binding; say so before doing it.
-        if (self->cloud_url_bound_ && effective != self->cloud_url_original_) {
-            self->ShowCloudUrlChangeConfirm(effective);
-            return;
-        }
-        if (self->SaveCloudProvisioningUrl(url)) {
-            self->CloseCloudProvisioningUrlDialog();
-        }
-    }, LV_EVENT_CLICKED, this);
+    soft_keyboard_.Show(cloud_url_textarea_, [this]() {
+        // Runs from the keyboard event; the dialog it may close owns that keyboard's target.
+        lv_async_call([](void* user_data) {
+            static_cast<SettingsApp*>(user_data)->SubmitCloudProvisioningUrlDialog();
+        }, this);
+    });
+}
 
-    soft_keyboard_.Show(cloud_url_textarea_);
+void SettingsApp::SubmitCloudProvisioningUrlDialog() {
+    if (cloud_url_textarea_ == nullptr) return;
+    const std::string url = TrimCloudUrl(lv_textarea_get_text(cloud_url_textarea_));
+    const std::string effective =
+        url.empty() ? rodakos::DeviceCloudConfigService::DefaultProvisioningUrl() : url;
+    // Saving a different address drops the current binding; say so before doing it.
+    if (cloud_url_bound_ && effective != cloud_url_original_) {
+        ShowCloudUrlChangeConfirm(effective);
+        return;
+    }
+    if (SaveCloudProvisioningUrl(url)) CloseCloudProvisioningUrlDialog();
 }
 
 // Replaces the address editor with a confirmation: old and new server, and what changing means.
@@ -898,60 +825,43 @@ void SettingsApp::ShowCloudUrlChangeConfirm(const std::string& url) {
     cloud_url_pending_ = url;
     lv_obj_clean(cloud_url_dialog_);
     cloud_url_textarea_ = nullptr;
+    // The keyboard is gone: dim the page behind like the other confirmations.
+    lv_obj_set_style_bg_color(cloud_url_dialog_, rodakos_theme_overlay(), 0);
+    lv_obj_set_style_bg_opa(cloud_url_dialog_, LV_OPA_70, 0);
+    lv_obj_add_flag(cloud_url_dialog_, LV_OBJ_FLAG_CLICKABLE);
 
     auto* box = lv_obj_create(cloud_url_dialog_);
     lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, 296, 196);
+    lv_obj_set_size(box, kDialogWidth, 196);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(box, 10, 0);
-    lv_obj_set_style_pad_all(box, 14, 0);
+    lv_obj_set_style_pad_all(box, kDialogPad, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto* title = CreateSettingLabel(box, "更换服务器？");
-    lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    CreateDialogTitle(box, "更换服务器？");
 
     const std::string hosts = "原来  " + HostOf(cloud_url_original_) + "\n新的  " + HostOf(url);
-    auto* host_label = CreateSettingLabel(box, hosts.c_str());
-    lv_obj_set_width(host_label, 268);
+    auto* host_label = CreateDialogMessage(box, hosts.c_str(), 30);
     lv_label_set_long_mode(host_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(host_label, &phone_font_12, 0);
-    lv_obj_align(host_label, LV_ALIGN_TOP_LEFT, 0, 30);
+    lv_obj_set_style_text_color(host_label, rodakos_theme_text_primary(), 0);
 
-    auto* warning = CreateSettingLabel(box, "设备会断开当前服务器，并清除现有绑定。之后需要在新服务器上重新配对。", true);
-    lv_obj_set_width(warning, 268);
-    lv_label_set_long_mode(warning, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(warning, &phone_font_12, 0);
+    auto* warning = CreateDialogMessage(
+        box, "设备会断开当前服务器，并清除现有绑定。之后需要在新服务器上重新配对。", 68);
     lv_obj_set_style_text_color(warning, rodakos_theme_warning(), 0);
-    lv_obj_align(warning, LV_ALIGN_TOP_LEFT, 0, 68);
 
-    auto make_button = [&](const char* text, bool primary, lv_align_t align) {
-        auto* button = lv_btn_create(box);
-        lv_obj_set_size(button, 128, 36);
-        lv_obj_align(button, align, 0, 0);
-        lv_obj_set_style_bg_color(button, primary ? rodakos_theme_error() : rodakos_theme_bg_tertiary(), 0);
-        lv_obj_set_style_radius(button, 7, 0);
-        lv_obj_set_style_shadow_width(button, 0, 0);
-        auto* label = lv_label_create(button);
-        lv_label_set_text(label, text);
-        lv_obj_set_style_text_color(label, primary ? lv_color_white() : rodakos_theme_text_primary(), 0);
-        lv_obj_set_style_text_font(label, &phone_font_14, 0);
-        lv_obj_center(label);
-        return button;
-    };
-    auto* cancel = make_button("取消", false, LV_ALIGN_BOTTOM_LEFT);
-    lv_obj_add_event_cb(cancel, [](lv_event_t* e) {
-        static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseCloudProvisioningUrlDialogAsync();
-    }, LV_EVENT_CLICKED, this);
-    auto* confirm = make_button("更换", true, LV_ALIGN_BOTTOM_RIGHT);
-    lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        if (self->SaveCloudProvisioningUrl(self->cloud_url_pending_)) {
-            self->CloseCloudProvisioningUrlDialogAsync();
-        }
-    }, LV_EVENT_CLICKED, this);
+    CreateDialogButtons(box, "更换", SettingButtonStyle::kDanger,
+        [](lv_event_t* e) {
+            static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseCloudProvisioningUrlDialogAsync();
+        },
+        [](lv_event_t* e) {
+            auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+            if (self->SaveCloudProvisioningUrl(self->cloud_url_pending_)) {
+                self->CloseCloudProvisioningUrlDialogAsync();
+            }
+        },
+        this);
 }
 
 void SettingsApp::CloseCloudProvisioningUrlDialog() {

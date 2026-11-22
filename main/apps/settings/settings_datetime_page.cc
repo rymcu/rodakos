@@ -17,48 +17,18 @@
 // open full-screen pickers, and one 40 px 立即校时 button at the bottom of the 320x200 body.
 namespace {
 constexpr const char* TAG = "SettingsApp";
-constexpr lv_coord_t kGridX = 10;
-constexpr lv_coord_t kGridWidth = 300;
-constexpr lv_coord_t kRowHeight = 38;
-constexpr lv_coord_t kPickerRowHeight = 38;
+using namespace rodakos_settings;
 
 const char* kWeekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
 
 lv_obj_t* CreateValueRow(lv_obj_t* list, int index, const char* icon, const char* title,
                          lv_obj_t** value_out) {
-    auto* row = lv_obj_create(list);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, kGridWidth, kRowHeight);
-    lv_obj_set_pos(row, 0, kRowHeight * index);
-    lv_obj_set_style_pad_hor(row, 12, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-    if (index > 0) {
-        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
-        lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
-    }
-    auto* icon_label = lv_label_create(row);
-    lv_label_set_text(icon_label, icon);
-    lv_obj_set_style_text_color(icon_label, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
-    lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, 0, 0);
-    auto* title_label = rodakos_settings::CreateSettingLabel(row, title, false);
+    auto* row = CreateListRow(list, index);
+    CreateSettingIcon(row, icon);
+    auto* title_label = CreateSettingLabel(row, title, false);
     lv_obj_align(title_label, LV_ALIGN_LEFT_MID, 28, 0);
-    auto* value = rodakos_settings::CreateSettingLabel(row, "", true);
-    lv_obj_set_width(value, 140);
-    lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_font(value, &phone_font_12, 0);
-    lv_obj_align(value, LV_ALIGN_RIGHT_MID, -16, 0);
-    auto* arrow = lv_label_create(row);
-    lv_label_set_text(arrow, ">");
-    lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
-    lv_obj_set_style_text_font(arrow, &phone_font_14, 0);
-    lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
-    *value_out = value;
+    *value_out = CreateRowValue(row, 140, true);
+    CreateRowChevron(row);
     return row;
 }
 
@@ -98,15 +68,7 @@ void SettingsApp::CreateDateTimePage() {
     lv_obj_set_style_text_font(time_sync_status_label_, &phone_font_12, 0);
     lv_obj_set_pos(time_sync_status_label_, kGridX + 4, 34);
 
-    auto* list = lv_obj_create(datetime_body_);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, kGridWidth, kRowHeight * 2);
-    lv_obj_set_pos(list, kGridX, 58);
-    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(list, 8, 0);
-    lv_obj_set_style_clip_corner(list, true, 0);
-    lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    auto* list = CreateGroupList(datetime_body_, kGridX, 58, kGridWidth, kRowHeight * 2);
 
     auto* tz_row = CreateValueRow(list, 0, ICON_GLOBE, "时区", &timezone_dropdown_);
     lv_obj_add_event_cb(tz_row, [](lv_event_t* e) {
@@ -117,17 +79,9 @@ void SettingsApp::CreateDateTimePage() {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowDateTimePicker(true);
     }, LV_EVENT_CLICKED, this);
 
-    time_sync_button_ = lv_btn_create(datetime_body_);
-    lv_obj_set_size(time_sync_button_, kGridWidth, 40);
-    lv_obj_set_pos(time_sync_button_, kGridX, 150);
-    lv_obj_set_style_bg_color(time_sync_button_, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(time_sync_button_, 7, 0);
-    lv_obj_set_style_shadow_width(time_sync_button_, 0, 0);
-    auto* sync_label = lv_label_create(time_sync_button_);
-    lv_label_set_text(sync_label, "立即校时");
-    lv_obj_set_style_text_color(sync_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(sync_label, &phone_font_14, 0);
-    lv_obj_center(sync_label);
+    time_sync_button_ = CreateSettingButton(datetime_body_, "立即校时", SettingButtonStyle::kPrimary,
+                                            kGridWidth, kActionHeight);
+    lv_obj_set_pos(time_sync_button_, kGridX, kActionY);
     lv_obj_add_event_cb(time_sync_button_, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->StartTimeSync();
     }, LV_EVENT_CLICKED, this);
@@ -219,14 +173,8 @@ void SettingsApp::ShowDateTimePicker(bool servers) {
     lv_obj_set_style_text_font(title, &phone_font_18, 0);
     lv_obj_set_pos(title, kGridX + 4, 8);
 
-    auto* list = lv_obj_create(datetime_picker_);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, kGridWidth, 150);
-    lv_obj_set_pos(list, kGridX, 38);
-    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(list, 8, 0);
-    lv_obj_set_style_clip_corner(list, true, 0);
+    auto* list = CreateGroupList(datetime_picker_, kGridX, 38, kGridWidth, 150);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
 
@@ -243,29 +191,20 @@ void SettingsApp::ShowDateTimePicker(bool servers) {
         const bool selected = !custom && current == value;
         current_listed = current_listed || selected;
 
-        auto* row = lv_obj_create(list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, kGridWidth, kPickerRowHeight);
-        lv_obj_set_pos(row, 0, static_cast<lv_coord_t>(index) * kPickerRowHeight);
-        lv_obj_set_style_pad_hor(row, 12, 0);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-        if (index > 0) {
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
-            lv_obj_set_style_border_width(row, 1, 0);
-            lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
-        }
+        auto* row = CreateListRow(list, static_cast<int>(index));
         auto* name = CreateSettingLabel(row, label, false);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        if (selected || (custom && !current_listed && index + 1 == count && !current.empty())) {
-            auto* check = CreateSettingLabel(row, custom ? current.c_str() : "✓", false);
-            lv_obj_set_width(check, 150);
-            lv_label_set_long_mode(check, LV_LABEL_LONG_DOT);
-            lv_obj_set_style_text_align(check, LV_TEXT_ALIGN_RIGHT, 0);
+        if (selected) {
+            // Same tick as the 按键 action picker.
+            auto* check = lv_label_create(row);
+            lv_label_set_text(check, ICON_CHECK);
             lv_obj_set_style_text_color(check, rodakos_theme_primary(), 0);
+            lv_obj_set_style_text_font(check, PhoneIconFont(), 0);
             lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+        } else if (custom && !current_listed && index + 1 == count && !current.empty()) {
+            auto* value = CreateRowValue(row, 150, false);
+            lv_label_set_text(value, current.c_str());
+            lv_obj_set_style_text_color(value, rodakos_theme_primary(), 0);
         }
         lv_obj_set_user_data(row, reinterpret_cast<void*>(index | (servers ? 0x10000u : 0u)));
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
@@ -297,17 +236,9 @@ void SettingsApp::ShowDateTimePicker(bool servers) {
         }, LV_EVENT_CLICKED, this);
     }
 
-    auto* back = lv_btn_create(datetime_picker_);
-    lv_obj_set_size(back, kGridWidth, 40);
+    auto* back = CreateSettingButton(datetime_picker_, "取消", SettingButtonStyle::kSecondary, kGridWidth,
+                                     kActionHeight);
     lv_obj_set_pos(back, kGridX, 192);
-    lv_obj_set_style_bg_color(back, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(back, 7, 0);
-    lv_obj_set_style_shadow_width(back, 0, 0);
-    auto* back_label = lv_label_create(back);
-    lv_label_set_text(back_label, "取消");
-    lv_obj_set_style_text_color(back_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(back_label, &phone_font_14, 0);
-    lv_obj_center(back_label);
     lv_obj_add_event_cb(back, [](lv_event_t* e) {
         lv_async_call([](void* user_data) {
             static_cast<SettingsApp*>(user_data)->CloseDateTimePicker();
@@ -408,7 +339,7 @@ void SettingsApp::ShowNtpServerDialog() {
     lv_obj_set_pos(dialog_box, 8, 8);
     lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 8, 0);
+    lv_obj_set_style_radius(dialog_box, kListRadius, 0);
     lv_obj_set_style_pad_hor(dialog_box, 12, 0);
     lv_obj_set_style_pad_ver(dialog_box, 8, 0);
     lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
@@ -432,34 +363,18 @@ void SettingsApp::ShowNtpServerDialog() {
     lv_obj_set_style_text_color(ntp_textarea_, rodakos_theme_text_primary(), 0);
     lv_obj_set_style_text_font(ntp_textarea_, &phone_font_12, 0);
     lv_obj_set_style_border_width(ntp_textarea_, 0, 0);
-    lv_obj_set_style_radius(ntp_textarea_, 6, 0);
+    lv_obj_set_style_radius(ntp_textarea_, kButtonRadius, 0);
 
-    auto* cancel_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel_btn, 60, 36);
+    auto* cancel_btn = CreateSettingButton(dialog_box, "取消", SettingButtonStyle::kSecondary, 60,
+                                           kDialogButtonHeight);
     lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 156, 0);
-    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel_btn, 6, 0);
-    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
-    auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
-    lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseNtpServerDialog();
     }, LV_EVENT_CLICKED, this);
 
-    auto* save_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(save_btn, 60, 36);
+    auto* save_btn = CreateSettingButton(dialog_box, "保存", SettingButtonStyle::kPrimary, 60,
+                                         kDialogButtonHeight);
     lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(save_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(save_btn, 6, 0);
-    lv_obj_set_style_shadow_width(save_btn, 0, 0);
-    auto* save_label = lv_label_create(save_btn);
-    lv_label_set_text(save_label, "保存");
-    lv_obj_set_style_text_color(save_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(save_label, &phone_font_14, 0);
-    lv_obj_center(save_label);
     lv_obj_add_event_cb(save_btn, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->SubmitNtpServerDialog();
     }, LV_EVENT_CLICKED, this);
