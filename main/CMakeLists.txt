@@ -196,6 +196,7 @@ idf_component_register(
         esp_app_format
         esp_timer
         heap
+        esp_psram
         mbedtls
         protocomm
         rodak_ota_state

@@ -7,8 +7,9 @@
 struct FakeHeap {
     size_t internal_free = 142U * 1024U;
     size_t internal_total = 313U * 1024U;
-    size_t psram_free = 6502U * 1024U;
-    size_t psram_total = 8192U * 1024U - 300U * 1024U;
+    // Matches the board boot log: 8 MB chip, 3264 K of code copied in, 4914 K heap.
+    size_t psram_free = 2250U * 1024U;
+    size_t psram_total = 4914U * 1024U;
 };
 inline FakeHeap& fake_heap() { static FakeHeap heap; return heap; }
 inline size_t heap_caps_get_free_size(unsigned caps) {

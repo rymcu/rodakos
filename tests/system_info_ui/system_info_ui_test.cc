@@ -9,6 +9,7 @@
 #include "apps/system_info/system_info_app.h"
 #undef private
 #include "esp_heap_caps.h"
+#include "esp_psram.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/audio_output_service.h"
 #include "phone_os/audio_service.h"
@@ -24,6 +25,7 @@
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_wake_service.h"
 #include "phone_os/web_file_system_service.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "phone_ui/rodakos_theme.h"
 #include "rodakos_adapters/file_service.h"
@@ -215,6 +217,27 @@ RODAK_TEST("firmware group shows the build time as a date, not __DATE__") {
             lv_obj_t* child = lv_obj_get_child(object, static_cast<int32_t>(i));
             if (lv_obj_check_type(child, &lv_label_class) &&
                 std::string(lv_label_get_text(child)) == "2026-11-21 18:02") found = true;
+            walk(child);
+        }
+    };
+    walk(f.app.body_);
+    RODAK_CHECK(found);
+}
+
+RODAK_TEST("resources show the PSRAM heap; firmware shows the chip specification") {
+    Fixture f;
+    f.Create();
+    RODAK_CHECK_EQ(Text(f.app.psram_.value), std::string("2.2 MB 可用 / 4.8 MB"));
+    bool found = false;
+    std::function<void(lv_obj_t*)> walk = [&](lv_obj_t* object) {
+        for (uint32_t i = 0; i < lv_obj_get_child_count(object); ++i) {
+            lv_obj_t* child = lv_obj_get_child(object, static_cast<int32_t>(i));
+            if (lv_obj_check_type(child, &lv_label_class) &&
+                std::string(lv_label_get_text(child)) == "16 MB Flash · 8 MB PSRAM") {
+                found = true;
+                // One line: a wrapped value would overflow the 38 px row.
+                RODAK_CHECK(lv_obj_get_height(child) <= lv_font_get_line_height(&phone_font_14));
+            }
             walk(child);
         }
     };

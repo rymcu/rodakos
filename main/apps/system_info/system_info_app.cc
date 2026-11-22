@@ -29,6 +29,7 @@
 #include <esp_flash.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_psram.h>
 #include <esp_system.h>
 #include <esp_timer.h>
 
@@ -429,7 +430,8 @@ void SystemInfoApp::CreateMainList() {
     const auto add_fact = [&](int row_index, const char* key, const char* value) {
         auto* row = CreateListRow(firmware, row_index, kGridWidth, kRowHeight, false);
         lv_obj_align(CreateListLabel(row, key), LV_ALIGN_LEFT_MID, 0, 0);
-        auto* label = CreateRowValue(row, 180, false);
+        // Keys are at most four characters (≈64 px), so values get the rest of the 276 px row.
+        auto* label = CreateRowValue(row, 200, false);
         lv_obj_set_style_text_font(label, &phone_font_14, 0);
         lv_label_set_text(label, value);
     };
@@ -445,8 +447,17 @@ void SystemInfoApp::CreateMainList() {
                   static_cast<unsigned>(chip.revision / 100), static_cast<unsigned>(chip.revision % 100),
                   static_cast<unsigned>(chip.cores));
     add_fact(3, "芯片", text);
-    std::snprintf(text, sizeof(text), "%u MB", static_cast<unsigned>(flash_size / (1024U * 1024U)));
-    add_fact(4, "Flash", text);
+    // Chip specification. The 资源 group shows only the heap: with SPIRAM_FETCH_INSTRUCTIONS
+    // the firmware code is copied into PSRAM at boot, so the PSRAM heap is smaller than the chip.
+    const size_t psram_size = esp_psram_get_size();
+    if (psram_size > 0) {
+        std::snprintf(text, sizeof(text), "%u MB Flash · %u MB PSRAM",
+                      static_cast<unsigned>(flash_size / (1024U * 1024U)),
+                      static_cast<unsigned>(psram_size / (1024U * 1024U)));
+    } else {
+        std::snprintf(text, sizeof(text), "%u MB Flash", static_cast<unsigned>(flash_size / (1024U * 1024U)));
+    }
+    add_fact(4, "存储", text);
     auto* dev_row = CreateListRow(firmware, 5);
     lv_obj_align(CreateListLabel(dev_row, "开发信息"), LV_ALIGN_LEFT_MID, 0, 0);
     CreateRowChevron(dev_row);
