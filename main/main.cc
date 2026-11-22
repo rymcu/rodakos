@@ -39,8 +39,9 @@
 #include "phone_os/voice_wake_service.h"
 #ifdef RODAKOS_RELEASE_TESTS
 #include "phone_os/voice_lifecycle_diagnostic.h"
-#include <esp_timer.h>
 #endif
+#include <esp_timer.h>
+#include <atomic>
 #include "phone_os/wake_on_lan_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_os/realtime_voice_transport.h"
@@ -668,19 +669,57 @@ extern "C" void app_main(void) {
                audio_output_service.IsOpenForOwner("audio-playback");
     });
     audio_service.SetBeforeOutputOpen([] { voice_wake_service.ReleaseInputForMedia(); });
+    // 交互收尾回调在服务锁内：只启动一次性定时器，真正排队放到 esp_timer 任务里，
+    // 唤醒通知任务暂时占用时重试，服务端登记 30 s 后过期。
+    static std::atomic<uint32_t> deferred_announce_seq{0};
+    static std::atomic<int> deferred_announce_attempts{0};
+    static esp_timer_handle_t deferred_announce_timer = nullptr;
+    const esp_timer_create_args_t deferred_announce_timer_args = {
+        .callback = [](void*) {
+            const uint32_t seq = deferred_announce_seq.load();
+            if (seq == 0) return;
+            const bool queued = voice_audio_frontend.QueueDiagnosticCommand([seq]() {
+                ESP_LOGI(TAG, "Deferred announce dequeued: seq=%" PRIu32, seq);
+                if (!voice_assistant_service.StartAnnounce(seq)) {
+                    ESP_LOGW(TAG, "Deferred announce did not start: seq=%" PRIu32, seq);
+                }
+            });
+            if (queued || ++deferred_announce_attempts >= 40) {
+                if (!queued) ESP_LOGW(TAG, "Deferred announce dropped: seq=%" PRIu32, seq);
+                deferred_announce_seq.store(0);
+                return;
+            }
+            esp_timer_start_once(deferred_announce_timer, 250 * 1000);
+        },
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "announce_defer",
+        .skip_unhandled_events = true,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&deferred_announce_timer_args, &deferred_announce_timer));
+    voice_assistant_service.SetDeferredAnnounceCallback([](uint32_t seq) {
+        deferred_announce_seq.store(seq);
+        deferred_announce_attempts.store(0);
+        esp_timer_stop(deferred_announce_timer);
+        esp_timer_start_once(deferred_announce_timer, 100 * 1000);
+    });
     // 服务端发起播报：不打断正在进行的交互；放音乐时只有 urgent 才插播（焦点会暂停并恢复音乐）。
     // 会话建立要等网络，放到 wake_notify 任务上做，MQTT 线程只排队。
     unified_mqtt_service.SetVoiceAnnounceHandler([](uint32_t announce_seq, bool urgent) -> std::string {
         ESP_LOGI(TAG, "voice.announce accepted by MQTT handler: seq=%" PRIu32 " urgent=%d",
                  announce_seq, urgent ? 1 : 0);
-        if (!voice_assistant_service.IsIdleForAnnounce()) {
-            ESP_LOGW(TAG, "voice.announce rejected: assistant is busy seq=%" PRIu32, announce_seq);
-            return "busy";
-        }
         if (!urgent &&
             music_player_service.GetState().audio.status == rodakos::AudioPlaybackStatus::kPlaying) {
             ESP_LOGW(TAG, "voice.announce rejected: music is playing seq=%" PRIu32, announce_seq);
             return "busy";
+        }
+        if (!voice_assistant_service.IsIdleForAnnounce()) {
+            // 语音点歌时对话还没结束：留到这轮交互收尾后再开播报，不能直接拒绝，否则推送必然失败。
+            if (!voice_assistant_service.DeferAnnounceUntilIdle(announce_seq)) {
+                ESP_LOGW(TAG, "voice.announce rejected: assistant is busy seq=%" PRIu32, announce_seq);
+                return "busy";
+            }
+            return std::string();
         }
         const bool queued = voice_audio_frontend.QueueDiagnosticCommand([announce_seq]() {
             ESP_LOGI(TAG, "voice.announce command dequeued: seq=%" PRIu32, announce_seq);

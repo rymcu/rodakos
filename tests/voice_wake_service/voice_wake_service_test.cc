@@ -456,6 +456,20 @@ RODAK_TEST("wake callback reads phase without copying the full assistant snapsho
     }
 }
 
+RODAK_TEST("wake during a server announce ends the announce and starts a conversation") {
+    Fixture f;
+    f.Start();
+    {
+        std::lock_guard<std::mutex> lock(f.assistant.mutex);
+        f.assistant.state.phase = VoiceAssistantPhase::kSpeaking;
+        f.assistant.state.announce = true;
+    }
+    f.service->NotifyWakeWordDetected("announce wake");
+    RODAK_CHECK_EQ(f.assistant.stops, 1u);
+    RODAK_CHECK_EQ(f.assistant.interrupts, 0u);
+    RODAK_CHECK_EQ(f.assistant.starts, 1u);
+}
+
 RODAK_TEST("Unix adapter validates and returns one gettimeofday snapshot") {
     wake_host::unix_us = 1800000000123456;
     wake_host::wall_reads = 0;

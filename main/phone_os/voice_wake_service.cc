@@ -331,7 +331,14 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
 
     // AEC/VAD frontends may report a wake phrase while TTS is active. Treat it
     // as a barge-in on the existing session instead of opening a second one.
-    const VoiceAssistantPhase assistant_phase = assistant_.GetPhaseSnapshot();
+    const bool announcing = assistant_.IsAnnouncing();
+    if (announcing) {
+        // 播报会话不开麦，唤醒词是唯一的打断入口：结束播报（音乐随之停止），再照常开一轮对话。
+        ESP_LOGI(TAG, "Wake word ended announce: %s", detected.c_str());
+        assistant_.StopInteraction();
+    }
+    const VoiceAssistantPhase assistant_phase =
+        announcing ? VoiceAssistantPhase::kIdle : assistant_.GetPhaseSnapshot();
     if (assistant_phase == VoiceAssistantPhase::kSpeaking) {
         // The phase snapshot may have waited while Stop or an identity change invalidated
         // this callback. Keep that generation current through the short setter.
@@ -349,7 +356,10 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (initialized_ && task_running_ && enabled_ && listening_ &&
+        // 前端识别到唤醒词即自行停止采集；监督 tick 若先于本回调运行，会把 listening_ 清掉。
+        // 播报场景下这是唯一的打断入口，不能因此丢掉这次唤醒（11-22 实测：音乐停了但没进对话）。
+        if (initialized_ && task_running_ && enabled_ &&
+            (listening_ || announcing) &&
             !service_stopping_ && !assistant_starting_ &&
             enable_generation_ == enable_generation) {
             runtime_.StopListening();
@@ -389,8 +399,18 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
         return current;
     };
     uint32_t assistant_generation = 0;
-    if (!assistant_.StartInteraction(
-            VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation)) {
+    bool started = assistant_.StartInteraction(
+        VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation);
+    // 刚结束的播报可能还在收尾（I/O、播放任务退出，焦点释放），StartInteraction 会判忙：
+    // 短暂重试，避免唤醒词只停了音乐却没开始对话。
+    for (int attempt = 0; !started && announcing && attempt < 20 && can_start();
+         ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        started = assistant_.StartInteraction(
+            VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation);
+    }
+    if (!started) {
+        ESP_LOGW(TAG, "Assistant start failed after wake: %s", detected.c_str());
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
             assistant_starting_ = false;
@@ -592,6 +612,13 @@ void VoiceWakeService::SupervisorTick() {
                 assistant_.StopInteraction();
                 return;
             }
+        }
+        if (assistant_state.announce && !assistant_state.stopping) {
+            // 播报（含长时间音乐推送）期间保持唤醒监听，否则整段播报无法打断。
+            if (!listening_) StartRuntimeLocked();
+            SetStatusLocked(VoiceWakeStatus::kAssistantActive, "Announcing");
+            xSemaphoreGive(mutex_);
+            return;
         }
         if (listening_) {
             StopRuntimeLocked("Assistant active");

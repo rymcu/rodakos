@@ -54,6 +54,15 @@ public:
     bool StartAnnounce(uint32_t announce_seq);
     // 空闲、可以马上开一个播报会话（只是快照，StartAnnounce 仍会复核）。
     bool IsIdleForAnnounce();
+    // 当前交互是服务端发起的只放音播报（快照）。唤醒回调只读这一位，不复制完整状态。
+    bool IsAnnouncing();
+    // 正在对话（例如语音点歌后还在播"正在播放"）时，把播报留到这轮交互结束再开；
+    // 同一时间只留最新一条。返回 false 表示服务不可用。
+    bool DeferAnnounceUntilIdle(uint32_t announce_seq);
+    // 交互清理完成后调用；不在服务锁内执行，由调用方放到能阻塞的任务上。
+    void SetDeferredAnnounceCallback(std::function<void(uint32_t)> callback) {
+        deferred_announce_callback_ = std::move(callback);
+    }
 
     // Queue confirmed user speech for the I/O task; true means accepted, not sent.
     bool InterruptSpeaking();
@@ -148,6 +157,8 @@ private:
     bool stopping_ = false;
     // 当前交互是服务端发起的只放音播报：不录音、不续轮、断线不重连。
     bool announce_ = false;
+    uint32_t deferred_announce_seq_ = 0;
+    std::function<void(uint32_t)> deferred_announce_callback_;
     bool start_in_progress_ = false;
     bool cleanup_resources_released_ = false;
     bool reconnect_pending_ = false;

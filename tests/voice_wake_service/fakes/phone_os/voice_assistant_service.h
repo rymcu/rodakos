@@ -11,6 +11,7 @@ struct VoiceAssistantState {
     VoiceAssistantPhase phase = VoiceAssistantPhase::kIdle;
     bool stopping = false;
     bool focus_active = false;
+    bool announce = false;
     std::string message;
 };
 class VoiceAssistantService {
@@ -37,6 +38,7 @@ public:
         if (hook) hook();
         return snapshot;
     }
+    bool IsAnnouncing() { std::lock_guard<std::mutex> lock(mutex); return state.announce; }
     void StopInteraction() {
         std::function<void()> hook;
         { std::lock_guard<std::mutex> lock(mutex); state = {}; ++stops; hook = stop_hook; }

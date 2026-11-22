@@ -29,6 +29,8 @@ struct VoiceAssistantState {
     bool focus_active = false;
     bool transport_active = false;
     bool recorder_active = false;
+    // 服务端发起的只放音播报（音乐推送等）：不开麦，靠唤醒监听打断
+    bool announce = false;
     uint32_t focus_token = 0;
     std::string message;
     std::string last_wake_word;
