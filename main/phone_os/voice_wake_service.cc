@@ -356,7 +356,10 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
 
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (initialized_ && task_running_ && enabled_ && listening_ &&
+        // 前端识别到唤醒词即自行停止采集；监督 tick 若先于本回调运行，会把 listening_ 清掉。
+        // 播报场景下这是唯一的打断入口，不能因此丢掉这次唤醒（11-22 实测：音乐停了但没进对话）。
+        if (initialized_ && task_running_ && enabled_ &&
+            (listening_ || assistant_snapshot.announce) &&
             !service_stopping_ && !assistant_starting_ &&
             enable_generation_ == enable_generation) {
             runtime_.StopListening();
@@ -396,8 +399,18 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
         return current;
     };
     uint32_t assistant_generation = 0;
-    if (!assistant_.StartInteraction(
-            VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation)) {
+    bool started = assistant_.StartInteraction(
+        VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation);
+    // 刚结束的播报可能还在收尾（I/O、播放任务退出，焦点释放），StartInteraction 会判忙：
+    // 短暂重试，避免唤醒词只停了音乐却没开始对话。
+    for (int attempt = 0; !started && assistant_snapshot.announce && attempt < 20 && can_start();
+         ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        started = assistant_.StartInteraction(
+            VoiceAssistantTrigger::kWakeWord, detected, can_start, &assistant_generation);
+    }
+    if (!started) {
+        ESP_LOGW(TAG, "Assistant start failed after wake: %s", detected.c_str());
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
             assistant_starting_ = false;
