@@ -9,6 +9,7 @@ constexpr int ERR_MP3_INDATA_UNDERFLOW = -1;
 constexpr int ERR_MP3_MAINDATA_UNDERFLOW = -2;
 using HMP3Decoder = void*;
 struct MP3FrameInfo {
+    int bitrate;
     int outputSamps;
     int samprate;
     int nChans;

@@ -68,6 +68,7 @@ public:
     MusicPlaybackMode TogglePlaybackMode();
 
     bool PlayTrack(size_t index, uint64_t library_revision = 0);
+    bool RetryTrack(const std::string& path);
     bool PlayPrevious();
     bool PlayNext();
     bool TogglePlayPause();

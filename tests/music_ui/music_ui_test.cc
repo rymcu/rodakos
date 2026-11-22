@@ -22,10 +22,12 @@
 #include "phone_os/phone_app_registry.h"
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
+#include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "rodakos_adapters/file_service.h"
 #include "settings.h"
 #include "esp_codec_dev.h"
+#include "esp_heap_caps.h"
 #include <src/others/test/lv_test.h>
 
 namespace {
@@ -108,10 +110,36 @@ struct Fixture {
     }
     void Create() { RODAK_CHECK(app.OnCreate(context)); created=true; lv_test_wait(2); }
     void Refresh() { app.RefreshState(); lv_test_wait(2); }
-    std::string Status() { return lv_label_get_text(app.status_label_); }
+    // The player shows its state on two lines: the title line and the detail line under it.
+    std::string Title() { return lv_label_get_text(app.track_title_label_); }
+    std::string Detail() { return lv_label_get_text(app.detail_label_); }
+    std::string Status() {
+        if (app.page_ == MusicApp::Page::kSongs) return lv_label_get_text(app.list_message_);
+        return Title() + "|" + Detail();
+    }
+    bool Shows(const char* text) { return Status().find(text) != std::string::npos; }
+    static std::string Icon(lv_obj_t* button) {
+        return lv_label_get_text(lv_obj_get_child(button, 0));
+    }
+    lv_obj_t* HeaderButton(int index) {
+        return lv_obj_get_child(lv_obj_get_child(app.root_, 0), index);
+    }
+    static void Click(lv_obj_t* button) { lv_obj_send_event(button, LV_EVENT_CLICKED, nullptr); }
+    void OpenSongs() {
+        RODAK_CHECK_EQ(Icon(app.songs_button_), ICON_MUSIC);
+        Click(app.songs_button_);
+        RODAK_CHECK_EQ(app.page_, MusicApp::Page::kSongs);
+    }
+    void OpenVolume() {
+        Click(app.volume_button_);
+        RODAK_CHECK_EQ(app.page_, MusicApp::Page::kVolume);
+    }
+    lv_obj_t* RetryButton() {
+        return app.page_ == MusicApp::Page::kSongs ? app.list_retry_button_ : app.play_button_;
+    }
     void Retry() {
         const auto revision=player.GetState().library_revision;
-        lv_obj_send_event(app.refresh_library_button_, LV_EVENT_CLICKED, nullptr);
+        Click(RetryButton());
         Await([&]{return player.GetState().library_revision>revision &&
             player.GetState().library_status!=MusicLibraryStatus::kScanning;});
         Refresh();
@@ -143,23 +171,32 @@ void Screenshot(const char* name) {
 RODAK_TEST("missing storage service differs from an empty library") {
     Fixture f(false);f.Create();
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kServiceUnavailable);
-    RODAK_CHECK_EQ(f.Status(),"File service unavailable");
+    RODAK_CHECK_EQ(f.Title(),"文件服务不可用");
 }
 RODAK_TEST("missing card retries to genuine empty library through the real UI") {
     Fixture f;f.files.mounted=false;f.files.mount_ok=false;f.Create();
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kStorageUnavailable);
-    RODAK_CHECK(f.Status().find("SD card unavailable")!=std::string::npos);
-    f.app.ShowTrackPicker();Screenshot("music-missing-card.ppm");
+    RODAK_CHECK_EQ(f.Title(), "读不到 SD 卡");
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_REFRESH);
+    f.OpenSongs();
+    RODAK_CHECK(f.Shows("读不到 SD 卡"));
+    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.list_retry_button_, LV_OBJ_FLAG_HIDDEN));
+    Screenshot("music-missing-card.ppm");
     f.files.mount_ok=true;f.Retry();
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kEmpty);
-    RODAK_CHECK(f.Status().find("No supported audio files")!=std::string::npos);
+    RODAK_CHECK(f.Shows("暂无歌曲"));
+    RODAK_CHECK(lv_obj_has_flag(f.app.list_retry_button_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(f.app.OnBackRequested());
+    f.Refresh();
+    RODAK_CHECK_EQ(f.Title(), "暂无歌曲");
+    RODAK_CHECK_EQ(f.Detail(), "放进 SD 卡的 music 文件夹");
     Screenshot("music-empty.ppm");
 }
 RODAK_TEST("root read failure is not a successful empty scan") {
     Fixture f;f.files.Fail("/");f.Create();
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kReadError);
     RODAK_CHECK_FALSE(f.player.ScanLibrary());
-    RODAK_CHECK(f.Status().find("Cannot read music folders")!=std::string::npos);
+    RODAK_CHECK_EQ(f.Title(), "无法读取歌曲目录");
 }
 RODAK_TEST("nested read failure discards partial and previous tracks") {
     Fixture f;f.files.Tracks({"/missing-old.wav"});f.Create();
@@ -177,21 +214,24 @@ RODAK_TEST("nested read failure discards partial and previous tracks") {
 }
 RODAK_TEST("stale song row cannot play a replacement at the same index") {
     Fixture f;f.files.Tracks({"/old.wav"});f.Create();
+    f.OpenSongs();
+    auto* row = f.app.song_rows_[0].button;
     f.files.Tracks({"/replacement.wav"});RODAK_CHECK(f.player.ScanLibrary());
-    f.app.PlayTrack(0);
+    lv_obj_send_event(row, LV_EVENT_PRESSED, nullptr);
+    f.Click(row);
     RODAK_CHECK(f.audio.GetState().file_path.empty());
-    RODAK_CHECK(f.Status().find("Music library changed")!=std::string::npos);
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kSongs);
 }
 RODAK_TEST("blocked next and toggle show the ownership error rather than no tracks") {
     Fixture f;f.files.Tracks({"/track.wav"});f.Create();
     RODAK_CHECK(f.player.SetPlaybackBlocked(true));
-    f.app.PlayNext();RODAK_CHECK(f.Status().find("another app")!=std::string::npos);
-    f.app.TogglePlayPause();RODAK_CHECK(f.Status().find("another app")!=std::string::npos);
+    f.Click(f.app.next_button_);RODAK_CHECK_EQ(f.Detail(), "音频被其他应用占用");
+    f.Click(f.app.play_button_);RODAK_CHECK_EQ(f.Detail(), "音频被其他应用占用");
     RODAK_CHECK(f.audio.GetState().file_path.empty());
 }
 RODAK_TEST("worker creation failure can retry and recover") {
     Fixture f;music_test::fail_monitor=true;f.Create();
-    RODAK_CHECK(f.Status().find("worker unavailable")!=std::string::npos);
+    RODAK_CHECK_EQ(f.Detail(), "曲库服务无法启动");
     music_test::fail_monitor=false;f.files.Tracks({"/recovered.wav"});f.Retry();
     RODAK_CHECK_EQ(f.player.GetState().library_status,MusicLibraryStatus::kReady);
     RODAK_CHECK_EQ(f.player.track_count(),1U);
@@ -210,14 +250,17 @@ RODAK_TEST("requested library scan publishes changed tracks") {
     RODAK_CHECK_EQ(tracks.front().path, "/after.wav");
 }
 RODAK_TEST("retry does not hold LVGL during a slow directory read") {
-    Fixture f;f.Create();f.files.Hold();f.app.RefreshLibrary();Await([&]{return f.files.Entered();});
-    f.Refresh();RODAK_CHECK_EQ(f.Status(),"Scanning music...");
-    f.app.PlayTrack(0);RODAK_CHECK(f.Status().find("Scanning")!=std::string::npos);
+    Fixture f;f.Create();f.OpenSongs();f.files.Hold();
+    f.Click(f.app.refresh_library_button_);Await([&]{return f.files.Entered();});
+    f.Refresh();RODAK_CHECK(f.Shows("正在读取歌曲"));
+    RODAK_CHECK(lv_obj_has_state(f.app.refresh_library_button_, LV_STATE_DISABLED));
+    RODAK_CHECK(f.app.OnBackRequested());
+    RODAK_CHECK(lv_obj_has_state(f.app.play_button_, LV_STATE_DISABLED));
     const auto stop_start = std::chrono::steady_clock::now();
     f.player.Stop();
     RODAK_CHECK(std::chrono::steady_clock::now()-stop_start < std::chrono::milliseconds(100));
     f.files.Release();Await([&]{return f.player.GetState().library_status==MusicLibraryStatus::kEmpty;});
-    f.Refresh();RODAK_CHECK(f.Status().find("No supported audio files")!=std::string::npos);
+    f.Refresh();RODAK_CHECK_EQ(f.Title(), "暂无歌曲");
 }
 RODAK_TEST("deinit waits for an active scan and never publishes its late tracks") {
     Fixture f;f.Create();f.files.Hold();f.app.RefreshLibrary();Await([&]{return f.files.Entered();});
@@ -235,10 +278,12 @@ RODAK_TEST("asynchronous missing-file error is visible and a subsequent valid tr
     const size_t missing_index = 1 - valid_index;
     RODAK_CHECK(f.player.PlayTrack(missing_index));
     Await([&]{return f.audio.GetState().status==AudioPlaybackStatus::kError;});
-    f.Refresh();RODAK_CHECK_EQ(f.Status(),f.audio.GetState().message);
+    f.Refresh();RODAK_CHECK_EQ(f.Detail(),"无法打开歌曲");
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_REFRESH);
     RODAK_CHECK(f.player.PlayTrack(valid_index));
     Await([&]{return f.audio.GetState().status==AudioPlaybackStatus::kCompleted;});
-    f.Refresh();RODAK_CHECK(f.Status().find("Completed")!=std::string::npos);
+    f.Refresh();RODAK_CHECK_EQ(f.Detail(), "valid");
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_PLAY_FILLED);
     std::filesystem::remove(valid);
 }
 RODAK_TEST("asynchronous codec write error after format discovery outranks progress in the real UI") {
@@ -247,41 +292,39 @@ RODAK_TEST("asynchronous codec write error after format discovery outranks progr
     f.files.Tracks({broken});f.Create();RODAK_CHECK(f.player.PlayTrack(0));
     Await([&]{return f.audio.GetState().status==AudioPlaybackStatus::kError;});
     RODAK_CHECK(f.audio.GetState().sample_rate>0);f.Refresh();
-    RODAK_CHECK_EQ(f.Status(),f.audio.GetState().message);
-    RODAK_CHECK(f.Status().find("100%") == std::string::npos);
+    RODAK_CHECK_EQ(f.Detail(),"音频输出失败");
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_REFRESH);
     lv_obj_update_layout(lv_screen_active());
-    lv_area_t title_area{}, status_area{}, card_area{};
+    lv_area_t title_area{}, detail_area{};
     lv_obj_get_coords(f.app.track_title_label_, &title_area);
-    lv_obj_get_coords(f.app.status_label_, &status_area);
-    lv_obj_get_coords(lv_obj_get_parent(f.app.status_label_), &card_area);
-    RODAK_CHECK(title_area.y2 < status_area.y1);
-    RODAK_CHECK(status_area.y2 <= card_area.y2);
-    const auto* status_font = lv_obj_get_style_text_font(f.app.status_label_, 0);
-    RODAK_CHECK(2 * status_font->line_height + lv_obj_get_style_text_line_space(f.app.status_label_, 0)
-                <= lv_obj_get_height(f.app.status_label_));
+    lv_obj_get_coords(f.app.detail_label_, &detail_area);
+    RODAK_CHECK(title_area.y2 < detail_area.y1);
     Screenshot("music-playback-error.ppm");
     fake_codec::fail_write=false;
-    RODAK_CHECK(f.player.PlayTrack(0));
+    f.Click(f.app.play_button_);
     Await([&]{return f.audio.GetState().status==AudioPlaybackStatus::kCompleted;});
-    f.Refresh();RODAK_CHECK(f.Status().find("Completed")!=std::string::npos);
+    f.Refresh();RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_PLAY_FILLED);
     std::filesystem::remove(broken);
 }
 RODAK_TEST("rejected codec volume change immediately restores slider and label") {
     Fixture f;f.Create();RODAK_CHECK(f.output.OpenForOwner("test",16000,1,16));
-    fake_codec::fail_volume_write=true;f.app.ShowVolumePanel();
+    fake_codec::fail_volume_write=true;f.OpenVolume();
     lv_slider_set_value(f.app.volume_slider_,90,LV_ANIM_OFF);
     lv_obj_send_event(f.app.volume_slider_,LV_EVENT_VALUE_CHANGED,nullptr);
     RODAK_CHECK_EQ(lv_slider_get_value(f.app.volume_slider_),60);
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.volume_value_label_)),"60%");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.volume_chip_label_)),"60");
     RODAK_CHECK_EQ(f.output.volume(),60);f.output.CloseForOwner("test");
 }
 RODAK_TEST("stop freezes completed-track auto advance") {
     Fixture f;const auto valid=Wav("rodakos-music-stop.wav",64,64);
-    f.files.Tracks({valid,"/second.wav"});f.Create();
+    f.files.Tracks({valid,"/zz-second.wav"});f.Create();
     auto tracks=f.player.GetTracks();size_t index=tracks[0].path==valid?0:1;
     RODAK_CHECK(f.player.PlayTrack(index));
     Await([&]{return f.audio.GetState().status==AudioPlaybackStatus::kCompleted;});
-    f.player.Stop();RODAK_CHECK_FALSE(f.player.Refresh());
+    f.Refresh();
+    RODAK_CHECK_EQ(f.Icon(f.app.stop_button_), ICON_STOP);
+    f.Click(f.app.stop_button_);RODAK_CHECK_FALSE(f.player.Refresh());
     f.player.TogglePlaybackMode();RODAK_CHECK_FALSE(f.player.Refresh());
     RODAK_CHECK_EQ(f.audio.GetState().file_path,valid);std::filesystem::remove(valid);
 }
@@ -304,7 +347,8 @@ RODAK_TEST("folder read failure can recover through the retry button") {
     f.Retry();
     RODAK_CHECK_EQ(f.player.GetState().library_status, MusicLibraryStatus::kReady);
     RODAK_CHECK_EQ(f.player.GetTracks().front().title, "recovered");
-    RODAK_CHECK_EQ(lv_obj_get_child_count(f.app.track_list_), 1U);
+    f.OpenSongs();
+    RODAK_CHECK(lv_obj_get_child_count(f.app.track_list_) <= 8U);
 }
 
 RODAK_TEST("exclusive focus waits for an earlier resume then prevents a later resume") {
@@ -371,20 +415,190 @@ RODAK_TEST("play during a scan cannot leave a stale busy message after success o
     f.files.Hold();
     f.app.RefreshLibrary();
     Await([&] { return f.files.Entered(); });
-    f.app.PlayNext();
-    RODAK_CHECK(f.Status().find("Scanning") != std::string::npos);
+    f.Click(f.app.next_button_);
+    RODAK_CHECK(f.Shows("正在读取歌曲"));
     f.files.Release();
     Await([&] { return f.player.GetState().library_status == MusicLibraryStatus::kReady; });
     f.Refresh();
-    RODAK_CHECK_EQ(f.Status(), "Ready");
+    RODAK_CHECK_EQ(f.Status(), "请选择歌曲|");
     f.files.Hold();
     f.files.Fail("/");
     f.app.RefreshLibrary();
     Await([&] { return f.files.Entered(); });
-    f.app.PlayNext();
+    f.Click(f.app.next_button_);
     f.files.Release();
     Await([&] { return f.player.GetState().library_status == MusicLibraryStatus::kReadError; });
     f.Refresh();
-    RODAK_CHECK(f.Status().find("Cannot read music folders") != std::string::npos);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.track_title_label_)), "No track");
+    RODAK_CHECK_EQ(f.Title(), "无法读取歌曲目录");
+}
+
+RODAK_TEST("the last track remains selectable with a fixed number of rows") {
+    Fixture f;
+    std::vector<std::string> paths;
+    for (int i = 1000; i < 1250; ++i) paths.push_back("/song" + std::to_string(i) + ".wav");
+    f.files.Tracks(paths);
+    f.Create();
+    f.OpenSongs();
+    RODAK_CHECK_EQ(f.Icon(f.app.refresh_library_button_), ICON_REFRESH);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.songs_title_)), "歌曲 · 250");
+    lv_obj_update_layout(f.app.track_list_);
+    const auto slots = lv_obj_get_child_count(f.app.track_list_);
+    RODAK_CHECK(slots <= 8U);
+    lv_obj_scroll_to_y(f.app.track_list_, 250 * 40, LV_ANIM_OFF);
+    lv_obj_update_layout(f.app.track_list_);
+    RODAK_CHECK_EQ(lv_obj_get_child_count(f.app.track_list_), slots);
+    const auto last = std::find_if(f.app.song_rows_.begin(), f.app.song_rows_.end(),
+        [](const auto& row) { return row.index == 249 && row.revision != 0; });
+    RODAK_CHECK(last != f.app.song_rows_.end());
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(last->title)), "song1249");
+    lv_area_t list_area{}, last_area{};
+    lv_obj_get_coords(f.app.track_list_, &list_area);
+    lv_obj_get_coords(last->button, &last_area);
+    RODAK_CHECK(last_area.y1 >= list_area.y1 && last_area.y2 <= list_area.y2);
+    lv_test_mouse_click_at(last_area.x1 + 150, last_area.y1 + 20);
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kPlayer);
+    RODAK_CHECK_EQ(f.audio.GetState().file_path, paths.back());
+}
+
+RODAK_TEST("revision change invalidates an existing press even after the row is rebound") {
+    Fixture f;
+    f.files.Tracks({"/old.wav"});
+    f.Create();
+    f.OpenSongs();
+    auto* row = f.app.song_rows_[0].button;
+    lv_obj_send_event(row, LV_EVENT_PRESSED, nullptr);
+    RODAK_CHECK(f.app.song_rows_[0].pressed);
+    f.files.Tracks({"/new.wav"});
+    RODAK_CHECK(f.player.ScanLibrary());
+    f.Refresh();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.song_rows_[0].title)), "new");
+    f.Click(row);
+    RODAK_CHECK(f.audio.GetState().file_path.empty());
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kSongs);
+}
+
+RODAK_TEST("player loading and playing show wake pause while paused only shows playback pause") {
+    std::atomic<bool> loading{false}, allow_open{false};
+    Fixture f;
+    // 256 writes at 10 ms each keep the track playing for ~2.5 s, well past the checks below.
+    const auto path = Wav("rodakos-music-status.wav", 1024 * 1024, 1024 * 1024);
+    // The hook runs on the playback task outside every audio mutex, so blocking it here cannot
+    // deadlock Refresh(). Blocking a codec write would: it holds the output-service mutex that
+    // GetState() takes to read the volume.
+    f.audio.SetBeforeOutputOpen([&] {
+        loading = true;
+        while (!allow_open) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    struct ReleaseGate {
+        std::atomic<bool>& open;
+        ~ReleaseGate() { open = true; }
+    } release{allow_open};
+    f.files.Tracks({path});
+    f.Create();
+    RODAK_CHECK_EQ(f.Icon(f.app.back_button_), ICON_ARROW_LEFT);
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_PLAY_FILLED);
+    RODAK_CHECK(lv_obj_has_flag(f.app.wake_hint_, LV_OBJ_FLAG_HIDDEN));
+    // Each codec write holds the output mutex briefly; a bounded delay slows playback without
+    // blocking GetState() indefinitely.
+    fake_codec::write_hook = [] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); };
+    f.Click(f.app.play_button_);
+    Await([&] { return loading.load(); });
+    f.Refresh();
+    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.wake_hint_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_PAUSE_FILLED);
+    allow_open = true;
+    Await([&] { return f.audio.GetState().status == AudioPlaybackStatus::kPlaying; });
+    f.Refresh();
+    RODAK_CHECK_FALSE(lv_obj_has_flag(f.app.wake_hint_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK(f.audio.GetState().duration_ms >= 32000);
+    Screenshot("music-playing.ppm");
+    // The player's monitor briefly holds its operation lock, and a tap that lands then reports
+    // busy without toggling. Retrying only after a busy result cannot double-toggle.
+    for (int i = 0; i < 50; ++i) {
+        f.Click(f.app.play_button_);
+        f.Refresh();
+        if (f.Detail() != "播放器忙 · 请重试") break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    RODAK_CHECK_EQ(f.audio.GetState().status, AudioPlaybackStatus::kPaused);
+    RODAK_CHECK(lv_obj_has_flag(f.app.wake_hint_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(f.Icon(f.app.play_button_), ICON_PLAY_FILLED);
+
+    f.OpenSongs();
+    RODAK_CHECK(f.app.song_rows_[0].current);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.song_rows_[0].lead)), ICON_PLAY);
+    Screenshot("music-songs.ppm");
+    f.Click(f.HeaderButton(0));
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kPlayer);
+    RODAK_CHECK(f.app.tracks_.empty());
+    RODAK_CHECK_EQ(f.audio.GetState().file_path, path);
+    RODAK_CHECK_EQ(f.audio.GetState().status, AudioPlaybackStatus::kPaused);
+    f.player.Stop();
+    Await([&] { return f.audio.GetState().status != AudioPlaybackStatus::kPaused; });
+    std::filesystem::remove(path);
+}
+
+RODAK_TEST("playback retry matches the failed path after the library changes") {
+    Fixture f;
+    const auto path = Wav("rodakos-music-retry.wav", 64, 64);
+    std::filesystem::remove(path);
+    f.files.Tracks({path});
+    f.Create();
+    RODAK_CHECK(f.player.PlayTrack(0));
+    Await([&] { return f.audio.GetState().status == AudioPlaybackStatus::kError; });
+    // Titles sort before the temp file's "<pid>-rodakos-..." name, so the failed track moves.
+    f.files.Tracks({"/0-added.wav", path});
+    RODAK_CHECK(f.player.ScanLibrary());
+    RODAK_CHECK_EQ(f.player.GetTracks()[1].path, path);
+    RODAK_CHECK_EQ(Wav("rodakos-music-retry.wav", 64, 64), path);
+    f.Refresh();
+    f.Click(f.app.play_button_);
+    Await([&] { return f.audio.GetState().status == AudioPlaybackStatus::kCompleted; });
+    RODAK_CHECK_EQ(f.audio.GetState().file_path, path);
+
+    std::filesystem::remove(path);
+    RODAK_CHECK(f.player.PlayTrack(1));
+    Await([&] { return f.audio.GetState().status == AudioPlaybackStatus::kError; });
+    f.files.Tracks({"/replacement.wav"});
+    RODAK_CHECK(f.player.ScanLibrary());
+    f.Refresh();
+    f.Click(f.app.play_button_);
+    RODAK_CHECK_EQ(f.audio.GetState().file_path, path);
+    RODAK_CHECK_EQ(f.Detail(), "曲库已更新 · 请重新选歌");
+}
+
+RODAK_TEST("system back closes the song list and volume sheet before returning home") {
+    Fixture f;
+    // The host font has no CJK glyphs, so an ASCII name exercises the "title-artist" split.
+    f.files.Tracks({"/Stay Here-Lin.wav"});
+    f.Create();
+    lv_obj_update_layout(f.app.root_);
+    RODAK_CHECK_EQ(f.Title(), "请选择歌曲");
+    RODAK_CHECK_EQ(lv_obj_get_width(f.app.play_button_), 52);
+    RODAK_CHECK(lv_obj_get_height(f.app.previous_button_) >= 44);
+    RODAK_CHECK(lv_obj_get_height(f.app.stop_button_) >= 36);
+    const auto screen_children = lv_obj_get_child_count(lv_screen_active());
+    f.OpenSongs();
+    lv_obj_update_layout(f.app.root_);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.song_rows_[0].title)), "Stay Here");
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app.song_rows_[0].artist)), "Lin");
+    RODAK_CHECK_EQ(lv_obj_get_child_count(lv_screen_active()), screen_children);
+    RODAK_CHECK(f.app.OnBackRequested());
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kPlayer);
+    f.OpenVolume();
+    RODAK_CHECK(f.app.volume_scrim_ != nullptr);
+    lv_obj_update_layout(f.app.root_);
+    lv_area_t slider{};
+    lv_obj_get_coords(f.app.volume_slider_, &slider);
+    const lv_point_t touch{slider.x1 + 5, slider.y1 - 15};
+    RODAK_CHECK(lv_obj_hit_test(f.app.volume_slider_, &touch));
+    Screenshot("music-volume.ppm");
+    RODAK_CHECK_EQ(lv_obj_get_child_count(lv_screen_active()), screen_children);
+    RODAK_CHECK(f.app.OnBackRequested());
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kPlayer);
+    RODAK_CHECK(f.app.volume_scrim_ == nullptr);
+    RODAK_CHECK_FALSE(f.app.OnBackRequested());
+    f.OpenVolume();
+    lv_test_mouse_click_at(160, 60); lv_test_wait(5);
+    RODAK_CHECK_EQ(f.app.page_, MusicApp::Page::kPlayer);
 }

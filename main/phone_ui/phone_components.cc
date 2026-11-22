@@ -41,6 +41,7 @@ lv_obj_t* RodakosCreateHeaderIconButton(lv_obj_t* parent, const char* icon) {
     auto* button = lv_btn_create(parent);
     lv_obj_remove_style_all(button);
     lv_obj_set_size(button, 40, 26);
+    lv_obj_set_ext_click_area(button, 7);
     lv_obj_set_style_radius(button, 6, 0);
     lv_obj_set_style_bg_color(button, rodakos_theme_bg_tertiary(), 0);
     lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
@@ -56,12 +57,8 @@ lv_obj_t* RodakosCreateHeaderIconButton(lv_obj_t* parent, const char* icon) {
     return button;
 }
 
-lv_obj_t* CreateAppHeader(lv_obj_t* parent,
-                          const char* title,
-                          lv_event_cb_t back_cb,
-                          lv_event_cb_t home_cb,
-                          void* user_data,
-                          lv_obj_t** title_label) {
+namespace {
+lv_obj_t* CreateHeaderBar(lv_obj_t* parent) {
     auto* header = lv_obj_create(parent);
     lv_obj_remove_style_all(header);
     lv_obj_set_size(header, LV_PCT(100), kRodakosAppHeaderHeight);
@@ -70,6 +67,28 @@ lv_obj_t* CreateAppHeader(lv_obj_t* parent,
     lv_obj_set_style_pad_hor(header, kRodakosAppHeaderPadding, 0);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    return header;
+}
+}  // namespace
+
+lv_obj_t* CreateAppHeader(lv_obj_t* parent,
+                          const char* title,
+                          lv_event_cb_t back_cb,
+                          lv_event_cb_t home_cb,
+                          void* user_data,
+                          lv_obj_t** title_label) {
+    return CreateAppHeader(parent, title, back_cb, home_cb, user_data, title_label, ICON_HOME);
+}
+
+lv_obj_t* CreateAppHeader(lv_obj_t* parent,
+                          const char* title,
+                          lv_event_cb_t back_cb,
+                          lv_event_cb_t action_cb,
+                          void* user_data,
+                          lv_obj_t** title_label,
+                          const char* action_icon,
+                          lv_obj_t** action_button) {
+    auto* header = CreateHeaderBar(parent);
 
     auto* back_btn = RodakosCreateHeaderIconButton(header, ICON_ARROW_LEFT);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
@@ -83,10 +102,16 @@ lv_obj_t* CreateAppHeader(lv_obj_t* parent,
     lv_obj_set_style_text_font(label, &phone_font_18, 0);
     lv_obj_center(label);
 
-    auto* home_btn = RodakosCreateHeaderIconButton(header, ICON_HOME);
-    lv_obj_align(home_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    if (home_cb != nullptr) {
-        lv_obj_add_event_cb(home_btn, home_cb, LV_EVENT_CLICKED, user_data);
+    lv_obj_t* action = nullptr;
+    if (action_icon != nullptr) {
+        action = RodakosCreateHeaderIconButton(header, action_icon);
+        lv_obj_align(action, LV_ALIGN_RIGHT_MID, 0, 0);
+        if (action_cb != nullptr) {
+            lv_obj_add_event_cb(action, action_cb, LV_EVENT_CLICKED, user_data);
+        }
+    }
+    if (action_button != nullptr) {
+        *action_button = action;
     }
 
     if (title_label != nullptr) {
@@ -120,4 +145,17 @@ lv_obj_t* PhoneCreateTextButton(PhoneUi& ui, lv_obj_t* parent, const char* text,
     lv_obj_set_style_text_color(label, theme.accent_text, 0);
     lv_obj_center(label);
     return button;
+}
+
+PhoneStatusBlock CreatePhoneStatusBlock(PhoneUi& ui, lv_obj_t* parent, const char* text,
+                                       const char* action_text, lv_coord_t action_width) {
+    auto* label = PhoneCreateLabel(ui, parent, text, true);
+    lv_obj_set_style_text_font(label, &phone_font_14, 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(label);
+    auto* button = action_text != nullptr
+                       ? PhoneCreateTextButton(ui, parent, action_text, action_width, 40)
+                       : nullptr;
+    if (button != nullptr) lv_obj_center(button);
+    return {label, button};
 }

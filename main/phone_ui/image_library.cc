@@ -158,8 +158,14 @@ bool ParseImageSize(const uint8_t* data, size_t size, int* width, int* height) {
            ParseBmpSize(data, size, width, height);
 }
 
+struct ImageCandidate {
+    std::string path;
+    std::string folded_name;
+    uint64_t modified_time;
+};
+
 bool ScanDirectory(FileService* fs, const std::string& dir, int depth, int max_depth,
-                   ImageLibrary::ImageScanResult& result) {
+                   ImageLibrary::ImageScanResult& result, std::vector<ImageCandidate>& images) {
     if (depth > max_depth) return true;
     std::vector<FileEntry> entries;
     errno = 0;
@@ -172,11 +178,11 @@ bool ScanDirectory(FileService* fs, const std::string& dir, int depth, int max_d
         return false;
     }
 
-    for (const auto& entry : entries) {
+    for (auto& entry : entries) {
         if (entry.is_directory) {
-            if (!ScanDirectory(fs, entry.path, depth + 1, max_depth, result)) return false;
+            if (!ScanDirectory(fs, entry.path, depth + 1, max_depth, result, images)) return false;
         } else if (ImageLibrary::IsSupportedImage(entry.name)) {
-            result.paths.push_back(entry.path);
+            images.push_back({std::move(entry.path), ToLower(entry.name), entry.modified_time});
         }
     }
     return true;
@@ -387,11 +393,26 @@ private:
         return {ImageLoadStatus::kInsufficientMemory, {}};
     }
 }
-void SortPaths(ImageScanResult& result) {
-    std::sort(result.paths.begin(), result.paths.end(), [](const auto& left, const auto& right) {
-        return ToLower(left) < ToLower(right);
+void SortPaths(std::vector<ImageCandidate>& images, ImageScanResult& result) {
+    // A path can be listed twice with different timestamps if the file changes during scanning.
+    std::sort(images.begin(), images.end(), [](const auto& left, const auto& right) {
+        if (left.path != right.path) return left.path < right.path;
+        return left.modified_time > right.modified_time;
     });
-    result.paths.erase(std::unique(result.paths.begin(), result.paths.end()), result.paths.end());
+    images.erase(std::unique(images.begin(), images.end(), [](const auto& left, const auto& right) {
+        return left.path == right.path;
+    }), images.end());
+    std::sort(images.begin(), images.end(), [](const auto& left, const auto& right) {
+        if (left.modified_time != right.modified_time) return left.modified_time > right.modified_time;
+        if (left.folded_name != right.folded_name) return left.folded_name > right.folded_name;
+        return left.path < right.path;
+    });
+    result.paths.reserve(images.size());
+    result.modified_times.reserve(images.size());
+    for (auto& image : images) {
+        result.paths.push_back(std::move(image.path));
+        result.modified_times.push_back(image.modified_time);
+    }
 }
 }  // namespace
 
@@ -482,8 +503,8 @@ ImageScanResult ScanImagesWithFileServiceDetailed(FileService* fs, const std::st
     if (!fs->IsMounted()) return {ImageScanStatus::kStorageUnavailable, {}, directory};
     if (max_depth < 0) return {ImageScanStatus::kReadFailed, {}, directory};
     ImageScanResult result;
-    if (!ScanDirectory(fs, directory, 0, max_depth, result)) result.paths.clear();
-    else SortPaths(result);
+    std::vector<ImageCandidate> images;
+    if (ScanDirectory(fs, directory, 0, max_depth, result, images)) SortPaths(images, result);
     return result;
 }
 ImageScanResult ScanPhotoLibrary(FileService* fs) {
@@ -500,15 +521,14 @@ ImageScanResult ScanPhotoLibrary(FileService* fs) {
                                     : ImageScanStatus::kReadFailed, {}, "/"};
     }
     ImageScanResult result;
+    std::vector<ImageCandidate> images;
     for (const auto& entry : entries) {
         const auto name = ToLower(entry.name);
         if (!entry.is_directory || (name != "photos" && name != "dcim")) continue;
-        auto album = ScanImagesWithFileServiceDetailed(fs, entry.path, 3);
-        if (album.status != ImageScanStatus::kReady) return album;
-        result.paths.insert(result.paths.end(), album.paths.begin(), album.paths.end());
+        if (!ScanDirectory(fs, entry.path, 0, 3, result, images)) return result;
     }
-    if (result.paths.empty()) return ScanImagesWithFileServiceDetailed(fs, "/", 2);
-    SortPaths(result);
+    if (images.empty()) return ScanImagesWithFileServiceDetailed(fs, "/", 2);
+    SortPaths(images, result);
     return result;
 }
 std::vector<std::string> ScanImagesWithFileService(FileService* fs, const std::string& directory, int max_depth) {

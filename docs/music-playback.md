@@ -17,10 +17,37 @@ FileService publishes directory entries only after `opendir`, `readdir`, all met
 subdirectory scan and removes its old playable list; it cannot silently offer a partial library
 as a successful refresh.
 
-The Songs page offers **Refresh / Retry**. Its monitor worker performs storage reads outside
-the LVGL callback. The UI reads status snapshots and rebuilds the list when the library revision
-changes. A song selection carries that revision so an old row cannot select a different song
-after a rescan. Worker-creation failure remains a visible, retryable error.
+## Music app UI
+
+The player follows the approved 320x240 design. A 96 px media-colored cover sits beside the song
+name and, below it, the artist; both come from a 「歌名-歌手」 file name, and a name without a dash
+is shown as the song only. Under the names three chips set the playback mode (shuffle and
+repeat-one turn the accent color, repeat-one adds a small 「1」), open the volume sheet and show the
+current volume, and Stop. A read-only progress bar shows elapsed and total time. The transport
+row is previous, a solid circular play key, and next. While a track loads or plays, a crossed
+microphone in the header shows that wake listening is paused; it disappears on pause.
+
+`AudioPlaybackState` reports `position_ms` and `duration_ms`. WAV time is exact. MP3 length comes
+from the Xing/Info frame count in the first frame when present, otherwise from the first frame's
+bitrate, so variable-bitrate files without that tag show an estimate.
+
+Errors appear in the error color on the artist line and turn the play key into a retry icon.
+Playback retry resolves the failed track by path and checks the library revision before playing
+it. A request rejected while a track still plays or is paused only shows the message; the play
+key keeps its pause/play meaning so the next tap cannot restart the song. An empty library, a
+missing card and a read failure use the same layout with a grey cover, and the play key rescans.
+
+The Songs page title shows the track count. Rows show the number, song and artist; the current
+track uses the accent color and a play icon in place of its number. Seven row slots are rebound
+while scrolling, so the object count does not grow with the library. It takes a track snapshot
+on open and when the library revision changes, and releases it on close. A rebind or revision
+change cancels a held selection. Refresh is disabled while the monitor worker scans outside LVGL.
+Library failures show the reason and 「重试」, including when the worker cannot start.
+
+The volume control is a bottom sheet over the dimmed player, created when opened and deleted when
+closed. It confirms changes through the shared service and restores its last confirmed value if a
+write fails. Tapping outside the sheet, header back or system back closes it without changing
+playback.
 
 ## Playback and errors
 

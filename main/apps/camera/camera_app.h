@@ -45,7 +45,13 @@ private:
     bool CaptureInFlight() const;
     void OnCaptureComplete(bool ok, const std::string& saved_path,
                            const std::string& error, uint64_t generation);
-    void UpdateStatus(const char* text, bool error = false);
+    // Shows a short message in a pill at the bottom-left of the viewfinder. hide_after_ms 0 keeps it.
+    void UpdateStatus(const char* text, bool error = false, uint32_t hide_after_ms = 0);
+    void HideStatus();
+    void ShowPreviewNotice(const char* title, const char* detail, bool retry);
+    void HidePreviewNotice();
+    void SetControlsEnabled(bool enabled);
+    void RetryPreview();
     void RequestAudioResources();
     void ReleaseAudioResources();
     void NavigateBack();
@@ -65,6 +71,13 @@ private:
     lv_obj_t* placeholder_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* capture_button_ = nullptr;
+    lv_obj_t* rail_ = nullptr;
+    lv_obj_t* notice_ = nullptr;
+    lv_obj_t* notice_title_ = nullptr;
+    lv_obj_t* notice_detail_ = nullptr;
+    lv_obj_t* retry_button_ = nullptr;
+    uint32_t status_shown_at_ = 0;
+    uint32_t status_hide_after_ms_ = 0;
     lv_timer_t* preview_start_timer_ = nullptr;
     lv_timer_t* preview_timer_ = nullptr;
     lv_timer_t* capture_result_timer_ = nullptr;

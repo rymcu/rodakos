@@ -6,7 +6,8 @@
     {"name": "rodakos_icons_20_4", "size": 20, "bpp": 4, "icons": "all"},
     {"name": "rodakos_icons_30_4", "size": 30, "bpp": 4,
      "icons": ["SETTINGS", "INFO", "MUSIC", "CAMERA", "MICROPHONE", "CALENDAR", "COMPASS",
-               "ASSISTANT", "LIGHT", "CLOCK", "IMAGE", "POWER", "FOLDER", "STORAGE", "PALETTE"]}
+               "ASSISTANT", "LIGHT", "CLOCK", "IMAGE", "POWER", "FOLDER", "STORAGE", "PALETTE",
+               "PLAY_FILLED", "PAUSE_FILLED", "REFRESH"]}
   ],
   "icons": {
     "ARROW_DOWN": "arrow-down-outline",
@@ -45,7 +46,9 @@
     "MUSIC": "musical-notes-outline",
     "PALETTE": "color-palette-outline",
     "PAUSE": "pause-outline",
+    "PAUSE_FILLED": "pause",
     "PLAY": "play-outline",
+    "PLAY_FILLED": "play",
     "POWER": "power-outline",
     "REFRESH": "refresh-outline",
     "REPEAT": "repeat-outline",

@@ -21,6 +21,7 @@ add_executable(photos_ui_tests
     "${RODAKOS_ROOT}/main/phone_ui/phone_ui.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_components.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_theme.cc"
+    "${RODAKOS_ROOT}/main/phone_ui/rodakos_layout.cc"
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc")
 target_include_directories(photos_ui_tests BEFORE PRIVATE
     fakes "${RODAKOS_ROOT}/tests/home_ui/fakes" "${RODAKOS_ROOT}/tests/home_ui"
