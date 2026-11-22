@@ -25,20 +25,11 @@ constexpr lv_coord_t kServerRowHeight = 32;
 
 lv_obj_t* CreateActionButton(lv_obj_t* parent, const char* text, bool primary, lv_align_t align,
                              lv_coord_t width = kHalfButton, lv_coord_t y = 0) {
-    auto* button = lv_btn_create(parent);
-    lv_obj_set_size(button, width, kButtonHeight);
+    auto* button = rodakos_settings::CreateSettingButton(
+        parent, text,
+        primary ? rodakos_settings::SettingButtonStyle::kPrimary : rodakos_settings::SettingButtonStyle::kSecondary,
+        width, kButtonHeight);
     lv_obj_align(button, align, 0, y);
-    lv_obj_set_style_bg_color(button, primary ? rodakos_theme_primary() : rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(button, 7, 0);
-    lv_obj_set_style_shadow_width(button, 0, 0);
-    auto* label = lv_label_create(button);
-    lv_label_set_text(label, text);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(label, width - 16);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(label, primary ? lv_color_white() : rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(label, &phone_font_14, 0);
-    lv_obj_center(label);
     return button;
 }
 

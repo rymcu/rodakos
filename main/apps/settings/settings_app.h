@@ -107,6 +107,7 @@ private:
     void ShowCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialog();
     void CloseCloudProvisioningUrlDialogAsync();
+    void SubmitCloudProvisioningUrlDialog();
     bool SaveCloudProvisioningUrl(const std::string& url);
     void ShowCloudUrlChangeConfirm(const std::string& url);
     void ShowLanOnboarding();

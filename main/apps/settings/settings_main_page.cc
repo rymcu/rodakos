@@ -29,29 +29,11 @@ namespace {
 
 using namespace rodakos_settings;
 
-constexpr lv_coord_t kGridX = 10;
-constexpr lv_coord_t kGridWidth = 300;
-constexpr lv_coord_t kRowHeight = 38;
-constexpr lv_coord_t kGroupLabelHeight = 20;
-constexpr lv_coord_t kGroupGap = 4;
 constexpr lv_coord_t kValueWidth = 128;
 
 lv_obj_t* CreateGroup(lv_obj_t* parent, const char* label, lv_coord_t& y, int rows) {
-    if (label != nullptr) {
-        auto* title = CreateSettingLabel(parent, label, true);
-        lv_obj_set_style_text_font(title, &phone_font_12, 0);
-        lv_obj_set_pos(title, kGridX + 4, y + 3);
-        y += kGroupLabelHeight;
-    }
-    auto* list = lv_obj_create(parent);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, kGridWidth, kRowHeight * rows);
-    lv_obj_set_pos(list, kGridX, y);
-    lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(list, 8, 0);
-    lv_obj_set_style_clip_corner(list, true, 0);
-    lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    if (label != nullptr) CreateGroupCaption(parent, label, y);
+    auto* list = CreateGroupList(parent, kGridX, y, kGridWidth, kRowHeight * rows);
     y += kRowHeight * rows + kGroupGap;
     return list;
 }
@@ -59,50 +41,14 @@ lv_obj_t* CreateGroup(lv_obj_t* parent, const char* label, lv_coord_t& y, int ro
 // One 38 px row. Returns the row; `value_out` receives the right-aligned status label.
 lv_obj_t* CreateRow(lv_obj_t* list, int index, const char* icon, const char* title,
                     bool chevron, lv_obj_t** value_out) {
-    auto* row = lv_obj_create(list);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, kGridWidth, kRowHeight);
-    lv_obj_set_pos(row, 0, kRowHeight * index);
-    lv_obj_set_style_pad_hor(row, 12, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(row, rodakos_theme_bg_tertiary(), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-    if (index > 0) {
-        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_TOP, 0);
-        lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, rodakos_theme_bg_tertiary(), 0);
-    }
-
-    auto* icon_label = lv_label_create(row);
-    lv_label_set_text(icon_label, icon);
-    lv_obj_set_style_text_color(icon_label, rodakos_theme_primary(), 0);
-    lv_obj_set_style_text_font(icon_label, PhoneIconFont(), 0);
-    lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, 0, 0);
-
+    auto* row = CreateListRow(list, index, kGridWidth, kRowHeight, chevron);
+    CreateSettingIcon(row, icon);
     if (title != nullptr) {
         auto* title_label = CreateSettingLabel(row, title, false);
         lv_obj_align(title_label, LV_ALIGN_LEFT_MID, 28, 0);
     }
-
-    lv_coord_t right = 0;
-    if (chevron) {
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        auto* arrow = lv_label_create(row);
-        lv_label_set_text(arrow, ">");
-        lv_obj_set_style_text_color(arrow, rodakos_theme_text_tertiary(), 0);
-        lv_obj_set_style_text_font(arrow, &phone_font_14, 0);
-        lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
-        right = -16;
-    }
-    if (value_out != nullptr) {
-        auto* value = CreateSettingLabel(row, "", true);
-        lv_obj_set_width(value, kValueWidth);
-        lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_style_text_font(value, &phone_font_12, 0);
-        lv_obj_align(value, LV_ALIGN_RIGHT_MID, right, 0);
-        *value_out = value;
-    }
+    if (chevron) CreateRowChevron(row);
+    if (value_out != nullptr) *value_out = CreateRowValue(row, kValueWidth, chevron);
     return row;
 }
 
@@ -289,8 +235,8 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* usb_value = nullptr;
     auto* usb_row = CreateRow(files, 1, ICON_STORAGE, "USB 磁盘模式", true, &usb_value);
+    // A note about what entering does, not a fault: keep it in the normal value colour.
     lv_label_set_text(usb_value, "需重启");
-    lv_obj_set_style_text_color(usb_value, rodakos_theme_warning(), 0);
     lv_obj_add_event_cb(usb_row, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowUsbDiskDialog();
     }, LV_EVENT_CLICKED, this);

@@ -78,88 +78,35 @@ void SettingsApp::ShowUsbDiskDialog() {
         return;
     }
 
-    usb_disk_dialog_ = lv_obj_create(lv_scr_act());
-    lv_obj_remove_style_all(usb_disk_dialog_);
-    lv_obj_set_size(usb_disk_dialog_, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(usb_disk_dialog_, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(usb_disk_dialog_, LV_OPA_70, 0);
-    lv_obj_clear_flag(usb_disk_dialog_, LV_OBJ_FLAG_SCROLLABLE);
-
-    auto* dialog_box = lv_obj_create(usb_disk_dialog_);
-    lv_obj_remove_style_all(dialog_box);
-    lv_obj_set_size(dialog_box, 296, 212);
-    lv_obj_center(dialog_box);
-    lv_obj_set_style_bg_color(dialog_box, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_bg_opa(dialog_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog_box, 10, 0);
-    lv_obj_set_style_pad_all(dialog_box, 14, 0);
-    lv_obj_clear_flag(dialog_box, LV_OBJ_FLAG_SCROLLABLE);
+    const SettingDialog dialog = CreateSettingDialog(212);
+    usb_disk_dialog_ = dialog.layer;
+    auto* dialog_box = dialog.box;
 
     auto* files = context_ != nullptr ? context_->services().file_service() : nullptr;
     auto* web_files = context_ != nullptr ? context_->services().web_files() : nullptr;
     const bool web_running = web_files != nullptr && web_files->IsRunning();
     usb_disk_sd_ready_ = false;
 
-    auto* title = CreateSettingLabel(dialog_box, "进入 USB 磁盘模式？");
-    lv_obj_set_style_text_font(title, &phone_font_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    auto* message = CreateSettingLabel(
-        dialog_box, "设备会重启，把 SD 卡作为 U 盘给电脑使用。", true);
-    lv_obj_set_width(message, 268);
-    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(message, &phone_font_12, 0);
-    lv_obj_align(message, LV_ALIGN_TOP_LEFT, 0, 28);
-
-    usb_disk_sd_label_ = CreateSettingLabel(dialog_box, "正在检查 SD 卡…", true);
-    lv_obj_set_style_text_font(usb_disk_sd_label_, &phone_font_12, 0);
-    lv_obj_align(usb_disk_sd_label_, LV_ALIGN_TOP_LEFT, 0, 50);
+    CreateDialogTitle(dialog_box, "进入 USB 磁盘模式？");
+    CreateDialogMessage(dialog_box, "设备会重启，把 SD 卡作为 U 盘给电脑使用。", 28);
+    usb_disk_sd_label_ = CreateDialogMessage(dialog_box, "正在检查 SD 卡…", 50);
 
     lv_coord_t hint_y = 68;
     if (web_running) {
-        auto* web_line = CreateSettingLabel(dialog_box, "网页传文件运行中，会等当前文件写完后关闭", false);
-        lv_obj_set_width(web_line, 268);
-        lv_label_set_long_mode(web_line, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_font(web_line, &phone_font_12, 0);
+        auto* web_line = CreateDialogMessage(dialog_box, "网页传文件运行中，会等当前文件写完后关闭", hint_y);
         lv_obj_set_style_text_color(web_line, rodakos_theme_warning(), 0);
-        lv_obj_align(web_line, LV_ALIGN_TOP_LEFT, 0, hint_y);
         hint_y += 18;
     }
-    auto* exit_hint = CreateSettingLabel(dialog_box, "用完在电脑上安全弹出，再长按 IO10 键回到正常模式。", true);
-    lv_obj_set_width(exit_hint, 268);
-    lv_label_set_long_mode(exit_hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(exit_hint, &phone_font_12, 0);
-    lv_obj_align(exit_hint, LV_ALIGN_TOP_LEFT, 0, hint_y);
+    CreateDialogMessage(dialog_box, "用完在电脑上安全弹出，再长按 IO10 键回到正常模式。", hint_y);
 
-    auto* cancel_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(cancel_btn, 128, 36);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(cancel_btn, rodakos_theme_bg_tertiary(), 0);
-    lv_obj_set_style_radius(cancel_btn, 7, 0);
-    lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
-
-    auto* cancel_label = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_color(cancel_label, rodakos_theme_text_primary(), 0);
-    lv_obj_set_style_text_font(cancel_label, &phone_font_14, 0);
-    lv_obj_center(cancel_label);
-    lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->CloseUsbDiskDialog();
-    }, LV_EVENT_CLICKED, this);
-
-    auto* enter_btn = lv_btn_create(dialog_box);
-    lv_obj_set_size(enter_btn, 128, 36);
-    lv_obj_align(enter_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(enter_btn, rodakos_theme_primary(), 0);
-    lv_obj_set_style_radius(enter_btn, 7, 0);
-    lv_obj_set_style_shadow_width(enter_btn, 0, 0);
-
-    auto* enter_label = lv_label_create(enter_btn);
-    lv_label_set_text(enter_label, "重启进入");
-    lv_obj_set_style_text_color(enter_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(enter_label, &phone_font_14, 0);
-    lv_obj_center(enter_label);
+    auto* enter_btn = CreateDialogButtons(dialog_box, "重启进入", SettingButtonStyle::kPrimary,
+        [](lv_event_t* e) {
+            static_cast<SettingsApp*>(lv_event_get_user_data(e))->CloseUsbDiskDialog();
+        },
+        [](lv_event_t* e) {
+            static_cast<SettingsApp*>(lv_event_get_user_data(e))->EnterUsbDiskMode();
+        },
+        this);
     lv_obj_add_state(enter_btn, LV_STATE_DISABLED);
     usb_disk_enter_button_ = enter_btn;
 
@@ -169,10 +116,6 @@ void SettingsApp::ShowUsbDiskDialog() {
         delete probe;
         OnUsbDiskSdProbed(false);
     }
-    lv_obj_add_event_cb(enter_btn, [](lv_event_t* e) {
-        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
-        self->EnterUsbDiskMode();
-    }, LV_EVENT_CLICKED, this);
 }
 
 void SettingsApp::CloseUsbDiskDialog() {

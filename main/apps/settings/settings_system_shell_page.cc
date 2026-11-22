@@ -14,9 +14,7 @@ namespace {
 
 using namespace rodakos_settings;
 
-constexpr lv_coord_t kGridX = 10;
-constexpr lv_coord_t kGridWidth = 300;
-constexpr lv_coord_t kRowHeight = 52;
+constexpr lv_coord_t kToggleRowMinHeight = 52;
 
 void StyleSwitch(lv_obj_t* sw) {
     const auto checked_indicator = static_cast<lv_style_selector_t>(
@@ -70,7 +68,7 @@ lv_obj_t* CreateToggleRow(lv_obj_t* list, lv_coord_t& y, bool first, const char*
     lv_obj_update_layout(detail_label);
 
     const lv_coord_t height = std::max<lv_coord_t>(
-        kRowHeight, kPadV + title_height + 2 + lv_obj_get_height(detail_label) + kPadV);
+        kToggleRowMinHeight, kPadV + title_height + 2 + lv_obj_get_height(detail_label) + kPadV);
     lv_obj_set_height(row, height);
     y += height;
 
@@ -109,7 +107,7 @@ void SettingsApp::CreateSystemShellPage() {
     lv_obj_set_pos(list, kGridX, 8);
     lv_obj_set_style_bg_color(list, rodakos_theme_bg_secondary(), 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(list, 8, 0);
+    lv_obj_set_style_radius(list, kListRadius, 0);
     lv_obj_set_style_clip_corner(list, true, 0);
     lv_obj_clear_flag(list, LV_OBJ_FLAG_SCROLLABLE);
 
