@@ -525,6 +525,22 @@ bool VoiceAssistantService::IsIdleForAnnounce() {
     return idle;
 }
 
+bool VoiceAssistantService::DeferAnnounceUntilIdle(uint32_t announce_seq) {
+    if (mutex_ == nullptr || announce_seq == 0) {
+        return false;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool accepted = initialized_ && !deinitializing_;
+    if (accepted) {
+        deferred_announce_seq_ = announce_seq;
+    }
+    xSemaphoreGive(mutex_);
+    if (accepted) {
+        ESP_LOGI(TAG, "Announce deferred until interaction ends: seq=%" PRIu32, announce_seq);
+    }
+    return accepted;
+}
+
 bool VoiceAssistantService::StartAnnounce(uint32_t announce_seq) {
     if (mutex_ == nullptr || announce_seq == 0) {
         return false;
@@ -1022,6 +1038,12 @@ void VoiceAssistantService::CompleteInteractionCleanupLocked(uint32_t generation
     cleanup_generation_ = 0;
     cleanup_task_ = nullptr;
     LogVoiceMemorySnapshot("Interaction memory end", generation);
+    // 回调只排队，不在锁内建立会话；服务端登记有 TTL，过期序号由会话握手拒绝。
+    const uint32_t deferred = deferred_announce_seq_;
+    deferred_announce_seq_ = 0;
+    if (deferred != 0 && deferred_announce_callback_ && !deinitializing_) {
+        deferred_announce_callback_(deferred);
+    }
 }
 
 void VoiceAssistantService::CompleteStartAttempt(TaskHandle_t task) {
@@ -1377,6 +1399,7 @@ void VoiceAssistantService::IoTask() {
         bool follow_up_timed_out = false;
         bool speaking_stalled = false;
         bool should_rearm_follow_up = false;
+        bool end_for_announce = false;
         uint32_t completed_turns = 0;
         uint32_t reconnect_interaction_generation = 0;
         int64_t reconnect_now_ms = 0;
@@ -1402,6 +1425,10 @@ void VoiceAssistantService::IoTask() {
             should_rearm_follow_up = !follow_up_timed_out &&
                                      follow_up_rearm_pending_ &&
                                      esp_timer_get_time() >= follow_up_rearm_not_before_us_;
+            // 点歌等待推送：本轮回复说完就收尾，不再等追问，让音乐尽快接上。
+            end_for_announce = deferred_announce_seq_ != 0 && !announce_ &&
+                               (should_rearm_follow_up ||
+                                conversation_policy_.waiting_for_follow_up());
         } else if (running && !transport_active_ && reconnect_pending_) {
             reconnect_interaction_generation = interaction_generation_;
             reconnect_now_ms = esp_timer_get_time() / 1000;
@@ -1446,6 +1473,11 @@ void VoiceAssistantService::IoTask() {
             // 服务器发了 output.start 却不再发音频或 output.stop：不等它，结束会话并恢复唤醒。
             ESP_LOGW(TAG, "Reply stalled: no audio for %lld ms after output.start; ending session",
                      static_cast<long long>(VoiceConversationPolicy::speaking_stall_timeout_ms()));
+            StopInteraction();
+            continue;
+        }
+        if (end_for_announce) {
+            ESP_LOGI(TAG, "Ending interaction for deferred announce");
             StopInteraction();
             continue;
         }
