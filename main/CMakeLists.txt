@@ -111,6 +111,7 @@ set(SOURCES
     "phone_ui/phone_screen.cc"
     "phone_ui/phone_components.cc"
     "phone_ui/rodakos_layout.cc"
+    "phone_ui/rodakos_list.cc"
     "phone_ui/rodakos_theme.cc"
     "phone_ui/theme_presets.cc"
     "phone_ui/soft_keyboard.cc"
