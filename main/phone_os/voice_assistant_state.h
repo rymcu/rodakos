@@ -41,4 +41,21 @@ struct VoiceAssistantState {
     uint32_t diagnostic_revision = 0;
 };
 
+// What the status light needs, without the strings of VoiceAssistantState: it is read about
+// 30 times a second.
+struct VoiceStatusLightSnapshot {
+    VoiceAssistantPhase phase = VoiceAssistantPhase::kIdle;
+    bool reconnecting = false;
+    // Between turn.accepted and output.start (contract section 6.1).
+    bool awaiting_reply = false;
+    bool user_speech = false;
+    // Level of the reply frame that is playing now, 0..255. 0 when nothing plays.
+    uint8_t playback_level = 0;
+    // Time left in the follow-up window; negative when no window runs.
+    int64_t follow_up_remaining_ms = -1;
+    // Counters only increase; the light reacts when one changes.
+    uint32_t interaction_starts = 0;
+    uint32_t barge_ins = 0;
+};
+
 }  // namespace rodakos

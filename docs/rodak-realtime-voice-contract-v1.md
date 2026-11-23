@@ -403,7 +403,7 @@ length is not known, and announcing several results together, come later.
 a 130 s deadline for `output.start`. That is 10 s more than the server's 120 s. `turn.progress` does
 not move the deadline. `output.start` then switches to the 20 s reply-stall rule. The Home screen
 shows the stage or label. The status light shows one "waiting for a reply" state for all stages
-(see [voice assistant: status light](voice-assistant.md#status-light-planned)).
+(see [voice assistant: status light](voice-assistant.md#status-light)).
 
 ### Multi-device wake arbitration (server side)
 

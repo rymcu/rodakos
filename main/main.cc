@@ -37,6 +37,7 @@
 #include "phone_os/voice_assistant_service.h"
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_wake_service.h"
+#include "phone_os/voice_status_light_service.h"
 #ifdef RODAKOS_RELEASE_TESTS
 #include "phone_os/voice_lifecycle_diagnostic.h"
 #endif
@@ -661,6 +662,9 @@ extern "C" void app_main(void) {
         audio_output_service);
     static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
+    static rodakos::VoiceStatusLightService voice_status_light_service(
+        light_service, [] { return voice_assistant_service.GetStatusLightSnapshot(); });
+    voice_status_light_service.Start();
     unified_mqtt_service.SetVoiceWakeService(&voice_wake_service);
     voice_wake_service.SetMediaPlaybackProbe([] {
         const auto status = audio_service.GetState().status;
@@ -933,6 +937,7 @@ extern "C" void app_main(void) {
     services.SetSerialProvisioning(&serial_provisioning_service);
     services.SetVoiceAssistant(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
+    services.SetVoiceStatusLight(&voice_status_light_service);
     services.SetWakeOnLan(&wake_on_lan_service);
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);

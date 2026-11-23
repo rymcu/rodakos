@@ -21,5 +21,5 @@ For a separate ASan/UBSan build, add
 The fake driver can reject an exact pixel write, refresh, discovery clear, or missing handle, and
 block refresh to exercise concurrent operations. A mid-pixel failure intentionally leaves a
 partially changed fake driver buffer. Tests assert unchanged accepted service configuration and
-`unverified` application, not a fictitious hardware rollback. The 13 cases are software evidence;
+`unverified` application, not a fictitious hardware rollback. The 18 cases (including 5 for the voice status overlay) are software evidence;
 they do not test RMT timing, physical RGB output, persistence or board task scheduling.

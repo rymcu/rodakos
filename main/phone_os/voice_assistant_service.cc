@@ -3,6 +3,7 @@
 
 #include "phone_os/audio_output_service.h"
 #include "phone_os/realtime_voice_contract.h"
+#include "phone_os/voice_status_light_model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -99,6 +100,8 @@ constexpr UBaseType_t kPlaybackTaskPriority = 5;
 // 3 s of 60 ms frames: covers the server's prebuffer burst and network jitter without
 // letting a stalled speaker hold a whole reply in PSRAM.
 constexpr size_t kMaxQueuedPlaybackFrames = 50;
+constexpr int64_t kStatusLightPlaybackHoldUs = 200 * 1000;
+constexpr int64_t kStatusLightSpeechHoldUs = 300 * 1000;
 // 100 Hz 下 5 ms 会折算为 0 tick，导致空转并饿死 IDLE1。
 constexpr TickType_t kIoIdleDelay = 1;
 constexpr int64_t kPlaybackDrainMarginUs = 20 * 1000;
@@ -377,6 +380,7 @@ bool VoiceAssistantService::StartInteraction(VoiceAssistantTrigger trigger,
     playback_epoch_policy_.Reset();
     interaction_generation = NextRealtimeVoiceGeneration(interaction_generation_);
     interaction_generation_ = interaction_generation;
+    ++status_light_starts_;
     SetPhaseLocked(VoiceAssistantPhase::kConnecting, "Connecting");
     diagnostic_ = CloudDiagnosticCode::kRefreshing;
     xSemaphoreGive(mutex_);
@@ -770,6 +774,7 @@ void VoiceAssistantService::ProcessInterrupt() {
         follow_up_rearm_pending_ = !device_vad;
         follow_up_rearm_not_before_us_ = 0;
         speaking_interrupted_ = true;
+        ++status_light_barge_ins_;
         conversation_policy_.OnSpeakingStopped(esp_timer_get_time() / 1000);
         conversation_policy_.OnFollowUpStarted(esp_timer_get_time() / 1000);
         SetPhaseLocked(device_vad ? VoiceAssistantPhase::kListening : VoiceAssistantPhase::kSpeaking,
@@ -870,6 +875,32 @@ VoiceAssistantState VoiceAssistantService::GetState() {
     state.recorder_name = recorder_.name();
     xSemaphoreGive(mutex_);
     return state;
+}
+
+VoiceStatusLightSnapshot VoiceAssistantService::GetStatusLightSnapshot() {
+    VoiceStatusLightSnapshot snapshot;
+    if (mutex_ == nullptr) {
+        return snapshot;
+    }
+    const int64_t now_us = esp_timer_get_time();
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    snapshot.phase = phase_;
+    snapshot.reconnecting = reconnect_pending_;
+    snapshot.user_speech = phase_ == VoiceAssistantPhase::kListening &&
+                           status_light_speech_at_us_ != 0 &&
+                           now_us - status_light_speech_at_us_ < kStatusLightSpeechHoldUs;
+    if (phase_ == VoiceAssistantPhase::kSpeaking && status_light_playback_at_us_ != 0 &&
+        now_us - status_light_playback_at_us_ < kStatusLightPlaybackHoldUs) {
+        snapshot.playback_level = status_light_playback_level_;
+    }
+    if (phase_ == VoiceAssistantPhase::kListening && conversation_policy_.waiting_for_follow_up()) {
+        snapshot.follow_up_remaining_ms =
+            std::max<int64_t>(0, conversation_policy_.follow_up_deadline_ms() - now_us / 1000);
+    }
+    snapshot.interaction_starts = status_light_starts_;
+    snapshot.barge_ins = status_light_barge_ins_;
+    xSemaphoreGive(mutex_);
+    return snapshot;
 }
 
 void VoiceAssistantService::SetPhaseLocked(VoiceAssistantPhase phase, const char* message) {
@@ -1346,6 +1377,10 @@ void VoiceAssistantService::PlaybackTask() {
             continue;
         }
 
+        PcmLevelMeter frame_level;
+        frame_level.Add(frame.pcm.data(), frame.pcm.size());
+        const uint8_t light_level = VoiceStatusLightModel::LevelFromRmsDbfs(frame_level.RmsDbfs());
+
         // Open on first use so a reply plays at the rate its decoder produced.
         bool written = false;
         if (audio_output_.IsOpenForOwner(kFocusOwner) ||
@@ -1359,6 +1394,10 @@ void VoiceAssistantService::PlaybackTask() {
         // A frame written after an interrupt cleared the queue is not counted, so the
         // drain deadline and barge-in window only follow audio that is still wanted.
         const bool counted = written && clear_generation == playback_clear_generation_;
+        if (counted) {
+            status_light_playback_level_ = light_level;
+            status_light_playback_at_us_ = esp_timer_get_time();
+        }
         if (!written) {
             ++playback_write_failures_;
             // Cleanup joins this task, so the I/O task ends the interaction instead.
@@ -2090,6 +2129,7 @@ bool VoiceAssistantService::SendNextAudioFrame() {
         fresh_vad && frame.vad_speech) {
         // Follow-up timeout measures inactivity, not time since the last TTS stop.
         conversation_policy_.OnUserSpeech(esp_timer_get_time() / 1000);
+        status_light_speech_at_us_ = esp_timer_get_time();
     }
     const bool send_vad_end = !stopping_ &&
         vad_end_policy_.Observe(frame.timestamp_ms, frame.config.frame_duration_ms,

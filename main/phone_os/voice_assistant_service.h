@@ -75,6 +75,8 @@ public:
     // Observation only; commands still validate their current state under the service lock.
     VoiceAssistantPhase GetPhaseSnapshot();
     VoiceAssistantState GetState();
+    // Read by the status light about 30 times a second; copies no strings.
+    VoiceStatusLightSnapshot GetStatusLightSnapshot();
 
 private:
     void SetPhaseLocked(VoiceAssistantPhase phase, const char* message);
@@ -186,6 +188,13 @@ private:
     uint64_t playback_decoded_pcm_bytes_ = 0;
     uint32_t playback_write_failures_ = 0;
     PcmLevelMeter playback_level_;
+    // Status light inputs. The level and speech marks expire so a stalled reply or capture
+    // does not leave the light bright.
+    uint32_t status_light_starts_ = 0;
+    uint32_t status_light_barge_ins_ = 0;
+    uint8_t status_light_playback_level_ = 0;
+    int64_t status_light_playback_at_us_ = 0;
+    int64_t status_light_speech_at_us_ = 0;
     VoiceAssistantPhase phase_ = VoiceAssistantPhase::kIdle;
     VoiceAssistantTrigger trigger_ = VoiceAssistantTrigger::kManual;
     std::string message_ = "Ready";
