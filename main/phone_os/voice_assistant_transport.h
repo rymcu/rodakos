@@ -35,6 +35,8 @@ enum class VoiceInboundEventType {
     kSessionFinished,
     kMcp,
     kError,
+    // turn.accepted (contract section 6.1): the server will answer the current utterance.
+    kTurnAccepted,
 };
 
 enum class VoiceTransportFailureKind {

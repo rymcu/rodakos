@@ -32,6 +32,9 @@ inline constexpr char kRealtimeVoiceEventOutputStop[] = "output.stop";
 inline constexpr char kRealtimeVoiceEventSessionEnd[] = "session.end";
 inline constexpr char kRealtimeVoiceEventMcp[] = "mcp";
 inline constexpr char kRealtimeVoiceEventError[] = "error";
+// Contract section 6.1. The server sends it only after session.open features.turn_accepted: 1,
+// so it is not a descriptor event.
+inline constexpr char kRealtimeVoiceEventTurnAccepted[] = "turn.accepted";
 inline constexpr char kRealtimeVoiceAudioMagic[] = "RAV1";
 inline constexpr size_t kRealtimeVoiceAudioHeaderBytes = 12;
 inline constexpr char kRealtimeVoiceVadDeviceAuthoritative[] = "device-authoritative";
@@ -92,9 +95,13 @@ public:
     bool AcceptOutputStart(uint32_t generation, uint32_t playback_epoch);
     bool AcceptOutputStop(uint32_t generation, uint32_t playback_epoch);
     bool AcceptAudio(uint32_t generation, uint32_t sequence);
+    // turn.accepted (contract section 6.1): the turnId must be greater than the last one of this
+    // session. The caller drops a rejected event; it is not an error.
+    bool AcceptTurnAccepted(uint32_t generation, uint32_t turn_id);
 
     uint32_t playback_epoch() const { return playback_epoch_; }
     uint32_t audio_sequence() const { return audio_sequence_; }
+    uint32_t accepted_turn_id() const { return accepted_turn_id_; }
     uint32_t generation() const { return generation_; }
     bool output_active() const { return output_active_; }
 
@@ -103,6 +110,7 @@ private:
     std::string session_id_;
     uint32_t playback_epoch_ = 0;
     uint32_t audio_sequence_ = 0;
+    uint32_t accepted_turn_id_ = 0;
     bool output_active_ = false;
 };
 
@@ -113,6 +121,7 @@ bool ParseRealtimeVoiceDescriptor(const cJSON* value,
                                   std::string& error);
 
 // announce_seq 非零时打开服务端发起播报的只放音会话（features.announce + announceSeq）。
+// 普通会话宣告 features.turn_accepted: 1（契约 §6.1）；播报会话没有用户轮次，不宣告。
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation,
@@ -140,6 +149,12 @@ bool ParseRealtimeVoiceServerError(const cJSON* envelope,
 // transport still owns session/generation/epoch state checks.
 bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
                                                std::string& error);
+
+// Decode turn.accepted (contract section 6.1). The envelope may hold only event, sessionId and
+// turnId, and turnId must be an integer in 1..UINT32_MAX. The transport still checks the
+// session and the turnId order.
+bool ParseRealtimeVoiceTurnAccepted(const cJSON* envelope, uint32_t& turn_id,
+                                    std::string& error);
 
 // Validate and decode the 12-byte RAV1 envelope without requiring ESP-IDF.
 // The helper intentionally does not enforce monotonic sequence ordering; that

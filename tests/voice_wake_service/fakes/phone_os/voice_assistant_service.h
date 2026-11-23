@@ -12,6 +12,7 @@ struct VoiceAssistantState {
     bool stopping = false;
     bool focus_active = false;
     bool announce = false;
+    bool awaiting_reply = false;
     std::string message;
 };
 class VoiceAssistantService {

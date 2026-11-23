@@ -69,6 +69,20 @@ RODAK_TEST("Voice contract fixture: server control events pass the firmware vali
     }
 }
 
+RODAK_TEST("Voice contract fixture: turn.accepted decodes and rejects as documented") {
+    RODAK_CHECK(ValidServerControl("valid/turn-accepted.first.json"));
+    RODAK_CHECK(ValidServerControl("valid/control-message.turn-accepted.json"));
+    CJsonPtr root = ParseFixture("valid/turn-accepted.first.json");
+    uint32_t turn_id = 0;
+    std::string error;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceTurnAccepted(root.get(), turn_id, error));
+    RODAK_CHECK_EQ(turn_id, 1u);
+    for (const char* fixture : {"invalid/turn-accepted.no-turn.json", "invalid/turn-accepted.turn-zero.json",
+                                "invalid/turn-accepted.with-text.json"}) {
+        RODAK_CHECK_FALSE(ValidServerControl(fixture));
+    }
+}
+
 RODAK_TEST("Voice contract fixture: server error fields decode") {
     CJsonPtr root = ParseFixture("valid/error.retryable.json");
     rodakos::RealtimeVoiceServerError server_error;
@@ -101,7 +115,8 @@ RODAK_TEST("Voice contract fixture: device-built messages match the fixtures") {
 
     CJsonPtr built(cJSON_Parse(rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7).c_str()),
                    cJSON_Delete);
-    CJsonPtr fixture = ParseFixture("valid/session-open.wake.json");
+    // An ordinary session asks for turn.accepted (contract section 6.1).
+    CJsonPtr fixture = ParseFixture("valid/session-open.turn-accepted.json");
     RODAK_CHECK(built != nullptr && fixture != nullptr);
     RODAK_CHECK(cJSON_Compare(built.get(), fixture.get(), true));
 
