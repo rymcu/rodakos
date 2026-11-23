@@ -93,6 +93,11 @@ strings and must not contain legacy markers. Rodak still lists the `mcp` capabil
 event for compatibility. It sends `mcp` events only when `session.open` has `features.mcp: true`,
 so it sends none to RodakOS.
 
+The draft `turn.accepted` and `turn.progress` events (§6.1) are negotiated in `session.open`, not
+in the descriptor.
+Released firmware rejects a descriptor whose `events` list has an unknown name, so the descriptor
+keeps the twelve names above.
+
 The VAD strategies are:
 
 | Strategy | Meaning |
@@ -152,7 +157,12 @@ compatibility flag only:
 ```
 
 `features` in `session.open` is a flag object whose values are only booleans or numbers. It is
-distinct from the descriptor's string-array `features`. A server-initiated announce session
+distinct from the descriptor's string-array `features`. `features.turn_accepted: 1` asks the
+server for the draft `turn.accepted` event, and `features.turn_progress: 1` asks for the draft
+`turn.progress` event (§6.1). `turn_progress: 1` requires `turn_accepted: 1`. A device without a
+screen can ask for `turn_accepted` alone. An absent flag or `0` means the server MUST NOT send that
+event.
+A server-initiated announce session
 also carries `"announce": true` and `"announceSeq": <N>` (see §8). Ordinary wake sessions omit
 both keys.
 
@@ -176,6 +186,8 @@ a schema in [`contracts/rodak-realtime-voice/v1/schemas/`](../contracts/rodak-re
 | device → server | `input.stop` | `sessionId` |
 | device → server | `playback.abort` | `sessionId`, `reason`: `user`, `wake-word`, or `vad_detected`, and an optional `playbackEpoch` |
 | device → server | `vad` | `sessionId`, `state` (`start`/`end`), `source`, positive `sequence`, `triggerMs`, optional epoch |
+| server → device | `turn.accepted` (draft, §6.1) | `sessionId`, positive `turnId` |
+| server → device | `turn.progress` (draft, §6.1) | `sessionId`, `turnId`, positive `seq`, `stage`: `thinking`, `tool` or `composing`, optional `label` |
 | server → device | `output.start` | `sessionId`, optional `text` and `playbackEpoch` |
 | server → device | `output.stop` | `sessionId`, optional `reason` and `playbackEpoch` |
 | server → device | `session.end` | `sessionId`, optional `reason` |
@@ -263,6 +275,135 @@ Rules both sides rely on:
 backoff, recorder pre-roll, AEC/VAD gating) is in
 [voice assistant: wire behavior](voice-assistant.md#wire-behavior) and
 [reconnect policy](voice-assistant.md#reconnect-policy).
+
+### 6.1 Turn acceptance and progress (draft)
+
+> Status: draft. Neither RodakOS nor Rodak implements it yet. The wire shape can still change.
+
+The device cannot tell when the server stops listening and starts working on an answer. With
+`server-authoritative` VAD the device sends no speech boundary at all (§1). The device therefore
+cannot tell a slow answer from a lost one. `turn.accepted` marks that point:
+
+```json
+{"event": "turn.accepted", "sessionId": "rv-7f3c2a9e1b4d4c6a", "turnId": 1}
+```
+
+Rules:
+
+- The server sends `turn.accepted` only when `session.open` had `features.turn_accepted: 1`.
+  Released firmware treats an unknown control event as a session error.
+- The server sends it once for each user utterance it decides to answer, before that answer's
+  `output.start`. It does not send it for audio that it discards, such as silence, an empty
+  recognition or suppressed echo. The follow-up window keeps running for such audio.
+- `turnId` starts at `1` on each session and increases by one for each accepted turn. A reconnect
+  opens a new session, so its first turn is `1` again.
+- After `turn.accepted`, the server MUST send `output.start`, `error` or `session.end` for that
+  session within 120 s.
+- The device drops a `turn.accepted` from another generation or session, one whose `turnId` is not
+  greater than the last one it saw, and one that arrives while a reply is playing. A dropped event is
+  not an error.
+- A barge-in (`playback.abort`), `session.end`, a reconnect or a local stop cancels the accepted turn.
+  The device ignores a late `turn.accepted` for a cancelled turn under the rule above.
+- `output.start` without a preceding `turn.accepted` stays valid. The device then goes straight from
+  listening to speaking.
+- An announce session (§8) has no user turn and never carries `turn.accepted`.
+
+`turn.accepted` is not a keep-alive. It does not extend the reply-stall rule above: during
+playback only RAV1 audio resets the 20 s gap. The WebSocket ping/pong detects a dead connection.
+
+#### Progress
+
+`turn.progress` tells the device which step of an accepted turn is running, so that a screen can
+show it:
+
+```json
+{"event": "turn.progress", "sessionId": "rv-7f3c2a9e1b4d4c6a", "turnId": 1, "seq": 2,
+ "stage": "tool", "label": "正在查询天气"}
+```
+
+| `stage` | Sent when |
+| --- | --- |
+| `thinking` | A model request of the turn starts. |
+| `tool` | A tool call of the turn starts. |
+| `composing` | The server has decided on the final answer and starts to generate it. |
+
+A step that ends needs no event: the next `thinking` or `composing` shows it.
+
+Rules:
+
+- The server sends `turn.progress` only when `session.open` had `features.turn_progress: 1`.
+- It is valid only between the turn's `turn.accepted` and its first `output.start`. The server
+  sends none after that `output.start`, also when the reply calls a tool mid-way.
+- `seq` starts at `1` for each turn and increases by one for each `turn.progress` sent.
+- The server sends progress only when a step starts. It MUST NOT send it from a timer. When steps
+  start less than 500 ms apart, the server MAY send only the latest one. `seq` counts messages
+  sent, so a skipped step leaves no gap.
+- `label` is optional display text of at most 32 Unicode code points. The server picks it from a
+  fixed list of phrases. It MUST NOT contain a tool name, tool arguments or the user's words. Without
+  a label the device shows its own text for the stage.
+- The device drops a `turn.progress` from another generation or session, for another turn than the
+  current accepted one, with a `seq` that is not greater than the last one, or that arrives after
+  `output.start`. A dropped event is not an error. A cancelled turn (rules above) drops its progress.
+
+`turn.progress` is display information only. It does not extend any device deadline. A turn that
+reports progress still has the 120 s limit for its first `output.start`.
+
+#### Step time limits
+
+Progress cannot show that a step hangs: a model request that never returns sends nothing. The
+server therefore limits each step and ends a turn that runs over:
+
+- Each step has a time limit. The 120 s after acceptance is the limit for the turn's first
+  `output.start`. After that `output.start`, the reply-stall rule of §6 applies instead.
+- When a step runs over, or the 120 s pass before `output.start`, the server cancels the work of
+  the turn. It then sends one `error` with
+  `code: "voice-turn-timeout"` and `retryable: false` for the current session. A later result of
+  the cancelled work is dropped.
+- A step that the server hands off to a background task (below) is not a step of the turn any more.
+  The turn's limits do not cancel it.
+- Like any non-retryable `error` (§6), it ends the interaction. The device does not reconnect and
+  re-arms local wake.
+
+*Informative:* Rodak's planned step limits. Speech recognition 20 s, including a retry. Intent
+check 3 s. A model request 90 s to its first useful chunk and 20 s between chunks. A device tool
+15 s, or 30 s when it waits for an MQTT receipt. A web tool 8 s. An external MCP tool 30 s. A step
+gets the smallest of its own limit, its configured limit and the time that is left of the 120 s.
+
+#### Long-running tasks
+
+Some work takes longer than a turn can wait, for example a command on a cloud computer, a large
+file transfer or an autonomous task with several steps. The user hears nothing while a turn waits,
+so this work does not run inside the turn:
+
+- The server hands such a step off to a background task. The turn then gives a spoken reply that
+  the task was submitted or has started, and ends as usual with `output.start`, audio and `output.stop`.
+- For a step whose length is not known in advance, the server MAY first wait inside the turn for a
+  short time. If the step ends in that time, the turn answers with the result. If not, the server
+  hands the step off and does not cancel it.
+- A handed-off task does not belong to the turn. A barge-in, `session.end`, a reconnect, a local stop
+  or the end of the session does not stop it. The task keeps its own time limit and its own cancel
+  rules.
+- The server MAY say the result of a finished task with a server-initiated announce (§8). Each try
+  uses a new MQTT command and a new `announceSeq`. A `busy` answer ends that command. The announce
+  rules do not change. A result that the server does not announce stays available, and the user
+  hears it in a later turn.
+- This draft has no wire event for a background task. The device does not see task IDs. The user
+  asks about a task or cancels it in a new turn, and the server answers with an ordinary reply.
+
+*Informative:* Rodak's planned handling. The first version only hands off at submit time: a long
+tool submits the task, gets a task ID within a few seconds and the reply says that the task was
+submitted. Each tool declares how it runs and its own limits. A task has its own cancel signal from
+the time it is submitted. Two short tools let the user ask for the status of a task and cancel it.
+A task with side effects needs the speaker's identity and a spoken confirmation before it starts.
+Results that are visible to the whole household can be announced, at most 3 tries in 24 hours.
+Other results wait until the user speaks to the device. Waiting inside the turn for a tool whose
+length is not known, and announcing several results together, come later.
+
+*Informative:* planned RodakOS behavior. `turn.accepted` stops the 30 s follow-up window and starts
+a 130 s deadline for `output.start`. That is 10 s more than the server's 120 s. `turn.progress` does
+not move the deadline. `output.start` then switches to the 20 s reply-stall rule. The Home screen
+shows the stage or label. The status light shows one "waiting for a reply" state for all stages
+(see [voice assistant: status light](voice-assistant.md#status-light-planned)).
 
 ### Multi-device wake arbitration (server side)
 
@@ -361,6 +502,7 @@ events and RAV1 frames against `contracts/rodak-realtime-voice/v1/`.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-23 | Draft `turn.accepted` and `turn.progress` events, server step time limits and background hand-off of long tasks (§6.1), negotiated by `session.open` `features.turn_accepted` and `features.turn_progress`. Not implemented. |
 | 2026-11-21 | Removed the `mcp` event rows, payload rules, `mcp` schema and fixtures. `mcp` stays only as a legacy descriptor/`session.open` marker. |
 | 2026-11-20 | Added the reading guide and `contracts/rodak-realtime-voice/v1/`. Shortened §6 to the rules both sides rely on; firmware timing now lives in [voice assistant](voice-assistant.md). Corrected the descriptor example to Rodak's emitted value and the `session.end` reasons (`goodbye-intent`, not `shutdown`). |
 | 2026-11-05 | Server-initiated announce (§8). |

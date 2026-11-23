@@ -129,6 +129,54 @@ The wake callback runs outside the ADC capture task so DNS, TLS, and WebSocket s
 audio sampling. A supervisor observes the assistant state and re-arms local monitoring after the
 interaction reaches idle.
 
+## Status Light (planned)
+
+> Status: design only. Nothing in this section is implemented yet.
+
+The Home screen gives no clear sign of what the assistant is doing after a wake. The board RGB
+light shows it. BigSmart has one WS2812 (`board_rgb`, GPIO43), so each state uses a color and a
+motion. A user who cannot tell the colors apart can still tell the motions apart.
+
+| State | Color | Motion | Source |
+| --- | --- | --- | --- |
+| Wake monitoring | off | the user's own light setting | `kIdle` |
+| Wake detected | white | one 150 ms flash | wake callback |
+| Connecting | blue | slow blink, 2 Hz | `kConnecting` |
+| Reconnecting | amber | slow blink | reconnect pending |
+| Listening | cyan | steady, brighter while device VAD hears speech | `kListening` + VAD |
+| Waiting for a reply | purple | breathing, about 1.5 s per cycle | `turn.accepted` until `output.start` |
+| Speaking | green | brightness follows the playback level | `kSpeaking` + playback level |
+| Follow-up window, last 5 s | cyan | fades out | follow-up deadline |
+| Barge-in | white | one short flash | `playback.abort` sent |
+| Error | red | three blinks, then off | `kError` |
+| Session end | — | 500 ms fade, then the user's light setting | back to `kIdle` |
+
+Rules:
+
+- The light reads only a local state snapshot of `VoiceAssistantService`: phase, "waiting for a
+  reply", reconnect, VAD and playback level. It does not subscribe to server events. The deadlines
+  in `VoiceConversationPolicy` read the same snapshot, so the light never shows "waiting" for a turn
+  that the device has already given up.
+- "Waiting for a reply" needs `turn.accepted` (contract §6.1). With a server that does not send it,
+  the light goes from listening to speaking directly. `turn.progress` stages are not shown on the
+  light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Home
+  screen shows the stage or label instead.
+- There is no light state for a slow server. A timer-based warning would fire on a late but healthy
+  turn, and the device deadlines already end a dead one.
+- A background task (contract §6.1, long-running tasks) has no light state. The turn ends normally
+  and the light returns to the user's setting.
+- The light is an overlay on `LightService`. It does not change the user configuration, its
+  `configuration_revision` or the MQTT report. The overlay is above MQTT light effects during a
+  voice interaction. When the overlay ends, the light shows the latest user configuration, and an
+  MQTT effect that is still running continues.
+- A separate low-priority task computes the animation at about 30 Hz and writes the LED through
+  `LightService`. The LVGL task and the assistant I/O task never write the LED.
+- Settings get a switch for the voice status light and a maximum brightness, 30 % by default.
+
+Risk to check on hardware: GPIO43 is also UART0 TXD. The console uses USB-Serial-JTAG, so there is
+no conflict at run time, but ROM boot output on UART0 can flash the LED at power-on. If it does,
+disable the ROM boot log.
+
 ## Audio Ownership
 
 `AudioCodecInput` arbitrates the shared ADC by owner and priority:
