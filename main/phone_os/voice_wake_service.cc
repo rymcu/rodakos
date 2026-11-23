@@ -595,10 +595,13 @@ void VoiceWakeService::SupervisorTick() {
     if (assistant_state.stopping || assistant_state.focus_active ||
         assistant_state.phase != VoiceAssistantPhase::kIdle) {
         const TickType_t now = xTaskGetTickCount();
-        if (assistant_state.phase == VoiceAssistantPhase::kSpeaking) {
+        if (assistant_state.phase == VoiceAssistantPhase::kSpeaking ||
+            assistant_state.awaiting_reply) {
             // TTS can legitimately exceed the idle-session budget. Refresh the
             // watchdog while playback is active so a streamed answer is not
             // truncated before the transport emits its terminal event.
+            // An accepted turn (contract section 6.1) may take up to 120 s on the
+            // server; the assistant's own 130 s reply deadline ends a lost turn.
             assistant_active_since_ticks_ = now;
         } else {
             if (assistant_active_since_ticks_ == 0) {

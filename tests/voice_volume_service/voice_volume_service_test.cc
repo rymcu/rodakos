@@ -935,6 +935,8 @@ RODAK_TEST("turn.accepted shows waiting for a reply until output.start") {
     f.transport.TurnAccepted();
     const bool waiting = WaitUntil([&] { return f.service.GetStatusLightSnapshot().awaiting_reply; });
     RODAK_CHECK(waiting);
+    // The wake supervisor reads this to keep its session watchdog off an accepted turn.
+    RODAK_CHECK(f.service.GetState().awaiting_reply);
     RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kListening);
     RODAK_CHECK_EQ(f.service.GetStatusLightSnapshot().follow_up_remaining_ms, int64_t{-1});
     f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
@@ -943,6 +945,7 @@ RODAK_TEST("turn.accepted shows waiting for a reply until output.start") {
         return snapshot.phase == rodakos::VoiceAssistantPhase::kSpeaking && !snapshot.awaiting_reply;
     });
     RODAK_CHECK(speaking);
+    RODAK_CHECK_FALSE(f.service.GetState().awaiting_reply);
     // A turn.accepted that arrives while the reply plays is dropped.
     f.transport.TurnAccepted();
     std::this_thread::sleep_for(50ms);

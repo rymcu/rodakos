@@ -265,7 +265,19 @@ The follow-up window is 30 seconds and is re-armed when capture restarts. A new
 restart does not bring the follow-up window back while that deadline runs. If it passes, the device
 logs `Accepted turn got no output.start` and ends the session like a follow-up timeout. The device
 drops a `turn.accepted` from another session, with a `turnId` that is not greater than the last
-one, or while a reply plays, and on an announce session. Silence,
+one, or while a reply plays, and on an announce session. The wake supervisor's 120 s session
+watchdog pauses while the device waits for an accepted reply, as it does during playback, so the
+130 s deadline decides.
+
+Hardware check (BigSmart, injected speech over USB serial, 2026-11-23):
+
+- Three turns in one session against a server that sends `turn.accepted`: `turnId` 1, 2 and 3,
+  each 30–40 ms before its `output.start`, all replies played, no error.
+- A Rodak test build that sends `turn.accepted` and then nothing: the device logged
+  `Accepted turn got no output.start` 130.0 s later and re-armed local wake 0.6 s after that.
+  Before the watchdog change the wake supervisor ended the same session after 117.6 s.
+- A Rodak test build that sends a non-retryable `voice-turn-timeout` 5 s after `turn.accepted`:
+  the device did not reconnect, ended the session and re-armed local wake 2.1 s later. Silence,
 a terminal error, a connection/listening watchdog, or Rodak's explicit `session.end`
 ends the session and restores local wake monitoring. Active TTS playback is not
 terminated by that watchdog.
