@@ -37,12 +37,22 @@ private:
 
 class VoiceBargeInPolicy {
 public:
+    // Frames the VAD labelled speech during one playback, split by the gate that rejected them.
+    // Field logs use these to tune the gates against real echo.
+    struct Stats {
+        uint32_t vad_speech_ms = 0;
+        uint32_t quiet_rejected_ms = 0;
+        uint32_t echo_rejected_ms = 0;
+    };
+
     static uint32_t CalculatePcmPower(const int16_t* samples, size_t count);
     void Reset();
     void StartPlayback(uint32_t timestamp_ms);
     void StopPlayback();
-    bool Observe(uint32_t frame_end_ms, uint32_t duration_ms,
-                 bool vad_valid, bool vad_speech, uint32_t pcm_power, uint32_t& onset_ms);
+    // input_power is the microphone power before echo cancellation; 0 means unknown.
+    bool Observe(uint32_t frame_end_ms, uint32_t duration_ms, bool vad_valid, bool vad_speech,
+                 uint32_t pcm_power, uint32_t input_power, uint32_t& onset_ms);
+    const Stats& stats() const { return stats_; }
 
 private:
     void ClearEvidence();
@@ -55,6 +65,7 @@ private:
     uint32_t silence_ms_ = 0;
     uint32_t speech_ms_ = 0;
     uint32_t onset_ms_ = 0;
+    Stats stats_;
 };
 
 }  // namespace rodakos

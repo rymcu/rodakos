@@ -5,9 +5,18 @@
 namespace rodakos {
 namespace {
 constexpr uint32_t kSilenceRearmMs = 180;
-constexpr uint32_t kSpeechConfirmMs = 180;
+// 180 ms let a burst of residual echo confirm an interruption on its own.
+constexpr uint32_t kSpeechConfirmMs = 360;
+// AEC has only adapted to the wake chime when a reply starts, so the first echo
+// passes through it at nearly full level.
+constexpr uint32_t kPlaybackGraceMs = 400;
+// A pause inside the barge-in utterance must not end it.
+constexpr uint32_t kVadEndSilenceMs = 600;
 constexpr uint32_t kTimestampToleranceMs = 30;
 constexpr uint32_t kMinimumSpeechPower = 256 * 256;
+// AEC removes about 18-20 dB of the speaker echo but leaves near-end speech, so
+// output more than 9 dB below the microphone input is treated as echo residual.
+constexpr uint64_t kEchoResidualRatio = 8;
 }
 
 void VoiceVadEndPolicy::Reset() {
@@ -42,7 +51,7 @@ bool VoiceVadEndPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     have_frame_ = true;
     last_frame_ms_ = frame_end_ms;
     silence_ms_ = vad_speech ? 0 : silence_ms_ + duration_ms;
-    if (silence_ms_ < kSilenceRearmMs) return false;
+    if (silence_ms_ < kVadEndSilenceMs) return false;
     Reset();
     return true;
 }
@@ -81,6 +90,7 @@ void VoiceBargeInPolicy::ClearEvidence() {
 void VoiceBargeInPolicy::Reset() {
     playing_ = false;
     fired_ = false;
+    stats_ = {};
     ClearEvidence();
 }
 
@@ -109,14 +119,14 @@ uint32_t VoiceBargeInPolicy::CalculatePcmPower(const int16_t* samples, size_t co
 
 bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
                                bool vad_valid, bool vad_speech, uint32_t pcm_power,
-                               uint32_t& onset_ms) {
+                               uint32_t input_power, uint32_t& onset_ms) {
     if (!playing_ || fired_) {
         return false;
     }
     // Compare modular device-clock differences so a millis rollover is harmless.
     if (!vad_valid || duration_ms == 0 || duration_ms > 120 ||
         static_cast<int32_t>(frame_end_ms - playback_start_ms_) <
-            static_cast<int32_t>(duration_ms)) {
+            static_cast<int32_t>(duration_ms + kPlaybackGraceMs)) {
         ClearEvidence();
         return false;
     }
@@ -132,7 +142,15 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     last_frame_ms_ = frame_end_ms;
     // WebRTC VAD also labels low-level residual playback as speech after AEC.
     // Require sustained AC energy; DC offset must not turn a quiet frame into speech.
-    if (!vad_speech || pcm_power < kMinimumSpeechPower) {
+    const bool quiet = pcm_power < kMinimumSpeechPower;
+    const bool echo = !quiet && input_power != 0 &&
+                      static_cast<uint64_t>(pcm_power) * kEchoResidualRatio < input_power;
+    if (vad_speech) {
+        stats_.vad_speech_ms += duration_ms;
+        if (quiet) stats_.quiet_rejected_ms += duration_ms;
+        if (echo) stats_.echo_rejected_ms += duration_ms;
+    }
+    if (!vad_speech || quiet || echo) {
         speech_ms_ = 0;
         silence_ms_ = std::min(kSilenceRearmMs, silence_ms_ + duration_ms);
         armed_ = silence_ms_ >= kSilenceRearmMs;

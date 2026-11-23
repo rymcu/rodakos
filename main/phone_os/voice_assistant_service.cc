@@ -1717,11 +1717,16 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                      audio_output_.volume());
             VoiceConversationAction action = VoiceConversationAction::kIgnore;
             xSemaphoreTake(mutex_, portMAX_DELAY);
+            const VoiceBargeInPolicy::Stats barge_in_stats = barge_in_policy_.stats();
             barge_in_policy_.StopPlayback();
             playback_vad_started_ = false;
             action = conversation_policy_.OnSpeakingStopped(
                 esp_timer_get_time() / 1000);
             xSemaphoreGive(mutex_);
+            ESP_LOGI(TAG, "Barge-in gate stats: vad_speech_ms=%" PRIu32
+                     " quiet_rejected_ms=%" PRIu32 " echo_rejected_ms=%" PRIu32,
+                     barge_in_stats.vad_speech_ms, barge_in_stats.quiet_rejected_ms,
+                     barge_in_stats.echo_rejected_ms);
             if (action == VoiceConversationAction::kIgnore) {
                 break;
             }
@@ -2170,13 +2175,17 @@ bool VoiceAssistantService::SendNextAudioFrame() {
         !vad_end_policy_.pending() &&
         !speaking_interrupted_ && !interrupt_pending_ &&
         barge_in_policy_.Observe(frame.timestamp_ms, frame.config.frame_duration_ms,
-                                 fresh_vad,
-                                 frame.vad_speech, pcm_power, onset_ms)) {
+                                 fresh_vad, frame.vad_speech, pcm_power, frame.input_power,
+                                 onset_ms)) {
         interrupt_pending_ = true;
         interrupt_manual_ = false;
         interrupt_onset_ms_ = onset_ms;
+        const auto& stats = barge_in_policy_.stats();
         ESP_LOGI(TAG, "AFE VAD confirmed: onset_ms=%" PRIu32 " frame_age_ms=%" PRId32
-                     " pcm_power=%" PRIu32, onset_ms, frame_age_ms, pcm_power);
+                     " pcm_power=%" PRIu32 " input_power=%" PRIu32 " vad_speech_ms=%" PRIu32
+                     " quiet_rejected_ms=%" PRIu32 " echo_rejected_ms=%" PRIu32,
+                 onset_ms, frame_age_ms, pcm_power, frame.input_power, stats.vad_speech_ms,
+                 stats.quiet_rejected_ms, stats.echo_rejected_ms);
     }
     xSemaphoreGive(mutex_);
 

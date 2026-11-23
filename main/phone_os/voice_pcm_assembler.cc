@@ -7,6 +7,7 @@ namespace rodakos {
 
 void VoicePcmAssembler::Reset() {
     samples_.clear();
+    input_power_ = 0;
     InvalidateContinuity();
     discontinuity_ = false;
 }
@@ -23,7 +24,8 @@ void VoicePcmAssembler::InvalidateContinuity() {
 void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
                                const VoiceRecorderConfig& config, int64_t fetched_at_us,
                                bool vad_valid, bool vad_speech,
-                               std::deque<VoicePcmFrame>& frames, size_t queue_limit) {
+                               std::deque<VoicePcmFrame>& frames, size_t queue_limit,
+                               uint32_t input_power) {
     if (samples == nullptr || count == 0 || config.sample_rate <= 0 ||
         config.frame_duration_ms <= 0 || queue_limit == 0) return;
     const size_t frame_samples = static_cast<size_t>(
@@ -41,6 +43,7 @@ void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
         samples_.insert(samples_.end(), samples + offset, samples + offset + take);
         vad_valid_samples_ += vad_valid ? take : 0;
         vad_speech_samples_ += vad_valid && vad_speech ? take : 0;
+        input_power_ = std::max(input_power_, input_power);
         offset += take;
         clock_samples_ += take;
         if (samples_.size() < frame_samples) continue;
@@ -53,6 +56,8 @@ void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
         // Fetch and upload boundaries differ; vote using their overlapping samples.
         frame.vad_valid = !discontinuity_ && vad_valid_samples_ == frame_samples;
         frame.vad_speech = frame.vad_valid && vad_speech_samples_ * 2 >= frame_samples;
+        frame.input_power = input_power_;
+        input_power_ = 0;
         discontinuity_ = false;
         samples_.clear();
         vad_valid_samples_ = 0;

@@ -484,6 +484,7 @@ void VoiceAudioFrontend::Stop() {
     ++conversation_generation_;
     frames_.clear();
     conversation_assembler_.Reset();
+    ResetConversationInputPowerLocked();
     xSemaphoreGive(mutex_);
     StopAfe();
     input_.CloseForOwner(kConversationAudioInputOwner);
@@ -1347,7 +1348,7 @@ void VoiceAudioFrontend::CaptureTask() {
             if (can_feed) {
                 afe_feed_active_ = true;
                 aec_diagnostic_capture_.AppendRaw(samples.data(), samples.size() / kInputChannels,
-                    generation, raw_observed_us, selected_main_mic_ == 1 ? 0 : 2);
+                    generation, raw_observed_us, mic_selector_.selected_slot());
                 if (diagnostic_audio_active_) {
                     for (auto& sample : selected_samples) {
                         sample = diagnostic_audio_position_ < diagnostic_audio_samples_
@@ -1355,9 +1356,10 @@ void VoiceAudioFrontend::CaptureTask() {
                     }
                 } else {
                     for (size_t i = 0; i < selected_samples.size(); ++i) {
-                        selected_samples[i] = samples[i * 4 + (selected_main_mic_ == 1 ? 0 : 2)];
+                        selected_samples[i] = samples[i * 4 + mic_selector_.selected_slot()];
                     }
                 }
+                RecordConversationInputPowerLocked(selected_samples);
             } else if (mode_ == mode && generation == conversation_generation_ &&
                        afe_data_ != nullptr && (afe_resync_pending_ || read_epoch != afe_stream_epoch_)) {
                 // 此 raw read 已消耗但未 AppendRaw；取消/旧代不计入当前 capture。
@@ -1847,38 +1849,37 @@ void VoiceAudioFrontend::AfeFetchTask() {
 
 void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
                                               std::vector<int16_t>& output) {
-    const size_t count = input.size() / 4;
+    const size_t count = input.size() / VoiceMicSelector::kChannels;
     output.resize(count);
-    int64_t p1 = 0, p2 = 0;
-    for (size_t i = 0; i < count; ++i) {
-        const int32_t a = input[i * 4];
-        const int32_t b = input[i * 4 + 2];
-        p1 += static_cast<int64_t>(a) * a;
-        p2 += static_cast<int64_t>(b) * b;
-        output[i] = static_cast<int16_t>(selected_main_mic_ == 1 ? a : b);
+    const size_t slot = mic_selector_.selected_slot();
+    for (size_t i = 0; i < count; ++i) output[i] = input[i * VoiceMicSelector::kChannels + slot];
+    mic_selector_.Update(input.data(), count);
+}
+
+void VoiceAudioFrontend::RecordConversationInputPowerLocked(const std::vector<int16_t>& samples) {
+    if (samples.empty()) return;
+    // Remove DC like the barge-in output power does, so an ADC offset cannot pass as echo.
+    int64_t sum = 0;
+    int64_t squares = 0;
+    for (const int16_t sample : samples) {
+        sum += sample;
+        squares += static_cast<int64_t>(sample) * sample;
     }
-    const int64_t n = static_cast<int64_t>(std::max<size_t>(1, count));
-    mic1_power_ = (mic1_power_ * 7 + (p1 / n) * 3) / 10;
-    mic2_power_ = (mic2_power_ * 7 + (p2 / n) * 3) / 10;
-    if (mic_speech_lock_) {
-        if (std::max(mic1_power_, mic2_power_) < 25000) {
-            mic_speech_lock_ = false;
-            mic_switch_frames_ = 0;
-        }
-        return;
-    }
-    const int64_t current = selected_main_mic_ == 1 ? mic1_power_ : mic2_power_;
-    const int64_t other = selected_main_mic_ == 1 ? mic2_power_ : mic1_power_;
-    if (other > current + 180000) {
-        if (++mic_switch_frames_ >= 5) {
-            selected_main_mic_ = selected_main_mic_ == 1 ? 2 : 1;
-            mic_switch_frames_ = 0;
-            mic_speech_lock_ = true;
-        }
-    } else {
-        mic_switch_frames_ = 0;
-        if (std::max(mic1_power_, mic2_power_) > 25000) mic_speech_lock_ = true;
-    }
+    const int64_t n = static_cast<int64_t>(samples.size());
+    const int64_t power = (squares - sum * sum / n) / n;
+    conversation_input_power_[conversation_input_power_index_] =
+        static_cast<uint32_t>(std::min<int64_t>(power, UINT32_MAX));
+    conversation_input_power_index_ =
+        (conversation_input_power_index_ + 1) % kConversationInputPowerReads;
+}
+
+uint32_t VoiceAudioFrontend::RecentConversationInputPowerLocked() const {
+    return *std::max_element(conversation_input_power_.begin(), conversation_input_power_.end());
+}
+
+void VoiceAudioFrontend::ResetConversationInputPowerLocked() {
+    conversation_input_power_.fill(0);
+    conversation_input_power_index_ = 0;
 }
 
 void VoiceAudioFrontend::FeedWakeSamples(const std::vector<int16_t>& tdm,
@@ -2053,7 +2054,8 @@ void VoiceAudioFrontend::ProcessConversationSamples(const int16_t* samples, size
     const int64_t observed_us = esp_timer_get_time();
     aec_diagnostic_capture_.AppendAfe(samples, count, generation, observed_us);
     conversation_assembler_.Append(samples, count, recorder_config_, observed_us,
-                                   vad_valid, vad_speech, frames_, kMaxQueuedFrames);
+                                   vad_valid, vad_speech, frames_, kMaxQueuedFrames,
+                                   RecentConversationInputPowerLocked());
     xSemaphoreGive(mutex_);
 }
 
