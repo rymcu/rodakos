@@ -242,3 +242,60 @@ RODAK_TEST("voice reply stall deadline saturates at the clock limit") {
     RODAK_CHECK_FALSE(policy.IsSpeakingStalled(max_ms - 1));
     RODAK_CHECK(policy.IsSpeakingStalled(max_ms));
 }
+
+RODAK_TEST("voice accepted turn stops the follow-up window and waits 130 s for output.start") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(0);
+    RODAK_CHECK_EQ(policy.OnSpeakingStopped(1000), VoiceConversationAction::kContinue);
+    RODAK_CHECK(policy.waiting_for_follow_up());
+
+    RODAK_CHECK(policy.OnTurnAccepted(5000));
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
+    RODAK_CHECK(policy.waiting_for_reply());
+    RODAK_CHECK_EQ(policy.reply_deadline_ms(), 5000 + policy.accepted_reply_timeout_ms());
+    // The old follow-up deadline no longer ends the session while the server works.
+    RODAK_CHECK_FALSE(policy.IsFollowUpTimedOut(1000 + policy.follow_up_timeout_ms()));
+    // A later capture restart must not bring the follow-up window back.
+    policy.OnFollowUpStarted(6000);
+    RODAK_CHECK_FALSE(policy.waiting_for_follow_up());
+
+    RODAK_CHECK_FALSE(policy.IsReplyOverdue(5000 + policy.accepted_reply_timeout_ms() - 1));
+    RODAK_CHECK(policy.IsReplyOverdue(5000 + policy.accepted_reply_timeout_ms()));
+    RODAK_CHECK_FALSE(policy.IsReplyOverdue(5000 + policy.accepted_reply_timeout_ms() + 1));
+    RODAK_CHECK_FALSE(policy.waiting_for_reply());
+}
+
+RODAK_TEST("voice accepted turn ends at output.start and the reply-stall rule takes over") {
+    VoiceConversationPolicy policy;
+    RODAK_CHECK(policy.OnTurnAccepted(0));
+    policy.OnSpeakingStarted(100000);
+    RODAK_CHECK_FALSE(policy.waiting_for_reply());
+    RODAK_CHECK_FALSE(policy.IsReplyOverdue(policy.accepted_reply_timeout_ms()));
+    RODAK_CHECK(policy.waiting_for_speaking_progress());
+    RODAK_CHECK_EQ(policy.speaking_deadline_ms(), 100000 + policy.speaking_stall_timeout_ms());
+    // After the reply the follow-up window runs as before.
+    RODAK_CHECK_EQ(policy.OnSpeakingStopped(110000), VoiceConversationAction::kContinue);
+    RODAK_CHECK(policy.waiting_for_follow_up());
+}
+
+RODAK_TEST("voice accepted turn is dropped while a reply plays and after the session ended") {
+    VoiceConversationPolicy policy;
+    policy.OnSpeakingStarted(0);
+    RODAK_CHECK_FALSE(policy.OnTurnAccepted(100));
+    RODAK_CHECK_FALSE(policy.waiting_for_reply());
+    RODAK_CHECK(policy.IsSpeakingStalled(policy.speaking_stall_timeout_ms()));
+    RODAK_CHECK_FALSE(policy.OnTurnAccepted(policy.speaking_stall_timeout_ms() + 1));
+    policy.Reset();
+    RODAK_CHECK(policy.OnTurnAccepted(0));
+    policy.Reset();
+    RODAK_CHECK_FALSE(policy.waiting_for_reply());
+}
+
+RODAK_TEST("voice accepted turn deadline saturates at the clock limit") {
+    VoiceConversationPolicy policy;
+    constexpr int64_t max_ms = std::numeric_limits<int64_t>::max();
+    RODAK_CHECK(policy.OnTurnAccepted(max_ms - 10));
+    RODAK_CHECK_EQ(policy.reply_deadline_ms(), max_ms);
+    RODAK_CHECK_FALSE(policy.IsReplyOverdue(max_ms - 1));
+    RODAK_CHECK(policy.IsReplyOverdue(max_ms));
+}

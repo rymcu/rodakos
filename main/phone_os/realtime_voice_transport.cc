@@ -1381,8 +1381,10 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         std::strcmp(event_name, kRealtimeVoiceEventSessionEnd) == 0;
     const bool is_mcp = std::strcmp(event_name, kRealtimeVoiceEventMcp) == 0;
     const bool is_error = std::strcmp(event_name, kRealtimeVoiceEventError) == 0;
+    const bool is_turn_accepted =
+        std::strcmp(event_name, kRealtimeVoiceEventTurnAccepted) == 0;
     if (!is_session_ready && !is_output_start && !is_output_stop && !is_session_end &&
-        !is_mcp && !is_error) {
+        !is_mcp && !is_error && !is_turn_accepted) {
         cJSON_Delete(root);
         SetError("Unsupported realtime voice control event", generation);
         return;
@@ -1411,7 +1413,10 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         }
         if (!session_matches) {
             cJSON_Delete(root);
-            SetError("Realtime voice control frame sessionId does not match", generation);
+            // Contract section 6.1: a turn.accepted of another session is dropped, not an error.
+            if (!is_turn_accepted) {
+                SetError("Realtime voice control frame sessionId does not match", generation);
+            }
             return;
         }
     }
@@ -1511,6 +1516,35 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
                 .failure = {},
             }, generation);
         }
+    } else if (is_turn_accepted) {
+        uint32_t turn_id = 0;
+        std::string turn_error;
+        if (!ParseRealtimeVoiceTurnAccepted(root, turn_id, turn_error)) {
+            cJSON_Delete(root);
+            SetError(turn_error, generation);
+            return;
+        }
+        // Dropped without an error (contract section 6.1): an event while a reply plays, and a
+        // turnId that is not greater than the last one.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool accepted = !closing_ && connection_generation_ == generation &&
+                              !inbound_output_active_ &&
+                              session_gate_.AcceptTurnAccepted(generation, turn_id);
+        xSemaphoreGive(mutex_);
+        if (!accepted) {
+            ESP_LOGD(TAG, "Dropping realtime voice turn.accepted: turn_id=%u",
+                     static_cast<unsigned>(turn_id));
+            cJSON_Delete(root);
+            return;
+        }
+        ESP_LOGI(TAG, "Received realtime voice turn.accepted: turn_id=%u",
+                 static_cast<unsigned>(turn_id));
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kTurnAccepted,
+            .audio = {},
+            .payload = {},
+            .failure = {},
+        }, generation);
     } else if (is_mcp) {
         VoiceInboundEvent inbound;
         std::string mcp_error;

@@ -131,8 +131,8 @@ interaction reaches idle.
 
 ## Status Light
 
-> Status: implemented except "waiting for a reply", which needs `turn.accepted` (contract §6.1).
-> Until that event is implemented, the light goes from listening to speaking directly.
+> Status: implemented. "Waiting for a reply" needs a server that sends `turn.accepted`
+> (contract §6.1).
 
 The Home screen gives no clear sign of what the assistant is doing after a wake. The board RGB
 light shows it. BigSmart has one WS2812 (`board_rgb`, GPIO43), so each state uses a color and a
@@ -158,8 +158,9 @@ Rules:
   reply", reconnect, VAD and playback level. It does not subscribe to server events. The deadlines
   in `VoiceConversationPolicy` read the same snapshot, so the light never shows "waiting" for a turn
   that the device has already given up.
-- "Waiting for a reply" needs `turn.accepted` (contract §6.1). With a server that does not send it,
-  the light goes from listening to speaking directly. `turn.progress` stages are not shown on the
+- "Waiting for a reply" needs `turn.accepted` (contract §6.1). The device asks for it in every
+  ordinary `session.open`. With a server that does not send it, the light goes from listening to
+  speaking directly. `turn.progress` stages are not shown on the
   light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Home
   screen shows the stage or label instead.
 - There is no light state for a slow server. A timer-based warning would fire on a late but healthy
@@ -259,7 +260,12 @@ sequence and the [AIoT contract](rodak-aiot-contract-v1.md) for the command and 
 The announce state machine has no host test and no recorded hardware run.
 
 The follow-up window is 30 seconds and is re-armed when capture restarts. A new
-`output.start` proves the next turn progressed and clears that deadline. Silence,
+`output.start` proves the next turn progressed and clears that deadline. `turn.accepted`
+(contract §6.1) also clears it and starts a 130 s deadline for `output.start` instead. A capture
+restart does not bring the follow-up window back while that deadline runs. If it passes, the device
+logs `Accepted turn got no output.start` and ends the session like a follow-up timeout. The device
+drops a `turn.accepted` from another session, with a `turnId` that is not greater than the last
+one, or while a reply plays, and on an announce session. Silence,
 a terminal error, a connection/listening watchdog, or Rodak's explicit `session.end`
 ends the session and restores local wake monitoring. Active TTS playback is not
 terminated by that watchdog.

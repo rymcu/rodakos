@@ -210,6 +210,12 @@ public:
         event.playback_epoch = epoch;
         Deliver(std::move(event));
     }
+    void TurnAccepted() {
+        VoiceInboundEvent event;
+        event.type = VoiceInboundEventType::kTurnAccepted;
+        event.transport_generation = generation;
+        Deliver(std::move(event));
+    }
     // One 60 ms TTS frame; the host decoder fills it with `marker`.
     void SpeakingAudio(uint8_t marker, uint32_t epoch = 1) {
         VoiceInboundEvent event;
@@ -920,6 +926,27 @@ RODAK_TEST("device barge-in during playback aborts the reply and drops queued au
     std::this_thread::sleep_for(50ms);
     for (int16_t marker = 3; marker <= 6; ++marker) RODAK_CHECK_EQ(CountMarker(marker), size_t{0});
     RODAK_CHECK_FALSE(fake_codec::open);
+}
+
+RODAK_TEST("turn.accepted shows waiting for a reply until output.start") {
+    Fixture f;
+    f.StartInitialized();
+    RODAK_CHECK_FALSE(f.service.GetStatusLightSnapshot().awaiting_reply);
+    f.transport.TurnAccepted();
+    const bool waiting = WaitUntil([&] { return f.service.GetStatusLightSnapshot().awaiting_reply; });
+    RODAK_CHECK(waiting);
+    RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kListening);
+    RODAK_CHECK_EQ(f.service.GetStatusLightSnapshot().follow_up_remaining_ms, int64_t{-1});
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    const bool speaking = WaitUntil([&] {
+        const auto snapshot = f.service.GetStatusLightSnapshot();
+        return snapshot.phase == rodakos::VoiceAssistantPhase::kSpeaking && !snapshot.awaiting_reply;
+    });
+    RODAK_CHECK(speaking);
+    // A turn.accepted that arrives while the reply plays is dropped.
+    f.transport.TurnAccepted();
+    std::this_thread::sleep_for(50ms);
+    RODAK_CHECK_FALSE(f.service.GetStatusLightSnapshot().awaiting_reply);
 }
 
 RODAK_TEST("end of reply plays the queued tail before closing and re-arming listening") {

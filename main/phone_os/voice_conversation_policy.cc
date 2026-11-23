@@ -10,6 +10,7 @@ void VoiceConversationPolicy::Reset() {
     finished_ = false;
     ClearFollowUpDeadline();
     ClearSpeakingDeadline();
+    ClearReplyDeadline();
 }
 
 void VoiceConversationPolicy::OnSpeakingStarted() {
@@ -18,6 +19,8 @@ void VoiceConversationPolicy::OnSpeakingStarted() {
     }
     speaking_active_ = true;
     ClearFollowUpDeadline();
+    // output.start 结束了 accepted 轮次的等待；之后由回复停顿规则接管。
+    ClearReplyDeadline();
 }
 
 void VoiceConversationPolicy::OnSpeakingStarted(int64_t now_ms) {
@@ -51,7 +54,7 @@ VoiceConversationAction VoiceConversationPolicy::OnSpeakingStopped(int64_t now_m
 }
 
 void VoiceConversationPolicy::OnFollowUpStarted(int64_t now_ms) {
-    if (finished_ || speaking_active_ || completed_turns_ == 0) {
+    if (finished_ || speaking_active_ || reply_deadline_active_ || completed_turns_ == 0) {
         return;
     }
     ArmFollowUpDeadline(now_ms);
@@ -73,6 +76,33 @@ bool VoiceConversationPolicy::IsFollowUpTimedOut(int64_t now_ms) {
 
     finished_ = true;
     ClearFollowUpDeadline();
+    return true;
+}
+
+bool VoiceConversationPolicy::OnTurnAccepted(int64_t now_ms) {
+    if (finished_ || speaking_active_) {
+        return false;
+    }
+    ClearFollowUpDeadline();
+    const int64_t normalized_now_ms = now_ms < 0 ? 0 : now_ms;
+    reply_deadline_active_ = true;
+    if (normalized_now_ms >
+        std::numeric_limits<int64_t>::max() - accepted_reply_timeout_ms()) {
+        reply_deadline_ms_ = std::numeric_limits<int64_t>::max();
+    } else {
+        reply_deadline_ms_ = normalized_now_ms + accepted_reply_timeout_ms();
+    }
+    return true;
+}
+
+bool VoiceConversationPolicy::IsReplyOverdue(int64_t now_ms) {
+    if (finished_ || speaking_active_ || !reply_deadline_active_ ||
+        now_ms < reply_deadline_ms_) {
+        return false;
+    }
+
+    finished_ = true;
+    ClearReplyDeadline();
     return true;
 }
 
@@ -101,6 +131,11 @@ void VoiceConversationPolicy::ArmSpeakingDeadline(int64_t now_ms) {
 void VoiceConversationPolicy::ClearSpeakingDeadline() {
     speaking_deadline_ms_ = 0;
     speaking_deadline_active_ = false;
+}
+
+void VoiceConversationPolicy::ClearReplyDeadline() {
+    reply_deadline_ms_ = 0;
+    reply_deadline_active_ = false;
 }
 
 void VoiceConversationPolicy::ArmFollowUpDeadline(int64_t now_ms) {

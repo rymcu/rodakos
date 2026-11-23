@@ -168,6 +168,23 @@ RODAK_TEST("canonical realtime voice session gate rejects stale output and audio
     RODAK_CHECK_FALSE(gate.AcceptAudio(7, 2));
 }
 
+RODAK_TEST("canonical realtime voice session gate accepts each turn.accepted once and in order") {
+    rodakos::RealtimeVoiceSessionGate gate;
+    RODAK_CHECK_FALSE(gate.AcceptTurnAccepted(7, 1));
+    RODAK_CHECK(gate.Establish(7, "session-a"));
+    RODAK_CHECK_FALSE(gate.AcceptTurnAccepted(7, 0));
+    RODAK_CHECK_FALSE(gate.AcceptTurnAccepted(6, 1));
+    RODAK_CHECK(gate.AcceptTurnAccepted(7, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnAccepted(7, 1));
+    RODAK_CHECK(gate.AcceptTurnAccepted(7, 3));
+    RODAK_CHECK_FALSE(gate.AcceptTurnAccepted(7, 2));
+    RODAK_CHECK_EQ(gate.accepted_turn_id(), 3u);
+    // A reconnect opens a new session whose first turn is 1 again.
+    gate.Clear();
+    RODAK_CHECK(gate.Establish(8, "session-b"));
+    RODAK_CHECK(gate.AcceptTurnAccepted(8, 1));
+}
+
 RODAK_TEST("canonical realtime voice session gate keeps sequence monotonic across output epochs") {
     rodakos::RealtimeVoiceSessionGate gate;
     RODAK_CHECK(gate.Establish(9, "session-b"));
@@ -423,6 +440,8 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
     RODAK_CHECK(open.find("session.open") != std::string::npos);
     // 普通会话不带播报字段；服务端发起播报的只放音会话带 announce + announceSeq。
     RODAK_CHECK(open.find("announce") == std::string::npos);
+    // 普通会话请服务端发 turn.accepted；播报会话没有用户轮次，不宣告。
+    RODAK_CHECK(open.find("\"turn_accepted\":1") != std::string::npos);
     const std::string announce =
         rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7, 42);
     std::unique_ptr<cJSON, decltype(&cJSON_Delete)> announce_root(
@@ -433,6 +452,7 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
     RODAK_CHECK(cJSON_IsNumber(announce_seq));
     RODAK_CHECK_EQ(static_cast<int>(announce_seq->valuedouble), 42);
     RODAK_CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(features, "mcp")));
+    RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(features, "turn_accepted") == nullptr);
     // 设备控制统一走 MQTT；固件始终宣告不支持 MCP，Rodak 不会建立设备 MCP 会话。
     RODAK_CHECK(open.find("\"mcp\":false") != std::string::npos);
     RODAK_CHECK(open.find("device_vad_epoch") != std::string::npos);
@@ -956,6 +976,13 @@ RODAK_TEST("canonical realtime voice server control payloads validate field type
         {R"({"event":"session.end","reason":""})", false},
         {R"({"event":"error","code":"failed","message":"no","retryable":false})", true},
         {R"({"event":"error","code":"failed","message":"no","retryable":"false"})", false},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":1})", true},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":4294967295})", true},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":4294967296})", false},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":1.5})", false},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":"1"})", false},
+        {R"({"event":"turn.accepted","sessionId":"","turnId":1})", false},
+        {R"({"event":"turn.accepted","sessionId":"s","turnId":1,"stage":"tool"})", false},
     };
     for (const auto& [json, expected] : cases) {
         cJSON* root = cJSON_Parse(json);

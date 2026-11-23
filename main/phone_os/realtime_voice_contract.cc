@@ -45,6 +45,7 @@ bool RealtimeVoiceSessionGate::Establish(uint32_t generation,
     session_id_ = session_id;
     playback_epoch_ = 0;
     audio_sequence_ = 0;
+    accepted_turn_id_ = 0;
     output_active_ = false;
     return true;
 }
@@ -54,6 +55,7 @@ void RealtimeVoiceSessionGate::Clear() {
     session_id_.clear();
     playback_epoch_ = 0;
     audio_sequence_ = 0;
+    accepted_turn_id_ = 0;
     output_active_ = false;
 }
 
@@ -91,6 +93,16 @@ bool RealtimeVoiceSessionGate::AcceptAudio(uint32_t generation, uint32_t sequenc
         return false;
     }
     audio_sequence_ = sequence;
+    return true;
+}
+
+bool RealtimeVoiceSessionGate::AcceptTurnAccepted(uint32_t generation, uint32_t turn_id) {
+    // A duplicate or a delayed event of an earlier turn must not restart the reply deadline.
+    if (generation == 0 || generation_ != generation || turn_id == 0 ||
+        turn_id <= accepted_turn_id_) {
+        return false;
+    }
+    accepted_turn_id_ = turn_id;
     return true;
 }
 namespace {
@@ -573,6 +585,49 @@ bool ParseRealtimeVoiceMcpInbound(const cJSON* envelope, uint32_t generation,
     return true;
 }
 
+bool ParseRealtimeVoiceTurnAccepted(const cJSON* envelope, uint32_t& turn_id,
+                                    std::string& error) {
+    turn_id = 0;
+    error.clear();
+    if (envelope == nullptr || !cJSON_IsObject(envelope)) {
+        error = "canonical turn.accepted envelope must be an object";
+        return false;
+    }
+    const cJSON* event = cJSON_GetObjectItemCaseSensitive(envelope, "event");
+    if (!cJSON_IsString(event) || event->valuestring == nullptr ||
+        std::strcmp(event->valuestring, kRealtimeVoiceEventTurnAccepted) != 0) {
+        error = "canonical turn.accepted event is invalid";
+        return false;
+    }
+    std::string session_id;
+    if (!ReadRequiredString(envelope, "sessionId", session_id)) {
+        error = "canonical turn.accepted sessionId is invalid";
+        return false;
+    }
+    // The schema allows no other field: the event carries no user text.
+    for (const cJSON* item = envelope->child; item != nullptr; item = item->next) {
+        if (item->string == nullptr ||
+            (std::strcmp(item->string, "event") != 0 &&
+             std::strcmp(item->string, "sessionId") != 0 &&
+             std::strcmp(item->string, "turnId") != 0)) {
+            error = "canonical turn.accepted has an unknown field";
+            return false;
+        }
+    }
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(envelope, "turnId");
+    if (!cJSON_IsNumber(value) || !(value->valuedouble >= 1 && value->valuedouble <= UINT32_MAX)) {
+        error = "canonical turn.accepted turnId is invalid";
+        return false;
+    }
+    const uint32_t parsed = static_cast<uint32_t>(value->valuedouble);
+    if (value->valuedouble != static_cast<double>(parsed)) {
+        error = "canonical turn.accepted turnId is invalid";
+        return false;
+    }
+    turn_id = parsed;
+    return true;
+}
+
 bool ParseRealtimeVoiceServerError(const cJSON* envelope,
                                    RealtimeVoiceServerError& server_error,
                                    std::string& error) {
@@ -637,6 +692,12 @@ bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
     if (event_name == kRealtimeVoiceEventError) {
         RealtimeVoiceServerError server_error;
         if (!ParseRealtimeVoiceServerError(envelope, server_error, error)) {
+            return false;
+        }
+    }
+    if (event_name == kRealtimeVoiceEventTurnAccepted) {
+        uint32_t turn_id = 0;
+        if (!ParseRealtimeVoiceTurnAccepted(envelope, turn_id, error)) {
             return false;
         }
     }
@@ -729,6 +790,10 @@ std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& 
         // 服务端发起播报：只放音，不开麦；序号对应 MQTT voice.announce 命令里的 announceSeq。
         cJSON_AddBoolToObject(features, "announce", true);
         cJSON_AddNumberToObject(features, "announceSeq", announce_seq);
+    } else {
+        // 契约 §6.1：请服务端在决定回答时发 turn.accepted。不认识该字段的旧服务端照常忽略。
+        // 播报会话没有用户轮次，不宣告。
+        cJSON_AddNumberToObject(features, "turn_accepted", 1);
     }
     cJSON_AddItemToObject(root, "features", features);
     AddAudio(root, "uplink", descriptor.uplink_sample_rate_hz, descriptor.uplink_channels,

@@ -886,6 +886,7 @@ VoiceStatusLightSnapshot VoiceAssistantService::GetStatusLightSnapshot() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     snapshot.phase = phase_;
     snapshot.reconnecting = reconnect_pending_;
+    snapshot.awaiting_reply = conversation_policy_.waiting_for_reply();
     snapshot.user_speech = phase_ == VoiceAssistantPhase::kListening &&
                            status_light_speech_at_us_ != 0 &&
                            now_us - status_light_speech_at_us_ < kStatusLightSpeechHoldUs;
@@ -1448,6 +1449,7 @@ void VoiceAssistantService::IoTask() {
         bool should_check_reconnect = false;
         bool follow_up_timed_out = false;
         bool speaking_stalled = false;
+        bool reply_overdue = false;
         bool should_rearm_follow_up = false;
         bool end_for_announce = false;
         uint32_t completed_turns = 0;
@@ -1471,6 +1473,8 @@ void VoiceAssistantService::IoTask() {
             const int64_t now_ms = esp_timer_get_time() / 1000;
             follow_up_timed_out = conversation_policy_.IsFollowUpTimedOut(now_ms);
             speaking_stalled = !follow_up_timed_out && conversation_policy_.IsSpeakingStalled(now_ms);
+            reply_overdue = !follow_up_timed_out && !speaking_stalled &&
+                            conversation_policy_.IsReplyOverdue(now_ms);
             completed_turns = conversation_policy_.completed_turns();
             should_rearm_follow_up = !follow_up_timed_out &&
                                      follow_up_rearm_pending_ &&
@@ -1523,6 +1527,14 @@ void VoiceAssistantService::IoTask() {
             // 服务器发了 output.start 却不再发音频或 output.stop：不等它，结束会话并恢复唤醒。
             ESP_LOGW(TAG, "Reply stalled: no audio for %lld ms after output.start; ending session",
                      static_cast<long long>(VoiceConversationPolicy::speaking_stall_timeout_ms()));
+            StopInteraction();
+            continue;
+        }
+        if (reply_overdue) {
+            // 契约 §6.1：服务端 120 s 内必须给出 output.start、error 或 session.end。
+            // 设备多等 10 s 仍没有，就当服务端丢了这一轮，结束会话并恢复唤醒。
+            ESP_LOGW(TAG, "Accepted turn got no output.start within %lld ms; ending session",
+                     static_cast<long long>(VoiceConversationPolicy::accepted_reply_timeout_ms()));
             StopInteraction();
             continue;
         }
@@ -1739,6 +1751,19 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             DrainPlayback();
             StopInteraction();
             break;
+        case VoiceInboundEventType::kTurnAccepted: {
+            // 契约 §6.1：服务端已决定回答。停掉追问窗口，开始 130 s 的回复时限。
+            // 播报会话没有用户轮次；回复正在播放时同样丢弃（不算错误）。
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool accepted = !stopping_ && io_running_ && !announce_ &&
+                                  event.transport_generation == transport_generation_ &&
+                                  conversation_policy_.OnTurnAccepted(esp_timer_get_time() / 1000);
+            xSemaphoreGive(mutex_);
+            if (!accepted) {
+                ESP_LOGD(TAG, "Dropping turn.accepted outside a user turn");
+            }
+            break;
+        }
         case VoiceInboundEventType::kMcp:
             // 设备侧不再提供 MCP 工具：会话宣告 features.mcp=false，服务端发来的 MCP 消息直接丢弃。
             break;
@@ -2008,7 +2033,10 @@ bool VoiceAssistantService::BeginFollowUpTurn() {
                          io_running_ && transport_active_ &&
                          phase_ == VoiceAssistantPhase::kSpeaking &&
                          follow_up_rearm_pending_ &&
-                         conversation_policy_.waiting_for_follow_up() &&
+                         // turn.accepted 可能在上一段回复排空前到达：它停掉了追问窗口，
+                         // 但麦克风仍要重新打开，让用户能继续说。
+                         (conversation_policy_.waiting_for_follow_up() ||
+                          conversation_policy_.waiting_for_reply()) &&
                          !HasTerminalInboundEventLocked();
     if (current) {
         interaction_generation = interaction_generation_;
