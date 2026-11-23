@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/session-open.schema.json",
   "title": "session.open (device -> server)",
-  "description": "First message on each connection. features.announce and features.announceSeq appear only on a playback-only announce session (contract section 8). generation is non-zero and wraps to 1.",
+  "description": "First message on each connection. features.announce and features.announceSeq appear only on a playback-only announce session (contract section 8). generation is non-zero and wraps to 1. features.turn_accepted 1 asks the server for turn.accepted and features.turn_progress 1 for turn.progress (contract section 6.1); turn_progress 1 requires turn_accepted 1; absent means 0.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -56,6 +56,18 @@
             1
           ]
         },
+        "turn_accepted": {
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "turn_progress": {
+          "enum": [
+            0,
+            1
+          ]
+        },
         "announce": {
           "const": true
         },
@@ -71,6 +83,26 @@
         ],
         "announceSeq": [
           "announce"
+        ]
+      },
+      "if": {
+        "properties": {
+          "turn_progress": {
+            "const": 1
+          }
+        },
+        "required": [
+          "turn_progress"
+        ]
+      },
+      "then": {
+        "properties": {
+          "turn_accepted": {
+            "const": 1
+          }
+        },
+        "required": [
+          "turn_accepted"
         ]
       }
     },

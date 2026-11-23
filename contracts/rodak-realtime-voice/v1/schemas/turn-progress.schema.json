@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/turn-progress.schema.json",
+  "title": "turn.progress (server -> device)",
+  "description": "Draft. A step of the accepted turn started. Sent only when session.open had features.turn_progress 1, after the turn's turn.accepted and before its first output.start. seq starts at 1 for each turn and increases by one per message. label is display text chosen by the server from a fixed list; it never carries a tool name, tool arguments or the transcript. Not a keep-alive.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "turn.progress"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "turnId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "stage": {
+      "enum": [
+        "thinking",
+        "tool",
+        "composing"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "x-nonblankAfterTrim": true
+    }
+  },
+  "required": [
+    "event",
+    "sessionId",
+    "turnId",
+    "seq",
+    "stage"
+  ]
+}

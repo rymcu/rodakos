@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/turn-accepted.schema.json",
+  "title": "turn.accepted (server -> device)",
+  "description": "Draft. The server committed to answer one user utterance. Sent only when session.open had features.turn_accepted 1, never on an announce session. turnId starts at 1 and increases strictly within a session. The server ends the turn with output.start, error or session.end within 120 s.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "turn.accepted"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "turnId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    }
+  },
+  "required": [
+    "event",
+    "sessionId",
+    "turnId"
+  ]
+}

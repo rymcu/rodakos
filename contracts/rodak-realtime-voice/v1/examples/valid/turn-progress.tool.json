@@ -1,0 +1,8 @@
+{
+  "event": "turn.progress",
+  "sessionId": "rv-7f3c2a9e1b4d4c6a",
+  "turnId": 1,
+  "seq": 2,
+  "stage": "tool",
+  "label": "正在查询天气"
+}
