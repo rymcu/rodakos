@@ -40,6 +40,7 @@ namespace rodakos {
 struct ButtonAction;
 struct ButtonBinding;
 struct DeviceCloudConfig;
+class VoiceStatusLightService;
 }
 
 enum class SettingsPage {
@@ -83,6 +84,7 @@ private:
     void ResetUiPointers();
     void ShowPage(SettingsPage page);
     void CreateMainPage();
+    void CreateVoiceStatusLightRows(lv_obj_t* list, rodakos::VoiceStatusLightService& light);
     // Refreshes the row-end values; NVS-backed values are read off the LVGL thread.
     void UpdateMainPageStatus();
     void CreateWiFiListPage();
@@ -167,6 +169,9 @@ private:
     lv_obj_t* brightness_slider_ = nullptr;
     // The Control Center changes the backlight without pausing Settings; this keeps the slider in step.
     lv_timer_t* brightness_sync_timer_ = nullptr;
+    lv_obj_t* voice_light_switch_ = nullptr;
+    lv_obj_t* voice_light_slider_ = nullptr;
+    lv_obj_t* voice_light_level_label_ = nullptr;
     lv_obj_t* home_wifi_value_ = nullptr;
     lv_obj_t* home_cloud_value_ = nullptr;
     lv_obj_t* home_time_zone_value_ = nullptr;

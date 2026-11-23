@@ -7,6 +7,7 @@
 #include "phone_os/phone_navigation.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/time_service.h"
+#include "phone_os/voice_status_light_service.h"
 #include "phone_os/web_file_system_service.h"
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
@@ -50,6 +51,13 @@ lv_obj_t* CreateRow(lv_obj_t* list, int index, const char* icon, const char* tit
     if (chevron) CreateRowChevron(row);
     if (value_out != nullptr) *value_out = CreateRowValue(row, kValueWidth, chevron);
     return row;
+}
+
+void StyleToggle(lv_obj_t* sw) {
+    const auto checked_indicator = static_cast<lv_style_selector_t>(
+        static_cast<uint32_t>(LV_PART_INDICATOR) | static_cast<uint32_t>(LV_STATE_CHECKED));
+    lv_obj_set_style_bg_color(sw, rodakos_theme_primary(), checked_indicator);
+    lv_obj_set_style_bg_color(sw, rodakos_theme_bg_tertiary(), LV_PART_INDICATOR);
 }
 
 // Settings is destroyed while 主题 or 关于本机 is open; remember where the list was so that
@@ -213,7 +221,8 @@ void SettingsApp::CreateMainPage() {
     }, LV_EVENT_CLICKED, this);
 
     // ===== 设备 =====
-    auto* device = CreateGroup(main_body_, "设备", y, 3);
+    auto* status_light = context_->services().voice_status_light();
+    auto* device = CreateGroup(main_body_, "设备", y, status_light != nullptr ? 5 : 3);
     auto* datetime_row = CreateRow(device, 0, ICON_CLOCK, "日期与时间", true, &home_time_zone_value_);
     lv_obj_add_event_cb(datetime_row, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowPage(SettingsPage::kDateTime);
@@ -226,6 +235,7 @@ void SettingsApp::CreateMainPage() {
     lv_obj_add_event_cb(shell_row, [](lv_event_t* e) {
         static_cast<SettingsApp*>(lv_event_get_user_data(e))->ShowPage(SettingsPage::kSystemShell);
     }, LV_EVENT_CLICKED, this);
+    if (status_light != nullptr) CreateVoiceStatusLightRows(device, *status_light);
 
     // ===== 文件传输 =====
     auto* files = CreateGroup(main_body_, "文件传输", y, 2);
@@ -322,4 +332,66 @@ void SettingsApp::OnCloudSummaryReady(SettingsCloudSummary summary) {
     }
     lv_label_set_text(home_cloud_value_, text);
     lv_obj_set_style_text_color(home_cloud_value_, color, 0);
+}
+
+void SettingsApp::CreateVoiceStatusLightRows(lv_obj_t* list,
+                                             rodakos::VoiceStatusLightService& light) {
+    const auto current = light.settings();
+
+    auto* toggle_row = CreateRow(list, 3, ICON_LIGHT, "语音状态灯", false, nullptr);
+    lv_obj_add_flag(toggle_row, LV_OBJ_FLAG_CLICKABLE);
+    voice_light_switch_ = lv_switch_create(toggle_row);
+    lv_obj_set_size(voice_light_switch_, 44, 24);
+    lv_obj_align(voice_light_switch_, LV_ALIGN_RIGHT_MID, 0, 0);
+    StyleToggle(voice_light_switch_);
+    if (current.enabled) lv_obj_add_state(voice_light_switch_, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(toggle_row, [](lv_event_t* e) {
+        auto* sw = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+        if (lv_obj_has_state(sw, LV_STATE_CHECKED)) lv_obj_clear_state(sw, LV_STATE_CHECKED);
+        else lv_obj_add_state(sw, LV_STATE_CHECKED);
+        lv_obj_send_event(sw, LV_EVENT_VALUE_CHANGED, nullptr);
+    }, LV_EVENT_CLICKED, voice_light_switch_);
+    lv_obj_add_event_cb(voice_light_switch_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        auto* light = self->context_->services().voice_status_light();
+        if (light == nullptr) return;
+        auto next = light->settings();
+        next.enabled = lv_obj_has_state(self->voice_light_switch_, LV_STATE_CHECKED);
+        if (!light->SetSettings(next)) self->ui_->ShowToastUnlocked("保存失败");
+    }, LV_EVENT_VALUE_CHANGED, this);
+
+    auto* level_row = CreateRow(list, 4, ICON_BRIGHTNESS, nullptr, false, nullptr);
+    voice_light_level_label_ = CreateSettingLabel(level_row, "", true);
+    lv_obj_set_width(voice_light_level_label_, 40);
+    lv_obj_set_style_text_align(voice_light_level_label_, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(voice_light_level_label_, &phone_font_12, 0);
+    lv_obj_align(voice_light_level_label_, LV_ALIGN_RIGHT_MID, 0, 0);
+    UpdateBrightnessLabel(voice_light_level_label_, current.max_brightness_percent);
+
+    voice_light_slider_ = lv_slider_create(level_row);
+    lv_obj_set_size(voice_light_slider_, 192, 6);
+    lv_obj_align(voice_light_slider_, LV_ALIGN_LEFT_MID, 32, 0);
+    lv_obj_set_ext_click_area(voice_light_slider_, 14);
+    lv_obj_add_flag(voice_light_slider_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    lv_obj_clear_flag(voice_light_slider_, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    lv_slider_set_range(voice_light_slider_, 5, 100);
+    lv_slider_set_value(voice_light_slider_, current.max_brightness_percent, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(voice_light_slider_, rodakos_theme_primary(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(voice_light_slider_, rodakos_theme_primary(), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(voice_light_slider_, 5, LV_PART_KNOB);
+    lv_obj_set_style_bg_color(voice_light_slider_, rodakos_theme_bg_tertiary(), LV_PART_MAIN);
+    lv_obj_add_event_cb(voice_light_slider_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        UpdateBrightnessLabel(self->voice_light_level_label_,
+                              lv_slider_get_value(self->voice_light_slider_));
+    }, LV_EVENT_VALUE_CHANGED, this);
+    lv_obj_add_event_cb(voice_light_slider_, [](lv_event_t* e) {
+        auto* self = static_cast<SettingsApp*>(lv_event_get_user_data(e));
+        auto* light = self->context_->services().voice_status_light();
+        if (light == nullptr) return;
+        auto next = light->settings();
+        next.max_brightness_percent =
+            static_cast<uint8_t>(lv_slider_get_value(self->voice_light_slider_));
+        if (!light->SetSettings(next)) self->ui_->ShowToastUnlocked("保存失败");
+    }, LV_EVENT_RELEASED, this);
 }

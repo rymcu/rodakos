@@ -24,6 +24,7 @@ class SerialProvisioningService;
 class SetupQrScanService;
 class VoiceAssistantService;
 class VoiceWakeService;
+class VoiceStatusLightService;
 class WakeOnLanService;
 class WebFileSystemService;
 }
@@ -85,6 +86,9 @@ public:
     void SetVoiceWake(rodakos::VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
     rodakos::VoiceWakeService* voice_wake() { return voice_wake_; }
 
+    void SetVoiceStatusLight(rodakos::VoiceStatusLightService* light) { voice_status_light_ = light; }
+    rodakos::VoiceStatusLightService* voice_status_light() { return voice_status_light_; }
+
     void SetWakeOnLan(rodakos::WakeOnLanService* wake_on_lan) { wake_on_lan_ = wake_on_lan; }
     rodakos::WakeOnLanService* wake_on_lan() { return wake_on_lan_; }
 
@@ -133,6 +137,7 @@ private:
     rodakos::SerialProvisioningService* serial_provisioning_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
     rodakos::VoiceWakeService* voice_wake_ = nullptr;
+    rodakos::VoiceStatusLightService* voice_status_light_ = nullptr;
     rodakos::WakeOnLanService* wake_on_lan_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;

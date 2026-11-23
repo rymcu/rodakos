@@ -259,3 +259,71 @@ RODAK_TEST("Light native toggles never lose concurrent updates") {
     RODAK_CHECK_FALSE(Read(service).enabled);
     RODAK_CHECK_EQ(Read(service).configuration_revision, 100u);
 }
+
+RODAK_TEST("Light overlay writes over the user setting without changing configuration") {
+    fake_light::Reset();
+    LightService service;
+    RODAK_CHECK(service.SetState(0, true, 50, {100, 80, 60}));
+    const auto before = Read(service);
+    RODAK_CHECK_EQ(service.SetOverlay(0, RgbColor{0, 200, 10}), ESP_OK);
+    RODAK_CHECK(service.HasOverlay(0));
+    for (size_t i = 0; i < 3; ++i) {
+        RODAK_CHECK_EQ(fake_light::Pixels()[i].red, 0u);
+        RODAK_CHECK_EQ(fake_light::Pixels()[i].green, 200u);
+        RODAK_CHECK_EQ(fake_light::Pixels()[i].blue, 10u);
+    }
+    const auto during = Read(service);
+    RODAK_CHECK_EQ(during.configuration_revision, before.configuration_revision);
+    RODAK_CHECK_EQ(during.brightness_percent, 50);
+    RODAK_CHECK_EQ(during.color.red, 100);
+    RODAK_CHECK(during.enabled);
+}
+
+RODAK_TEST("Light overlay removal restores the latest user configuration") {
+    fake_light::Reset();
+    LightService service;
+    RODAK_CHECK(service.SetState(0, true, 50, {100, 80, 60}));
+    RODAK_CHECK_EQ(service.SetOverlay(0, RgbColor{0, 200, 10}), ESP_OK);
+    RODAK_CHECK_EQ(service.SetOverlay(0, std::nullopt), ESP_OK);
+    RODAK_CHECK_FALSE(service.HasOverlay(0));
+    RODAK_CHECK_EQ(fake_light::Pixels()[0].red, 50u);
+    RODAK_CHECK_EQ(fake_light::Pixels()[0].green, 40u);
+    RODAK_CHECK_EQ(fake_light::Pixels()[0].blue, 30u);
+    const unsigned refreshes = fake_light::refresh_calls;
+    RODAK_CHECK_EQ(service.SetOverlay(0, std::nullopt), ESP_OK);
+    RODAK_CHECK_EQ(fake_light::refresh_calls.load(), refreshes);
+}
+
+RODAK_TEST("Light patch during an overlay commits and reports driver-applied but stays covered") {
+    fake_light::Reset();
+    LightService service;
+    RODAK_CHECK(service.SetState(0, true, 50, {100, 80, 60}));
+    RODAK_CHECK_EQ(service.SetOverlay(0, RgbColor{0, 200, 10}), ESP_OK);
+    const auto result = service.ApplyLightPatch(0, Brightness(80));
+    RODAK_CHECK(result.accepted);
+    RODAK_CHECK_EQ(result.application, LightApplication::kDriverApplied);
+    RODAK_CHECK_EQ(result.configuration_revision, 2u);
+    RODAK_CHECK_EQ(fake_light::Pixels()[0].green, 200u);
+    RODAK_CHECK_EQ(service.SetOverlay(0, std::nullopt), ESP_OK);
+    RODAK_CHECK_EQ(fake_light::Pixels()[0].red, 80u);
+}
+
+RODAK_TEST("Light overlay restore failure marks the light unverified") {
+    fake_light::Reset();
+    LightService service;
+    RODAK_CHECK(service.SetState(0, true, 50, {100, 80, 60}));
+    RODAK_CHECK_EQ(service.SetOverlay(0, RgbColor{0, 200, 10}), ESP_OK);
+    fake_light::fail_refresh = true;
+    RODAK_CHECK(service.SetOverlay(0, std::nullopt) != ESP_OK);
+    const auto state = Read(service);
+    RODAK_CHECK_FALSE(state.available);
+    RODAK_CHECK_EQ(state.application, LightApplication::kUnverified);
+    RODAK_CHECK_EQ(state.configuration_revision, 1u);
+}
+
+RODAK_TEST("Light overlay rejects an unknown index") {
+    fake_light::Reset();
+    LightService service;
+    RODAK_CHECK_EQ(service.SetOverlay(99, RgbColor{1, 2, 3}), ESP_ERR_INVALID_ARG);
+    RODAK_CHECK_FALSE(service.HasOverlay(99));
+}

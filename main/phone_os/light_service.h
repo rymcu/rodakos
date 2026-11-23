@@ -82,12 +82,19 @@ public:
     bool SetColor(size_t index, RgbColor color);
     bool SetState(size_t index, bool enabled, uint8_t brightness_percent, RgbColor color);
     bool Apply(size_t index);
+    // Shows `color` (already scaled, written at full brightness) above the user configuration.
+    // The configuration, its revision and the MQTT report do not change. A patch accepted while
+    // the overlay is active is written to the driver and then covered again by the overlay.
+    // nullopt removes the overlay and writes the user configuration back.
+    esp_err_t SetOverlay(size_t index, const std::optional<RgbColor>& color);
+    bool HasOverlay(size_t index) const;
 
 private:
     LightApplyResult ApplyLightPatchLocked(size_t index, const LightPatch& patch);
 
     std::vector<LightState> lights_;
     std::vector<BoardLightDevice> board_lights_;
+    std::vector<std::optional<RgbColor>> overlays_;
     bool initialized_ = false;
     mutable std::recursive_mutex mutex_;
 };

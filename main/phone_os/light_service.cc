@@ -23,6 +23,7 @@ bool LightService::Init() {
     initialized_ = true;
     lights_.clear();
     board_lights_.clear();
+    overlays_.clear();
 
     for (const auto& device : DiscoverBoardLights()) {
         LightState state;
@@ -38,6 +39,7 @@ bool LightService::Init() {
                                              : LightApplication::kUnverified;
         board_lights_.push_back(device);
         lights_.push_back(std::move(state));
+        overlays_.emplace_back();
     }
 
     ESP_LOGI(TAG, "Discovered %u board light(s)", static_cast<unsigned>(lights_.size()));
@@ -104,6 +106,39 @@ bool LightService::Apply(size_t index) {
     LightPatch patch;
     patch.enabled = lights_[index].enabled;
     return ApplyLightPatchLocked(index, patch).accepted;
+}
+
+esp_err_t LightService::SetOverlay(size_t index, const std::optional<RgbColor>& color) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!initialized_) Init();
+    if (index >= lights_.size() || index >= board_lights_.size()) return ESP_ERR_INVALID_ARG;
+
+    if (color) {
+        overlays_[index] = color;
+        return ApplyBoardLight(board_lights_[index], true, 100, color->red, color->green,
+                               color->blue);
+    }
+    if (!overlays_[index]) return ESP_OK;
+    overlays_[index].reset();
+
+    LightState& state = lights_[index];
+    const esp_err_t err = ApplyBoardLight(board_lights_[index], state.enabled,
+                                          state.brightness_percent, state.color.red,
+                                          state.color.green, state.color.blue);
+    if (err != ESP_OK) {
+        // The LEDs may still show the overlay; the accepted configuration is no longer on them.
+        state.available = false;
+        state.last_error = err;
+        state.application = LightApplication::kUnverified;
+        ESP_LOGW(TAG, "Failed to restore light '%s' after overlay: %s", state.id.c_str(),
+                 esp_err_to_name(err));
+    }
+    return err;
+}
+
+bool LightService::HasOverlay(size_t index) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return index < overlays_.size() && overlays_[index].has_value();
 }
 
 LightApplyResult LightService::ApplyLightPatch(size_t index, const LightPatch& patch) {
@@ -183,6 +218,16 @@ LightApplyResult LightService::ApplyLightPatchLocked(size_t index, const LightPa
     result.state = next;
     result.configuration_revision = state.configuration_revision;
     result.application = state.application;
+    if (const auto& overlay = overlays_[index]) {
+        // The patch itself reached the driver, so its receipt stays driver-applied. Cover it
+        // again under the same lock so the user colour does not flash during an overlay.
+        const esp_err_t overlay_err = ApplyBoardLight(board_lights_[index], true, 100,
+                                                      overlay->red, overlay->green, overlay->blue);
+        if (overlay_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to re-apply overlay on '%s': %s", state.id.c_str(),
+                     esp_err_to_name(overlay_err));
+        }
+    }
     return result;
 }
 

@@ -129,9 +129,10 @@ The wake callback runs outside the ADC capture task so DNS, TLS, and WebSocket s
 audio sampling. A supervisor observes the assistant state and re-arms local monitoring after the
 interaction reaches idle.
 
-## Status Light (planned)
+## Status Light
 
-> Status: design only. Nothing in this section is implemented yet.
+> Status: implemented except "waiting for a reply", which needs `turn.accepted` (contract §6.1).
+> Until that event is implemented, the light goes from listening to speaking directly.
 
 The Home screen gives no clear sign of what the assistant is doing after a wake. The board RGB
 light shows it. BigSmart has one WS2812 (`board_rgb`, GPIO43), so each state uses a color and a
@@ -170,8 +171,19 @@ Rules:
   voice interaction. When the overlay ends, the light shows the latest user configuration, and an
   MQTT effect that is still running continues.
 - A separate low-priority task computes the animation at about 30 Hz and writes the LED through
-  `LightService`. The LVGL task and the assistant I/O task never write the LED.
-- Settings get a switch for the voice status light and a maximum brightness, 30 % by default.
+  `LightService`. The LVGL task and the assistant I/O task never write the LED. It writes only
+  when the color changes.
+- A patch that arrives during the overlay (Smart app or MQTT) is written to the driver, so its
+  receipt stays `driver-applied`, and is covered again under the same lock. If writing the user
+  setting back fails, the light reports `available: false` and `application: unverified`.
+- Settings > 设备 has a switch for the voice status light and its maximum brightness, 30 % by
+  default. Both are stored in NVS namespace `voice_light`.
+
+Code: `main/phone_os/voice_status_light_model.*` (pure state-to-color model),
+`voice_status_light_service.*` (task and settings), `LightService::SetOverlay`, and
+`VoiceAssistantService::GetStatusLightSnapshot`. Host tests:
+`tests/app_model/voice_status_light_model_test.cc` and the overlay cases in
+`tests/light_service`.
 
 Risk to check on hardware: GPIO43 is also UART0 TXD. The console uses USB-Serial-JTAG, so there is
 no conflict at run time, but ROM boot output on UART0 can flash the LED at power-on. If it does,
