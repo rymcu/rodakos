@@ -70,6 +70,11 @@ void ArmLvglAllocationFailure(uint32_t skip, uint32_t count) {
 
 }  // namespace rodakos
 
+// The custom LVGL heap backend uses heap_caps_*_prefer, which skips the wrappers below.
+extern "C" bool rodakos_lvgl_allocation_should_fail(size_t size) {
+    return rodakos::ShouldFail(size);
+}
+
 extern "C" IRAM_ATTR void* __wrap_heap_caps_malloc_default(size_t size) {
     if (rodakos::ShouldFail(size)) return nullptr;
     return __real_heap_caps_malloc_default(size);

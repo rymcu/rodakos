@@ -40,7 +40,9 @@ CONFIG_MBEDTLS_THREADING_C=y
 CONFIG_MBEDTLS_THREADING_PTHREAD=y
 
 # LVGL
-CONFIG_LV_USE_CLIB_MALLOC=y
+# LVGL objects, styles and text buffers are small, long-lived and rebuilt on app
+# switches. main/phone_ui/lvgl_psram_alloc.c keeps them out of internal SRAM.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_USE_SNAPSHOT=y
 CONFIG_LV_USE_IMGFONT=y
 CONFIG_LV_FONT_MONTSERRAT_12=y

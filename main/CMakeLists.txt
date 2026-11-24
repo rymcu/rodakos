@@ -108,6 +108,7 @@ set(SOURCES
     "phone_os/web_file_system_service.cc"
     "phone_os/web_access_guard.cc"
     "phone_ui/phone_ui.cc"
+    "phone_ui/lvgl_psram_alloc.c"
     "phone_ui/boot_animation.cc"
     "phone_ui/phone_fonts.cc"
     "phone_ui/phone_theme.cc"
@@ -213,6 +214,10 @@ idf_component_register(
         rodakos_fonts
         quirc
 )
+
+# LVGL's custom heap backend lives in main; LVGL's archive links after it, so pull the
+# definitions in explicitly.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-u lv_mem_init")
 
 target_link_options(${COMPONENT_LIB} INTERFACE
     "-Wl,--wrap=jpeg_calloc"
