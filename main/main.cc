@@ -349,7 +349,9 @@ void TouchPollTask(void* arg) {
         vTaskDelayUntil(&last_wake, period);
     }
 
-    vTaskDelete(nullptr);
+    // Unreachable today: nothing clears `running` after the task starts. A real stop entry must
+    // use the task retirement path, because self-delete allocates an internal cleanup task.
+    vTaskDeleteWithCaps(nullptr);
 }
 
 lv_indev_t* InitTouchInput(lv_display_t* disp) {
@@ -391,12 +393,16 @@ lv_indev_t* InitTouchInput(lv_display_t* disp) {
         return nullptr;
     }
 
+    // The poll path never touches flash or NVS, and the I2C ISR is not IRAM-safe, so the
+    // permanent stack can live in PSRAM and leave internal SRAM to DMA and network tasks.
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t task_ret = xTaskCreatePinnedToCore(
-        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task, 0);
+    const BaseType_t task_ret = xTaskCreatePinnedToCoreWithCaps(
+        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t task_ret = xTaskCreate(
-        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task);
+    const BaseType_t task_ret = xTaskCreateWithCaps(
+        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (task_ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to start touch polling task");
@@ -503,7 +509,7 @@ extern "C" void app_main(void) {
 
     static rodakos::FileService* file_service = rodakos::CreateFileService();
     static rodakos::DeviceCloudConfigService device_cloud_config_service;
-    static rodakos::AppearanceService appearance_service(device_cloud_config_service, file_service);
+    EXT_RAM_BSS_ATTR static rodakos::AppearanceService appearance_service(device_cloud_config_service, file_service);
     appearance_service.BeginBootLoad();
 
     // Get LCD configuration for resolution
@@ -638,29 +644,29 @@ extern "C" void app_main(void) {
     static rodakos::MusicPlayerService music_player_service(audio_service, file_service);
     static rodakos::LightService light_service;
     light_service.Init();
-    static rodakos::Qmi8658MotionSensor qmi8658_motion_sensor;
+    EXT_RAM_BSS_ATTR static rodakos::Qmi8658MotionSensor qmi8658_motion_sensor;
     static rodakos::MotionService motion_service(&qmi8658_motion_sensor);
     static rodakos::ButtonBindingService button_binding_service;
     static rodakos::AudioFocusService audio_focus_service(
         music_player_service, audio_output_service);
     static rodakos::AudioCodecInput audio_input;
-    static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
+    EXT_RAM_BSS_ATTR static rodakos::RecordingService recording_service(audio_input, file_service, &audio_focus_service);
     static rodakos::OtaUpdateService ota_update_service(
         device_cloud_config_service, file_service);
     static rodakos::BatteryMonitor battery_monitor;
-    static rodakos::UnifiedMqttService unified_mqtt_service(
+    EXT_RAM_BSS_ATTR static rodakos::UnifiedMqttService unified_mqtt_service(
         device_cloud_config_service, ota_update_service, &audio_output_service,
         &battery_monitor, &light_service);
     unified_mqtt_service.SetAppearanceService(&appearance_service);
-    static rodakos::RodakRealtimeVoiceTransport voice_assistant_transport(
+    EXT_RAM_BSS_ATTR static rodakos::RodakRealtimeVoiceTransport voice_assistant_transport(
         device_cloud_config_service);
-    static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
-    static rodakos::VoiceAssistantService voice_assistant_service(
+    EXT_RAM_BSS_ATTR static rodakos::VoiceAudioFrontend voice_audio_frontend(audio_input);
+    EXT_RAM_BSS_ATTR static rodakos::VoiceAssistantService voice_assistant_service(
         audio_focus_service,
         voice_assistant_transport,
         voice_audio_frontend,
         audio_output_service);
-    static rodakos::VoiceWakeService voice_wake_service(
+    EXT_RAM_BSS_ATTR static rodakos::VoiceWakeService voice_wake_service(
         voice_assistant_service, voice_audio_frontend);
     static rodakos::VoiceStatusLightService voice_status_light_service(
         light_service, [] { return voice_assistant_service.GetStatusLightSnapshot(); });
@@ -735,7 +741,7 @@ extern "C" void app_main(void) {
                  announce_seq, queued ? 1 : 0);
         return queued ? std::string() : std::string("busy");
     });
-    static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
+    EXT_RAM_BSS_ATTR static rodakos::LanOnboardingService lan_onboarding_service(device_cloud_config_service);
     static rodakos::SerialProvisioningService serial_provisioning_service(
         wifi, device_cloud_config_service,
         []() { unified_mqtt_service.RequestCredentialRefresh(); },
@@ -785,13 +791,13 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Audio services ready - focus, assistant, and playback open codec on demand");
     ESP_LOGI(TAG, "Recording service ready - audio ADC opens on demand");
 
-    static rodakos::WebFileSystemService web_files_service(file_service);
+    EXT_RAM_BSS_ATTR static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
 
-    static rodakos::CameraService camera_service(file_service);
+    EXT_RAM_BSS_ATTR static rodakos::CameraService camera_service(file_service);
     ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
     static rodakos::WebRtcCameraService web_rtc_camera_service(&camera_service);
-    static rodakos::SetupQrScanService setup_qr_scan_service(
+    EXT_RAM_BSS_ATTR static rodakos::SetupQrScanService setup_qr_scan_service(
         &camera_service, &audio_focus_service, wifi, device_cloud_config_service);
     // A new bootstrap URL cleared the cached credentials; restart cloud like USB provisioning.
     setup_qr_scan_service.SetServerChangedCallback([]() {
@@ -822,7 +828,7 @@ extern "C" void app_main(void) {
         }
         lvgl_port_unlock();
     }
-    static rodakos::WebRtcDisplayService web_rtc_display_service(&display_service);
+    EXT_RAM_BSS_ATTR static rodakos::WebRtcDisplayService web_rtc_display_service(&display_service);
     unified_mqtt_service.SetWebRtcDisplayService(&web_rtc_display_service);
     appearance_service.SetBusyGate([]() {
         const auto voice = voice_assistant_service.GetState();
@@ -954,7 +960,7 @@ extern "C" void app_main(void) {
         unified_mqtt_service.ReconnectAfterCredentialChange();
     });
 
-    static PhoneSystem system(ui, services);
+    EXT_RAM_BSS_ATTR static PhoneSystem system(ui, services);
     if (!system.Start()) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         boot_animation.Stop();

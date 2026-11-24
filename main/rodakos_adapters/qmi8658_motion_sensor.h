@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/motion_service.h"
+#include "phone_os/task-retirement.h"
 
 #include <driver/i2c_master.h>
 #include <esp_err.h>
@@ -8,6 +9,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include <atomic>
 #include <cstdint>
 
 namespace rodakos {
@@ -48,11 +50,15 @@ private:
     void SetLastError(const char* text);
     void SetLastError(esp_err_t err, const char* context);
     static void SensorTask(void* arg);
+    void SensorLoop();
 
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     i2c_master_dev_handle_t i2c_dev_ = nullptr;
-    TaskHandle_t task_handle_ = nullptr;
-    volatile bool task_running_ = false;
+    // Exit runs through the shared retirement path: IDF's self-delete would allocate an internal
+    // cleanup task on exit and abort when internal SRAM is fragmented.
+    TaskRetirementOwner retirement_owner_;
+    TaskRetirementTicket retirement_;
+    std::atomic<bool> task_running_{false};
     bool initialized_ = false;
     float yaw_degrees_ = 0.0f;
     int64_t last_yaw_update_us_ = 0;

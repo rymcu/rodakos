@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -100,6 +101,13 @@ private:
         uint32_t generation = 0;
     };
 
+    struct CachedBinding {
+        std::string button_id;
+        ButtonEvent event = ButtonEvent::kSingleClick;
+        ButtonAction action;
+        bool custom = false;
+    };
+
     struct QueuedButtonEvent {
         char button_id[32] = {};
         ButtonEvent event = ButtonEvent::kSingleClick;
@@ -111,6 +119,9 @@ private:
     void RegisterCallbacks();
     bool StartWorker();
     void ResetDiscoveredState();
+    void LoadBindingCache();
+    void UpdateBindingCache(const std::string& button_id, ButtonEvent event,
+                            const ButtonAction& action, bool custom);
     void HandleButtonEvent(std::string_view button_id, ButtonEvent event);
     void ExecuteBinding(const RegisteredButton& button, ButtonEvent event);
     void ScheduleSingleClick(const RegisteredButton& button);
@@ -142,6 +153,10 @@ private:
     QueueHandle_t event_queue_ = nullptr;
     TaskHandle_t worker_task_ = nullptr;
     bool initialized_ = false;
+    // The worker runs on a PSRAM stack and must not read NVS, which turns the flash cache off.
+    // Init loads every registered binding here; SetBinding/ResetBinding keep it in step.
+    mutable std::mutex binding_cache_mutex_;
+    std::vector<CachedBinding> binding_cache_;
 };
 
 }  // namespace rodakos

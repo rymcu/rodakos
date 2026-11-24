@@ -232,6 +232,39 @@ Services
 PhoneSystem
 ```
 
+## Internal SRAM Pressure
+
+The limit is the largest contiguous internal block, not total free heap or PSRAM. Check
+`Main health` (`internal_largest`, `dma_largest`) before and after Camera and a voice turn.
+
+- A task stack may live in PSRAM (`xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)`) only if the
+  task never reaches NVS, OTA, or direct flash/partition access (`esp_partition_read()` and
+  `esp_flash_read()` included). Those turn the flash cache off, and IDF asserts when the current
+  stack is outside internal RAM. `touch_poll`, `voice_light`, `btn_bind` and `qmi8658_motion`
+  use PSRAM stacks. `btn_bind` therefore reads button bindings from a RAM cache that `Init`
+  loads and `SetBinding`/`ResetBinding` update. `mqtt_worker`, `serial_prov` and `wake_notify`
+  reach NVS through cloud-config, WiFi and provisioning paths and keep internal stacks.
+- A WithCaps task that exits must use the shared task retirement path:
+  `vTaskDeleteWithCaps(nullptr)` creates an internal-RAM cleanup task and aborts if that fails.
+  The self-delete branches left in `touch_poll` and `btn_bind` are unreachable today.
+- Large `app_main` service objects use `EXT_RAM_BSS_ATTR`. Keep a new static in internal RAM if
+  an IRAM ISR or a cache-disabled path touches it.
+- LVGL uses `CONFIG_LV_USE_CUSTOM_MALLOC` with `main/phone_ui/lvgl_psram_alloc.c`, which prefers
+  PSRAM and falls back to the default internal heap, never the
+  `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL` DMA pool. The display DMA buffers come from
+  `esp_lvgl_port`, not from this heap. The LCD SPI completion ISR writes the display object; it
+  is not IRAM-safe. Making it IRAM-safe requires the whole completion callback chain (code and
+  data, including the display object) to be usable with the flash cache off. Under
+  `RODAKOS_RELEASE_TESTS` the allocator calls the LVGL failure injector directly, because
+  `heap_caps_*_prefer` bypasses the wrapped `heap_caps_*_default`.
+- WiFi static RX buffers are hardware DMA buffers in internal RAM (about 1.6 KB each, 16 by
+  default with `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`); only dynamic buffers prefer PSRAM.
+  Reducing `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` would return internal DMA RAM but needs a
+  throughput and packet-loss test during WebRTC and voice. IDF recommends `RX_BA_WIN` 16 in this
+  mode. On 2026-11-24, disabling `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` and
+  `CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT` moved `.dram0.data` by 16 B and the idle/after-voice
+  `internal_free` by under 200 B, so both stay enabled. `CONFIG_LWIP_IPV6` is required by trusted-server discovery and numeric IPv6 routes.
+
 ## Touch Not Responding
 
 Current design: GT911 touch is handled by a cached polling bridge in `main.cc`, not by direct `lvgl_port_add_touch()`.
