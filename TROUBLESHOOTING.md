@@ -232,6 +232,28 @@ Services
 PhoneSystem
 ```
 
+## Internal SRAM Pressure
+
+The limit is the largest contiguous internal block, not total free heap or PSRAM. Check
+`Main health` (`internal_largest`, `dma_largest`) before and after Camera and a voice turn.
+
+- A task stack may live in PSRAM (`xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)`) only if the
+  task never reaches NVS, flash or OTA writes. Those turn the flash cache off, and IDF asserts
+  when the current stack is outside internal RAM. `touch_poll`, `voice_light`, `btn_bind` and
+  `qmi8658_motion` use PSRAM stacks. `btn_bind` therefore hands its NVS binding lookup to the
+  LVGL task. `mqtt_worker`, `serial_prov` and `wake_notify` reach NVS through cloud-config,
+  WiFi and provisioning paths and keep internal stacks.
+- Large `app_main` service objects use `EXT_RAM_BSS_ATTR`. Keep a new static in internal RAM if
+  an IRAM ISR or a cache-disabled path touches it.
+- LVGL uses `CONFIG_LV_USE_CUSTOM_MALLOC` with `main/phone_ui/lvgl_psram_alloc.c`, which prefers
+  PSRAM. The display DMA buffers come from `esp_lvgl_port`, not from this heap. Under
+  `RODAKOS_RELEASE_TESTS` the allocator calls the LVGL failure injector directly, because
+  `heap_caps_*_prefer` bypasses the wrapped `heap_caps_*_default`.
+- Leave `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` and `CONFIG_ESP_WIFI_RX_BA_WIN` at 16: with
+  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` IDF prefers PSRAM for them and documents 16 as the
+  minimum BA window. Disabling SoftAP/Enterprise did not change internal RAM measurably.
+  `CONFIG_LWIP_IPV6` is required by trusted-server discovery and numeric IPv6 routes.
+
 ## Touch Not Responding
 
 Current design: GT911 touch is handled by a cached polling bridge in `main.cc`, not by direct `lvgl_port_add_touch()`.
