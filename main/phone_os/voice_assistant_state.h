@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/cloud_diagnostic.h"
+#include "phone_os/voice_turn_progress.h"
 
 #include <cstdint>
 #include <string>
@@ -34,6 +35,9 @@ struct VoiceAssistantState {
     // turn.accepted 之后、output.start 之前（契约 §6.1）。服务端已接下这一轮，
     // 由 VoiceConversationPolicy 的 130 s 时限负责结束丢失的轮次。
     bool awaiting_reply = false;
+    // 仅在 awaiting_reply 期间有值：最近一条 turn.progress 的步骤和服务端给的显示文字。
+    VoiceTurnStage turn_stage = VoiceTurnStage::kNone;
+    std::string turn_label;
     uint32_t focus_token = 0;
     std::string message;
     std::string last_wake_word;

@@ -869,6 +869,10 @@ VoiceAssistantState VoiceAssistantService::GetState() {
     state.recorder_active = recorder_active_;
     state.announce = announce_;
     state.awaiting_reply = conversation_policy_.waiting_for_reply();
+    if (state.awaiting_reply) {
+        state.turn_stage = turn_stage_;
+        state.turn_label = turn_label_;
+    }
     state.focus_token = focus_token_;
     state.message = message_;
     state.last_wake_word = last_wake_word_;
@@ -901,6 +905,21 @@ VoiceStatusLightSnapshot VoiceAssistantService::GetStatusLightSnapshot() {
     }
     snapshot.interaction_starts = status_light_starts_;
     snapshot.barge_ins = status_light_barge_ins_;
+    xSemaphoreGive(mutex_);
+    return snapshot;
+}
+
+VoiceTurnProgressSnapshot VoiceAssistantService::GetTurnProgressSnapshot() {
+    VoiceTurnProgressSnapshot snapshot;
+    if (mutex_ == nullptr) {
+        return snapshot;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    snapshot.awaiting_reply = conversation_policy_.waiting_for_reply();
+    if (snapshot.awaiting_reply) {
+        snapshot.stage = turn_stage_;
+        snapshot.label = turn_label_;
+    }
     xSemaphoreGive(mutex_);
     return snapshot;
 }
@@ -1759,9 +1778,29 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             const bool accepted = !stopping_ && io_running_ && !announce_ &&
                                   event.transport_generation == transport_generation_ &&
                                   conversation_policy_.OnTurnAccepted(esp_timer_get_time() / 1000);
+            if (accepted) {
+                turn_stage_ = VoiceTurnStage::kNone;
+                turn_label_.clear();
+            }
             xSemaphoreGive(mutex_);
             if (!accepted) {
                 ESP_LOGD(TAG, "Dropping turn.accepted outside a user turn");
+            }
+            break;
+        }
+        case VoiceInboundEventType::kTurnProgress: {
+            // 契约 §6.1：只供屏幕显示，不顺延 130 s 回复时限。设备已放弃或已开始播放的轮次直接丢弃。
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const bool accepted = !stopping_ && io_running_ && !announce_ &&
+                                  event.transport_generation == transport_generation_ &&
+                                  conversation_policy_.waiting_for_reply();
+            if (accepted) {
+                turn_stage_ = event.turn_stage;
+                turn_label_ = std::move(event.payload);
+            }
+            xSemaphoreGive(mutex_);
+            if (!accepted) {
+                ESP_LOGD(TAG, "Dropping turn.progress outside an accepted turn");
             }
             break;
         }

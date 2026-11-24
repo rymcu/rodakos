@@ -1383,8 +1383,10 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
     const bool is_error = std::strcmp(event_name, kRealtimeVoiceEventError) == 0;
     const bool is_turn_accepted =
         std::strcmp(event_name, kRealtimeVoiceEventTurnAccepted) == 0;
+    const bool is_turn_progress =
+        std::strcmp(event_name, kRealtimeVoiceEventTurnProgress) == 0;
     if (!is_session_ready && !is_output_start && !is_output_stop && !is_session_end &&
-        !is_mcp && !is_error && !is_turn_accepted) {
+        !is_mcp && !is_error && !is_turn_accepted && !is_turn_progress) {
         cJSON_Delete(root);
         SetError("Unsupported realtime voice control event", generation);
         return;
@@ -1413,8 +1415,9 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         }
         if (!session_matches) {
             cJSON_Delete(root);
-            // Contract section 6.1: a turn.accepted of another session is dropped, not an error.
-            if (!is_turn_accepted) {
+            // Contract section 6.1: turn.accepted and turn.progress of another session are dropped,
+            // not an error.
+            if (!is_turn_accepted && !is_turn_progress) {
                 SetError("Realtime voice control frame sessionId does not match", generation);
             }
             return;
@@ -1544,6 +1547,39 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             .audio = {},
             .payload = {},
             .failure = {},
+        }, generation);
+    } else if (is_turn_progress) {
+        RealtimeVoiceTurnProgress progress;
+        std::string progress_error;
+        if (!ParseRealtimeVoiceTurnProgress(root, progress, progress_error)) {
+            cJSON_Delete(root);
+            SetError(progress_error, generation);
+            return;
+        }
+        // Dropped without an error (contract section 6.1): another turn than the current accepted
+        // one, a seq that is not greater than the last one, and an event after output.start.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool accepted = !closing_ && connection_generation_ == generation &&
+                              !inbound_output_active_ &&
+                              session_gate_.AcceptTurnProgress(generation, progress.turn_id,
+                                                               progress.seq);
+        xSemaphoreGive(mutex_);
+        if (!accepted) {
+            ESP_LOGD(TAG, "Dropping realtime voice turn.progress: turn_id=%u seq=%u",
+                     static_cast<unsigned>(progress.turn_id), static_cast<unsigned>(progress.seq));
+            cJSON_Delete(root);
+            return;
+        }
+        // The label is server text for the screen; it stays out of the log.
+        ESP_LOGI(TAG, "Received realtime voice turn.progress: turn_id=%u seq=%u stage=%d",
+                 static_cast<unsigned>(progress.turn_id), static_cast<unsigned>(progress.seq),
+                 static_cast<int>(progress.stage));
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kTurnProgress,
+            .audio = {},
+            .payload = std::move(progress.label),
+            .failure = {},
+            .turn_stage = progress.stage,
         }, generation);
     } else if (is_mcp) {
         VoiceInboundEvent inbound;

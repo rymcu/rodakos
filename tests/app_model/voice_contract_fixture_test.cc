@@ -83,6 +83,30 @@ RODAK_TEST("Voice contract fixture: turn.accepted decodes and rejects as documen
     }
 }
 
+RODAK_TEST("Voice contract fixture: turn.progress decodes and rejects as documented") {
+    RODAK_CHECK(ValidServerControl("valid/turn-progress.thinking.json"));
+    RODAK_CHECK(ValidServerControl("valid/turn-progress.tool.json"));
+    RODAK_CHECK(ValidServerControl("valid/control-message.turn-progress.json"));
+    CJsonPtr root = ParseFixture("valid/turn-progress.tool.json");
+    rodakos::RealtimeVoiceTurnProgress progress;
+    std::string error;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceTurnProgress(root.get(), progress, error));
+    RODAK_CHECK_EQ(progress.turn_id, 1u);
+    RODAK_CHECK_EQ(progress.seq, 2u);
+    RODAK_CHECK(progress.stage == rodakos::VoiceTurnStage::kTool);
+    RODAK_CHECK_EQ(progress.label, std::string("正在查询天气"));
+    root = ParseFixture("valid/turn-progress.thinking.json");
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceTurnProgress(root.get(), progress, error));
+    RODAK_CHECK(progress.stage == rodakos::VoiceTurnStage::kThinking);
+    RODAK_CHECK(progress.label.empty());
+    for (const char* fixture :
+         {"invalid/turn-progress.blank-label.json", "invalid/turn-progress.long-label.json",
+          "invalid/turn-progress.seq-zero.json", "invalid/turn-progress.tool-done.json",
+          "invalid/turn-progress.tool-name.json"}) {
+        RODAK_CHECK_FALSE(ValidServerControl(fixture));
+    }
+}
+
 RODAK_TEST("Voice contract fixture: server error fields decode") {
     CJsonPtr root = ParseFixture("valid/error.retryable.json");
     rodakos::RealtimeVoiceServerError server_error;
@@ -115,8 +139,8 @@ RODAK_TEST("Voice contract fixture: device-built messages match the fixtures") {
 
     CJsonPtr built(cJSON_Parse(rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7).c_str()),
                    cJSON_Delete);
-    // An ordinary session asks for turn.accepted (contract section 6.1).
-    CJsonPtr fixture = ParseFixture("valid/session-open.turn-accepted.json");
+    // An ordinary session asks for turn.accepted and turn.progress (contract section 6.1).
+    CJsonPtr fixture = ParseFixture("valid/session-open.turn-progress.json");
     RODAK_CHECK(built != nullptr && fixture != nullptr);
     RODAK_CHECK(cJSON_Compare(built.get(), fixture.get(), true));
 

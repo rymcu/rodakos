@@ -156,6 +156,28 @@ void ClockTimerCallback(lv_timer_t* timer) {
     }
 }
 
+void VoiceTurnTimerCallback(lv_timer_t* timer) {
+    auto* self = static_cast<HomeApp*>(lv_timer_get_user_data(timer));
+    if (self != nullptr) {
+        self->UpdateVoiceTurnStatus();
+    }
+}
+
+// Device text for a stage without a server label (contract section 6.1).
+const char* VoiceTurnStageText(rodakos::VoiceTurnStage stage) {
+    switch (stage) {
+        case rodakos::VoiceTurnStage::kThinking:
+            return "正在思考";
+        case rodakos::VoiceTurnStage::kTool:
+            return "正在处理";
+        case rodakos::VoiceTurnStage::kComposing:
+            return "正在组织回答";
+        case rodakos::VoiceTurnStage::kNone:
+        default:
+            return "已收到";
+    }
+}
+
 const char* BatteryIconForLevel(int level_percent, bool charging) {
     if (charging) {
         return ICON_BATTERY_CHARGING;
@@ -579,6 +601,21 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     lv_label_set_text(battery_label_, "--%");
     lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
     lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
+
+    // Between the clock (about 40 px) and the 92 px status cluster; centering on the header would
+    // run into the cluster. Hidden until the server accepts a turn.
+    voice_turn_label_ = lv_label_create(header);
+    if (voice_turn_label_ != nullptr) {
+        lv_label_set_text(voice_turn_label_, "");
+        lv_label_set_long_mode(voice_turn_label_, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(voice_turn_label_, 148);
+        lv_obj_set_style_text_align(voice_turn_label_, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(voice_turn_label_, rodakos_theme_primary(), 0);
+        lv_obj_set_style_text_font(voice_turn_label_, &phone_font_12, 0);
+        lv_obj_align(voice_turn_label_, LV_ALIGN_LEFT_MID, 50, 0);
+        lv_obj_add_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(voice_turn_label_, LV_OBJ_FLAG_CLICKABLE);
+    }
     LogHomeResources("status-bar");
 
     // ===== BODY 区域 =====
@@ -681,6 +718,11 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     UpdateClock();
     clock_timer_ = lv_timer_create(ClockTimerCallback, 1000, this);
     LogHomeResources("footer-timer");
+    if (context.services().voice_turn_progress() != nullptr) {
+        // turn.progress steps can be 500 ms apart; the clock timer is too slow for them.
+        voice_turn_timer_ = lv_timer_create(VoiceTurnTimerCallback, 250, this);
+        UpdateVoiceTurnStatus();
+    }
 
     if (collection_state_.kind == CollectionKind::kFolder) {
         OpenFolder(collection_state_.folder_id);
@@ -2371,6 +2413,10 @@ void HomeApp::DestroyUi() {
         lv_timer_delete(clock_timer_);
         clock_timer_ = nullptr;
     }
+    if (voice_turn_timer_ != nullptr) {
+        lv_timer_delete(voice_turn_timer_);
+        voice_turn_timer_ = nullptr;
+    }
     if (root_ != nullptr && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
     }
@@ -2390,6 +2436,8 @@ void HomeApp::ResetUiPointers() {
     wifi_label_ = nullptr;
     battery_icon_ = nullptr;
     battery_label_ = nullptr;
+    voice_turn_label_ = nullptr;
+    voice_turn_text_.clear();
     battery_refresh_ticks_ = 0;
     page_tiles_.clear();
     page_populated_.clear();
@@ -2427,6 +2475,29 @@ void HomeApp::UpdateClock() {
         UpdateBatteryStatus();
     }
     battery_refresh_ticks_ = (battery_refresh_ticks_ + 1) % kBatteryRefreshTicks;
+}
+
+void HomeApp::UpdateVoiceTurnStatus() {
+    if (voice_turn_label_ == nullptr || context_ == nullptr) {
+        return;
+    }
+    auto* provider = context_->services().voice_turn_progress();
+    const auto snapshot = provider != nullptr ? provider->GetTurnProgressSnapshot()
+                                              : rodakos::VoiceTurnProgressSnapshot{};
+    std::string text;
+    if (snapshot.awaiting_reply) {
+        text = snapshot.label.empty() ? VoiceTurnStageText(snapshot.stage) : snapshot.label;
+    }
+    if (text == voice_turn_text_) {
+        return;
+    }
+    voice_turn_text_ = std::move(text);
+    lv_label_set_text(voice_turn_label_, voice_turn_text_.c_str());
+    if (voice_turn_text_.empty()) {
+        lv_obj_add_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void HomeApp::UpdateBatteryStatus() {

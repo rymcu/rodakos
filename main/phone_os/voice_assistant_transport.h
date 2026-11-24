@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/cloud_diagnostic.h"
+#include "phone_os/voice_turn_progress.h"
 
 #include <cstdint>
 #include <functional>
@@ -37,6 +38,9 @@ enum class VoiceInboundEventType {
     kError,
     // turn.accepted (contract section 6.1): the server will answer the current utterance.
     kTurnAccepted,
+    // turn.progress (contract section 6.1): a step of the accepted turn started. The stage is in
+    // turn_stage and the optional display label in payload.
+    kTurnProgress,
 };
 
 enum class VoiceTransportFailureKind {
@@ -113,6 +117,7 @@ struct VoiceInboundEvent {
     VoiceAudioPacket audio;
     std::string payload;
     VoiceTransportFailure failure;
+    VoiceTurnStage turn_stage = VoiceTurnStage::kNone;
 };
 
 using VoiceInboundHandler = std::function<void(VoiceInboundEvent&&)>;

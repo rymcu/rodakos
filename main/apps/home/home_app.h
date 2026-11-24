@@ -23,6 +23,7 @@ public:
     bool OnThemeChanged(PhoneAppContext& context) override;
     bool OnHomeRequested() override;
     void UpdateClock();
+    void UpdateVoiceTurnStatus();
 
 private:
     struct DeferredEditPayload;
@@ -188,7 +189,10 @@ private:
     lv_obj_t* wifi_label_ = nullptr;
     lv_obj_t* battery_icon_ = nullptr;
     lv_obj_t* battery_label_ = nullptr;
+    lv_obj_t* voice_turn_label_ = nullptr;
     lv_timer_t* clock_timer_ = nullptr;
+    lv_timer_t* voice_turn_timer_ = nullptr;
+    std::string voice_turn_text_;
     DeferredEditPayload* pending_edit_ = nullptr;
     DeferredLaunchPayload* pending_launch_ = nullptr;
     bool edit_action_pending_ = false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/battery_monitor.h"
+#include "phone_os/voice_turn_progress.h"
 #include <functional>
 
 class BacklightAdapter;
@@ -83,6 +84,9 @@ public:
     void SetVoiceAssistant(rodakos::VoiceAssistantService* voice_assistant) { voice_assistant_ = voice_assistant; }
     rodakos::VoiceAssistantService* voice_assistant() { return voice_assistant_; }
 
+    void SetVoiceTurnProgress(rodakos::VoiceTurnProgressProvider* provider) { voice_turn_progress_ = provider; }
+    rodakos::VoiceTurnProgressProvider* voice_turn_progress() { return voice_turn_progress_; }
+
     void SetVoiceWake(rodakos::VoiceWakeService* voice_wake) { voice_wake_ = voice_wake; }
     rodakos::VoiceWakeService* voice_wake() { return voice_wake_; }
 
@@ -136,6 +140,7 @@ private:
     rodakos::LanOnboardingService* lan_onboarding_ = nullptr;
     rodakos::SerialProvisioningService* serial_provisioning_ = nullptr;
     rodakos::VoiceAssistantService* voice_assistant_ = nullptr;
+    rodakos::VoiceTurnProgressProvider* voice_turn_progress_ = nullptr;
     rodakos::VoiceWakeService* voice_wake_ = nullptr;
     rodakos::VoiceStatusLightService* voice_status_light_ = nullptr;
     rodakos::WakeOnLanService* wake_on_lan_ = nullptr;

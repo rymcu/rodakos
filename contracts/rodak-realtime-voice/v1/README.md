@@ -19,7 +19,7 @@ The `realtimeVoice` descriptor that AIoT sends is in
 | --- | --- | --- |
 | Device → server | `session.open`, `wake.detected`, `input.start`, `input.stop`, `playback.abort`, `vad` | What RodakOS emits. Rodak accepts more where noted (for example any non-empty `playback.abort` reason). |
 | Server → device | `session.ready`, `output.start`, `output.stop`, `session.end`, `error` | What Rodak emits and RodakOS accepts. |
-| Server → device (draft) | `turn.accepted`, `turn.progress` | Contract §6.1. RodakOS implements `turn.accepted`; `turn.progress` is not implemented yet. Sent only after `session.open` `features.turn_accepted: 1` and `features.turn_progress: 1`. |
+| Server → device (draft) | `turn.accepted`, `turn.progress` | Contract §6.1. RodakOS implements both. Sent only after `session.open` `features.turn_accepted: 1` and `features.turn_progress: 1`. |
 
 Schemas cover one message at a time. Ordering rules stay in the prose: one `session.ready` per
 generation, increasing `playbackEpoch` and RAV1 sequence, stale-generation drops (§2, §5, §6).
