@@ -30,26 +30,62 @@ carry sample-weighted VAD metadata and a sample-clock timestamp. The service
 does not append AFE `vad_cache` samples because those onset samples already
 exist in the continuous stream.
 
+The sample clock is anchored at the first fetch. When a later fetch shows that a
+timestamp would be later than the fetch time, the anchor moves back. Before this
+correction, a late first fetch put most frames 30–85 ms in the future for the
+whole session. Barge-in rejects frames more than 30 ms ahead of the device
+clock, so in most sessions no frame could reach it.
+
 ## Interruption policy
 
 After actual playback begins, `VoiceBargeInPolicy` ignores the first 400 ms,
 while AEC is still adapting to the new reply. It then requires at least 180 ms
-of fresh silence followed by 360 ms of sustained speech. Short noise, invalid
-VAD, missing frames, stale queued PCM, and frames that fail either energy gate
-do not confirm an interruption. Each speech frame during the confirmation window
-must pass two energy gates:
+of fresh silence, followed by at least 360 ms of continuous VAD speech. Inside
+the last 360 ms of that speech, frames totalling at least 180 ms must pass both
+energy gates:
 
 - DC-removed AFE output RMS of at least 256 (about -42.1 dBFS).
-- AFE output power at least 1/8 (−9 dB) of the loudest microphone input power
-  over the last 200 ms, measured before AEC. The AEC removes about 18–20 dB of
-  speaker echo but keeps most near-end speech, so a frame below this ratio is
-  echo residual. A frame without input power (`input_power = 0`) skips this gate.
+- AFE output power at least 1/32 (−15 dB) of the loudest microphone input power
+  over the last 200 ms, measured before AEC. A frame below this ratio is treated
+  as echo residual. A frame without input power (`input_power = 0`) skips this
+  gate.
 
-A frame that fails a gate counts as silence. Each `output.stop` logs
+Short noise, invalid VAD, missing frames and stale queued PCM do not confirm an
+interruption. A VAD silence frame ends the run and clears the energy evidence.
+A speech frame that fails a gate does not end the run, because speech energy
+dips between syllables.
+
+Each `output.stop` logs
 `Barge-in gate stats: vad_speech_ms=… quiet_rejected_ms=… echo_rejected_ms=…`,
-and `AFE VAD confirmed:` adds `input_power` and the same counters. Use these
-counters to tune both gates against measured echo. The values above are not yet
-measured on hardware.
+and `AFE VAD confirmed:` adds `input_power` and the same counters.
+
+### Hardware calibration (BigSmart, 2026-11-24)
+
+These values come from serial tests on one BigSmart at volume 40, with the
+device speaker playing real TTS from a local Rodak. The tests used
+`tools/run_serial_voice_test.py`. Injected speech came from `--barge-in`;
+echo-only sessions came from `--live-mic-playback` with a quiet room. No human
+spoke during the tests.
+
+| Signal after AEC+NS | Measured |
+| ------------------- | -------- |
+| Injected speech, input/output ratio of loud speech frames | 4–29 dB, median 12 dB |
+| Injected speech, frames passing both gates in a VAD run | 3–4 of 6 frames per 360 ms |
+| Echo only, longest VAD speech run | 480 ms |
+| Echo only, frames passing both gates at −15 dB | at most 1 per run |
+
+| Rule on hardware | Injected interruptions confirmed | Echo-only false interruptions |
+| ---------------- | -------------------------------- | ----------------------------- |
+| Every frame passes, −9 dB (first #57 version) | 0 of 5 | 0 of 7 |
+| 180 ms in window, −12 dB | 6 of 9 | not run |
+| 180 ms in window, −15 dB (current) | 9 of 10 | 0 of 6 |
+
+In the one missed run, the VAD labelled no frame as speech during the replay, so
+no energy gate was reached. In the echo-only runs at −15 dB, the VAD labelled
+1.3–2.0 s of each reply as speech. The quiet gate rejected 87–100 % of that time
+and the echo gate rejected the rest.
+
+The calibration does not cover a human talker, other volumes, or other rooms.
 
 While the ES8311 loopback carries playback (mean square above 1024, about
 −60 dBFS) and for 1 s after it, `VoiceMicSelector` does not switch between MIC1

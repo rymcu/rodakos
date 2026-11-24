@@ -91,6 +91,22 @@ RODAK_TEST("pcm assembly carries the loudest input power of each frame and reset
     RODAK_CHECK_EQ(frames[3].input_power, uint32_t{0});
 }
 
+RODAK_TEST("pcm assembly pulls a late first anchor back so timestamps never pass fetch time") {
+    VoicePcmAssembler assembler;
+    std::deque<VoicePcmFrame> frames;
+    const std::vector<int16_t> input(960, 42);
+    // The first fetch returns 50 ms late; later fetches arrive on time.
+    assembler.Append(input.data(), 960, Config(), 1050000, true, false, frames, 80);
+    RODAK_CHECK_EQ(frames[0].timestamp_ms, uint32_t{1050});
+    assembler.Append(input.data(), 960, Config(), 1060000, true, false, frames, 80);
+    RODAK_CHECK_EQ(frames[1].timestamp_ms, uint32_t{1060});
+    assembler.Append(input.data(), 960, Config(), 1120000, true, false, frames, 80);
+    RODAK_CHECK_EQ(frames[2].timestamp_ms, uint32_t{1120});
+    // A late fetch does not move timestamps forward.
+    assembler.Append(input.data(), 960, Config(), 1230000, true, false, frames, 80);
+    RODAK_CHECK_EQ(frames[3].timestamp_ms, uint32_t{1180});
+}
+
 RODAK_TEST("pcm assembly preserves normal sample weighted VAD across fetch boundaries") {
     VoicePcmAssembler assembler;
     std::deque<VoicePcmFrame> frames;

@@ -36,6 +36,14 @@ void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
         clock_start_us_ = fetched_at_us -
             static_cast<int64_t>(count + samples_.size()) * 1000000 / config.sample_rate;
         clock_initialized_ = true;
+    } else {
+        // The first fetch after a start can return late, which put every later timestamp
+        // about one frame ahead of real time and failed the barge-in freshness check.
+        // A sample cannot be fetched before it was captured, so pull the anchor back
+        // whenever a fetch proves the clock is ahead.
+        const int64_t bound_us = fetched_at_us -
+            static_cast<int64_t>(clock_samples_ + count) * 1000000 / config.sample_rate;
+        clock_start_us_ = std::min(clock_start_us_, bound_us);
     }
     size_t offset = 0;
     while (offset < count) {
