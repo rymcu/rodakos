@@ -307,6 +307,13 @@ private:
     rodakos::BatterySnapshot snapshot_;
 };
 
+class FixedTurnProgressProvider final : public rodakos::VoiceTurnProgressProvider {
+public:
+    rodakos::VoiceTurnProgressSnapshot GetTurnProgressSnapshot() override { return snapshot; }
+
+    rodakos::VoiceTurnProgressSnapshot snapshot;
+};
+
 void EnterArrange(HomeFixture& fixture) {
     LongPress(HomeButton(fixture.home));
     RODAK_CHECK(fixture.home.HasEditingTarget());
@@ -514,6 +521,71 @@ RODAK_TEST("status bar displays the current battery level") {
     RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_label_)), "86%");
     RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.battery_icon_)),
                    ICON_BATTERY_FULL);
+}
+
+RODAK_TEST("status bar shows the step of an accepted voice turn and hides it afterwards") {
+    ResetScreen();
+    ResetSettings();
+    FixedTurnProgressProvider progress;
+    HomeFixture fixture(4);
+    // Without a provider at OnCreate, Home creates no voice-turn timer.
+    RODAK_CHECK(fixture.home.voice_turn_timer_ == nullptr);
+    fixture.services.SetVoiceTurnProgress(&progress);
+    RODAK_CHECK(fixture.home.voice_turn_label_ != nullptr);
+    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+
+    progress.snapshot.awaiting_reply = true;
+    fixture.home.UpdateVoiceTurnStatus();
+    RODAK_CHECK_FALSE(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "已收到");
+    lv_obj_update_layout(lv_screen_active());
+    lv_area_t label_area;
+    lv_area_t clock_area;
+    lv_area_t cluster_area;
+    lv_obj_get_coords(fixture.home.voice_turn_label_, &label_area);
+    lv_obj_get_coords(fixture.home.clock_label_, &clock_area);
+    lv_obj_get_coords(fixture.home.status_cluster_, &cluster_area);
+    RODAK_CHECK(label_area.x1 > clock_area.x2);
+    RODAK_CHECK(label_area.x2 < cluster_area.x1);
+
+    progress.snapshot.stage = rodakos::VoiceTurnStage::kThinking;
+    fixture.home.UpdateVoiceTurnStatus();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在思考");
+
+    progress.snapshot.stage = rodakos::VoiceTurnStage::kTool;
+    progress.snapshot.label = "正在查询天气";
+    fixture.home.UpdateVoiceTurnStatus();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在查询天气");
+
+    progress.snapshot.stage = rodakos::VoiceTurnStage::kComposing;
+    progress.snapshot.label.clear();
+    fixture.home.UpdateVoiceTurnStatus();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在组织回答");
+
+    progress.snapshot = {};
+    fixture.home.UpdateVoiceTurnStatus();
+    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+}
+
+RODAK_TEST("Home polls the voice turn provider and drops its timer on destroy") {
+    ResetScreen();
+    ResetSettings();
+    FixedTurnProgressProvider progress;
+    progress.snapshot.awaiting_reply = true;
+    progress.snapshot.stage = rodakos::VoiceTurnStage::kTool;
+    HomeFixture fixture(4);
+    fixture.services.SetVoiceTurnProgress(&progress);
+    // A rebuilt Home picks up the provider, creates its timer and shows the step at once.
+    RODAK_CHECK(fixture.home.OnThemeChanged(fixture.context));
+    RODAK_CHECK(fixture.home.voice_turn_timer_ != nullptr);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在处理");
+    progress.snapshot = {};
+    Pump(300);
+    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+    fixture.home.DestroyUi();
+    RODAK_CHECK(fixture.home.voice_turn_timer_ == nullptr);
+    RODAK_CHECK(fixture.home.voice_turn_label_ == nullptr);
+    RODAK_CHECK(fixture.home.OnThemeChanged(fixture.context));
 }
 
 RODAK_TEST("tap slop launches but one-page drags over an app do not") {

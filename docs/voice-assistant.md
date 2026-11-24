@@ -162,7 +162,7 @@ Rules:
   ordinary `session.open`. With a server that does not send it, the light goes from listening to
   speaking directly. `turn.progress` stages are not shown on the
   light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Home
-  screen shows the stage or label instead.
+  status bar shows them instead (see [turn progress on Home](#turn-progress-on-home)).
 - There is no light state for a slow server. A timer-based warning would fire on a late but healthy
   turn, and the device deadlines already end a dead one.
 - A background task (contract §6.1, long-running tasks) has no light state. The turn ends normally
@@ -189,6 +189,51 @@ Code: `main/phone_os/voice_status_light_model.*` (pure state-to-color model),
 Risk to check on hardware: GPIO43 is also UART0 TXD. The console uses USB-Serial-JTAG, so there is
 no conflict at run time, but ROM boot output on UART0 can flash the LED at power-on. If it does,
 disable the ROM boot log.
+
+## Turn Progress on Home
+
+> Status: implemented. Needs a server that sends `turn.progress` (contract §6.1).
+
+Every ordinary `session.open` asks for `features.turn_progress: 1`. Between `turn.accepted` and
+`output.start`, the Home status bar shows one line between the clock and the Wi-Fi/battery icons:
+
+| What the device has | Text |
+| --- | --- |
+| `turn.accepted`, no progress yet | 已收到 |
+| `stage: thinking` | 正在思考 |
+| `stage: tool` | 正在处理 |
+| `stage: composing` | 正在组织回答 |
+| A `label` | the label, which replaces the stage text |
+
+Rules:
+
+- The text shows only while `VoiceConversationPolicy` waits for a reply. When the device gives up on
+  the turn (130 s), plays the reply, is interrupted or ends the session, the line hides. The next
+  accepted turn starts again at 已收到. A step without a label does not keep the previous label.
+- The transport drops a `turn.progress` for another session or turn, with a `seq` that is not
+  greater than the last one, before `turn.accepted` or after `output.start`. A dropped event is not
+  an error. An announce session never asks for progress.
+- A malformed event (unknown field, unknown `stage`, `seq` 0, or a `label` that is blank or longer
+  than 32 code points after trim) is a protocol error, as for other control events. A label that is
+  not valid UTF-8 is malformed too. The device trims the label and shows a control character in
+  it as a space, so the label stays on one line; a long label ends in "…".
+- The label is not written to the log. The log line has the turn, `seq` and stage only.
+- Home reads `VoiceAssistantService::GetTurnProgressSnapshot()` through `VoiceTurnProgressProvider`
+  every 250 ms and changes the label only when the text changes. Other apps do not show progress.
+
+Code: `ParseRealtimeVoiceTurnProgress` and `RealtimeVoiceSessionGate::AcceptTurnProgress` in
+`realtime_voice_contract.*`, the `kTurnProgress` case in `voice_assistant_service.cc`, and
+`HomeApp::UpdateVoiceTurnStatus`. Host tests: `tests/app_model` (gate, label and fixture cases),
+`tests/voice_volume_service` and `tests/home_ui`.
+
+Hardware check (BigSmart, injected speech over USB serial, 2026-11-24):
+
+- An open question against a Rodak test build that sends `turn.progress`: `turn.accepted`, then
+  `thinking` (seq 1) 390 ms later, `composing` (seq 2) 790 ms later and `output.start` 1650 ms
+  later. The device dropped none of them and the reply played normally.
+- A device command and a server that plays a short sound right after acceptance: `output.start`
+  arrives about 20 ms after `turn.accepted` and no progress is sent, so the Home line does not show.
+- The Home line itself was not inspected on the screen, and no `tool` step was observed.
 
 ## Audio Ownership
 

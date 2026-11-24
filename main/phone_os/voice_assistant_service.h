@@ -27,7 +27,7 @@ namespace rodakos {
 class AudioOutputService;
 class VoiceAssistantAudioCodec;
 
-class VoiceAssistantService {
+class VoiceAssistantService final : public VoiceTurnProgressProvider {
 public:
     VoiceAssistantService(AudioFocusService& audio_focus,
                           VoiceAssistantTransport& transport,
@@ -77,6 +77,8 @@ public:
     VoiceAssistantState GetState();
     // Read by the status light about 30 times a second; copies no strings.
     VoiceStatusLightSnapshot GetStatusLightSnapshot();
+    // Read by the Home screen. Stage and label are empty outside an accepted turn.
+    VoiceTurnProgressSnapshot GetTurnProgressSnapshot() override;
 
 private:
     void SetPhaseLocked(VoiceAssistantPhase phase, const char* message);
@@ -192,6 +194,10 @@ private:
     // does not leave the light bright.
     uint32_t status_light_starts_ = 0;
     uint32_t status_light_barge_ins_ = 0;
+    // Latest turn.progress of the accepted turn. Readers check conversation_policy_.waiting_for_reply()
+    // first, so the values need no clearing when the turn ends.
+    VoiceTurnStage turn_stage_ = VoiceTurnStage::kNone;
+    std::string turn_label_;
     uint8_t status_light_playback_level_ = 0;
     int64_t status_light_playback_at_us_ = 0;
     int64_t status_light_speech_at_us_ = 0;

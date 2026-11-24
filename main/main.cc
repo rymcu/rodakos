@@ -936,6 +936,7 @@ extern "C" void app_main(void) {
     services.SetLanOnboarding(&lan_onboarding_service);
     services.SetSerialProvisioning(&serial_provisioning_service);
     services.SetVoiceAssistant(&voice_assistant_service);
+    services.SetVoiceTurnProgress(&voice_assistant_service);
     services.SetVoiceWake(&voice_wake_service);
     services.SetVoiceStatusLight(&voice_status_light_service);
     services.SetWakeOnLan(&wake_on_lan_service);

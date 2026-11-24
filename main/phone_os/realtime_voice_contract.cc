@@ -46,6 +46,8 @@ bool RealtimeVoiceSessionGate::Establish(uint32_t generation,
     playback_epoch_ = 0;
     audio_sequence_ = 0;
     accepted_turn_id_ = 0;
+    progress_seq_ = 0;
+    progress_open_ = false;
     output_active_ = false;
     return true;
 }
@@ -56,6 +58,8 @@ void RealtimeVoiceSessionGate::Clear() {
     playback_epoch_ = 0;
     audio_sequence_ = 0;
     accepted_turn_id_ = 0;
+    progress_seq_ = 0;
+    progress_open_ = false;
     output_active_ = false;
 }
 
@@ -76,6 +80,7 @@ bool RealtimeVoiceSessionGate::AcceptOutputStart(uint32_t generation,
     if (playback_epoch != 0 && playback_epoch <= playback_epoch_) return false;
     if (playback_epoch != 0) playback_epoch_ = playback_epoch;
     output_active_ = true;
+    progress_open_ = false;
     return true;
 }
 
@@ -103,6 +108,18 @@ bool RealtimeVoiceSessionGate::AcceptTurnAccepted(uint32_t generation, uint32_t 
         return false;
     }
     accepted_turn_id_ = turn_id;
+    progress_seq_ = 0;
+    progress_open_ = true;
+    return true;
+}
+
+bool RealtimeVoiceSessionGate::AcceptTurnProgress(uint32_t generation, uint32_t turn_id,
+                                                  uint32_t seq) {
+    if (generation == 0 || generation_ != generation || !progress_open_ ||
+        turn_id != accepted_turn_id_ || seq == 0 || seq <= progress_seq_) {
+        return false;
+    }
+    progress_seq_ = seq;
     return true;
 }
 namespace {
@@ -628,6 +645,174 @@ bool ParseRealtimeVoiceTurnAccepted(const cJSON* envelope, uint32_t& turn_id,
     return true;
 }
 
+namespace {
+
+bool ReadPositiveUint32(const cJSON* envelope, const char* name, uint32_t& output) {
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(envelope, name);
+    if (!cJSON_IsNumber(value) || !(value->valuedouble >= 1 && value->valuedouble <= UINT32_MAX)) {
+        return false;
+    }
+    const uint32_t parsed = static_cast<uint32_t>(value->valuedouble);
+    if (value->valuedouble != static_cast<double>(parsed)) {
+        return false;
+    }
+    output = parsed;
+    return true;
+}
+
+// cJSON passes raw string bytes through, so the label is checked here: no overlong forms,
+// surrogates or values above U+10FFFF.
+bool DecodeUtf8(const std::string& text, size_t& index, uint32_t& code_point) {
+    const auto byte = [&](size_t at) { return static_cast<uint8_t>(text[at]); };
+    const uint8_t lead = byte(index);
+    size_t length = 0;
+    uint32_t min = 0;
+    if (lead < 0x80) {
+        code_point = lead;
+        ++index;
+        return true;
+    } else if ((lead & 0xE0) == 0xC0) {
+        length = 2;
+        code_point = lead & 0x1F;
+        min = 0x80;
+    } else if ((lead & 0xF0) == 0xE0) {
+        length = 3;
+        code_point = lead & 0x0F;
+        min = 0x800;
+    } else if ((lead & 0xF8) == 0xF0) {
+        length = 4;
+        code_point = lead & 0x07;
+        min = 0x10000;
+    } else {
+        return false;
+    }
+    if (index + length > text.size()) return false;
+    for (size_t offset = 1; offset < length; ++offset) {
+        const uint8_t next = byte(index + offset);
+        if ((next & 0xC0) != 0x80) return false;
+        code_point = (code_point << 6) | (next & 0x3F);
+    }
+    if (code_point < min || code_point > 0x10FFFF ||
+        (code_point >= 0xD800 && code_point <= 0xDFFF)) {
+        return false;
+    }
+    index += length;
+    return true;
+}
+
+// The whitespace of JavaScript String.prototype.trim(), which the contract checker applies.
+bool IsJsWhitespace(uint32_t code_point) {
+    switch (code_point) {
+        case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x20:
+        case 0xA0: case 0x1680: case 0x2028: case 0x2029: case 0x202F: case 0x205F:
+        case 0x3000: case 0xFEFF:
+            return true;
+        default:
+            return code_point >= 0x2000 && code_point <= 0x200A;
+    }
+}
+
+bool ParseTurnProgressLabel(const std::string& raw, std::string& label) {
+    struct Piece {
+        size_t begin;
+        size_t end;
+        uint32_t code_point;
+    };
+    std::vector<Piece> pieces;
+    for (size_t index = 0; index < raw.size();) {
+        const size_t begin = index;
+        uint32_t code_point = 0;
+        if (!DecodeUtf8(raw, index, code_point)) return false;
+        if (pieces.size() == kRealtimeVoiceTurnProgressLabelMaxCodePoints) return false;
+        pieces.push_back({begin, index, code_point});
+    }
+    size_t first = 0;
+    size_t last = pieces.size();
+    while (first < last && IsJsWhitespace(pieces[first].code_point)) ++first;
+    while (last > first && IsJsWhitespace(pieces[last - 1].code_point)) --last;
+    if (first == last) return false;
+    label.clear();
+    for (size_t index = first; index < last; ++index) {
+        const uint32_t code_point = pieces[index].code_point;
+        // A line break or other control character would push the label off its single line.
+        if (code_point < 0x20 || (code_point >= 0x7F && code_point < 0xA0) ||
+            code_point == 0x2028 || code_point == 0x2029) {
+            label.push_back(' ');
+        } else {
+            label.append(raw, pieces[index].begin, pieces[index].end - pieces[index].begin);
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+bool ParseRealtimeVoiceTurnProgress(const cJSON* envelope, RealtimeVoiceTurnProgress& progress,
+                                    std::string& error) {
+    progress = {};
+    error.clear();
+    if (envelope == nullptr || !cJSON_IsObject(envelope)) {
+        error = "canonical turn.progress envelope must be an object";
+        return false;
+    }
+    const cJSON* event = cJSON_GetObjectItemCaseSensitive(envelope, "event");
+    if (!cJSON_IsString(event) || event->valuestring == nullptr ||
+        std::strcmp(event->valuestring, kRealtimeVoiceEventTurnProgress) != 0) {
+        error = "canonical turn.progress event is invalid";
+        return false;
+    }
+    std::string session_id;
+    if (!ReadRequiredString(envelope, "sessionId", session_id)) {
+        error = "canonical turn.progress sessionId is invalid";
+        return false;
+    }
+    // The schema allows no other field: a tool name or the user's words must not reach the device.
+    for (const cJSON* item = envelope->child; item != nullptr; item = item->next) {
+        if (item->string == nullptr ||
+            (std::strcmp(item->string, "event") != 0 &&
+             std::strcmp(item->string, "sessionId") != 0 &&
+             std::strcmp(item->string, "turnId") != 0 &&
+             std::strcmp(item->string, "seq") != 0 &&
+             std::strcmp(item->string, "stage") != 0 &&
+             std::strcmp(item->string, "label") != 0)) {
+            error = "canonical turn.progress has an unknown field";
+            return false;
+        }
+    }
+    RealtimeVoiceTurnProgress parsed;
+    if (!ReadPositiveUint32(envelope, "turnId", parsed.turn_id)) {
+        error = "canonical turn.progress turnId is invalid";
+        return false;
+    }
+    if (!ReadPositiveUint32(envelope, "seq", parsed.seq)) {
+        error = "canonical turn.progress seq is invalid";
+        return false;
+    }
+    const cJSON* stage = cJSON_GetObjectItemCaseSensitive(envelope, "stage");
+    if (cJSON_IsString(stage) && stage->valuestring != nullptr) {
+        if (std::strcmp(stage->valuestring, "thinking") == 0) {
+            parsed.stage = VoiceTurnStage::kThinking;
+        } else if (std::strcmp(stage->valuestring, "tool") == 0) {
+            parsed.stage = VoiceTurnStage::kTool;
+        } else if (std::strcmp(stage->valuestring, "composing") == 0) {
+            parsed.stage = VoiceTurnStage::kComposing;
+        }
+    }
+    if (parsed.stage == VoiceTurnStage::kNone) {
+        error = "canonical turn.progress stage is invalid";
+        return false;
+    }
+    const cJSON* label = cJSON_GetObjectItemCaseSensitive(envelope, "label");
+    if (label != nullptr &&
+        (!cJSON_IsString(label) || label->valuestring == nullptr ||
+         !ParseTurnProgressLabel(label->valuestring, parsed.label))) {
+        error = "canonical turn.progress label is invalid";
+        return false;
+    }
+    progress = std::move(parsed);
+    return true;
+}
+
 bool ParseRealtimeVoiceServerError(const cJSON* envelope,
                                    RealtimeVoiceServerError& server_error,
                                    std::string& error) {
@@ -698,6 +883,12 @@ bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
     if (event_name == kRealtimeVoiceEventTurnAccepted) {
         uint32_t turn_id = 0;
         if (!ParseRealtimeVoiceTurnAccepted(envelope, turn_id, error)) {
+            return false;
+        }
+    }
+    if (event_name == kRealtimeVoiceEventTurnProgress) {
+        RealtimeVoiceTurnProgress progress;
+        if (!ParseRealtimeVoiceTurnProgress(envelope, progress, error)) {
             return false;
         }
     }
@@ -791,9 +982,10 @@ std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& 
         cJSON_AddBoolToObject(features, "announce", true);
         cJSON_AddNumberToObject(features, "announceSeq", announce_seq);
     } else {
-        // 契约 §6.1：请服务端在决定回答时发 turn.accepted。不认识该字段的旧服务端照常忽略。
-        // 播报会话没有用户轮次，不宣告。
+        // 契约 §6.1：请服务端在决定回答时发 turn.accepted，并上报步骤 turn.progress 供 Home 页显示。
+        // 不认识这些字段的旧服务端照常忽略。播报会话没有用户轮次，不宣告。
         cJSON_AddNumberToObject(features, "turn_accepted", 1);
+        cJSON_AddNumberToObject(features, "turn_progress", 1);
     }
     cJSON_AddItemToObject(root, "features", features);
     AddAudio(root, "uplink", descriptor.uplink_sample_rate_hz, descriptor.uplink_channels,

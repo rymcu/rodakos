@@ -1,5 +1,7 @@
 #pragma once
 
+#include "phone_os/voice_turn_progress.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -35,6 +37,9 @@ inline constexpr char kRealtimeVoiceEventError[] = "error";
 // Contract section 6.1. The server sends it only after session.open features.turn_accepted: 1,
 // so it is not a descriptor event.
 inline constexpr char kRealtimeVoiceEventTurnAccepted[] = "turn.accepted";
+inline constexpr char kRealtimeVoiceEventTurnProgress[] = "turn.progress";
+// Contract section 6.1: label is at most 32 Unicode code points.
+inline constexpr size_t kRealtimeVoiceTurnProgressLabelMaxCodePoints = 32;
 inline constexpr char kRealtimeVoiceAudioMagic[] = "RAV1";
 inline constexpr size_t kRealtimeVoiceAudioHeaderBytes = 12;
 inline constexpr char kRealtimeVoiceVadDeviceAuthoritative[] = "device-authoritative";
@@ -73,6 +78,14 @@ struct RealtimeVoiceAudioFrame {
     size_t payload_size = 0;
 };
 
+struct RealtimeVoiceTurnProgress {
+    uint32_t turn_id = 0;
+    uint32_t seq = 0;
+    VoiceTurnStage stage = VoiceTurnStage::kNone;
+    // Trimmed display text; empty when the server sent no label.
+    std::string label;
+};
+
 struct RealtimeVoiceServerError {
     std::string code;
     std::string message;
@@ -98,6 +111,9 @@ public:
     // turn.accepted (contract section 6.1): the turnId must be greater than the last one of this
     // session. The caller drops a rejected event; it is not an error.
     bool AcceptTurnAccepted(uint32_t generation, uint32_t turn_id);
+    // turn.progress (contract section 6.1): only for the current accepted turn, before its first
+    // output.start, with a seq greater than the last one. The caller drops a rejected event.
+    bool AcceptTurnProgress(uint32_t generation, uint32_t turn_id, uint32_t seq);
 
     uint32_t playback_epoch() const { return playback_epoch_; }
     uint32_t audio_sequence() const { return audio_sequence_; }
@@ -111,6 +127,9 @@ private:
     uint32_t playback_epoch_ = 0;
     uint32_t audio_sequence_ = 0;
     uint32_t accepted_turn_id_ = 0;
+    uint32_t progress_seq_ = 0;
+    // Between turn.accepted and the turn's first output.start.
+    bool progress_open_ = false;
     bool output_active_ = false;
 };
 
@@ -121,7 +140,7 @@ bool ParseRealtimeVoiceDescriptor(const cJSON* value,
                                   std::string& error);
 
 // announce_seq 非零时打开服务端发起播报的只放音会话（features.announce + announceSeq）。
-// 普通会话宣告 features.turn_accepted: 1（契约 §6.1）；播报会话没有用户轮次，不宣告。
+// 普通会话宣告 features.turn_accepted: 1 和 turn_progress: 1（契约 §6.1）；播报会话没有用户轮次，不宣告。
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation,
@@ -154,6 +173,13 @@ bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
 // turnId, and turnId must be an integer in 1..UINT32_MAX. The transport still checks the
 // session and the turnId order.
 bool ParseRealtimeVoiceTurnAccepted(const cJSON* envelope, uint32_t& turn_id,
+                                    std::string& error);
+
+// Decode turn.progress (contract section 6.1). The envelope may hold only event, sessionId,
+// turnId, seq, stage and label. label must be valid UTF-8 of at most 32 code points and nonblank
+// after trim. The decoded label is trimmed, and control characters become spaces so that it stays
+// on one line. The transport still checks the session, the turn and the seq order.
+bool ParseRealtimeVoiceTurnProgress(const cJSON* envelope, RealtimeVoiceTurnProgress& progress,
                                     std::string& error);
 
 // Validate and decode the 12-byte RAV1 envelope without requiring ESP-IDF.

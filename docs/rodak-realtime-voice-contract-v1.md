@@ -278,8 +278,8 @@ backoff, recorder pre-roll, AEC/VAD gating) is in
 
 ### 6.1 Turn acceptance and progress (draft)
 
-> Status: draft. RodakOS implements `turn.accepted`. `turn.progress` is not implemented yet. The
-> wire shape can still change.
+> Status: draft. RodakOS implements `turn.accepted` and `turn.progress`. The wire shape can still
+> change.
 
 The device cannot tell when the server stops listening and starts working on an answer. With
 `server-authoritative` VAD the device sends no speech boundary at all (§1). The device therefore
@@ -400,14 +400,17 @@ Results that are visible to the whole household can be announced, at most 3 trie
 Other results wait until the user speaks to the device. Waiting inside the turn for a tool whose
 length is not known, and announcing several results together, come later.
 
-*Informative:* RodakOS behavior. An ordinary `session.open` carries `features.turn_accepted: 1`;
-an announce `session.open` does not. `turn.accepted` stops the 30 s follow-up window and starts a
+*Informative:* RodakOS behavior. An ordinary `session.open` carries `features.turn_accepted: 1`
+and `features.turn_progress: 1`; an announce `session.open` carries neither. `turn.accepted` stops the 30 s follow-up window and starts a
 130 s deadline for `output.start`. That is 10 s more than the server's 120 s, so the server's
 `voice-turn-timeout` arrives first. If the deadline passes, the device ends the session and re-arms
 local wake. `output.start` then switches to the 20 s reply-stall rule. The status light shows
 "waiting for a reply" between `turn.accepted` and `output.start` (see
-[voice assistant: status light](voice-assistant.md#status-light)). Planned: `turn.progress`, which
-will not move the deadline, and the stage or label on the Home screen.
+[voice assistant: status light](voice-assistant.md#status-light)). The Home status bar shows the
+latest `turn.progress` label, or device text for its stage, until `output.start` (see
+[voice assistant: turn progress on Home](voice-assistant.md#turn-progress-on-home)).
+`turn.progress` does not move the deadline. The device rejects a label that is not valid UTF-8, and
+shows a control character in a label as a space.
 
 ### Multi-device wake arbitration (server side)
 
@@ -506,6 +509,7 @@ events and RAV1 frames against `contracts/rodak-realtime-voice/v1/`.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-24 | RodakOS implements `turn.progress`: an ordinary `session.open` also sends `features.turn_progress: 1`, the device drops events outside the current accepted turn or with an old `seq`, and the Home status bar shows the step until `output.start`. |
 | 2026-11-23 | RodakOS implements `turn.accepted`: an ordinary `session.open` sends `features.turn_accepted: 1`, the device drops out-of-order or mistimed events and waits 130 s for `output.start`. |
 | 2026-11-23 | Draft `turn.accepted` and `turn.progress` events, server step time limits and background hand-off of long tasks (§6.1), negotiated by `session.open` `features.turn_accepted` and `features.turn_progress`. Not implemented. |
 | 2026-11-21 | Removed the `mcp` event rows, payload rules, `mcp` schema and fixtures. `mcp` stays only as a legacy descriptor/`session.open` marker. |

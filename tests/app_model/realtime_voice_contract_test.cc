@@ -185,6 +185,68 @@ RODAK_TEST("canonical realtime voice session gate accepts each turn.accepted onc
     RODAK_CHECK(gate.AcceptTurnAccepted(8, 1));
 }
 
+RODAK_TEST("canonical realtime voice session gate accepts turn.progress only for the open accepted turn") {
+    rodakos::RealtimeVoiceSessionGate gate;
+    RODAK_CHECK(gate.Establish(7, "session-a"));
+    // No turn accepted yet.
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 1));
+    RODAK_CHECK(gate.AcceptTurnAccepted(7, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(6, 1, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 2, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 0));
+    RODAK_CHECK(gate.AcceptTurnProgress(7, 1, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 1));
+    // The server may skip steps that start less than 500 ms apart; seq still only grows.
+    RODAK_CHECK(gate.AcceptTurnProgress(7, 1, 3));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 2));
+    // output.start closes the progress of the turn, also when the reply later calls a tool.
+    RODAK_CHECK(gate.AcceptOutputStart(7, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 4));
+    RODAK_CHECK(gate.AcceptOutputStop(7, 1));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 4));
+    // The next accepted turn starts seq at 1 again; a late event of the old turn is dropped.
+    RODAK_CHECK(gate.AcceptTurnAccepted(7, 2));
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 1, 5));
+    RODAK_CHECK(gate.AcceptTurnProgress(7, 2, 1));
+    gate.Clear();
+    RODAK_CHECK_FALSE(gate.AcceptTurnProgress(7, 2, 2));
+}
+
+RODAK_TEST("canonical realtime voice turn.progress label is trimmed, bounded and kept on one line") {
+    const auto parse = [](const std::string& label_json, std::string& label) {
+        const std::string json =
+            R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1,"stage":"tool","label":)" +
+            label_json + "}";
+        cJSON* root = cJSON_Parse(json.c_str());
+        rodakos::RealtimeVoiceTurnProgress progress;
+        std::string error;
+        const bool ok = root != nullptr && rodakos::ParseRealtimeVoiceTurnProgress(root, progress, error);
+        cJSON_Delete(root);
+        label = progress.label;
+        return ok;
+    };
+    std::string label;
+    RODAK_CHECK(parse(R"("  正在查询天气\u3000")", label));
+    RODAK_CHECK_EQ(label, std::string("正在查询天气"));
+    RODAK_CHECK(parse(R"("第一行\n第二行")", label));
+    RODAK_CHECK_EQ(label, std::string("第一行 第二行"));
+    // 32 code points pass, 33 fail, whatever their UTF-8 length.
+    std::string thirty_two;
+    for (int i = 0; i < 32; ++i) thirty_two += "天";
+    RODAK_CHECK(parse("\"" + thirty_two + "\"", label));
+    RODAK_CHECK_EQ(label, thirty_two);
+    RODAK_CHECK_FALSE(parse("\"" + thirty_two + "天\"", label));
+    // An emoji outside the BMP is one code point.
+    RODAK_CHECK(parse(R"("\ud83c\udf24")", label));
+    RODAK_CHECK_FALSE(parse(R"("\u2028\ufeff ")", label));
+    RODAK_CHECK_FALSE(parse(R"("")", label));
+    RODAK_CHECK_FALSE(parse("1", label));
+    // cJSON keeps raw bytes; an invalid UTF-8 sequence is not display text.
+    RODAK_CHECK_FALSE(parse("\"\xC0\xAF\"", label));
+    RODAK_CHECK_FALSE(parse("\"\xE5\xA4\"", label));
+    RODAK_CHECK_FALSE(parse("\"\xED\xA0\x80\"", label));
+}
+
 RODAK_TEST("canonical realtime voice session gate keeps sequence monotonic across output epochs") {
     rodakos::RealtimeVoiceSessionGate gate;
     RODAK_CHECK(gate.Establish(9, "session-b"));
@@ -440,8 +502,9 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
     RODAK_CHECK(open.find("session.open") != std::string::npos);
     // 普通会话不带播报字段；服务端发起播报的只放音会话带 announce + announceSeq。
     RODAK_CHECK(open.find("announce") == std::string::npos);
-    // 普通会话请服务端发 turn.accepted；播报会话没有用户轮次，不宣告。
+    // 普通会话请服务端发 turn.accepted 和 turn.progress；播报会话没有用户轮次，不宣告。
     RODAK_CHECK(open.find("\"turn_accepted\":1") != std::string::npos);
+    RODAK_CHECK(open.find("\"turn_progress\":1") != std::string::npos);
     const std::string announce =
         rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7, 42);
     std::unique_ptr<cJSON, decltype(&cJSON_Delete)> announce_root(
@@ -453,6 +516,7 @@ RODAK_TEST("canonical realtime voice control messages use event names") {
     RODAK_CHECK_EQ(static_cast<int>(announce_seq->valuedouble), 42);
     RODAK_CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(features, "mcp")));
     RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(features, "turn_accepted") == nullptr);
+    RODAK_CHECK(cJSON_GetObjectItemCaseSensitive(features, "turn_progress") == nullptr);
     // 设备控制统一走 MQTT；固件始终宣告不支持 MCP，Rodak 不会建立设备 MCP 会话。
     RODAK_CHECK(open.find("\"mcp\":false") != std::string::npos);
     RODAK_CHECK(open.find("device_vad_epoch") != std::string::npos);
@@ -983,6 +1047,16 @@ RODAK_TEST("canonical realtime voice server control payloads validate field type
         {R"({"event":"turn.accepted","sessionId":"s","turnId":"1"})", false},
         {R"({"event":"turn.accepted","sessionId":"","turnId":1})", false},
         {R"({"event":"turn.accepted","sessionId":"s","turnId":1,"stage":"tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1,"stage":"thinking"})", true},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":2,"stage":"composing","label":"好"})", true},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"stage":"tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":0,"seq":1,"stage":"tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1.5,"stage":"tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1,"stage":"Tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1,"stage":"tool","label":null})", false},
+        {R"({"event":"turn.progress","sessionId":"","turnId":1,"seq":1,"stage":"tool"})", false},
+        {R"({"event":"turn.progress","sessionId":"s","turnId":1,"seq":1,"stage":"tool","text":"x"})", false},
     };
     for (const auto& [json, expected] : cases) {
         cJSON* root = cJSON_Parse(json);

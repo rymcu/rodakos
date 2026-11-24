@@ -216,6 +216,14 @@ public:
         event.transport_generation = generation;
         Deliver(std::move(event));
     }
+    void TurnProgress(rodakos::VoiceTurnStage stage, std::string label = {}) {
+        VoiceInboundEvent event;
+        event.type = VoiceInboundEventType::kTurnProgress;
+        event.transport_generation = generation;
+        event.turn_stage = stage;
+        event.payload = std::move(label);
+        Deliver(std::move(event));
+    }
     // One 60 ms TTS frame; the host decoder fills it with `marker`.
     void SpeakingAudio(uint8_t marker, uint32_t epoch = 1) {
         VoiceInboundEvent event;
@@ -950,6 +958,74 @@ RODAK_TEST("turn.accepted shows waiting for a reply until output.start") {
     f.transport.TurnAccepted();
     std::this_thread::sleep_for(50ms);
     RODAK_CHECK_FALSE(f.service.GetStatusLightSnapshot().awaiting_reply);
+}
+
+RODAK_TEST("turn.progress shows the latest step only while the accepted turn waits") {
+    using rodakos::VoiceTurnStage;
+    Fixture f;
+    f.StartInitialized();
+    // Progress before turn.accepted is dropped.
+    f.transport.TurnProgress(VoiceTurnStage::kThinking);
+    std::this_thread::sleep_for(50ms);
+    RODAK_CHECK_FALSE(f.service.GetTurnProgressSnapshot().awaiting_reply);
+    RODAK_CHECK(f.service.GetTurnProgressSnapshot().stage == VoiceTurnStage::kNone);
+
+    f.transport.TurnAccepted();
+    const bool waiting = WaitUntil([&] { return f.service.GetTurnProgressSnapshot().awaiting_reply; });
+    RODAK_CHECK(waiting);
+    RODAK_CHECK(f.service.GetTurnProgressSnapshot().stage == VoiceTurnStage::kNone);
+    f.transport.TurnProgress(VoiceTurnStage::kTool, "正在查询天气");
+    const bool tool = WaitUntil([&] {
+        const auto snapshot = f.service.GetTurnProgressSnapshot();
+        return snapshot.stage == VoiceTurnStage::kTool && snapshot.label == "正在查询天气";
+    });
+    RODAK_CHECK(tool);
+    RODAK_CHECK(f.service.GetState().turn_stage == VoiceTurnStage::kTool);
+    // A step without a label clears the previous label.
+    f.transport.TurnProgress(VoiceTurnStage::kComposing);
+    const bool composing = WaitUntil([&] {
+        const auto snapshot = f.service.GetTurnProgressSnapshot();
+        return snapshot.stage == VoiceTurnStage::kComposing && snapshot.label.empty();
+    });
+    RODAK_CHECK(composing);
+
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    const bool speaking = WaitUntil([&] { return !f.service.GetTurnProgressSnapshot().awaiting_reply; });
+    RODAK_CHECK(speaking);
+    RODAK_CHECK(f.service.GetTurnProgressSnapshot().stage == VoiceTurnStage::kNone);
+    RODAK_CHECK(f.service.GetState().turn_label.empty());
+    // Progress after output.start is dropped.
+    f.transport.TurnProgress(VoiceTurnStage::kTool, "x");
+    std::this_thread::sleep_for(50ms);
+    RODAK_CHECK(f.service.GetTurnProgressSnapshot().stage == VoiceTurnStage::kNone);
+}
+
+RODAK_TEST("a new accepted turn starts without the previous turn's step") {
+    using rodakos::VoiceTurnStage;
+    Fixture f;
+    f.StartInitialized();
+    f.transport.TurnAccepted();
+    f.transport.TurnProgress(VoiceTurnStage::kTool, "正在查询天气");
+    const bool tool = WaitUntil([&] {
+        return f.service.GetTurnProgressSnapshot().stage == VoiceTurnStage::kTool;
+    });
+    RODAK_CHECK(tool);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    const bool speaking = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kSpeaking;
+    });
+    RODAK_CHECK(speaking);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped);
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    });
+    RODAK_CHECK(listening);
+    f.transport.TurnAccepted();
+    const bool waiting = WaitUntil([&] { return f.service.GetTurnProgressSnapshot().awaiting_reply; });
+    RODAK_CHECK(waiting);
+    const auto snapshot = f.service.GetTurnProgressSnapshot();
+    RODAK_CHECK(snapshot.stage == VoiceTurnStage::kNone);
+    RODAK_CHECK(snapshot.label.empty());
 }
 
 RODAK_TEST("end of reply plays the queued tail before closing and re-arming listening") {
