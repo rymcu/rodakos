@@ -20,7 +20,7 @@ constexpr const char* kSettingsNamespace = "btnbind";
 constexpr const char* kLaunchPrefix = "launch:";
 constexpr TickType_t kSingleClickDelayTicks = pdMS_TO_TICKS(280);
 constexpr UBaseType_t kEventQueueDepth = 8;
-constexpr uint32_t kWorkerStackWords = 6144;
+constexpr uint32_t kWorkerStackBytes = 6144;
 
 bool IsSupportedEvent(ButtonEvent event) {
     switch (event) {
@@ -330,8 +330,9 @@ bool ButtonBindingService::StartWorker() {
         return false;
     }
 
-    const BaseType_t ret = xTaskCreate(
-        WorkerTask, "btn_bind", kWorkerStackWords, this, 4, &worker_task_);
+    const BaseType_t ret = xTaskCreateWithCaps(
+        WorkerTask, "btn_bind", kWorkerStackBytes, this, 4, &worker_task_,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to start button worker task");
         vQueueDelete(event_queue_);
@@ -366,17 +367,25 @@ void ButtonBindingService::HandleButtonEvent(std::string_view button_id, ButtonE
 }
 
 void ButtonBindingService::ExecuteBinding(const RegisteredButton& button, ButtonEvent event) {
-    const ButtonBinding binding = GetBinding(button.button_id, event);
-    if (binding.action.type == ButtonActionType::kNone) {
-        ESP_LOGI(TAG, "Button '%s' %s has no action",
-                 button.button_id.c_str(), EventName(event));
-        return;
+    // The binding lookup reads NVS, which turns the flash cache off. The worker stack is in
+    // PSRAM, so the lookup runs later in the LVGL task, whose stack is internal.
+    auto* pending = new PendingAction{
+        .service = this,
+        .button_id = button.button_id,
+        .title = button.title,
+        .event = event,
+    };
+
+    bool queued = false;
+    if (lvgl_port_lock(1000)) {
+        queued = lv_async_call(RunPendingAction, pending) == LV_RESULT_OK;
+        lvgl_port_unlock();
     }
 
-    const std::string toast = button.title + ": " + ActionLabel(binding.action);
-    ESP_LOGI(TAG, "Button '%s' %s -> %s",
-             button.button_id.c_str(), EventName(event), EncodeAction(binding.action).c_str());
-    ExecuteAction(binding.action, toast);
+    if (!queued) {
+        ESP_LOGW(TAG, "Failed to queue button action");
+        delete pending;
+    }
 }
 
 void ButtonBindingService::ScheduleSingleClick(const RegisteredButton& button) {
@@ -497,25 +506,6 @@ void ButtonBindingService::ProcessQueuedEvent(const QueuedButtonEvent& event) {
     ExecuteBinding(*button, event.event);
 }
 
-void ButtonBindingService::ExecuteAction(const ButtonAction& action, const std::string& toast) {
-    auto* pending = new PendingAction{
-        .service = this,
-        .action = action,
-        .toast = toast,
-    };
-
-    bool queued = false;
-    if (lvgl_port_lock(1000)) {
-        queued = lv_async_call(RunPendingAction, pending) == LV_RESULT_OK;
-        lvgl_port_unlock();
-    }
-
-    if (!queued) {
-        ESP_LOGW(TAG, "Failed to queue button action");
-        delete pending;
-    }
-}
-
 ButtonAction ButtonBindingService::DefaultAction(std::string_view button_id,
                                                  ButtonEvent event) const {
     if (event == ButtonEvent::kSingleClick && button_id == "boot_button") {
@@ -580,7 +570,7 @@ void ButtonBindingService::SingleClickTimerCallback(TimerHandle_t timer) {
 void ButtonBindingService::WorkerTask(void* user_data) {
     auto* service = static_cast<ButtonBindingService*>(user_data);
     if (service == nullptr || service->event_queue_ == nullptr) {
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
 
@@ -599,9 +589,16 @@ void ButtonBindingService::RunPendingAction(void* user_data) {
     }
 
     auto* service = pending->service;
-    if (service != nullptr && service->navigation_ != nullptr) {
+    const ButtonBinding binding =
+        service != nullptr ? service->GetBinding(pending->button_id, pending->event) : ButtonBinding{};
+    if (service != nullptr && binding.action.type == ButtonActionType::kNone) {
+        ESP_LOGI(TAG, "Button '%s' %s has no action",
+                 pending->button_id.c_str(), EventName(pending->event));
+    } else if (service != nullptr && service->navigation_ != nullptr) {
+        ESP_LOGI(TAG, "Button '%s' %s -> %s", pending->button_id.c_str(),
+                 EventName(pending->event), EncodeAction(binding.action).c_str());
         bool ok = false;
-        switch (pending->action.type) {
+        switch (binding.action.type) {
             case ButtonActionType::kHome:
                 ok = service->navigation_->ReturnHome();
                 break;
@@ -612,7 +609,7 @@ void ButtonBindingService::RunPendingAction(void* user_data) {
                 ok = service->navigation_->ToggleControlCenter();
                 break;
             case ButtonActionType::kLaunchApp:
-                ok = service->navigation_->Launch(pending->action.app_id);
+                ok = service->navigation_->Launch(binding.action.app_id);
                 break;
             case ButtonActionType::kNone:
             default:
@@ -620,7 +617,8 @@ void ButtonBindingService::RunPendingAction(void* user_data) {
                 break;
         }
         if (service->ui_ != nullptr) {
-            service->ui_->ShowToastUnlocked(ok ? pending->toast.c_str() : "Button action failed");
+            const std::string toast = pending->title + ": " + ActionLabel(binding.action);
+            service->ui_->ShowToastUnlocked(ok ? toast.c_str() : "Button action failed");
         }
     }
 

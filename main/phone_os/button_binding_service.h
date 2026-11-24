@@ -90,8 +90,9 @@ private:
 
     struct PendingAction {
         ButtonBindingService* service = nullptr;
-        ButtonAction action;
-        std::string toast;
+        std::string button_id;
+        std::string title;
+        ButtonEvent event = ButtonEvent::kSingleClick;
     };
 
     struct DeferredClick {
@@ -121,7 +122,6 @@ private:
                           uint32_t generation = 0,
                           bool check_generation = false);
     void ProcessQueuedEvent(const QueuedButtonEvent& event);
-    void ExecuteAction(const ButtonAction& action, const std::string& toast);
     std::string StorageKey(std::string_view button_id, ButtonEvent event) const;
     const RegisteredButton* FindRegistered(std::string_view button_id) const;
     const ButtonState* FindButton(std::string_view button_id) const;
