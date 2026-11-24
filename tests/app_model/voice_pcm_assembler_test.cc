@@ -72,6 +72,25 @@ RODAK_TEST("pcm assembly explicit reset discards old session partial audio") {
     RODAK_CHECK_EQ(frames[0].timestamp_ms, uint32_t{1000});
 }
 
+RODAK_TEST("pcm assembly carries the loudest input power of each frame and resets it") {
+    VoicePcmAssembler assembler;
+    std::deque<VoicePcmFrame> frames;
+    const std::vector<int16_t> input(1920, 42);
+    assembler.Append(input.data(), 512, Config(), 1032000, true, true, frames, 80, 500);
+    assembler.Append(input.data() + 512, 512, Config(), 1064000, true, true, frames, 80, 9000);
+    assembler.Append(input.data() + 1024, 896, Config(), 1120000, true, true, frames, 80, 70);
+    RODAK_CHECK_EQ(frames.size(), size_t{2});
+    // Frame 1 spans the first two fetches; frame 2 takes the tail of fetch 2 and all of fetch 3.
+    RODAK_CHECK_EQ(frames[0].input_power, uint32_t{9000});
+    RODAK_CHECK_EQ(frames[1].input_power, uint32_t{9000});
+    assembler.Append(input.data(), 960, Config(), 1180000, true, true, frames, 80, 70);
+    RODAK_CHECK_EQ(frames[2].input_power, uint32_t{70});
+    assembler.Append(input.data(), 512, Config(), 1212000, true, true, frames, 80, 9000);
+    assembler.Reset();
+    assembler.Append(input.data(), 960, Config(), 1300000, true, true, frames, 80);
+    RODAK_CHECK_EQ(frames[3].input_power, uint32_t{0});
+}
+
 RODAK_TEST("pcm assembly preserves normal sample weighted VAD across fetch boundaries") {
     VoicePcmAssembler assembler;
     std::deque<VoicePcmFrame> frames;

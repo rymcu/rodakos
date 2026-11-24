@@ -13,10 +13,12 @@ public:
     void InvalidateContinuity();
     void Append(const int16_t* samples, size_t count, const VoiceRecorderConfig& config,
                 int64_t fetched_at_us, bool vad_valid, bool vad_speech,
-                std::deque<VoicePcmFrame>& frames, size_t queue_limit);
+                std::deque<VoicePcmFrame>& frames, size_t queue_limit,
+                uint32_t input_power = 0);
 
 private:
     std::vector<int16_t> samples_;
+    uint32_t input_power_ = 0;
     size_t vad_valid_samples_ = 0;
     size_t vad_speech_samples_ = 0;
     int64_t clock_start_us_ = 0;

@@ -6,40 +6,120 @@ namespace {
 using rodakos::VoiceBargeInPolicy;
 using rodakos::VoicePlaybackEpochPolicy;
 using rodakos::VoiceVadEndPolicy;
+// 60 ms frames: 400 ms grace plus 180 ms of silence arm the policy after ten quiet frames,
+// and 360 ms of speech (six frames) confirms an interruption.
+constexpr int kArmFrames = 10;
+constexpr int kConfirmFrames = 6;
+constexpr uint32_t kLoud = 65536;
+
 bool Frames(VoiceBargeInPolicy& policy, uint32_t& time, bool speech,
-            int count, uint32_t& onset, bool valid = true) {
+            int count, uint32_t& onset, bool valid = true, uint32_t input_power = 0) {
     bool triggered = false;
     for (int i = 0; i < count; ++i) {
         time += 60;
-        triggered = policy.Observe(time, 60, valid, speech, speech ? 65536 : 0, onset) || triggered;
+        triggered = policy.Observe(time, 60, valid, speech, speech ? kLoud : 0,
+                                   input_power, onset) || triggered;
     }
     return triggered;
+}
+
+void Arm(VoiceBargeInPolicy& policy, uint32_t& time, uint32_t& onset) {
+    Frames(policy, time, false, kArmFrames, onset);
 }
 }
 
 RODAK_TEST("barge in rejects measured residual echo even when VAD labels speech") {
     VoiceBargeInPolicy policy;
-    policy.StartPlayback(1000);
     uint32_t time = 1000, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
     for (uint32_t rms : {0U, 0U, 0U, 77U, 104U, 75U, 21U, 20U, 107U, 153U, 153U, 153U, 16U}) {
         time += 60;
-        RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, rms * rms, onset));
+        RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, rms * rms, 0, onset));
     }
     Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
+}
+
+RODAK_TEST("barge in ignores speech in the playback start grace window") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 1000, onset = 0;
+    policy.StartPlayback(time);
+    // Echo that starts with the reply: AEC has not adapted yet, so it is loud and labelled speech.
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 6, onset));
+    // Silence inside the grace window does not count towards arming.
+    time = 1000;
+    policy.StartPlayback(time);
+    Frames(policy, time, false, 3, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, kConfirmFrames, onset));
+    Frames(policy, time, false, 3, onset);
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
+}
+
+RODAK_TEST("barge in needs sustained speech longer than an echo burst") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    // 300 ms of loud, speech-labelled residual (the old 180 ms confirmation fired here).
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
+    Frames(policy, time, false, 3, onset);
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
+}
+
+RODAK_TEST("barge in rejects output far below the microphone input as echo residual") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    // Loud speaker echo at the microphone, 18 dB removed by AEC: output is 1/64 of input.
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 10, onset, true, kLoud * 64));
+    RODAK_CHECK_EQ(policy.stats().echo_rejected_ms, uint32_t{600});
+    RODAK_CHECK_EQ(policy.stats().vad_speech_ms, uint32_t{600});
+    // Near-end speech over the same echo keeps most of its level through AEC.
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset, true, kLoud * 4));
+    RODAK_CHECK_EQ(policy.stats().echo_rejected_ms, uint32_t{600});
+}
+
+RODAK_TEST("barge in echo frames break confirmation and rearm like silence") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 4, onset, true, kLoud * 2));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset, true, kLoud * 16));
+    // The echo frame ended the run and disarmed the policy like a single quiet frame does.
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 4, onset, true, kLoud * 2));
+    Frames(policy, time, false, 3, onset);
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset, true, kLoud * 2));
+}
+
+RODAK_TEST("barge in stats count quiet rejections and reset with playback") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    time += 60;
+    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 100 * 100, 0, onset));
+    RODAK_CHECK_EQ(policy.stats().vad_speech_ms, uint32_t{60});
+    RODAK_CHECK_EQ(policy.stats().quiet_rejected_ms, uint32_t{60});
+    RODAK_CHECK_EQ(policy.stats().echo_rejected_ms, uint32_t{0});
+    policy.StopPlayback();
+    RODAK_CHECK_EQ(policy.stats().vad_speech_ms, uint32_t{0});
+    RODAK_CHECK_EQ(policy.stats().quiet_rejected_ms, uint32_t{0});
 }
 
 RODAK_TEST("barge in energy rejects a short transient and resets speech confirmation") {
     VoiceBargeInPolicy policy;
     uint32_t time = 1000, onset = 0;
     policy.StartPlayback(time);
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset));
+    Arm(policy, time, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
     time += 60;
-    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 255 * 255, onset));
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 255 * 255, 0, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
     Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
 }
 
 RODAK_TEST("barge in PCM energy excludes DC and handles full scale without overflow") {
@@ -107,9 +187,12 @@ RODAK_TEST("explicit interruption preserves previous vad end and blocks newly in
     RODAK_CHECK_FALSE(playback.AcceptStart(2));
     RODAK_CHECK_FALSE(playback.AcceptAudioOrStop(2));
     RODAK_CHECK(vad_end.pending());
-    RODAK_CHECK_FALSE(vad_end.Observe(1060, 60, true, false));
-    RODAK_CHECK_FALSE(vad_end.Observe(1120, 60, true, false));
-    RODAK_CHECK(vad_end.Observe(1180, 60, true, false));
+    uint32_t time = 1000;
+    for (int i = 0; i < 9; ++i) {
+        time += 60;
+        RODAK_CHECK_FALSE(vad_end.Observe(time, 60, true, false));
+    }
+    RODAK_CHECK(vad_end.Observe(time + 60, 60, true, false));
     RODAK_CHECK_FALSE(vad_end.pending());
     RODAK_CHECK(playback.AcceptStart(3));
     RODAK_CHECK(playback.AcceptAudioOrStop(3));
@@ -119,26 +202,26 @@ RODAK_TEST("barge in requires fresh silence then sustained speech and fires once
     VoiceBargeInPolicy policy;
     uint32_t time = 1000, onset = 0;
     policy.StartPlayback(time);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 10, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 12, onset));
     RODAK_CHECK_FALSE(Frames(policy, time, false, 3, onset));
     const uint32_t expected_onset = time;
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, kConfirmFrames - 1, onset));
     RODAK_CHECK(Frames(policy, time, true, 1, onset));
     RODAK_CHECK_EQ(onset, expected_onset);
     RODAK_CHECK_FALSE(Frames(policy, time, false, 6, onset));
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 6, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 8, onset));
 }
 
 RODAK_TEST("barge in ignores short noise and requires silence rearm") {
     VoiceBargeInPolicy policy;
     uint32_t time = 0, onset = 0;
     policy.StartPlayback(time);
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset));
+    Arm(policy, time, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
     Frames(policy, time, false, 1, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 4, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 7, onset));
     Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
 }
 
 RODAK_TEST("barge in invalid vad or missing capture breaks confirmation") {
@@ -146,13 +229,13 @@ RODAK_TEST("barge in invalid vad or missing capture breaks confirmation") {
         VoiceBargeInPolicy policy;
         uint32_t time = 0, onset = 0;
         policy.StartPlayback(time);
-        Frames(policy, time, false, 3, onset);
-        Frames(policy, time, true, 2, onset);
+        Arm(policy, time, onset);
+        Frames(policy, time, true, 5, onset);
         if (gap) time += 120;
         RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset, gap));
-        RODAK_CHECK_FALSE(Frames(policy, time, true, 3, onset));
+        RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
         Frames(policy, time, false, 3, onset);
-        RODAK_CHECK(Frames(policy, time, true, 3, onset));
+        RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
     }
 }
 
@@ -162,24 +245,24 @@ RODAK_TEST("barge in rejects queued frames before playback and resets for next p
     policy.StartPlayback(1000);
     Frames(policy, time, false, 3, onset);
     time = 1000;
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 3, onset));
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, kConfirmFrames, onset));
+    Arm(policy, time, onset);
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
     policy.StopPlayback();
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 3, onset));
+    Arm(policy, time, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, kConfirmFrames, onset));
     policy.StartPlayback(time);
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    Arm(policy, time, onset);
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
 }
 
 RODAK_TEST("barge in timestamp rollover preserves onset") {
     VoiceBargeInPolicy policy;
-    uint32_t time = UINT32_MAX - 200, onset = 0;
+    uint32_t time = UINT32_MAX - 800, onset = 0;
     policy.StartPlayback(time);
-    Frames(policy, time, false, 3, onset);
+    Arm(policy, time, onset);
     const uint32_t expected = time;
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
     RODAK_CHECK_EQ(onset, expected);
 }
 
@@ -188,38 +271,51 @@ RODAK_TEST("vad end waits for fresh sustained silence then fires once") {
     policy.Start(1000);
     RODAK_CHECK_FALSE(policy.Observe(900, 60, true, false));
     RODAK_CHECK_FALSE(policy.Observe(1060, 60, true, true));
-    RODAK_CHECK_FALSE(policy.Observe(1120, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(1180, 60, true, false));
-    RODAK_CHECK(policy.Observe(1240, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(1300, 60, true, false));
-    policy.Start(1300);
-    RODAK_CHECK_FALSE(policy.Observe(1360, 60, true, false));
+    uint32_t time = 1060;
+    for (int i = 0; i < 9; ++i) {
+        time += 60;
+        RODAK_CHECK_FALSE(policy.Observe(time, 60, true, false));
+    }
+    time += 60;
+    RODAK_CHECK(policy.Observe(time, 60, true, false));
+    RODAK_CHECK_FALSE(policy.Observe(time + 60, 60, true, false));
+    policy.Start(time + 60);
+    RODAK_CHECK_FALSE(policy.Observe(time + 120, 60, true, false));
     policy.Reset();
-    RODAK_CHECK_FALSE(policy.Observe(1420, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(1480, 60, true, false));
+    RODAK_CHECK_FALSE(policy.Observe(time + 180, 60, true, false));
+}
+
+RODAK_TEST("vad end survives a short pause inside the utterance") {
+    VoiceVadEndPolicy policy;
+    policy.Start(0);
+    uint32_t time = 0;
+    // A 300 ms pause between words (the old 180 ms rule ended the utterance here).
+    for (int i = 0; i < 5; ++i) RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, false));
+    RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, true));
+    for (int i = 0; i < 9; ++i) RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, false));
+    RODAK_CHECK(policy.Observe(time += 60, 60, true, false));
 }
 
 RODAK_TEST("vad end invalid frame and capture gap reset silence evidence") {
     VoiceVadEndPolicy policy;
     policy.Start(0);
-    RODAK_CHECK_FALSE(policy.Observe(60, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(120, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(180, 60, false, false));
-    RODAK_CHECK_FALSE(policy.Observe(240, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(300, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(480, 60, true, false));
-    RODAK_CHECK_FALSE(policy.Observe(540, 60, true, false));
-    RODAK_CHECK(policy.Observe(600, 60, true, false));
+    uint32_t time = 0;
+    for (int i = 0; i < 9; ++i) RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, false));
+    RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, false, false));
+    for (int i = 0; i < 9; ++i) RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, false));
+    time += 180;
+    for (int i = 0; i < 9; ++i) RODAK_CHECK_FALSE(policy.Observe(time += 60, 60, true, false));
+    RODAK_CHECK(policy.Observe(time += 60, 60, true, false));
 }
 
 RODAK_TEST("barge in duplicate timestamps cannot accumulate evidence") {
     VoiceBargeInPolicy policy;
     uint32_t time = 0, onset = 0;
     policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    Frames(policy, time, true, 5, onset);
+    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, kLoud, 0, onset));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
     Frames(policy, time, false, 3, onset);
-    Frames(policy, time, true, 2, onset);
-    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 65536, onset));
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 3, onset));
-    Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, 3, onset));
+    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
 }

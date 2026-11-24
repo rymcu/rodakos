@@ -898,9 +898,9 @@ RODAK_TEST("device barge-in during playback aborts the reply and drops queued au
     f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
     for (uint8_t marker = 1; marker <= 6; ++marker) f.transport.SpeakingAudio(marker);
     const bool writing = write_gate.Wait();
-    // Uplink frames arrive in real time: 180 ms of silence arms the policy, then
-    // 180 ms of loud speech confirms barge-in.
-    std::this_thread::sleep_for(80ms);
+    // Uplink frames arrive in real time: after the 400 ms playback grace, 180 ms of
+    // silence arms the policy, then 360 ms of loud speech confirms barge-in.
+    std::this_thread::sleep_for(450ms);
     rodakos::VoicePcmFrame quiet = SpeechFrame(0);
     quiet.vad_speech = false;
     std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
@@ -909,7 +909,7 @@ RODAK_TEST("device barge-in during playback aborts the reply and drops queued au
         f.recorder.PushFrame(quiet);
         std::this_thread::sleep_for(60ms);
     }
-    for (int i = 0; i < 4 && f.transport.aborts.load() == 0; ++i) {
+    for (int i = 0; i < 8 && f.transport.aborts.load() == 0; ++i) {
         f.recorder.PushFrame(SpeechFrame(NowMs()));
         std::this_thread::sleep_for(60ms);
     }

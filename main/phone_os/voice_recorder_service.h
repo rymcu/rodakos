@@ -19,6 +19,8 @@ struct VoicePcmFrame {
     std::vector<int16_t> samples;
     bool vad_valid = false;
     bool vad_speech = false;
+    // Peak microphone power before echo cancellation over this frame; 0 means unknown.
+    uint32_t input_power = 0;
 };
 
 class VoiceRecorderService {

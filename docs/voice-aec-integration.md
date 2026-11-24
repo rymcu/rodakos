@@ -32,12 +32,28 @@ exist in the continuous stream.
 
 ## Interruption policy
 
-After actual playback begins, `VoiceBargeInPolicy` requires at least 180 ms of
-fresh silence followed by 180 ms of sustained speech. Short noise, invalid VAD,
-missing frames, stale queued PCM, and energy below the playback gate do not
-confirm an interruption. The deployed playback-only energy safeguard requires
-DC-removed PCM RMS of at least 256 (about -42.1 dBFS) during the confirmation
-window.
+After actual playback begins, `VoiceBargeInPolicy` ignores the first 400 ms,
+while AEC is still adapting to the new reply. It then requires at least 180 ms
+of fresh silence followed by 360 ms of sustained speech. Short noise, invalid
+VAD, missing frames, stale queued PCM, and frames that fail either energy gate
+do not confirm an interruption. Each speech frame during the confirmation window
+must pass two energy gates:
+
+- DC-removed AFE output RMS of at least 256 (about -42.1 dBFS).
+- AFE output power at least 1/8 (−9 dB) of the loudest microphone input power
+  over the last 200 ms, measured before AEC. The AEC removes about 18–20 dB of
+  speaker echo but keeps most near-end speech, so a frame below this ratio is
+  echo residual. A frame without input power (`input_power = 0`) skips this gate.
+
+A frame that fails a gate counts as silence. Each `output.stop` logs
+`Barge-in gate stats: vad_speech_ms=… quiet_rejected_ms=… echo_rejected_ms=…`,
+and `AFE VAD confirmed:` adds `input_power` and the same counters. Use these
+counters to tune both gates against measured echo. The values above are not yet
+measured on hardware.
+
+While the ES8311 loopback carries playback (mean square above 1024, about
+−60 dBFS) and for 1 s after it, `VoiceMicSelector` does not switch between MIC1
+and MIC2. A switch would change the echo path under a converged AEC.
 
 When the policy confirms speech, the service:
 
@@ -48,7 +64,8 @@ When the policy confirms speech, the service:
 3. closes the local decoder and DAC output, while retaining the WebSocket,
    recorder, AFE, and Opus uplink.
 4. rejects late TTS frames until the next `output.start`.
-5. sends one matching `vad` `state: "end"` after 180 ms of fresh silence.
+5. sends one matching `vad` `state: "end"` after 600 ms of fresh silence, so a
+   pause between words does not end the utterance.
 
 The tagged interruption does not call the local wake service and does not open a
 second session or send a new `input.start`. Manual wake interruption uses
