@@ -25,7 +25,7 @@ constexpr uint8_t kRegAxL = 0x35;
 constexpr uint8_t kRegReset = 0x60;
 constexpr int kI2cTimeoutMs = 100;
 constexpr int kSampleIntervalMs = 100;
-constexpr uint32_t kTaskStackWords = 4096;
+constexpr uint32_t kTaskStackBytes = 4096;
 constexpr UBaseType_t kTaskPriority = 4;
 constexpr float kYawDeadZoneDps = 0.8f;
 constexpr float kMaxYawDeltaSeconds = 0.2f;
@@ -235,7 +235,10 @@ bool Qmi8658MotionSensor::StartTask() {
     }
 
     task_running_ = true;
-    BaseType_t ret = xTaskCreate(SensorTask, "qmi8658_motion", kTaskStackWords, this, kTaskPriority, &task_handle_);
+    // Sampling only does I2C (ISR not IRAM-safe) and never touches flash or NVS.
+    BaseType_t ret = xTaskCreateWithCaps(SensorTask, "qmi8658_motion", kTaskStackBytes, this,
+                                         kTaskPriority, &task_handle_,
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
         task_running_ = false;
         task_handle_ = nullptr;
@@ -252,7 +255,7 @@ void Qmi8658MotionSensor::StopTask() {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (task_handle_ != nullptr) {
-        vTaskDelete(task_handle_);
+        vTaskDeleteWithCaps(task_handle_);
         task_handle_ = nullptr;
     }
 }
@@ -416,7 +419,7 @@ void Qmi8658MotionSensor::SensorTask(void* arg) {
     if (self != nullptr) {
         self->task_handle_ = nullptr;
     }
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 }  // namespace rodakos
