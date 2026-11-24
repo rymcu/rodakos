@@ -53,6 +53,8 @@ Qmi8658MotionSensor::Qmi8658MotionSensor() {
 
 Qmi8658MotionSensor::~Qmi8658MotionSensor() {
     Stop();
+    retirement_owner_.Close();
+    retirement_owner_.Drain();
 }
 
 bool Qmi8658MotionSensor::Start() {
@@ -230,34 +232,37 @@ void Qmi8658MotionSensor::ReleaseHardware() {
 }
 
 bool Qmi8658MotionSensor::StartTask() {
-    if (task_handle_ != nullptr) {
+    if (task_running_) {
         return true;
     }
+    // A previous generation must be fully reclaimed before its ticket is replaced.
+    retirement_.Join();
 
     task_running_ = true;
+    retirement_ = ReserveTaskRetirement(retirement_owner_, SensorTask, this);
+    TaskHandle_t handle = nullptr;
     // Sampling only does I2C (ISR not IRAM-safe) and never touches flash or NVS.
-    BaseType_t ret = xTaskCreateWithCaps(SensorTask, "qmi8658_motion", kTaskStackBytes, this,
-                                         kTaskPriority, &task_handle_,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const BaseType_t ret = !retirement_ ? pdFAIL
+        : xTaskCreateWithCaps(TaskRetirementEntry, "qmi8658_motion", kTaskStackBytes,
+                              TaskRetirementContext(retirement_), kTaskPriority, &handle,
+                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
+        if (retirement_) CancelTaskRetirement(retirement_);
+        retirement_.Reset();
         task_running_ = false;
-        task_handle_ = nullptr;
         SetLastError("Failed to start QMI8658 task");
         ESP_LOGW(TAG, "Failed to start QMI8658 task");
         return false;
     }
+    PublishTaskRetirement(retirement_, handle);
     return true;
 }
 
 void Qmi8658MotionSensor::StopTask() {
     task_running_ = false;
-    for (int i = 0; i < 30 && task_handle_ != nullptr; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    if (task_handle_ != nullptr) {
-        vTaskDeleteWithCaps(task_handle_);
-        task_handle_ = nullptr;
-    }
+    // Waits for the current sample and loop exit, then reclaims the PSRAM stack externally.
+    retirement_.Join();
+    retirement_.Reset();
 }
 
 esp_err_t Qmi8658MotionSensor::WriteRegister(uint8_t reg, uint8_t value) {
@@ -411,15 +416,14 @@ void Qmi8658MotionSensor::SetLastError(esp_err_t err, const char* context) {
 }
 
 void Qmi8658MotionSensor::SensorTask(void* arg) {
-    auto* self = static_cast<Qmi8658MotionSensor*>(arg);
-    while (self != nullptr && self->task_running_) {
-        self->PollOnce();
+    static_cast<Qmi8658MotionSensor*>(arg)->SensorLoop();
+}
+
+void Qmi8658MotionSensor::SensorLoop() {
+    while (task_running_) {
+        PollOnce();
         vTaskDelay(pdMS_TO_TICKS(kSampleIntervalMs));
     }
-    if (self != nullptr) {
-        self->task_handle_ = nullptr;
-    }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 }  // namespace rodakos

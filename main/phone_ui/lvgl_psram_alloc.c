@@ -4,8 +4,10 @@
 // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL bytes lands in internal SRAM. Widget trees
 // rebuilt on app switches then scatter long-lived small blocks through the internal
 // heap and split the contiguous runs that DMA and network tasks need. LVGL data is
-// touched only from tasks, never from an ISR or while the flash cache is off, and
-// the display DMA buffers come from esp_lvgl_port, not from this heap.
+// touched from tasks, plus lv_display_flush_ready() in the LCD SPI completion ISR. That
+// ISR is not IRAM-safe (bus intr_flags=0), so it stays masked while the flash cache is
+// off. Making it cache-safe would require the display object in internal RAM. The
+// display DMA buffers come from esp_lvgl_port, not from this heap.
 //
 // heap_caps_*_prefer bypass the heap_caps_*_default wrappers that inject release-test
 // failures, so release-test builds ask the injector directly.
@@ -17,7 +19,9 @@
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_CUSTOM
 
 #define LVGL_HEAP_PREFERRED (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-#define LVGL_HEAP_FALLBACK (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+// MALLOC_CAP_DEFAULT keeps the fallback out of the CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL pool,
+// which must stay free for DMA buffers such as the Camera receive ring.
+#define LVGL_HEAP_FALLBACK (MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 
 #ifdef RODAKOS_RELEASE_TESTS
 bool rodakos_lvgl_allocation_should_fail(size_t size);
