@@ -349,7 +349,7 @@ void TouchPollTask(void* arg) {
         vTaskDelayUntil(&last_wake, period);
     }
 
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 lv_indev_t* InitTouchInput(lv_display_t* disp) {
@@ -391,12 +391,16 @@ lv_indev_t* InitTouchInput(lv_display_t* disp) {
         return nullptr;
     }
 
+    // The poll path never touches flash or NVS, and the I2C ISR is not IRAM-safe, so the
+    // permanent stack can live in PSRAM and leave internal SRAM to DMA and network tasks.
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    const BaseType_t task_ret = xTaskCreatePinnedToCore(
-        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task, 0);
+    const BaseType_t task_ret = xTaskCreatePinnedToCoreWithCaps(
+        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-    const BaseType_t task_ret = xTaskCreate(
-        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task);
+    const BaseType_t task_ret = xTaskCreateWithCaps(
+        TouchPollTask, "touch_poll", 4096, &g_touch_input, 2, &g_touch_input.task,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     if (task_ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to start touch polling task");

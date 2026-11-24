@@ -59,9 +59,11 @@ bool VoiceStatusLightService::Start() {
         ESP_LOGW(TAG, "No board light; voice status light disabled");
         return false;
     }
-    // Permanent task: it never exits, so it needs no retirement record.
-    const BaseType_t created = xTaskCreate(TaskEntry, "voice_light", kTaskStackBytes, this,
-                                           kTaskPriority, nullptr);
+    // Permanent task: it never exits, so it needs no retirement record. Its RMT write and
+    // snapshot read never touch flash or NVS, so the stack can stay out of internal SRAM.
+    const BaseType_t created = xTaskCreateWithCaps(TaskEntry, "voice_light", kTaskStackBytes, this,
+                                                   kTaskPriority, nullptr,
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     xSemaphoreTake(mutex_, portMAX_DELAY);
     start_ok_ = created == pdPASS;
     xSemaphoreGive(mutex_);
