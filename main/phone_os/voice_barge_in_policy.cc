@@ -7,6 +7,9 @@ namespace {
 constexpr uint32_t kSilenceRearmMs = 180;
 // 180 ms let a burst of residual echo confirm an interruption on its own.
 constexpr uint32_t kSpeechConfirmMs = 360;
+// After AEC and NS, injected speech during playback passed both energy gates in only
+// 3-4 of the 6 frames of a 360 ms VAD run, and residual echo in at most one.
+constexpr uint32_t kSpeechEvidenceMs = 180;
 // AEC has only adapted to the wake chime when a reply starts, so the first echo
 // passes through it at nearly full level.
 constexpr uint32_t kPlaybackGraceMs = 400;
@@ -14,9 +17,11 @@ constexpr uint32_t kPlaybackGraceMs = 400;
 constexpr uint32_t kVadEndSilenceMs = 600;
 constexpr uint32_t kTimestampToleranceMs = 30;
 constexpr uint32_t kMinimumSpeechPower = 256 * 256;
-// AEC removes about 18-20 dB of the speaker echo but leaves near-end speech, so
-// output more than 9 dB below the microphone input is treated as echo residual.
-constexpr uint64_t kEchoResidualRatio = 8;
+// On BigSmart, AEC+NS left injected near-end speech 4-29 dB (median 12 dB) below the
+// microphone input, and residual echo mostly more than 18 dB below it. Output more than
+// 15 dB below the input is treated as echo residual; -12 dB still rejected a third of
+// the speech frames on hardware.
+constexpr uint64_t kEchoResidualRatio = 32;
 }
 
 void VoiceVadEndPolicy::Reset() {
@@ -85,6 +90,24 @@ void VoiceBargeInPolicy::ClearEvidence() {
     have_frame_ = false;
     silence_ms_ = 0;
     speech_ms_ = 0;
+    ClearSpeechEvidence();
+}
+
+void VoiceBargeInPolicy::ClearSpeechEvidence() {
+    evidence_.fill({});
+    evidence_index_ = 0;
+}
+
+uint32_t VoiceBargeInPolicy::RecentSpeechEvidenceMs(uint32_t frame_end_ms) const {
+    uint32_t total = 0;
+    for (const auto& entry : evidence_) {
+        if (entry.evidence_ms != 0 &&
+            static_cast<int32_t>(frame_end_ms - entry.frame_end_ms) <
+                static_cast<int32_t>(kSpeechConfirmMs)) {
+            total += entry.evidence_ms;
+        }
+    }
+    return total;
 }
 
 void VoiceBargeInPolicy::Reset() {
@@ -141,7 +164,7 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     have_frame_ = true;
     last_frame_ms_ = frame_end_ms;
     // WebRTC VAD also labels low-level residual playback as speech after AEC.
-    // Require sustained AC energy; DC offset must not turn a quiet frame into speech.
+    // Require AC energy; DC offset must not turn a quiet frame into speech.
     const bool quiet = pcm_power < kMinimumSpeechPower;
     const bool echo = !quiet && input_power != 0 &&
                       static_cast<uint64_t>(pcm_power) * kEchoResidualRatio < input_power;
@@ -150,8 +173,9 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
         if (quiet) stats_.quiet_rejected_ms += duration_ms;
         if (echo) stats_.echo_rejected_ms += duration_ms;
     }
-    if (!vad_speech || quiet || echo) {
+    if (!vad_speech) {
         speech_ms_ = 0;
+        ClearSpeechEvidence();
         silence_ms_ = std::min(kSilenceRearmMs, silence_ms_ + duration_ms);
         armed_ = silence_ms_ >= kSilenceRearmMs;
         return false;
@@ -164,7 +188,12 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
         onset_ms_ = frame_end_ms - duration_ms;
     }
     speech_ms_ += duration_ms;
-    if (speech_ms_ < kSpeechConfirmMs) {
+    // Speech energy dips between syllables, and AEC/NS cut it further during playback,
+    // so the energy gates need only part of the recent VAD run, not every frame.
+    evidence_[evidence_index_] = {frame_end_ms, quiet || echo ? 0 : duration_ms};
+    evidence_index_ = (evidence_index_ + 1) % evidence_.size();
+    if (speech_ms_ < kSpeechConfirmMs ||
+        RecentSpeechEvidenceMs(frame_end_ms) < kSpeechEvidenceMs) {
         return false;
     }
     fired_ = true;

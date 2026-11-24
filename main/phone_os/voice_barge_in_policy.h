@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <cstddef>
 
@@ -55,7 +56,14 @@ public:
     const Stats& stats() const { return stats_; }
 
 private:
+    struct SpeechEvidence {
+        uint32_t frame_end_ms = 0;
+        uint32_t evidence_ms = 0;
+    };
+
     void ClearEvidence();
+    void ClearSpeechEvidence();
+    uint32_t RecentSpeechEvidenceMs(uint32_t frame_end_ms) const;
     bool playing_ = false;
     bool fired_ = false;
     bool armed_ = false;
@@ -65,6 +73,10 @@ private:
     uint32_t silence_ms_ = 0;
     uint32_t speech_ms_ = 0;
     uint32_t onset_ms_ = 0;
+    // Covers the confirmation window for frames of 20 ms or longer; shorter frames can only
+    // undercount evidence.
+    std::array<SpeechEvidence, 18> evidence_{};
+    size_t evidence_index_ = 0;
     Stats stats_;
 };
 

@@ -81,17 +81,47 @@ RODAK_TEST("barge in rejects output far below the microphone input as echo resid
     RODAK_CHECK_EQ(policy.stats().echo_rejected_ms, uint32_t{600});
 }
 
-RODAK_TEST("barge in echo frames break confirmation and rearm like silence") {
+RODAK_TEST("barge in needs 180 ms of energy evidence inside the recent VAD run") {
     VoiceBargeInPolicy policy;
     uint32_t time = 0, onset = 0;
     policy.StartPlayback(time);
     Arm(policy, time, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 4, onset, true, kLoud * 2));
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset, true, kLoud * 16));
-    // The echo frame ended the run and disarmed the policy like a single quiet frame does.
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 4, onset, true, kLoud * 2));
+    const uint32_t expected_onset = time;
+    // Echo residual labelled speech: one passing frame every three, as measured on hardware.
+    for (int i = 0; i < 4; ++i) {
+        RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset, true, kLoud * 64));
+        RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset, true, kLoud * 2));
+    }
+    // Near-end speech adds a passing frame; three now fall inside the last 360 ms.
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset, true, kLoud * 64));
+    RODAK_CHECK(Frames(policy, time, true, 1, onset, true, kLoud * 2));
+    RODAK_CHECK_EQ(onset, expected_onset);
+}
+
+RODAK_TEST("barge in evidence from an earlier VAD run does not carry over") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset));
     Frames(policy, time, false, 3, onset);
-    RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset, true, kLoud * 2));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset, true, kLoud * 64));
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 1, onset));
+}
+
+RODAK_TEST("barge in quiet syllable gaps inside speech do not reset confirmation") {
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    const uint32_t expected_onset = time;
+    RODAK_CHECK_FALSE(Frames(policy, time, true, 2, onset));
+    for (int i = 0; i < 3; ++i) {
+        time += 60;
+        RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 100 * 100, 0, onset));
+    }
+    RODAK_CHECK(Frames(policy, time, true, 1, onset));
+    RODAK_CHECK_EQ(onset, expected_onset);
 }
 
 RODAK_TEST("barge in stats count quiet rejections and reset with playback") {
@@ -109,15 +139,15 @@ RODAK_TEST("barge in stats count quiet rejections and reset with playback") {
     RODAK_CHECK_EQ(policy.stats().quiet_rejected_ms, uint32_t{0});
 }
 
-RODAK_TEST("barge in energy rejects a short transient and resets speech confirmation") {
+RODAK_TEST("barge in energy rejects speech-labelled frames just below the floor") {
     VoiceBargeInPolicy policy;
     uint32_t time = 1000, onset = 0;
     policy.StartPlayback(time);
     Arm(policy, time, onset);
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
-    time += 60;
-    RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 255 * 255, 0, onset));
-    RODAK_CHECK_FALSE(Frames(policy, time, true, 5, onset));
+    for (int i = 0; i < 12; ++i) {
+        time += 60;
+        RODAK_CHECK_FALSE(policy.Observe(time, 60, true, true, 255 * 255, 0, onset));
+    }
     Frames(policy, time, false, 3, onset);
     RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
 }
