@@ -25,6 +25,8 @@ constexpr uint8_t kRegAxL = 0x35;
 constexpr uint8_t kRegReset = 0x60;
 constexpr int kI2cTimeoutMs = 100;
 constexpr int kSampleIntervalMs = 100;
+// Stop runs in the LVGL task and joins the sampler, so the idle wait is sliced to bound that join.
+constexpr int kStopPollMs = 10;
 constexpr uint32_t kTaskStackBytes = 4096;
 constexpr UBaseType_t kTaskPriority = 4;
 constexpr float kYawDeadZoneDps = 0.8f;
@@ -52,8 +54,8 @@ Qmi8658MotionSensor::Qmi8658MotionSensor() {
 }
 
 Qmi8658MotionSensor::~Qmi8658MotionSensor() {
-    Stop();
     retirement_owner_.Close();
+    Stop();
     retirement_owner_.Drain();
 }
 
@@ -232,13 +234,13 @@ void Qmi8658MotionSensor::ReleaseHardware() {
 }
 
 bool Qmi8658MotionSensor::StartTask() {
-    if (task_running_) {
+    if (task_running_.load()) {
         return true;
     }
     // A previous generation must be fully reclaimed before its ticket is replaced.
     retirement_.Join();
 
-    task_running_ = true;
+    task_running_.store(true);
     retirement_ = ReserveTaskRetirement(retirement_owner_, SensorTask, this);
     TaskHandle_t handle = nullptr;
     // Sampling only does I2C (ISR not IRAM-safe) and never touches flash or NVS.
@@ -249,7 +251,7 @@ bool Qmi8658MotionSensor::StartTask() {
     if (ret != pdPASS) {
         if (retirement_) CancelTaskRetirement(retirement_);
         retirement_.Reset();
-        task_running_ = false;
+        task_running_.store(false);
         SetLastError("Failed to start QMI8658 task");
         ESP_LOGW(TAG, "Failed to start QMI8658 task");
         return false;
@@ -259,7 +261,7 @@ bool Qmi8658MotionSensor::StartTask() {
 }
 
 void Qmi8658MotionSensor::StopTask() {
-    task_running_ = false;
+    task_running_.store(false);
     // Waits for the current sample and loop exit, then reclaims the PSRAM stack externally.
     retirement_.Join();
     retirement_.Reset();
@@ -420,9 +422,12 @@ void Qmi8658MotionSensor::SensorTask(void* arg) {
 }
 
 void Qmi8658MotionSensor::SensorLoop() {
-    while (task_running_) {
+    while (task_running_.load()) {
         PollOnce();
-        vTaskDelay(pdMS_TO_TICKS(kSampleIntervalMs));
+        for (int waited = 0; waited < kSampleIntervalMs && task_running_.load();
+             waited += kStopPollMs) {
+            vTaskDelay(pdMS_TO_TICKS(kStopPollMs));
+        }
     }
 }
 

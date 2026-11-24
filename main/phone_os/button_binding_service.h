@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -90,15 +91,21 @@ private:
 
     struct PendingAction {
         ButtonBindingService* service = nullptr;
-        std::string button_id;
-        std::string title;
-        ButtonEvent event = ButtonEvent::kSingleClick;
+        ButtonAction action;
+        std::string toast;
     };
 
     struct DeferredClick {
         ButtonBindingService* service = nullptr;
         std::string button_id;
         uint32_t generation = 0;
+    };
+
+    struct CachedBinding {
+        std::string button_id;
+        ButtonEvent event = ButtonEvent::kSingleClick;
+        ButtonAction action;
+        bool custom = false;
     };
 
     struct QueuedButtonEvent {
@@ -112,6 +119,9 @@ private:
     void RegisterCallbacks();
     bool StartWorker();
     void ResetDiscoveredState();
+    void LoadBindingCache();
+    void UpdateBindingCache(const std::string& button_id, ButtonEvent event,
+                            const ButtonAction& action, bool custom);
     void HandleButtonEvent(std::string_view button_id, ButtonEvent event);
     void ExecuteBinding(const RegisteredButton& button, ButtonEvent event);
     void ScheduleSingleClick(const RegisteredButton& button);
@@ -122,6 +132,7 @@ private:
                           uint32_t generation = 0,
                           bool check_generation = false);
     void ProcessQueuedEvent(const QueuedButtonEvent& event);
+    void ExecuteAction(const ButtonAction& action, const std::string& toast);
     std::string StorageKey(std::string_view button_id, ButtonEvent event) const;
     const RegisteredButton* FindRegistered(std::string_view button_id) const;
     const ButtonState* FindButton(std::string_view button_id) const;
@@ -142,6 +153,10 @@ private:
     QueueHandle_t event_queue_ = nullptr;
     TaskHandle_t worker_task_ = nullptr;
     bool initialized_ = false;
+    // The worker runs on a PSRAM stack and must not read NVS, which turns the flash cache off.
+    // Init loads every registered binding here; SetBinding/ResetBinding keep it in step.
+    mutable std::mutex binding_cache_mutex_;
+    std::vector<CachedBinding> binding_cache_;
 };
 
 }  // namespace rodakos

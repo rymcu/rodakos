@@ -349,6 +349,8 @@ void TouchPollTask(void* arg) {
         vTaskDelayUntil(&last_wake, period);
     }
 
+    // Unreachable today: nothing clears `running` after the task starts. A real stop entry must
+    // use the task retirement path, because self-delete allocates an internal cleanup task.
     vTaskDeleteWithCaps(nullptr);
 }
 

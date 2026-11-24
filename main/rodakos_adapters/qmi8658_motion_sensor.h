@@ -9,6 +9,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include <atomic>
 #include <cstdint>
 
 namespace rodakos {
@@ -57,7 +58,7 @@ private:
     // cleanup task on exit and abort when internal SRAM is fragmented.
     TaskRetirementOwner retirement_owner_;
     TaskRetirementTicket retirement_;
-    volatile bool task_running_ = false;
+    std::atomic<bool> task_running_{false};
     bool initialized_ = false;
     float yaw_degrees_ = 0.0f;
     int64_t last_yaw_update_us_ = 0;
