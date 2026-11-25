@@ -21,8 +21,12 @@ passes it to ESP-SR AFE with `AEC_MODE_VOIP_HIGH_PERF` and WebRTC VAD
 (`VAD_MODE_0`). Recorder uses its own input ownership and the default uniform
 gain profile. Conversation capture uses `InputGainProfile::kAecReference10Db`,
 keeping microphones at 30 dB while requesting 10 dB (9 dB after ES7210
-quantization) for the reference channel. Wake monitoring uses the same profile
-when its own echo canceller is enabled. It is a separate synchronous ESP-SR AEC
+quantization) for the reference channel at normal levels. During conversation, four
+loopback samples at or beyond ±24,576 in one 20 ms read select 24 dB microphone gain
+and 0 dB reference gain for the next read. The driver changes the two gain masks
+on the open ADC. The lower gains stay in effect through playback and return to
+normal after one second of inactive loopback. Wake monitoring keeps the normal
+profile when its own echo canceller is enabled. It is a separate synchronous ESP-SR AEC
 in front of MultiNet, described in [wake word evaluation](voice-wake-evaluation.md#wake-frontend-aec-and-agc).
 
 Fetched PCM, including silence, is the continuous Opus uplink source. Frames
@@ -46,7 +50,9 @@ energy gates:
 
 - DC-removed AFE output RMS of at least 256 (about -42.1 dBFS).
 - AFE output power at least 1/32 (−15 dB) of the loudest microphone input power
-  over the last 200 ms, measured before AEC. A frame below this ratio is treated
+  over the last 200 ms, measured before AEC. For strong output (RMS at least 512),
+  the existing ratio is 1/96. The fetch timestamp expires old raw reads even when
+  capture pauses. A frame below the applicable ratio is treated
   as echo residual. A frame without input power (`input_power = 0`) skips this
   gate.
 
@@ -119,9 +125,8 @@ Status (2026-10-24, COM3): the uplink no longer falls behind during playback. Tw
 fixed. Reply playback moved to its own task, and the capture loop no longer sleeps one tick after
 each full read. Before the second fix, the I2S RX ring overflowed and the uplink frame age reached
 about 4.7 s after 70 s of playback. The frame age now stays at 0 ms. Server-side barge-in works.
-Device-side barge-in still does not trigger: after AEC/NS, most speech frames during playback are
-below the -42 dBFS energy gate, so the policy seldom gets three frames in sequence. This threshold
-needs a separate adjustment.
+On that October build, device-side barge-in rarely met the energy gate after AEC/NS.
+The November calibration above records the later windowed policy and device results.
 
 ## Audio ownership and memory
 
@@ -189,6 +194,72 @@ output is a diagnostic, not an acoustic acceptance score.
 python tools/capture_aec_diagnostics.py --port COM3 --output build/logs/aec-<stamp>
 python tools/analyze_aec_diagnostics.py build/logs/aec-<stamp>
 ```
+
+## Live microphone volume sweep on BigSmart, 2026-11-25
+
+For [issue #63](https://github.com/rymcu/rodakos/issues/63), one BigSmart running
+0.1.5 on COM4 made three ordinary Rodak voice requests at each volume. Every trial
+started with the same injected recording requesting a one-minute story. At the first
+playback marker the harness sent `audio_live` to restore the physical microphones.
+It injected no barge-in speech. Rodak generated a new story for each trial. The
+reported and desired volumes matched before and after every trial.
+
+| Volume | Replies completed | Device AFE abort | Rodak ASR interruption |
+| ---: | ---: | ---: | ---: |
+| 60 | 3/3 | 0/3 | 0/3 |
+| 80 | 1/3 | 0/3 | 2/3 at 15.10 s and 23.08 s |
+| 100 | 1/3 | 1/3 at 3.72 s | 1/3 at 2.30 s |
+
+Times are relative to the device playback-start marker. For Rodak ASR interruptions
+the endpoint is the device's playback statistics line. In all three server-side
+cases the server interrupted playback after its ASR recognized the transcript “嗯嗯”. The device returned to follow-up listening in these cases too.
+Completed replies were checked against the number of TTS segments sent by Rodak
+and the number of packets received by the device.
+
+At volume 100, trial 3, the device confirmed local VAD at 3.65 s
+(`frame_age_ms=52`, `pcm_power=206001`, `input_power=182884`). At 3.72 s it
+logged `TTS interrupted`, `vad_sent=yes`, `abort_sent=yes`, `source=esp-sr`.
+Rodak recorded receipt of `playback.abort` with reason `vad_detected` for the same
+session. The harness sent its cleanup stop only after this event. Issue #63 used
+IntelliConnect and reported `vad_sent=suppressed`; both captures show a device
+abort. This sweep did not independently record room sound or isolate acoustic echo.
+The board's reported and desired volumes returned to 30 after the last trial.
+
+### High-level capture and delayed AFE input-power comparison
+
+Package `20261125-193609` was built from `e7f924c` with the ADC headroom and input-power
+history changes (0.1.5, app SHA-256
+`ba8716079b910d993ed3525c37857f12c459c1e335fe0aaece8c23a652215e40`). A six-second
+stock capture at volume 100 had 5.67% of MIC3 reference samples and 0.77% of the selected
+microphone samples at or beyond ±32,760. A six-second capture on the final build measured
+0.057% and 0.143%, respectively. Each capture contained 96,000 samples per channel,
+no recorded discontinuities and no mic switch. They used different generated stories.
+
+The stock capture's microphone and AFE RMS envelopes correlated most strongly at roughly
+140 ms of delay (10 ms blocks). The old four-read, 80 ms peak could therefore compare an
+echo with the quieter input *after* the corresponding speaker burst. In one 60 ms slice
+the AFE power was 1,932,486, the recent 80 ms raw peak was 1,532,522, and the 200 ms peak
+was 415,736,931. The wider history rejects this residual with the existing power ratio.
+It resets at session stop and AFE buffer resynchronization.
+
+| Volume | Complete replies on fixed build | Device AFE aborts | Server ASR interruptions | Injected speech interrupted and next reply finished |
+| ---: | ---: | ---: | ---: | ---: |
+| 60 | 3/3 | 0 | 0 | 1/1 |
+| 80 | 5/5 | 0 | 0 | 1/1 |
+| 100 | 6/6 | 0 | 0 | 1/1 |
+
+The 14 physical-microphone trials used the same request as the stock sweep. Rodak's
+completed segment packet totals matched device reception, and the codec reported zero
+write failures. One volume-80 reply lasted only 2.76 s; four other volume-80 replies lasted
+39–47 s. At volume 100 the six trials lasted 29–70 s. The separate interruption trials
+injected speech during playback and checked local confirmation, `playback.abort`, VAD end,
+the next playback epoch and natural return to follow-up. An initial fixed 12 s observation
+ended before the next story finished; the table uses the later natural-completion checks.
+Physical double-talk with a human and other rooms remains open.
+
+The board finished on the development-signed production-flavor package with reported and
+desired volume restored to 30. Recovery handoff, local OTA confirmation and Home startup
+passed after flashing.
 
 ## Acceptance boundary
 

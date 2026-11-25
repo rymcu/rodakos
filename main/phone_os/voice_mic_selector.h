@@ -17,6 +17,7 @@ public:
     int selected_mic() const { return selected_mic_; }
     size_t selected_slot() const { return selected_mic_ == 1 ? 0 : 2; }
     bool playback_hold() const { return hold_samples_ > 0; }
+    bool needs_adc_headroom() const { return needs_adc_headroom_; }
 
 private:
     int selected_mic_ = 2;
@@ -25,6 +26,7 @@ private:
     int64_t mic2_power_ = 0;
     bool speech_lock_ = false;
     size_t hold_samples_ = 0;
+    bool needs_adc_headroom_ = false;
 };
 
 }  // namespace rodakos

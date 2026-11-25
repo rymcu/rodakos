@@ -54,3 +54,25 @@ RODAK_TEST("AudioCodecInput closes and rejects owner when MIC3 reference channel
     RODAK_CHECK_FALSE(input.IsOpen());
     RODAK_CHECK_EQ(fake_codec::closes, 1);
 }
+
+RODAK_TEST("duplex headroom changes ES7210 gains in place and restores normal capture gain") {
+    using Profile = rodakos::AudioCodecInput::InputGainProfile;
+    fake_codec::Reset();
+    rodakos::AudioCodecInput input;
+    auto open = [&](int gain, Profile profile) {
+        return input.OpenForOwner("voice-conversation-frontend", 30, 16000, 4, 16, gain, 0, profile);
+    };
+    RODAK_CHECK(open(30, Profile::kAecReference10Db));
+    RODAK_CHECK(open(24, Profile::kAecReference0Db));
+    RODAK_CHECK(open(24, Profile::kAecReference0Db));
+    RODAK_CHECK(open(30, Profile::kAecReference10Db));
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes.size(), size_t{6});
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[2].first, uint16_t{0xB});
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[2].second, 24.0f);
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[3].first, uint16_t{0x4});
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[3].second, 0.0f);
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[4].second, 30.0f);
+    RODAK_CHECK_EQ(fake_codec::in_channel_gain_writes[5].second, 10.0f);
+    RODAK_CHECK_EQ(fake_codec::opens, 1);
+    RODAK_CHECK_EQ(fake_codec::closes, 0);
+}

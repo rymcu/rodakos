@@ -12,6 +12,9 @@ constexpr int64_t kReferenceActivePower = 1024;
 // Switching changes the echo path under a converged AEC, and the residual burst that
 // follows can pass as near-end speech. Keep the microphone until the echo tail has gone.
 constexpr size_t kPlaybackHoldSamples = 16000;
+// Switch before the ES7210 saturates. A single transient sample is insufficient.
+constexpr int kReferenceHeadroomLevel = 24576;
+constexpr size_t kHeadroomSamples = 4;
 
 int64_t AcPower(int64_t sum, int64_t squares, int64_t count) {
     return (squares - sum * sum / count) / count;
@@ -29,16 +32,19 @@ void VoiceMicSelector::ResetSession() {
     mic2_power_ = 0;
     speech_lock_ = false;
     hold_samples_ = 0;
+    needs_adc_headroom_ = false;
 }
 
 void VoiceMicSelector::Update(const int16_t* tdm, size_t frames) {
     if (tdm == nullptr || frames == 0) return;
     int64_t sum1 = 0, sum2 = 0, sum_ref = 0;
     int64_t sq1 = 0, sq2 = 0, sq_ref = 0;
+    size_t high_reference_samples = 0;
     for (size_t i = 0; i < frames; ++i) {
         const int64_t a = tdm[i * kChannels];
         const int64_t r = tdm[i * kChannels + 1];
         const int64_t b = tdm[i * kChannels + 2];
+        if (r >= kReferenceHeadroomLevel || r <= -kReferenceHeadroomLevel) ++high_reference_samples;
         sum1 += a;
         sum_ref += r;
         sum2 += b;
@@ -55,9 +61,12 @@ void VoiceMicSelector::Update(const int16_t* tdm, size_t frames) {
         hold_samples_ -= std::min(hold_samples_, frames);
     }
     if (hold_samples_ > 0) {
+        // Lowering analog gain also lowers the measured reference. Latch through the echo tail.
+        needs_adc_headroom_ = needs_adc_headroom_ || high_reference_samples >= kHeadroomSamples;
         switch_frames_ = 0;
         return;
     }
+    needs_adc_headroom_ = false;
     if (speech_lock_) {
         if (std::max(mic1_power_, mic2_power_) < kSpeechLockPower) {
             speech_lock_ = false;

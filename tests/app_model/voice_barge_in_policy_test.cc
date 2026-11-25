@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "phone_os/voice_barge_in_policy.h"
+#include "phone_os/voice_input_power_history.h"
 #include <vector>
 
 namespace {
@@ -39,6 +40,23 @@ RODAK_TEST("barge in rejects measured residual echo even when VAD labels speech"
     }
     Frames(policy, time, false, 3, onset);
     RODAK_CHECK(Frames(policy, time, true, kConfirmFrames, onset));
+}
+
+RODAK_TEST("delayed AFE echo uses the raw microphone peak from the same playback burst") {
+    rodakos::VoiceInputPowerHistory history;
+    VoiceBargeInPolicy policy;
+    uint32_t time = 0, onset = 0;
+    policy.StartPlayback(time);
+    Arm(policy, time, onset);
+    // Measured max-volume frame: the 80 ms mic peak was 1532522; the older burst was 415736931.
+    history.Record(415736931, 1000000);
+    for (int i = 1; i <= 7; ++i) history.Record(1532522, 1000000 + i * 20000);
+    RODAK_CHECK_EQ(history.Peak(1140000), uint32_t{415736931});
+    RODAK_CHECK_FALSE(policy.Observe(time + 60, 60, true, true, 1932486,
+                                     history.Peak(1140000), onset));
+    RODAK_CHECK_EQ(policy.stats().echo_rejected_ms, uint32_t{60});
+    RODAK_CHECK_EQ(history.Peak(1200000), uint32_t{1532522});
+    RODAK_CHECK_EQ(history.Peak(1340000), uint32_t{0});
 }
 
 RODAK_TEST("barge in ignores speech in the playback start grace window") {

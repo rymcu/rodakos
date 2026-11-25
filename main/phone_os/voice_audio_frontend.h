@@ -8,6 +8,7 @@
 #include "phone_os/voice_afe_observation.h"
 #include "phone_os/voice_wake_frontend.h"
 #include "phone_os/voice_mic_selector.h"
+#include "phone_os/voice_input_power_history.h"
 
 #include <array>
 #include <cstdint>
@@ -108,9 +109,7 @@ private:
     void ProcessConversationSamples(const int16_t* samples, size_t count, uint32_t generation,
                                     bool vad_valid, bool vad_speech);
     void SelectMainMicrophone(const std::vector<int16_t>& input, std::vector<int16_t>& output);
-    void RecordConversationInputPowerLocked(const std::vector<int16_t>& samples);
-    uint32_t RecentConversationInputPowerLocked() const;
-    void ResetConversationInputPowerLocked();
+    void RecordConversationInputPowerLocked(const std::vector<int16_t>& samples, int64_t read_end_us);
     size_t ResolveReadSamples(Mode mode) const;
     void SetErrorLocked(const char* error);
 
@@ -175,11 +174,7 @@ private:
     std::string last_error_;
     VoiceIdentityConfig wake_identity_ = DefaultVoiceIdentityConfig();
     VoiceMicSelector mic_selector_;
-    // AFE output trails its input by ~2 fetches, so the barge-in echo test compares each
-    // output frame with the loudest recent input read (4 x 20 ms).
-    static constexpr size_t kConversationInputPowerReads = 4;
-    std::array<uint32_t, kConversationInputPowerReads> conversation_input_power_{};
-    size_t conversation_input_power_index_ = 0;
+    VoiceInputPowerHistory conversation_input_power_;
     const esp_afe_sr_iface_t* afe_iface_ = nullptr;
     esp_afe_sr_data_t* afe_data_ = nullptr;
     TaskHandle_t afe_fetch_task_ = nullptr;
