@@ -157,6 +157,53 @@ because it is not an acoustic echo, and its in/out ratio stayed near 0 dB. Those
 here. `AFE_MODE_HIGH_PERF` was also tried for the wake AEC and recalled no better (12/18 against
 13/18), so the low-cost mode stays.
 
+## Wake buffer placement and reuse on BigSmart, 2026-11-25
+
+One BigSmart on COM4 ran 40 interleaved trials on a single ESP-IDF 6.0.2 image built from
+`e7f924c`. The four modes used the current chunking code, reusable chunk buffers, or the
+current code with an extra copy into a 16-byte-aligned MultiNet input buffer. The last two
+modes used identical code and checked the address of that 1,024-byte buffer in internal
+SRAM or PSRAM. The model, AEC and task stacks kept their normal placement.
+
+Each clip consisted of three repetitions of the same 16 kHz PCM16 positive or negative
+utterance, with a 500 ms lead, a 1.5 s tail and a threshold of 140 permille. The positive
+clip ran four times per mode in each condition. The negative clip ran twice per mode in
+quiet. Each trial discarded eight warm-up reads and the closing read that restores the
+recognizer. The table gives the median of the **per-trial P99** elapsed times, from a
+successful microphone read returning through completion of wake processing.
+
+| Clip and speaker condition | Current (ms) | Reuse (ms) | Internal SRAM input (ms) | PSRAM input (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Positive, quiet | 36.96 | 35.77 | 36.00 | 35.96 |
+| Positive, speaker playing with AEC | 43.37 | 42.87 | 43.44 | 41.90 |
+| Negative, quiet | 36.08 | 36.38 | 36.34 | 36.51 |
+
+Of 10,712 timed reads, 926 took longer to process than their 32 ms audio duration.
+There were zero reported read failures and zero measured read-to-read gaps over 64 ms.
+The longest gap was 56.24 ms. The capture adapter did not provide a DMA overrun count.
+The lowest sampled largest free block was 22,528 B for both internal RAM and DMA in every
+mode. Sampling covered trial start, every 32 timed reads and trial end.
+
+All 16 quiet positive trials recognized all three repetitions. All eight quiet negative
+trials had zero detections. With speaker playback, the number of trials with at least
+one detection was 4/4 current, 4/4 reuse, 3/4 SRAM and 2/4 PSRAM. The uploaded PCM was
+identical. The wake AEC used a live loopback reference from the continuously playing speaker,
+whose phase varied between trials. This limits recognition and timing comparisons under playback.
+
+These results support keeping the current placement. In paired playback trials the PSRAM
+input P99 was higher twice and lower twice. Reuse reduced the median P99 for the positive
+clip, increased it for the negative clip, and produced no observed increase in the largest
+free internal block. This run covered wake processing only. Conversation AFE, Opus and
+human acoustic wake performance need separate measurements.
+
+The development-signed trial package was `20261125-155310`, app SHA-256
+`da9be29a7347dd0094a5bc33e5772c3f3ec36153acedf0f3b736aad20e9fc7cf`.
+The original 0.1.5 package was `20261125-094038`, app SHA-256
+`02ee07947cf4606702092ae3fc2d4a966e98926585e357e465851360f8191f8f`.
+The original app matched flash before the experiment. After the trials the guarded
+incremental flash restored that package, verified the write, and confirmed Recovery
+handoff, Home startup and local OTA boot confirmation.
+
 ## Not done yet
 
 - **A trained WakeNet model** for 你好达克 through Espressif's TTS training service (esp-sr issue
