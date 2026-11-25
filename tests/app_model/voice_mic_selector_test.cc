@@ -32,6 +32,26 @@ RODAK_TEST("mic selector switches to the louder microphone without playback") {
     RODAK_CHECK_EQ(selector.selected_slot(), size_t{0});
 }
 
+RODAK_TEST("loud loopback requests ADC headroom until a full second without playback") {
+    VoiceMicSelector selector;
+    auto tdm = Read(30000, 100, 30000);
+    for (size_t i = 0; i < 3; ++i) tdm[4 * i + 1] = -32768;
+    Feed(selector, tdm, 1);
+    RODAK_CHECK_FALSE(selector.needs_adc_headroom());
+    tdm[13] = 24576;
+    Feed(selector, tdm, 1);
+    RODAK_CHECK(selector.needs_adc_headroom());
+    Feed(selector, Read(100, 2000, 100), 60);
+    RODAK_CHECK(selector.needs_adc_headroom());
+    Feed(selector, Read(100, 0, 100), 49);
+    RODAK_CHECK(selector.needs_adc_headroom());
+    Feed(selector, Read(100, 0, 100), 1);
+    RODAK_CHECK_FALSE(selector.needs_adc_headroom());
+    Feed(selector, tdm, 1);
+    selector.ResetSession();
+    RODAK_CHECK_FALSE(selector.needs_adc_headroom());
+}
+
 RODAK_TEST("mic selector keeps the microphone while the speaker reference is active") {
     VoiceMicSelector selector;
     // Speaker echo reaches MIC1 louder than MIC2; switching would reset the AEC echo path.

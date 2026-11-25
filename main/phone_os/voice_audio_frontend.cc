@@ -44,6 +44,7 @@ constexpr uint16_t kBitsPerSample = 16;
 // BigSmart raw TDM order is MIC1, MIC3(reference), MIC2, MIC4.
 constexpr uint16_t kInputChannelMask = 0;
 constexpr int kInputGain = 30;
+constexpr int kHighPlaybackInputGain = 24;
 constexpr int kDetectionDurationMs = 3000;
 // 0.2 is conservative for a quiet near-field lab. The lower threshold is paired
 // with a distinctive command and the existing single-command gate so distant
@@ -552,7 +553,7 @@ void VoiceAudioFrontend::Stop() {
     ++conversation_generation_;
     frames_.clear();
     conversation_assembler_.Reset();
-    ResetConversationInputPowerLocked();
+    conversation_input_power_ = {};
     mic_selector_.ResetSession();
     xSemaphoreGive(mutex_);
     StopAfe();
@@ -1303,18 +1304,17 @@ bool VoiceAudioFrontend::EnsureInputForMode(Mode mode) {
         xSemaphoreGive(mutex_);
         return false;
     }
-    // Wake AEC needs the loopback at the conversation reference gain, not microphone gain.
-    const bool reference_gain = mode == Mode::kConversation || wake_frontend_.aec_active();
-    const bool opened = input_.OpenForOwner(owner,
-                                             priority,
-                                             kSampleRate,
-                                             kInputChannels,
-                                             kBitsPerSample,
-                                             kInputGain,
-                                             kInputChannelMask,
-                                             reference_gain
-                                                 ? AudioCodecInput::InputGainProfile::kAecReference10Db
-                                                 : AudioCodecInput::InputGainProfile::kUniform);
+    using GainProfile = AudioCodecInput::InputGainProfile;
+    int mic_gain = kInputGain;
+    GainProfile gain_profile = GainProfile::kUniform;
+    if (mode == Mode::kConversation && mic_selector_.needs_adc_headroom()) {
+        mic_gain = kHighPlaybackInputGain;
+        gain_profile = GainProfile::kAecReference0Db;
+    } else if (mode == Mode::kConversation || wake_frontend_.aec_active()) {
+        gain_profile = GainProfile::kAecReference10Db;
+    }
+    const bool opened = input_.OpenForOwner(owner, priority, kSampleRate, kInputChannels,
+                                            kBitsPerSample, mic_gain, kInputChannelMask, gain_profile);
     input_open_ = opened;
     if (opened) {
         last_error_.clear();
@@ -1430,7 +1430,7 @@ void VoiceAudioFrontend::CaptureTask() {
                                      ? diagnostic_audio_[diagnostic_audio_position_++] : 0;
                     }
                 }
-                RecordConversationInputPowerLocked(selected_samples);
+                RecordConversationInputPowerLocked(selected_samples, raw_observed_us);
             } else if (mode_ == mode && generation == conversation_generation_ &&
                        afe_data_ != nullptr && (afe_resync_pending_ || read_epoch != afe_stream_epoch_)) {
                 // 此 raw read 已消耗但未 AppendRaw；取消/旧代不计入当前 capture。
@@ -1644,6 +1644,7 @@ void VoiceAudioFrontend::AfeFetchTask() {
                 afe_credit_bytes_ = afe_uncertain_bytes_ = 0;
                 afe_resync_pending_ = false;
                 ++afe_stream_epoch_;
+                conversation_input_power_ = {};
                 ++resyncs;
                 resync_errors = 0;
                 InvalidateAfeContinuityLocked();
@@ -1942,7 +1943,8 @@ void VoiceAudioFrontend::SelectMainMicrophone(const std::vector<int16_t>& input,
     for (size_t i = 0; i < count; ++i) output[i] = input[i * VoiceMicSelector::kChannels + slot];
 }
 
-void VoiceAudioFrontend::RecordConversationInputPowerLocked(const std::vector<int16_t>& samples) {
+void VoiceAudioFrontend::RecordConversationInputPowerLocked(const std::vector<int16_t>& samples,
+                                                            int64_t read_end_us) {
     if (samples.empty()) return;
     // Remove DC like the barge-in output power does, so an ADC offset cannot pass as echo.
     int64_t sum = 0;
@@ -1953,19 +1955,7 @@ void VoiceAudioFrontend::RecordConversationInputPowerLocked(const std::vector<in
     }
     const int64_t n = static_cast<int64_t>(samples.size());
     const int64_t power = (squares - sum * sum / n) / n;
-    conversation_input_power_[conversation_input_power_index_] =
-        static_cast<uint32_t>(std::min<int64_t>(power, UINT32_MAX));
-    conversation_input_power_index_ =
-        (conversation_input_power_index_ + 1) % kConversationInputPowerReads;
-}
-
-uint32_t VoiceAudioFrontend::RecentConversationInputPowerLocked() const {
-    return *std::max_element(conversation_input_power_.begin(), conversation_input_power_.end());
-}
-
-void VoiceAudioFrontend::ResetConversationInputPowerLocked() {
-    conversation_input_power_.fill(0);
-    conversation_input_power_index_ = 0;
+    conversation_input_power_.Record(static_cast<uint32_t>(power), read_end_us);
 }
 
 void VoiceAudioFrontend::FeedWakeSamples(const std::vector<int16_t>& tdm,
@@ -2151,7 +2141,7 @@ void VoiceAudioFrontend::ProcessConversationSamples(const int16_t* samples, size
     aec_diagnostic_capture_.AppendAfe(samples, count, generation, observed_us);
     conversation_assembler_.Append(samples, count, recorder_config_, observed_us,
                                    vad_valid, vad_speech, frames_, kMaxQueuedFrames,
-                                   RecentConversationInputPowerLocked());
+                                   conversation_input_power_.Peak(observed_us));
     xSemaphoreGive(mutex_);
 }
 

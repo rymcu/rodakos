@@ -1,6 +1,6 @@
 # RodakOS Roadmap
 
-Updated 2026-11-19. This page lists the current baseline and the open work.
+Updated 2026-11-25. This page lists the current baseline and the open work.
 [OTA release readiness](ota-release-readiness.md) and the feature documents linked below keep
 the dated candidate evidence (packages, hashes, serial windows). The
 [documentation archive](archive/README.md) keeps earlier versions of this page.
@@ -81,7 +81,7 @@ gates are local tests, local builds, package verification and recorded device wi
 | Camera image | Physical color, exposure and optics with a test chart. Camera supply rails. | [Camera diagnostics](camera-teardown-diagnostics.md) |
 | Trusted server recovery | New-address and single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, damaged/missing trust recovery | [Trusted server discovery](trusted-server-discovery.md), [#33](https://github.com/rymcu/rodakos/issues/33) |
 | Home and Shell | Physical swipes, Arrange, page restoration, readability, three-page turnover with the 25-app test flavor | [Home validation](home-layout-design.md#validation-boundary), [#27](https://github.com/rymcu/rodakos/issues/27) |
-| Voice | Music/Recorder coexistence, repeated-wake suppression, TTS tail, acoustic AEC/barge-in, false accept/reject, long-duration measurements. Device-side barge-in does not trigger yet: after AEC/NS, most speech frames are below the -42 dBFS energy gate | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md), [wake evaluation](voice-wake-evaluation.md#not-done-yet), [#23](https://github.com/rymcu/rodakos/issues/23) |
+| Voice | Music/Recorder coexistence, repeated-wake suppression, TTS tail, acoustic barge-in with real talkers at different distances and playback volumes, false accept/reject rates and long-duration measurements. | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md), [wake evaluation](voice-wake-evaluation.md#not-done-yet), [#23](https://github.com/rymcu/rodakos/issues/23), [#63](https://github.com/rymcu/rodakos/issues/63) |
 | Server-initiated announce | Host test for the `VoiceAssistantService` announce state machine. Device runs for playback-only start, no follow-up, no reconnect, wake-word termination, `busy` ACK and urgent announce during music | [Voice contract §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce), [AIoT contract](rodak-aiot-contract-v1.md) |
 | LAN first setup | Hardware runs for a wrong code, an expired request and a user cancel | [LAN first setup](lan-onboarding-design.md) |
 | Cloud diagnosis | Real credential expiry/revocation, DNS/HTTP cancellation latency, device typography and touch | [Cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery), [#24](https://github.com/rymcu/rodakos/issues/24) |

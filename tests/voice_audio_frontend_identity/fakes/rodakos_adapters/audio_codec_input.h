@@ -3,7 +3,7 @@
 namespace rodakos {
 class AudioCodecInput {
 public:
-    enum class InputGainProfile { kUniform, kAecReference10Db };
+    enum class InputGainProfile { kUniform, kAecReference10Db, kAecReference0Db };
     AudioCodecInput();
     ~AudioCodecInput();
     bool Init();

@@ -410,6 +410,50 @@ the GCC 15 transition. Both compatibility fixes stay in `main/CMakeLists.txt`.
 
 ## Verification Gates
 
+### BigSmart full-length RAV1 TTS playback, 2026-11-25
+
+One BigSmart on COM4 ran four normal realtime voice conversations. USB supplied the same
+2.69 s spoken request, “朗诵滕王阁序”. The device uploaded it to Rodak for ASR, agent response
+generation and TTS, then played the RAV1 reply. For this test the server was configured to
+answer this board with a fixed public-domain text. The server's reply text matched the seven prose paragraphs and eight
+closing lines in order in all four sessions. The reference was [Wang Bo's 滕王阁序,
+revision 12697774](https://zh.wikisource.org/w/index.php?title=滕王閣序&oldid=12697774).
+
+Both arms used the same diagnostic firmware, a 64-byte-aligned 4,096-byte buffer, the same
+PCM packing loop and the same codec write. The firmware checked the buffer address before
+each session. Only the active output staging buffer changed location. The ordinary staging
+buffer and a common PSRAM timing array remained allocated in both arms. The experiment
+measured time from the first driver write beginning through the last driver write returning.
+Packing P99 is per 60 ms decoded packet and excludes the blocking codec write.
+
+| Run | Staging | ASR transcript | Opus packets | Audio (s) | Driver playback window (s) | Pack P99 (µs) | ASR complete to first send (s) | Lowest sampled largest internal block (KiB) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | PSRAM | 朗诵滕王阁序 | 4,438 | 266.28 | 266.260464 | 258 | 2.337 | 22 |
+| 2 | SRAM | 朗诵滕王阁序 | 4,438 | 266.28 | 266.260817 | 97 | 2.171 | 16 |
+| 3 | SRAM | 朗诵滕王阁序 | 4,438 | 266.28 | 266.500986 | 102 | 2.440 | 16 |
+| 4 | PSRAM | 滕王阁去 | 4,564 | 273.84 | 273.925807 | 222 | 3.131 | 22 |
+
+The first three runs delivered the same 79 TTS segments and the same length-delimited
+Opus payload fingerprint (`299fd9f51af4d5ca`). Their codec-write P99s were 60.379,
+60.599 and 60.745 ms in run order. On the server, generating the whole reply took 35.490,
+35.321 and 37.897 s from the start of first-sentence synthesis. This interval includes
+overlapping text generation, synthesis and encoding. The server sent the first and last
+packets about 265.86 s apart in each run. The fourth reply added an introduction before
+the complete text, generating 82 segments. Its audio duration is reported separately.
+
+All 17,878 packets were decoded, queued and written, with zero queue drops or reported codec
+write failures. Inter-write gaps longer than 60 ms occurred 0, 0, 3 and 1 times respectively.
+The longest was 194.749 ms. The observations end at the driver and do not measure physical
+speaker onset or acoustic gaps. For this workload PSRAM preserved more contiguous internal
+memory and delivered the same audio at real-time speed. These results cover the playback
+staging buffer only.
+
+The development-signed test used `e7f924c` with the measurement patch, package
+`20261125-170539`, app SHA-256
+`152eb9331df5fda7f6deb46c85947ced575c5569b76e3ed99cc735bd9f7a5537`.
+The board returned to its original 0.1.5 package `20261125-094038` with a verified write,
+Home startup and local OTA confirmation. The server configuration for the board was restored.
+
 ### TEST 固件的准备阶段优先级快照
 
 `RODAKOS_RELEASE_TESTS=ON` 时，`PrepareInteraction` 只在当前任务采四个有效优先级端点：

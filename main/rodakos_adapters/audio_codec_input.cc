@@ -263,7 +263,7 @@ bool AudioCodecInput::SetGainLocked(int gain, InputGainProfile gain_profile) {
     }
 
     gain_configured_ = false;
-    if (gain_profile == InputGainProfile::kAecReference10Db) {
+    if (gain_profile != InputGainProfile::kUniform) {
         // ES7210 gain masks address physical ADC channels: MIC3 is channel 2,
         // although its PCM is TDM slot 1. Configure microphones and loopback
         // independently so MIC3 never transients through microphone gain.
@@ -277,14 +277,15 @@ bool AudioCodecInput::SetGainLocked(int gain, InputGainProfile gain_profile) {
             ESP_LOGW(TAG, "Failed to set microphone channel gain to %d: %d", gain, mic_ret);
             return false;
         }
+        const int reference_gain = gain_profile == InputGainProfile::kAecReference0Db ? 0 : 10;
         const int reference_ret = esp_codec_dev_set_in_channel_gain(
-            codec, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), 10.0F);
+            codec, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), static_cast<float>(reference_gain));
         if (reference_ret != ESP_CODEC_DEV_OK) {
             ESP_LOGW(TAG, "Failed to request AEC reference gain: %d", reference_ret);
             return false;
         }
-        ESP_LOGI(TAG, "Input gain configured: microphones=%d dB, MIC3 reference=10 dB (ADC channel 2)",
-                 gain);
+        ESP_LOGI(TAG, "Input gain configured: microphones=%d dB, MIC3 reference=%d dB (ADC channel 2)",
+                 gain, reference_gain);
     } else {
         const int ret = esp_codec_dev_set_in_gain(codec, static_cast<float>(gain));
         if (ret != ESP_CODEC_DEV_OK) {
