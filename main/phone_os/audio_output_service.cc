@@ -91,7 +91,8 @@ bool AudioOutputService::OpenForOwner(const char* owner,
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
     if (owner_.empty() || owner_ == owner) {
-        ok = output_.Open(sample_rate, channels, bits_per_sample, volume_);
+        ok = output_.Open(sample_rate, channels, bits_per_sample,
+                          volume_.load(std::memory_order_relaxed));
         if (ok) {
             owner_ = owner;
         } else if (!output_.IsOpen()) {
@@ -144,11 +145,12 @@ AudioVolumeResult AudioOutputService::ApplyVolume(AudioVolumeOperation operation
         return result;
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    result.previous_volume = volume_;
-    result.volume = volume_;
+    const int current_volume = volume_.load(std::memory_order_relaxed);
+    result.previous_volume = current_volume;
+    result.volume = current_volume;
     result.configuration_revision = configuration_revision_;
 
-    int requested = volume_;
+    int requested = current_volume;
     bool valid = false;
     switch (operation) {
         case AudioVolumeOperation::kSet:
@@ -157,11 +159,11 @@ AudioVolumeResult AudioOutputService::ApplyVolume(AudioVolumeOperation operation
             break;
         case AudioVolumeOperation::kUp:
             valid = value >= 1 && value <= 100;
-            if (valid) requested = std::min(100, volume_ + value);
+            if (valid) requested = std::min(100, current_volume + value);
             break;
         case AudioVolumeOperation::kDown:
             valid = value >= 1 && value <= 100;
-            if (valid) requested = std::max(0, volume_ - value);
+            if (valid) requested = std::max(0, current_volume - value);
             break;
     }
 
@@ -169,10 +171,10 @@ AudioVolumeResult AudioOutputService::ApplyVolume(AudioVolumeOperation operation
         const bool open = output_.IsOpen();
         if (!open || output_.SetVolume(requested)) {
             // 同一锁区生成回执；不能在另一次查询时推断本次写入是否经过 codec。
-            volume_ = requested;
+            volume_.store(requested, std::memory_order_release);
             ++configuration_revision_;
             result.accepted = true;
-            result.volume = volume_;
+            result.volume = requested;
             result.configuration_revision = configuration_revision_;
             result.application = open ? AudioVolumeApplication::kCodecApplied
                                       : AudioVolumeApplication::kDeferred;
@@ -183,13 +185,7 @@ AudioVolumeResult AudioOutputService::ApplyVolume(AudioVolumeOperation operation
 }
 
 int AudioOutputService::volume() const {
-    if (mutex_ == nullptr) {
-        return volume_;
-    }
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    const int volume = volume_;
-    xSemaphoreGive(mutex_);
-    return volume;
+    return volume_.load(std::memory_order_acquire);
 }
 
 bool AudioOutputService::IsOpen() {

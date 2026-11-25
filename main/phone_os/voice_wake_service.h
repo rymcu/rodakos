@@ -52,6 +52,7 @@ public:
     virtual void Deinit() = 0;
     virtual bool StartListening(std::function<void(const std::string&)> on_wake_word) = 0;
     virtual void StopListening() = 0;
+    virtual void PrepareForAssistantHandoff() { StopListening(); }
     virtual bool IsListening() const = 0;
     virtual bool IsAvailable() const = 0;
     virtual bool ConfigureWakeWord(const VoiceIdentityConfig& config) = 0;
@@ -139,6 +140,7 @@ private:
     bool task_running_ = false;
     bool enabled_ = false;
     bool listening_ = false;
+    bool handoff_pending_ = false;
     bool assistant_starting_ = false;
     uint32_t enable_generation_ = 0;
     uint32_t assistant_start_generation_ = 0;

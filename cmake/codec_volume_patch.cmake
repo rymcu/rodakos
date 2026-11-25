@@ -9,10 +9,13 @@ set(codec_original_source "${codec_component_dir}/esp_codec_dev.c")
 set(codec_generated_source "${CMAKE_BINARY_DIR}/rodak_patches/esp_codec_dev/esp_codec_dev.c")
 set(codec_original_i2s_source "${codec_component_dir}/platform/audio_codec_data_i2s.c")
 set(codec_generated_i2s_source "${CMAKE_BINARY_DIR}/rodak_patches/esp_codec_dev/platform/audio_codec_data_i2s.c")
+set(codec_original_es7210_source "${codec_component_dir}/device/es7210/es7210.c")
+set(codec_generated_es7210_source "${CMAKE_BINARY_DIR}/rodak_patches/esp_codec_dev/device/es7210/es7210.c")
 set(codec_patch_inputs
     "${codec_patch_script}"
     "${codec_patch_dir}/provenance.json"
     "${codec_patch_dir}/set_out_vol.c"
+    "${codec_patch_dir}/set_in_gain.c"
     "${codec_patch_dir}/open.c"
     "${codec_patch_dir}/set_fs.c"
     "${codec_patch_dir}/i2s_format_fault.c"
@@ -22,6 +25,7 @@ set(codec_patch_inputs
     "${codec_component_dir}/.component_hash"
     "${codec_original_source}"
     "${codec_original_i2s_source}"
+    "${codec_original_es7210_source}"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${codec_patch_inputs})
 
@@ -45,12 +49,15 @@ string(STRIP "${codec_patch_output}" codec_patch_output)
 message(STATUS "${codec_patch_output}")
 
 # Recreate the generated source if build outputs are removed without reconfiguring.
-add_custom_command(OUTPUT "${codec_generated_source}" "${codec_generated_i2s_source}"
+add_custom_command(
+    OUTPUT "${codec_generated_source}" "${codec_generated_i2s_source}" "${codec_generated_es7210_source}"
     COMMAND ${codec_patch_command}
     DEPENDS ${codec_patch_inputs}
     VERBATIM
 )
-add_custom_target(rodak_codec_volume_overlay DEPENDS "${codec_generated_source}" "${codec_generated_i2s_source}")
+add_custom_target(rodak_codec_volume_overlay
+    DEPENDS "${codec_generated_source}" "${codec_generated_i2s_source}" "${codec_generated_es7210_source}"
+)
 add_dependencies(${codec_component_lib} rodak_codec_volume_overlay)
 
 get_target_property(codec_sources ${codec_component_lib} SOURCES)
@@ -65,13 +72,19 @@ foreach(codec_source IN LISTS codec_sources)
     elseif(codec_source_absolute STREQUAL codec_original_i2s_source)
         list(APPEND codec_replaced_sources "${codec_generated_i2s_source}")
         math(EXPR codec_replacement_count "${codec_replacement_count} + 1")
+    elseif(codec_source_absolute STREQUAL codec_original_es7210_source)
+        list(APPEND codec_replaced_sources "${codec_generated_es7210_source}")
+        math(EXPR codec_replacement_count "${codec_replacement_count} + 1")
     else()
         list(APPEND codec_replaced_sources "${codec_source}")
     endif()
 endforeach()
-if(NOT codec_replacement_count EQUAL 2)
-    message(FATAL_ERROR "Expected esp_codec_dev.c and platform/audio_codec_data_i2s.c in the resolved codec target")
+if(NOT codec_replacement_count EQUAL 3)
+    message(FATAL_ERROR "Expected esp_codec_dev.c, platform/audio_codec_data_i2s.c and device/es7210/es7210.c in the resolved codec target")
 endif()
 set_property(TARGET ${codec_component_lib} PROPERTY SOURCES "${codec_replaced_sources}")
-# The copied C source still uses its upstream component's private, local header.
-target_include_directories(${codec_component_lib} PRIVATE "${codec_component_dir}")
+# The copied C sources still use their upstream component's private, local headers.
+target_include_directories(${codec_component_lib} PRIVATE
+    "${codec_component_dir}"
+    "${codec_component_dir}/device/es7210"
+)

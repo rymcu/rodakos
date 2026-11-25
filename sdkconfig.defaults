@@ -90,6 +90,8 @@ CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y
 CONFIG_SR_MN_EN_NONE=y
 
 # RYMCU BigSmart uses ES8311 for speaker output and ES7210 for microphone input.
+# Keep I2S DMA EOF interrupts in IRAM so SPI flash writes do not stall the 90 ms audio ring.
+CONFIG_I2S_ISR_IRAM_SAFE=y
 # Keep unused codec drivers out of the firmware image.
 CONFIG_CODEC_ES8311_SUPPORT=y
 CONFIG_CODEC_ES7210_SUPPORT=y

@@ -644,6 +644,7 @@ bool AudioService::PlayWavFile(FILE* fp, const std::string& path, bool& stopped)
         state_.channels = wav.channels;
         state_.bits_per_sample = wav.bits_per_sample;
         state_.data_bytes = wav.data_size;
+        state_.duration_ms = BytesToMs(wav.data_size, wav);
         state_.status = pause_requested_ ? AudioPlaybackStatus::kPaused : AudioPlaybackStatus::kPlaying;
         state_.message = pause_requested_ ? "Paused" : "Playing";
         xSemaphoreGive(mutex_);
@@ -971,6 +972,7 @@ bool AudioService::PlayMp3File(FILE* fp, const std::string& path, bool& stopped)
                 state_.channels = static_cast<uint16_t>(frame_info.nChans);
                 state_.bits_per_sample = static_cast<uint16_t>(frame_info.bitsPerSample);
                 state_.data_bytes = file_size;
+                state_.duration_ms = duration_ms;
                 state_.status = pause_requested_ ? AudioPlaybackStatus::kPaused : AudioPlaybackStatus::kPlaying;
                 state_.message = pause_requested_ ? "Paused" : "Playing";
                 xSemaphoreGive(mutex_);

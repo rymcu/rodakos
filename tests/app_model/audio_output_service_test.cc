@@ -433,4 +433,7 @@ RODAK_TEST("Playback rejects formats the fixed codec frame cannot carry") {
     RODAK_CHECK_FALSE(output.IsOpen());
     RODAK_CHECK_EQ(fake_codec::opens, 0);
     RODAK_CHECK(output.OpenForOwner("test", 16000, 1, 16));
+    RODAK_CHECK(output.IsOpen());
+    output.CloseForOwner("test");
+    RODAK_CHECK_FALSE(output.IsOpen());
 }

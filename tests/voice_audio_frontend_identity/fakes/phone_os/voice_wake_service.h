@@ -10,6 +10,7 @@ public:
     virtual void Deinit() = 0;
     virtual bool StartListening(std::function<void(const std::string&)>) = 0;
     virtual void StopListening() = 0;
+    virtual void PrepareForAssistantHandoff() { StopListening(); }
     virtual bool IsListening() const = 0;
     virtual bool IsAvailable() const = 0;
     virtual bool ConfigureWakeWord(const VoiceIdentityConfig&) = 0;

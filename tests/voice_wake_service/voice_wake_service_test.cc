@@ -34,7 +34,12 @@ public:
         listening = success;
         return success;
     }
-    void StopListening() override { ++stop_calls; listening = false; }
+    void StopListening() override { ++stop_calls; handoff_pending = false; listening = false; }
+#if defined(RODAK_WAKE_BASELINE_HEADER)
+    void PrepareForAssistantHandoff() { ++handoff_calls; handoff_pending = true; listening = false; }
+#else
+    void PrepareForAssistantHandoff() override { ++handoff_calls; handoff_pending = true; listening = false; }
+#endif
     bool IsListening() const override { return listening; }
     bool IsAvailable() const override { return available; }
     bool ConfigureWakeWord(const VoiceIdentityConfig& config) override {
@@ -75,7 +80,8 @@ public:
     std::function<void(const std::string&)> last_callback;
     std::atomic<bool> available{true};
     std::atomic<bool> listening{false};
-    std::atomic<unsigned> init_calls{0}, configure_calls{0}, start_calls{0}, stop_calls{0}, deinit_calls{0};
+    std::atomic<bool> handoff_pending{false};
+    std::atomic<unsigned> init_calls{0}, configure_calls{0}, start_calls{0}, stop_calls{0}, handoff_calls{0}, deinit_calls{0};
 };
 
 VoiceIdentityConfig Config(uint32_t revision, bool temporary = false) {
@@ -770,5 +776,45 @@ RODAK_TEST("wake destructor closes admission and drains full supervisor retireme
     core.Release(); destroy.get();
     RODAK_CHECK(waits);
     RODAK_CHECK_EQ(held.live_tasks, 1u);
+    CheckReclaimed();
+}
+
+RODAK_TEST("disabling wake during assistant handoff releases microphone ownership immediately") {
+    Fixture f;
+    f.Start();
+    std::promise<void> entered, release;
+    auto gate = release.get_future().share();
+    {
+        std::lock_guard<std::mutex> lock(f.assistant.mutex);
+        f.assistant.start_hook = [&]() {
+            entered.set_value();
+            gate.wait();
+        };
+    }
+    const unsigned stops_before = f.runtime.stop_calls.load();
+    auto wake = std::async(std::launch::async, [&]() {
+        f.service->NotifyWakeWordDetected("handoff wake");
+    });
+    const bool hook_entered =
+        entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    const unsigned handoff_calls = f.runtime.handoff_calls.load();
+    const bool handoff_pending = f.runtime.handoff_pending.load();
+    const bool disabled = hook_entered && f.service->SetEnabled(false);
+    const bool pending_after_disable = f.runtime.handoff_pending.load();
+    const unsigned stops_after = f.runtime.stop_calls.load();
+    {
+        std::lock_guard<std::mutex> lock(f.assistant.mutex);
+        f.assistant.start_hook = {};
+    }
+    release.set_value();
+    wake.get();
+    RODAK_CHECK(hook_entered);
+    RODAK_CHECK_EQ(handoff_calls, 1u);
+    RODAK_CHECK(handoff_pending);
+    RODAK_CHECK(disabled);
+    RODAK_CHECK_FALSE(pending_after_disable);
+    RODAK_CHECK(stops_after > stops_before);
+    RODAK_CHECK_EQ(f.assistant.starts, 0u);
+    f.service->Stop();
     CheckReclaimed();
 }

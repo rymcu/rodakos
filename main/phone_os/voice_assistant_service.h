@@ -118,7 +118,7 @@ private:
     bool HasTerminalInboundEventLocked() const;
     void StopRecorderForPlayback();
     void PlayWakeChime();
-    void RecordPlaybackFrame(int frame_duration_ms);
+    void RecordPlaybackFrameLocked(int frame_duration_ms, int64_t now_us);
     void DrainPlayback();
     void DiscardPendingRecorderFrames();
 
@@ -185,6 +185,7 @@ private:
     VoicePlaybackEpochPolicy playback_epoch_policy_;
     VoiceAssistantReconnectCoordinator reconnect_coordinator_;
     bool playback_vad_started_ = false;
+    uint8_t listening_speech_frames_ = 0;
     uint32_t playback_audio_events_ = 0;
     uint32_t playback_decoded_frames_ = 0;
     uint64_t playback_decoded_pcm_bytes_ = 0;

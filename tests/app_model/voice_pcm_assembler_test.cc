@@ -121,3 +121,46 @@ RODAK_TEST("pcm assembly preserves normal sample weighted VAD across fetch bound
     RODAK_CHECK_EQ(frames[0].timestamp_ms, uint32_t{1060});
     RODAK_CHECK_EQ(frames[1].timestamp_ms, uint32_t{1120});
 }
+
+RODAK_TEST("pcm assembly reanchors after cumulative sub-stall RX sample loss") {
+    VoicePcmAssembler assembler;
+    std::deque<VoicePcmFrame> frames;
+    const std::vector<int16_t> input(960, 42);
+    assembler.Append(input.data(), 960, Config(), 1060000, true, true, frames, 80);
+    RODAK_CHECK_EQ(frames.size(), size_t{1});
+    RODAK_CHECK_EQ(frames[0].timestamp_ms, uint32_t{1060});
+    // 320 ms of silent DMA sample loss (> 250 ms threshold): marks crossing frame invalid
+    // and re-anchors subsequent frames to wall clock so VAD freshness recovers.
+    assembler.Append(input.data(), 960, Config(), 1440000, true, true, frames, 80);
+    RODAK_CHECK_EQ(frames.size(), size_t{2});
+    RODAK_CHECK_FALSE(frames[1].vad_valid);
+    RODAK_CHECK_EQ(frames[1].timestamp_ms, uint32_t{1440});
+    assembler.Append(input.data(), 960, Config(), 1500000, true, true, frames, 80);
+    RODAK_CHECK_EQ(frames.size(), size_t{3});
+    RODAK_CHECK(frames[2].vad_valid);
+    RODAK_CHECK(frames[2].vad_speech);
+    RODAK_CHECK_EQ(frames[2].timestamp_ms, uint32_t{1500});
+}
+
+RODAK_TEST("pcm assembly keeps timestamps strictly monotonic across backlogged same-ms fetches") {
+    VoicePcmAssembler assembler;
+    std::deque<VoicePcmFrame> frames;
+    const std::vector<int16_t> chunk(512, 19);
+    // First 15 fetches of 512 samples = 7680 samples = exactly 8 frames of 960 samples;
+    // late first fetch puts clock_start_us_ 60 ms ahead of real capture.
+    int64_t t_us = 1092000;
+    for (int i = 0; i < 15; ++i) {
+        assembler.Append(chunk.data(), chunk.size(), Config(), t_us, true, true, frames, 80);
+        t_us += 32000;
+    }
+    RODAK_CHECK_EQ(frames.size(), size_t{8});
+    const uint32_t eighth_ts = frames.back().timestamp_ms;
+    // Two backlogged fetches arrive in the same millisecond before eighth_ts: frame 9 must
+    // still advance monotonically rather than pulling back and resetting VAD evidence.
+    const int64_t burst_us = static_cast<int64_t>(eighth_ts - 4) * 1000;
+    assembler.Append(chunk.data(), chunk.size(), Config(), burst_us, true, true, frames, 80);
+    assembler.Append(chunk.data(), chunk.size(), Config(), burst_us, true, true, frames, 80);
+    RODAK_CHECK_EQ(frames.size(), size_t{9});
+    RODAK_CHECK(frames[8].vad_valid);
+    RODAK_CHECK_EQ(frames[8].timestamp_ms, eighth_ts + 1);
+}

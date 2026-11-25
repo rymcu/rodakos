@@ -37,6 +37,7 @@ public:
 
     bool StartListening(std::function<void(const std::string&)> on_wake_word) override;
     void StopListening() override;
+    void PrepareForAssistantHandoff() override;
     bool IsListening() const override;
     bool IsAvailable() const override { return true; }
     bool ConfigureWakeWord(const VoiceIdentityConfig& config) override;
@@ -97,6 +98,7 @@ private:
     void ProcessWakeSamples(std::vector<int16_t>& samples, uint32_t generation, uint32_t epoch,
                             bool injected);
     void StartWakeFrontendLocked();
+    void StopListeningStateLocked();
     void CleanWakeWindowLocked();
     void TrackWakeWindowLocked(const std::vector<int16_t>& samples, esp_mn_state_t state);
     bool ApplyWakeCommandLocked(const std::string& command);
@@ -150,6 +152,8 @@ private:
     bool initialized_ = false;
     bool task_running_ = false;
     bool input_open_ = false;
+    bool conversation_starting_ = false;
+    bool wake_handoff_pending_ = false;
     Mode mode_ = Mode::kIdle;
     VoiceRecorderConfig recorder_config_;
     std::function<void(const std::string&)> on_wake_word_;
@@ -171,9 +175,9 @@ private:
     std::string last_error_;
     VoiceIdentityConfig wake_identity_ = DefaultVoiceIdentityConfig();
     VoiceMicSelector mic_selector_;
-    // AFE output trails its input by a few fetches, so the barge-in echo test compares each
-    // output frame with the loudest recent input read (10 x 20 ms).
-    static constexpr size_t kConversationInputPowerReads = 10;
+    // AFE output trails its input by ~2 fetches, so the barge-in echo test compares each
+    // output frame with the loudest recent input read (4 x 20 ms).
+    static constexpr size_t kConversationInputPowerReads = 4;
     std::array<uint32_t, kConversationInputPowerReads> conversation_input_power_{};
     size_t conversation_input_power_index_ = 0;
     const esp_afe_sr_iface_t* afe_iface_ = nullptr;

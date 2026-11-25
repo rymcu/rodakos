@@ -121,6 +121,7 @@ public:
         return Current(expected);
     }
     bool SendStartListening(rodakos::VoiceListeningMode, uint32_t expected) override {
+        ++listen_starts;
         return Current(expected);
     }
     bool SendStopListening(uint32_t expected) override { return Current(expected); }
@@ -132,10 +133,18 @@ public:
         return Current(expected);
     }
     bool SendVadStart(const char*, uint32_t, uint32_t, uint32_t expected, uint32_t) override {
+        ++vad_starts;
         return Current(expected);
     }
     bool SendVadEnd(const char*, uint32_t, uint32_t, uint32_t expected, uint32_t) override {
+        ++vad_ends;
         return Current(expected);
+    }
+    bool SuppressesDeviceVadEvents(uint32_t expected) const override {
+        return Current(expected) && suppress_vad;
+    }
+    bool UsesDeviceAuthoritativeVad(uint32_t expected) const override {
+        return Current(expected) && device_authoritative_vad;
     }
     bool SendMcpMessage(const std::string& payload, uint32_t expected) override {
         std::lock_guard<std::mutex> lock(mutex);
@@ -225,18 +234,23 @@ public:
         Deliver(std::move(event));
     }
     // One 60 ms TTS frame; the host decoder fills it with `marker`.
-    void SpeakingAudio(uint8_t marker, uint32_t epoch = 1) {
+    void SpeakingAudio(uint8_t marker, uint32_t epoch = 1, int sample_rate = 16000) {
         VoiceInboundEvent event;
         event.type = VoiceInboundEventType::kAudio;
         event.transport_generation = generation;
         event.playback_epoch = epoch;
-        event.audio.sample_rate = 16000;
+        event.audio.sample_rate = sample_rate;
         event.audio.frame_duration_ms = 60;
         event.audio.payload = {marker};
         Deliver(std::move(event));
     }
     std::atomic<unsigned> audio_sends{0};
     std::atomic<unsigned> aborts{0};
+    std::atomic<unsigned> listen_starts{0};
+    std::atomic<unsigned> vad_starts{0};
+    std::atomic<unsigned> vad_ends{0};
+    std::atomic<bool> suppress_vad{false};
+    std::atomic<bool> device_authoritative_vad{false};
     size_t ResponseCount() {
         std::lock_guard<std::mutex> lock(mutex);
         return responses.size();
@@ -847,6 +861,7 @@ rodakos::VoicePcmFrame SpeechFrame(uint32_t timestamp_ms) {
 uint32_t NowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
 size_t CountMarker(int16_t marker) {
+    std::lock_guard<std::mutex> lock(fake_codec::written_mutex);
     size_t count = 0;
     for (const int16_t sample : fake_codec::written) count += sample == marker ? 1 : 0;
     return count;
@@ -908,18 +923,21 @@ RODAK_TEST("device barge-in during playback aborts the reply and drops queued au
     const bool writing = write_gate.Wait();
     // Uplink frames arrive in real time: after the 400 ms playback grace, 180 ms of
     // silence arms the policy, then 360 ms of loud speech confirms barge-in.
-    std::this_thread::sleep_for(450ms);
+    std::this_thread::sleep_for(480ms);
+    uint32_t frame_ts = NowMs();
     rodakos::VoicePcmFrame quiet = SpeechFrame(0);
     quiet.vad_speech = false;
     std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
     for (int i = 0; i < 4; ++i) {
-        quiet.timestamp_ms = NowMs();
+        quiet.timestamp_ms = frame_ts;
         f.recorder.PushFrame(quiet);
         std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
     }
     for (int i = 0; i < 8 && f.transport.aborts.load() == 0; ++i) {
-        f.recorder.PushFrame(SpeechFrame(NowMs()));
+        f.recorder.PushFrame(SpeechFrame(frame_ts));
         std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
     }
     const bool aborted = WaitUntil([&] { return f.transport.aborts.load() == 1; });
     write_gate.Release();
@@ -1075,3 +1093,198 @@ RODAK_TEST("Stop while the speaker write is blocked waits for it before closing 
     RODAK_CHECK_FALSE(fake_codec::open);
     RODAK_CHECK_EQ(f.service.GetPhaseSnapshot(), rodakos::VoiceAssistantPhase::kIdle);
 }
+
+#ifndef RODAK_ASSISTANT_LEGACY_BASELINE
+#include "opus_decoder.h"
+
+RODAK_TEST("24 kHz and 48 kHz downlink frames decode to 16 kHz for shared I2S0 capture") {
+    Fixture f;
+    fake_codec::required_sample_rate = 16000;
+    f.StartInitialized();
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted);
+    f.transport.SpeakingAudio(5, 1, 24000);
+    f.transport.SpeakingAudio(6, 1, 48000);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped);
+    const bool drained = WaitUntil([] { return CountMarker(6) == 960 * 4 && !fake_codec::open; });
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    });
+    RODAK_CHECK(drained);
+    RODAK_CHECK(listening);
+    RODAK_CHECK_EQ(fake_opus_decoder::last_sample_rate, 16000);
+    RODAK_CHECK_EQ(fake_codec::format.sample_rate, 16000u);
+    RODAK_CHECK_EQ(CountMarker(5), size_t{960 * 4});
+}
+
+RODAK_TEST("epochless output.stop after tagged output.start drains and re-arms follow-up") {
+    Fixture f;
+    f.StartInitialized();
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, 3);
+    f.transport.SpeakingAudio(9, 3);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped, 0);
+    const bool drained = WaitUntil([] { return CountMarker(9) == 960 * 4 && !fake_codec::open; });
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+    });
+    RODAK_CHECK(drained);
+    RODAK_CHECK(listening);
+}
+
+RODAK_TEST("barge-in during queued TTS tail after output.stop cuts speaker and starts follow-up") {
+    Fixture f;
+    f.StartInitialized();
+    const unsigned initial_listens = f.transport.listen_starts.load();
+    retirement_host::Gate write_gate;
+    std::atomic<int> writes{0};
+    fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, 2);
+    for (uint8_t marker = 1; marker <= 6; ++marker) f.transport.SpeakingAudio(marker, 2);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped, 2);
+    const bool writing = write_gate.Wait();
+    std::this_thread::sleep_for(480ms);
+    uint32_t frame_ts = NowMs();
+    rodakos::VoicePcmFrame quiet = SpeechFrame(0);
+    quiet.vad_speech = false;
+    std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
+    for (int i = 0; i < 4; ++i) {
+        quiet.timestamp_ms = frame_ts;
+        f.recorder.PushFrame(quiet);
+        std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
+    }
+    for (int i = 0; i < 8 && f.transport.aborts.load() == 0; ++i) {
+        f.recorder.PushFrame(SpeechFrame(frame_ts));
+        std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
+    }
+    const bool aborted = WaitUntil([&] { return f.transport.aborts.load() == 1; });
+    write_gate.Release();
+    const bool listening = WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening &&
+               f.transport.listen_starts.load() > initial_listens;
+    });
+    fake_codec::on_write = {};
+    RODAK_CHECK(writing);
+    RODAK_CHECK(aborted);
+    RODAK_CHECK(listening);
+    // Tail barge-in after output.stop must not emit unpaired pre-input.start VAD events.
+    RODAK_CHECK_EQ(f.transport.vad_starts.load(), 0u);
+    RODAK_CHECK_EQ(f.transport.vad_ends.load(), 0u);
+    for (int16_t marker = 3; marker <= 6; ++marker) RODAK_CHECK_EQ(CountMarker(marker), size_t{0});
+}
+
+RODAK_TEST("barge-in confirming on the same cycle as queued output.stop still re-arms follow-up") {
+    Fixture f;
+    f.StartInitialized();
+    const unsigned initial_listens = f.transport.listen_starts.load();
+    retirement_host::Gate write_gate;
+    std::atomic<int> writes{0};
+    fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, 4);
+    for (uint8_t marker = 1; marker <= 4; ++marker) f.transport.SpeakingAudio(marker, 4);
+    RODAK_CHECK(write_gate.Wait());
+    std::this_thread::sleep_for(480ms);
+    uint32_t frame_ts = NowMs();
+    rodakos::VoicePcmFrame quiet = SpeechFrame(0);
+    quiet.vad_speech = false;
+    std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
+    for (int i = 0; i < 4; ++i) {
+        quiet.timestamp_ms = frame_ts;
+        f.recorder.PushFrame(quiet);
+        std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
+    }
+    for (int i = 0; i < 5; ++i) {
+        f.recorder.PushFrame(SpeechFrame(frame_ts));
+        std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
+    }
+    // Queue output.stop together with the 6th confirming speech frame so SendNextAudioFrame
+    // can confirm interrupt_pending_ while kSpeakingStopped is still sitting in inbound_events_.
+    f.recorder.PushFrame(SpeechFrame(frame_ts));
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped, 4);
+    const bool aborted = WaitUntil([&] { return f.transport.aborts.load() == 1; });
+    write_gate.Release();
+    RODAK_CHECK(aborted);
+    RODAK_CHECK(WaitUntil([&] {
+        return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening &&
+               f.transport.listen_starts.load() > initial_listens;
+    }));
+    fake_codec::on_write = {};
+    RODAK_CHECK_EQ(f.transport.vad_ends.load(), 0u);
+}
+
+RODAK_TEST("server-authoritative VAD suppresses vad events without blocking next reply barge-in") {
+    Fixture f;
+    f.transport.suppress_vad = true;
+    f.StartInitialized();
+    for (uint32_t epoch : {1U, 2U}) {
+        retirement_host::Gate write_gate;
+        std::atomic<int> writes{0};
+        fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+        f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, epoch);
+        for (uint8_t marker = 1; marker <= 5; ++marker) f.transport.SpeakingAudio(marker, epoch);
+        RODAK_CHECK(write_gate.Wait());
+        std::this_thread::sleep_for(480ms);
+        uint32_t frame_ts = NowMs();
+        rodakos::VoicePcmFrame quiet = SpeechFrame(0);
+        quiet.vad_speech = false;
+        std::fill(quiet.samples.begin(), quiet.samples.end(), 0);
+        for (int i = 0; i < 4; ++i) {
+            quiet.timestamp_ms = frame_ts;
+            f.recorder.PushFrame(quiet);
+            std::this_thread::sleep_for(60ms);
+            frame_ts += 60;
+        }
+        const unsigned aborts_before = f.transport.aborts.load();
+        for (int i = 0; i < 8 && f.transport.aborts.load() == aborts_before; ++i) {
+            f.recorder.PushFrame(SpeechFrame(frame_ts));
+            std::this_thread::sleep_for(60ms);
+            frame_ts += 60;
+        }
+        const bool aborted =
+            WaitUntil([&] { return f.transport.aborts.load() == aborts_before + 1; });
+        write_gate.Release();
+        RODAK_CHECK(aborted);
+        RODAK_CHECK(WaitUntil([&] {
+            return f.service.GetPhaseSnapshot() == rodakos::VoiceAssistantPhase::kListening;
+        }));
+        fake_codec::on_write = {};
+        // Note: no 600 ms silence between epoch 1 and epoch 2; epoch 2 barge-in still succeeds!
+    }
+    RODAK_CHECK_EQ(f.transport.vad_starts.load(), 0u);
+    RODAK_CHECK_EQ(f.transport.vad_ends.load(), 0u);
+    RODAK_CHECK_EQ(f.transport.aborts.load(), 2u);
+}
+
+RODAK_TEST("device-authoritative VAD emits start and end boundaries in listening mode") {
+    Fixture f;
+    f.transport.device_authoritative_vad = true;
+    f.StartInitialized();
+    uint32_t frame_ts = NowMs();
+    f.recorder.PushFrame(SpeechFrame(frame_ts));
+    RODAK_CHECK(WaitUntil([&] { return f.transport.vad_starts.load() == 1u; }));
+    rodakos::VoicePcmFrame quiet = SpeechFrame(0);
+    // Sub-threshold VAD flicker (< -48 dBFS) must still count as silence for vad:end.
+    quiet.vad_speech = true;
+    for (size_t i = 0; i < quiet.samples.size(); ++i) quiet.samples[i] = i % 2 ? 20 : -20;
+    for (int i = 0; i < 10; ++i) {
+        std::this_thread::sleep_for(60ms);
+        frame_ts += 60;
+        quiet.timestamp_ms = frame_ts;
+        f.recorder.PushFrame(quiet);
+    }
+    RODAK_CHECK(WaitUntil([&] { return f.transport.vad_ends.load() == 1u; }));
+}
+
+RODAK_TEST("quiet VAD noise flicker in listening mode does not light up user speech") {
+    Fixture f;
+    f.StartInitialized();
+    rodakos::VoicePcmFrame hiss = SpeechFrame(NowMs());
+    for (size_t i = 0; i < hiss.samples.size(); ++i) hiss.samples[i] = i % 2 ? 20 : -20;
+    const unsigned before = f.recorder.popped.load();
+    f.recorder.PushFrame(std::move(hiss));
+    RODAK_CHECK(WaitUntil([&] { return f.recorder.popped.load() == before + 1; }));
+    RODAK_CHECK_FALSE(f.service.GetStatusLightSnapshot().user_speech);
+}
+#endif

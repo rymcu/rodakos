@@ -49,6 +49,9 @@ public:
     bool InterruptSpeaking() { std::lock_guard<std::mutex> lock(mutex); ++interrupts; return true; }
     bool StartInteraction(VoiceAssistantTrigger, const std::string&, const std::function<bool()>& admit,
                           uint32_t* generation) {
+        std::function<void()> hook;
+        { std::lock_guard<std::mutex> lock(mutex); hook = start_hook; }
+        if (hook) hook();
         if (!admit()) return false;
         std::lock_guard<std::mutex> lock(mutex);
         if (generation) *generation = ++starts;
@@ -58,6 +61,7 @@ public:
     VoiceAssistantState state;
     std::function<void()> get_state_hook;
     std::function<void()> get_phase_hook;
+    std::function<void()> start_hook;
     std::function<void()> stop_hook;
     unsigned starts = 0;
     unsigned stops = 0;

@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <vector>
 
 #include "esp_codec_dev.h"
+#include "es7210_adc.h"
+#include "es7210_reg.h"
 
 namespace {
 
@@ -16,6 +19,13 @@ struct FakeCodec : audio_codec_if_t {
     int format_result = ESP_CODEC_DEV_OK;
     int enable_result = ESP_CODEC_DEV_OK;
     bool enabled = false;
+    int mic_gain_result = ESP_CODEC_DEV_OK;
+    int mic_channel_gain_result = ESP_CODEC_DEV_OK;
+    int mic_gain_calls = 0;
+    int mic_channel_gain_calls = 0;
+    float last_mic_db = 0;
+    float last_mic_channel_db = 0;
+    uint16_t last_mic_channel_mask = 0;
 
     FakeCodec() : audio_codec_if_t{} {
         is_open = [](const audio_codec_if_t* h) { return From(h).ready; };
@@ -33,6 +43,19 @@ struct FakeCodec : audio_codec_if_t {
             return fake.volume_result;
         };
         mute = [](const audio_codec_if_t*, bool) { return ESP_CODEC_DEV_OK; };
+        set_mic_gain = [](const audio_codec_if_t* h, float db) {
+            auto& fake = From(h);
+            ++fake.mic_gain_calls;
+            fake.last_mic_db = db;
+            return fake.mic_gain_result;
+        };
+        set_mic_channel_gain = [](const audio_codec_if_t* h, uint16_t mask, float db) {
+            auto& fake = From(h);
+            ++fake.mic_channel_gain_calls;
+            fake.last_mic_channel_mask = mask;
+            fake.last_mic_channel_db = db;
+            return fake.mic_channel_gain_result;
+        };
     }
 
     static FakeCodec& From(const audio_codec_if_t* h) {
@@ -358,4 +381,103 @@ RODAK_TEST("Codec volume preserves custom curve ranges rather than imposing UI l
     RODAK_CHECK_EQ(esp_codec_dev_set_out_vol(fixture.device, 140), ESP_CODEC_DEV_OK);
     RODAK_CHECK_EQ(fixture.Volume(), 140);
     RODAK_CHECK(std::fabs(fixture.codec.last_db - (-15.0F)) < 0.001F);
+}
+
+RODAK_TEST("Codec input gain preserves fractional dB and propagates driver errors without committing cache") {
+    CodecFixture fixture(true, ESP_CODEC_DEV_TYPE_IN);
+    fixture.Open();
+    fixture.codec.mic_gain_calls = 0;
+    RODAK_CHECK_EQ(esp_codec_dev_set_in_gain(fixture.device, 34.5F), ESP_CODEC_DEV_OK);
+    RODAK_CHECK(std::fabs(fixture.codec.last_mic_db - 34.5F) < 0.001F);
+    float cached = 0.0F;
+    RODAK_CHECK_EQ(esp_codec_dev_get_in_gain(fixture.device, &cached), ESP_CODEC_DEV_OK);
+    RODAK_CHECK(std::fabs(cached - 34.5F) < 0.001F);
+
+    fixture.codec.mic_gain_result = ESP_CODEC_DEV_WRITE_FAIL;
+    RODAK_CHECK_EQ(esp_codec_dev_set_in_gain(fixture.device, 12.0F), ESP_CODEC_DEV_WRITE_FAIL);
+    RODAK_CHECK_EQ(esp_codec_dev_get_in_gain(fixture.device, &cached), ESP_CODEC_DEV_OK);
+    RODAK_CHECK(std::fabs(cached - 34.5F) < 0.001F);
+
+    RODAK_CHECK_EQ(esp_codec_dev_set_in_channel_gain(fixture.device, 0x4, 37.5F), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(fixture.codec.last_mic_channel_mask, uint16_t{0x4});
+    RODAK_CHECK(std::fabs(fixture.codec.last_mic_channel_db - 37.5F) < 0.001F);
+    // Per-channel gain clears cached uniform mic_gain so reopen does not replay 34.5 dB across all channels.
+    RODAK_CHECK_EQ(esp_codec_dev_get_in_gain(fixture.device, &cached), ESP_CODEC_DEV_OK);
+    RODAK_CHECK(std::fabs(cached) < 0.001F);
+    fixture.codec.mic_channel_gain_result = -777;
+    RODAK_CHECK_EQ(esp_codec_dev_set_in_channel_gain(fixture.device, 0x4, 9.0F), -777);
+
+    // Closing after uniform gain also clears cached mic_gain so reopen replays 0 dB instead of 30 dB.
+    fixture.codec.mic_gain_result = ESP_CODEC_DEV_OK;
+    RODAK_CHECK_EQ(esp_codec_dev_set_in_gain(fixture.device, 30.0F), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_close(fixture.device), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(esp_codec_dev_get_in_gain(fixture.device, &cached), ESP_CODEC_DEV_OK);
+    RODAK_CHECK(std::fabs(cached) < 0.001F);
+    fixture.codec.last_mic_db = -1.0F;
+    fixture.Open();
+    RODAK_CHECK(std::fabs(fixture.codec.last_mic_db) < 0.001F);
+}
+
+RODAK_TEST("ES7210 masked register updates abort on I2C read failure instead of clearing mic enable bit") {
+    struct FakeCtrl : audio_codec_ctrl_if_t {
+        std::map<int, uint8_t> regs;
+        int fail_read_reg = -1;
+        int fail_write_reg = -1;
+        int writes_after_fail = 0;
+
+        FakeCtrl() : audio_codec_ctrl_if_t{} {
+            is_open = [](const audio_codec_ctrl_if_t*) { return true; };
+            read_reg = [](const audio_codec_ctrl_if_t* c, int reg, int, void* data, int) {
+                auto& self = *const_cast<FakeCtrl*>(static_cast<const FakeCtrl*>(c));
+                if (reg == self.fail_read_reg) return ESP_CODEC_DEV_READ_FAIL;
+                auto it = self.regs.find(reg);
+                *static_cast<uint8_t*>(data) = it != self.regs.end() ? it->second : 0;
+                return ESP_CODEC_DEV_OK;
+            };
+            write_reg = [](const audio_codec_ctrl_if_t* c, int reg, int, void* data, int) {
+                auto& self = *const_cast<FakeCtrl*>(static_cast<const FakeCtrl*>(c));
+                if (reg == self.fail_write_reg) return ESP_CODEC_DEV_WRITE_FAIL;
+                if (self.fail_read_reg >= 0) ++self.writes_after_fail;
+                self.regs[reg] = static_cast<uint8_t>(*static_cast<const int*>(data));
+                return ESP_CODEC_DEV_OK;
+            };
+        }
+    } ctrl;
+
+    es7210_codec_cfg_t cfg{};
+    cfg.ctrl_if = &ctrl;
+    cfg.mic_selected = ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2 | ES7210_INPUT_MIC3 | ES7210_INPUT_MIC4;
+    const audio_codec_if_t* es7210 = es7210_codec_new(&cfg);
+    RODAK_CHECK(es7210 != nullptr);
+    // MIC3 enable bit (0x10) must be set after open.
+    RODAK_CHECK_NE(ctrl.regs[ES7210_MIC3_GAIN_REG45] & 0x10, 0);
+    const uint8_t before = ctrl.regs[ES7210_MIC3_GAIN_REG45];
+
+    ctrl.fail_read_reg = ES7210_MIC3_GAIN_REG45;
+    RODAK_CHECK_EQ(es7210->set_mic_channel_gain(es7210, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), 10.0F),
+                   ESP_CODEC_DEV_READ_FAIL);
+    RODAK_CHECK_EQ(ctrl.writes_after_fail, 0);
+    RODAK_CHECK_EQ(ctrl.regs[ES7210_MIC3_GAIN_REG45], before);
+    RODAK_CHECK_NE(ctrl.regs[ES7210_MIC3_GAIN_REG45] & 0x10, 0);
+
+    // Partial enable failure rolls back power registers through es7210_stop.
+    ctrl.fail_read_reg = ES7210_MIC2_GAIN_REG44;
+    RODAK_CHECK_NE(es7210->enable(es7210, true), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(ctrl.regs[ES7210_POWER_DOWN_REG06], uint8_t{0x07});
+    RODAK_CHECK_EQ(ctrl.regs[ES7210_CLOCK_OFF_REG01], uint8_t{0x7f});
+
+    // If rollback write fails during enable(true), a later enable(false) still executes es7210_stop.
+    ctrl.fail_write_reg = ES7210_POWER_DOWN_REG06;
+    RODAK_CHECK_NE(es7210->enable(es7210, true), ESP_CODEC_DEV_OK);
+    ctrl.regs[ES7210_POWER_DOWN_REG06] = 0x00;
+    ctrl.fail_read_reg = -1;
+    ctrl.fail_write_reg = -1;
+    RODAK_CHECK_EQ(es7210->enable(es7210, false), ESP_CODEC_DEV_OK);
+    RODAK_CHECK_EQ(ctrl.regs[ES7210_POWER_DOWN_REG06], uint8_t{0x07});
+
+    RODAK_CHECK_EQ(es7210->set_mic_channel_gain(es7210, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), 10.0F),
+                   ESP_CODEC_DEV_OK);
+    RODAK_CHECK_NE(ctrl.regs[ES7210_MIC3_GAIN_REG45] & 0x10, 0);
+    RODAK_CHECK_EQ(ctrl.regs[ES7210_MIC3_GAIN_REG45] & 0x0F, 3);
+    audio_codec_delete_codec_if(es7210);
 }

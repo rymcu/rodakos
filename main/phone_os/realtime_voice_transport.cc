@@ -996,12 +996,27 @@ bool RodakRealtimeVoiceTransport::SendVadEnd(const char* source, uint32_t sequen
     return SendVadState("end", source, sequence, trigger_ms, expected_generation, playback_epoch);
 }
 
+bool RodakRealtimeVoiceTransport::SuppressesDeviceVadEvents(uint32_t expected_generation) const {
+    std::string session_id;
+    std::string vad_strategy;
+    return SnapshotSession(expected_generation, session_id, &vad_strategy) &&
+           vad_strategy == kRealtimeVoiceVadServerAuthoritative;
+}
+
+bool RodakRealtimeVoiceTransport::UsesDeviceAuthoritativeVad(uint32_t expected_generation) const {
+    std::string session_id;
+    std::string vad_strategy;
+    return SnapshotSession(expected_generation, session_id, &vad_strategy) &&
+           vad_strategy == kRealtimeVoiceVadDeviceAuthoritative;
+}
+
 bool RodakRealtimeVoiceTransport::SendVadState(const char* state, const char* source,
                                                 uint32_t sequence, uint32_t trigger_ms,
                                                 uint32_t expected_generation,
                                                 uint32_t playback_epoch) {
     std::string session_id;
-    if (!SnapshotSession(expected_generation, session_id)) {
+    std::string vad_strategy;
+    if (!SnapshotSession(expected_generation, session_id, &vad_strategy)) {
         return ResolveLocalOperationFailure(
             VoiceTransportFailureKind::kNetwork, "audio_channel_closed",
             "Audio channel is not open", true, expected_generation);
@@ -1009,7 +1024,7 @@ bool RodakRealtimeVoiceTransport::SendVadState(const char* state, const char* so
     // The server-selected strategy is authoritative for this session. A
     // server-authoritative session still streams audio, but device VAD events
     // are deliberately suppressed so they cannot create a second boundary.
-    if (vad_strategy_ == kRealtimeVoiceVadServerAuthoritative) {
+    if (vad_strategy == kRealtimeVoiceVadServerAuthoritative) {
         return true;
     }
     const std::string message = BuildRealtimeVoiceVadMessage(
@@ -1291,7 +1306,8 @@ bool RodakRealtimeVoiceTransport::SendSessionOpen(uint32_t generation) {
 }
 
 bool RodakRealtimeVoiceTransport::SnapshotSession(uint32_t expected_generation,
-                                                   std::string& session_id) const {
+                                                   std::string& session_id,
+                                                   std::string* vad_strategy) const {
     if (mutex_ == nullptr) {
         return false;
     }
@@ -1301,6 +1317,9 @@ bool RodakRealtimeVoiceTransport::SnapshotSession(uint32_t expected_generation,
                        !session_id_.empty();
     if (valid) {
         session_id = session_id_;
+        if (vad_strategy != nullptr) {
+            *vad_strategy = vad_strategy_;
+        }
     }
     xSemaphoreGive(mutex_);
     return valid;
@@ -1466,11 +1485,20 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             // A delayed stop from an older playback must not terminate a
             // newer utterance.  Zero remains the wire-compatible value for
             // servers that omit playbackEpoch on output.stop.
+            const cJSON* reason_value = cJSON_GetObjectItemCaseSensitive(root, "reason");
+            std::string stop_reason =
+                (cJSON_IsString(reason_value) && reason_value->valuestring != nullptr)
+                    ? reason_value->valuestring
+                    : std::string();
+            uint32_t effective_epoch = epoch;
             xSemaphoreTake(mutex_, portMAX_DELAY);
             const bool stale = closing_ || connection_generation_ != generation ||
                                !inbound_output_active_ ||
                                !session_gate_.AcceptOutputStop(generation, epoch);
-            if (!stale) inbound_output_active_ = false;
+            if (!stale) {
+                if (effective_epoch == 0) effective_epoch = inbound_playback_epoch_;
+                inbound_output_active_ = false;
+            }
             xSemaphoreGive(mutex_);
             if (stale) {
                 cJSON_Delete(root);
@@ -1478,9 +1506,9 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             }
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStopped,
-                .playback_epoch = epoch,
+                .playback_epoch = effective_epoch,
                 .audio = {},
-                .payload = {},
+                .payload = std::move(stop_reason),
                 .failure = {},
             }, generation);
         }

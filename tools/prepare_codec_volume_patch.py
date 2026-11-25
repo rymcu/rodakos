@@ -90,6 +90,126 @@ def patch_i2s(source: bytes) -> bytes:
     return source
 
 
+def patch_es7210(source: bytes) -> bytes:
+    source = replace_checked(source,
+        b"static int es7210_update_reg_bit(audio_codec_es7210_t *codec, uint8_t reg_addr, uint8_t update_bits, uint8_t data)\n"
+        b"{\n"
+        b"    int regv = 0;\n"
+        b"    es7210_read_reg(codec, reg_addr, &regv);\n"
+        b"    regv = (regv & (~update_bits)) | (update_bits & data);\n"
+        b"    return es7210_write_reg(codec, reg_addr, regv);\n"
+        b"}",
+        b"static int es7210_update_reg_bit(audio_codec_es7210_t *codec, uint8_t reg_addr, uint8_t update_bits, uint8_t data)\n"
+        b"{\n"
+        b"    int regv = 0;\n"
+        b"    int ret = es7210_read_reg(codec, reg_addr, &regv);\n"
+        b"    if (ret != ESP_CODEC_DEV_OK) {\n"
+        b"        return ret;\n"
+        b"    }\n"
+        b"    regv = (regv & (~update_bits)) | (update_bits & data);\n"
+        b"    return es7210_write_reg(codec, reg_addr, regv);\n"
+        b"}")
+    for mask in (b"0xfc", b"0x1f"):
+        source = replace_checked(source,
+            b"    ret = es7210_read_reg(codec, ES7210_SDP_INTERFACE1_REG11, &adc_iface);\n"
+            b"    adc_iface &= " + mask + b";",
+            b"    ret = es7210_read_reg(codec, ES7210_SDP_INTERFACE1_REG11, &adc_iface);\n"
+            b"    if (ret != ESP_CODEC_DEV_OK) {\n"
+            b"        return ret;\n"
+            b"    }\n"
+            b"    adc_iface &= " + mask + b";")
+    source = replace_checked(source,
+        b"    if (ret != 0) {\n"
+        b"        return ESP_CODEC_DEV_WRITE_FAIL;\n"
+        b"    }",
+        b"    if (ret != 0) {\n"
+        b"        (void) es7210_stop(codec);\n"
+        b"        return ESP_CODEC_DEV_WRITE_FAIL;\n"
+        b"    }")
+    source = replace_checked(source,
+        b"    es7210_read_reg(codec, ES7210_CLOCK_OFF_REG01, &ret);\n"
+        b"    if (ret >= 0) {\n"
+        b"        codec->off_reg = (uint8_t) ret;\n"
+        b"    }",
+        b"    int off_reg = 0;\n"
+        b"    if (es7210_read_reg(codec, ES7210_CLOCK_OFF_REG01, &off_reg) != ESP_CODEC_DEV_OK) {\n"
+        b"        (void) es7210_stop(codec);\n"
+        b"        return ESP_CODEC_DEV_READ_FAIL;\n"
+        b"    }\n"
+        b"    codec->off_reg = (uint8_t) off_reg;")
+    source = replace_checked(source,
+        b"static int _es7210_set_channel_gain(audio_codec_es7210_t *codec, uint16_t channel_mask, float db)\n"
+        b"{\n"
+        b"    int ret = 0;\n"
+        b"    es7210_gain_value_t gain = get_db(db);\n"
+        b"    if ((codec->mic_select & ES7210_INPUT_MIC1) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0))) {\n"
+        b"        ret |= es7210_update_reg_bit(codec, ES7210_MIC1_GAIN_REG43, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if ((codec->mic_select & ES7210_INPUT_MIC2) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1))) {\n"
+        b"        ret |= es7210_update_reg_bit(codec, ES7210_MIC2_GAIN_REG44, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if ((codec->mic_select & ES7210_INPUT_MIC3) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2))) {\n"
+        b"        ret |= es7210_update_reg_bit(codec, ES7210_MIC3_GAIN_REG45, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if ((codec->mic_select & ES7210_INPUT_MIC4) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(3))) {\n"
+        b"        ret |= es7210_update_reg_bit(codec, ES7210_MIC4_GAIN_REG46, 0x0f, gain);\n"
+        b"    }\n"
+        b"    return ret == 0 ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;\n"
+        b"}",
+        b"static int _es7210_set_channel_gain(audio_codec_es7210_t *codec, uint16_t channel_mask, float db)\n"
+        b"{\n"
+        b"    int ret = ESP_CODEC_DEV_OK;\n"
+        b"    es7210_gain_value_t gain = get_db(db);\n"
+        b"    if (ret == ESP_CODEC_DEV_OK && ((codec->mic_select & ES7210_INPUT_MIC1) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0)))) {\n"
+        b"        ret = es7210_update_reg_bit(codec, ES7210_MIC1_GAIN_REG43, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if (ret == ESP_CODEC_DEV_OK && ((codec->mic_select & ES7210_INPUT_MIC2) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1)))) {\n"
+        b"        ret = es7210_update_reg_bit(codec, ES7210_MIC2_GAIN_REG44, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if (ret == ESP_CODEC_DEV_OK && ((codec->mic_select & ES7210_INPUT_MIC3) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2)))) {\n"
+        b"        ret = es7210_update_reg_bit(codec, ES7210_MIC3_GAIN_REG45, 0x0f, gain);\n"
+        b"    }\n"
+        b"    if (ret == ESP_CODEC_DEV_OK && ((codec->mic_select & ES7210_INPUT_MIC4) & (channel_mask & ESP_CODEC_DEV_MAKE_CHANNEL_MASK(3)))) {\n"
+        b"        ret = es7210_update_reg_bit(codec, ES7210_MIC4_GAIN_REG46, 0x0f, gain);\n"
+        b"    }\n"
+        b"    return ret;\n"
+        b"}")
+    source = replace_checked(source,
+        b"    if (enable == codec->enabled) {\n"
+        b"        return ESP_CODEC_DEV_OK;\n"
+        b"    }\n"
+        b"    int ret = 0;\n"
+        b"    if (enable) {\n"
+        b"        ret |= es7210_start(codec, codec->off_reg);\n"
+        b"    } else {\n"
+        b"        ret |= es7210_stop(codec);\n"
+        b"    }\n"
+        b"    if (ret == ESP_CODEC_DEV_OK) {\n"
+        b'        ESP_LOGD(TAG, "Codec is %s", enable ? "enabled" : "disabled");\n'
+        b"        codec->enabled = enable;\n"
+        b"    }",
+        b"    if (enable && codec->enabled) {\n"
+        b"        return ESP_CODEC_DEV_OK;\n"
+        b"    }\n"
+        b"    int ret = 0;\n"
+        b"    if (enable) {\n"
+        b"        ret = es7210_start(codec, codec->off_reg);\n"
+        b"        if (ret == ESP_CODEC_DEV_OK) {\n"
+        b"            codec->enabled = true;\n"
+        b"        } else {\n"
+        b"            codec->enabled = false;\n"
+        b"            (void) es7210_stop(codec);\n"
+        b"        }\n"
+        b"    } else {\n"
+        b"        codec->enabled = false;\n"
+        b"        ret = es7210_stop(codec);\n"
+        b"    }\n"
+        b"    if (ret == ESP_CODEC_DEV_OK) {\n"
+        b'        ESP_LOGD(TAG, "Codec is %s", enable ? "enabled" : "disabled");\n'
+        b"    }")
+    return source
+
+
 def write_generated(output: Path, content: bytes) -> bool:
     if output.exists() and output.read_bytes() == content:
         return False
@@ -139,16 +259,29 @@ def prepare(component_dir: Path, lock_file: Path, project_manifest: Path, output
     source = require_hash(component_dir / "esp_codec_dev.c", provenance["source_sha256_lf"])
     i2s_source = require_hash(component_dir / "platform" / "audio_codec_data_i2s.c",
                               provenance["i2s_source_sha256_lf"])
+    es7210_source = require_hash(component_dir / "device" / "es7210" / "es7210.c",
+                                 provenance["es7210_source_sha256_lf"])
     patched = replace_function(source,
         b"int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t handle, int volume)\n",
         b"int esp_codec_dev_set_vol_handler(", "set_out_vol.c")
     patched = replace_function(patched,
         b"int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_t *fs)\n",
         b"int esp_codec_dev_read_reg(", "open.c")
+    patched = replace_function(patched,
+        b"int esp_codec_dev_set_in_gain(esp_codec_dev_handle_t handle, float db)\n",
+        b"int esp_codec_dev_get_in_gain(", "set_in_gain.c")
+    patched = replace_checked(patched,
+        b"    dev->output_opened = dev->input_opened = false;\n",
+        b"    if (dev->input_opened && dev->disable_when_closed) {\n"
+        b"        dev->mic_gain = 0.0f;\n"
+        b"    }\n"
+        b"    dev->output_opened = dev->input_opened = false;\n")
     patched_i2s = patch_i2s(i2s_source)
-    # Validate both complete upstream sources before writing either build copy.
+    patched_es7210 = patch_es7210(es7210_source)
+    # Validate all complete upstream sources before writing any build copy.
     changed = write_generated(output, patched)
-    return write_generated(output.parent / "platform" / "audio_codec_data_i2s.c", patched_i2s) or changed
+    changed = write_generated(output.parent / "platform" / "audio_codec_data_i2s.c", patched_i2s) or changed
+    return write_generated(output.parent / "device" / "es7210" / "es7210.c", patched_es7210) or changed
 
 
 def main() -> int:

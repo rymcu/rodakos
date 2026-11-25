@@ -152,6 +152,14 @@ public:
     virtual bool SendVadEnd(const char* source, uint32_t sequence,
                             uint32_t trigger_ms, uint32_t expected_generation,
                             uint32_t playback_epoch = 0) = 0;
+    virtual bool SuppressesDeviceVadEvents(uint32_t expected_generation) const {
+        (void)expected_generation;
+        return false;
+    }
+    virtual bool UsesDeviceAuthoritativeVad(uint32_t expected_generation) const {
+        (void)expected_generation;
+        return false;
+    }
     virtual bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) = 0;
     virtual void SetInboundHandler(VoiceInboundHandler handler) = 0;
 
