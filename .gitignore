@@ -15,3 +15,5 @@ components/esp_board_manager/boards/rymcu_bigsmart/
 .vscode/settings.json
 .env
 build-*/
+.codex-*/
+*_cache/

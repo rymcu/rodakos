@@ -320,3 +320,37 @@ RODAK_TEST("AFE resync epoch fences a pending raw read and the old local input t
     RODAK_CHECK(diagnostic.afe_discontinuities >= 5U);
     RODAK_CHECK(fixture.frontend.IsRunning());
 }
+
+RODAK_TEST("AFE transient raw read failure drops local producer remainder without splicing across the gap") {
+    Fixture fixture;
+    host::SetAudioSampleValue(111);
+    host::SupplyAudioReads(1);
+    RODAK_CHECK(fixture.frontend.Start({}));
+    RODAK_CHECK(control::WaitFeedReturns(1));
+    RODAK_CHECK(fixture.frontend.ArmAecDiagnosticCapture(1000));
+    RODAK_CHECK(WaitUntil([&] {
+        return fixture.frontend.GetAecDiagnosticCaptureStatus().raw_discontinuities >= 1U;
+    }));
+    RODAK_CHECK_EQ(control::FedMicrophoneSamples().size(), size_t{256});
+    host::SetAudioSampleValue(222);
+    host::SupplyAudioReads(1);
+    RODAK_CHECK(control::WaitFeedReturns(2));
+    const auto fed = control::FedMicrophoneSamples();
+    RODAK_CHECK_EQ(fed.size(), size_t{512});
+    RODAK_CHECK(std::all_of(fed.begin() + 256, fed.end(), [](int16_t s) { return s == 222; }));
+}
+
+RODAK_TEST("Wake handoff keeps wake input open until conversation input claims ownership") {
+    Fixture fixture;
+    RODAK_CHECK(fixture.frontend.StartListening([](const std::string&) {}));
+    fixture.frontend.PrepareForAssistantHandoff();
+    RODAK_CHECK(fixture.frontend.Start({}));
+    const auto events = host::AudioInputEvents();
+    const auto open_wake = std::find(events.begin(), events.end(), "open:voice-wake-frontend");
+    const auto close_wake = std::find(events.begin(), events.end(), "close:voice-wake-frontend");
+    const auto open_conv = std::find(events.begin(), events.end(), "open:voice-conversation-frontend");
+    RODAK_CHECK(open_wake != events.end());
+    RODAK_CHECK(open_conv != events.end());
+    RODAK_CHECK(open_wake < open_conv);
+    RODAK_CHECK(close_wake == events.end() || open_conv < close_wake);
+}

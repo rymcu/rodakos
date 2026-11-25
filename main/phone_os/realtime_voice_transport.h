@@ -42,6 +42,8 @@ public:
     bool SendVadEnd(const char* source, uint32_t sequence,
                     uint32_t trigger_ms, uint32_t expected_generation,
                     uint32_t playback_epoch = 0) override;
+    bool SuppressesDeviceVadEvents(uint32_t expected_generation) const override;
+    bool UsesDeviceAuthoritativeVad(uint32_t expected_generation) const override;
     bool SendMcpMessage(const std::string& payload, uint32_t expected_generation) override;
     void SetInboundHandler(VoiceInboundHandler handler) override;
 
@@ -60,7 +62,9 @@ private:
                   const std::string& expected_session,
                   bool require_open);
     bool SendSessionOpen(uint32_t generation);
-    bool SnapshotSession(uint32_t expected_generation, std::string& session_id) const;
+    bool SnapshotSession(uint32_t expected_generation,
+                         std::string& session_id,
+                         std::string* vad_strategy = nullptr) const;
     std::string BuildSessionOpenMessage(uint32_t generation) const;
     void CleanupDetachedClient();
     void HandleDataFrame(const esp_websocket_event_data_t& data, uint32_t generation);

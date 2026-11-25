@@ -27,6 +27,7 @@ public:
     void Reset();
     bool AcceptStart(uint32_t epoch);
     bool AcceptAudioOrStop(uint32_t epoch) const;
+    bool AcceptStop(uint32_t epoch) const;
     void Interrupt();
     uint32_t current_epoch() const { return current_epoch_; }
 
@@ -45,6 +46,9 @@ public:
         uint32_t quiet_rejected_ms = 0;
         uint32_t echo_rejected_ms = 0;
     };
+
+    static constexpr uint32_t kMinimumSpeechPower = 256 * 256;
+    static constexpr uint32_t kMinimumListeningSpeechPower = 128 * 128;
 
     static uint32_t CalculatePcmPower(const int16_t* samples, size_t count);
     void Reset();

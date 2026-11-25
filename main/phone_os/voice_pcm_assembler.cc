@@ -4,10 +4,17 @@
 #include <utility>
 
 namespace rodakos {
+namespace {
+// Exceeds the ~154 ms combined I2S DMA + AFE buffer while staying below the 300 ms
+// assistant VAD freshness limit, so cumulative sub-100 ms RX drops recover automatically.
+constexpr int64_t kMaxClockLagUs = 250 * 1000;
+}
 
 void VoicePcmAssembler::Reset() {
     samples_.clear();
     input_power_ = 0;
+    last_timestamp_ms_ = 0;
+    have_emitted_frame_ = false;
     InvalidateContinuity();
     discontinuity_ = false;
 }
@@ -43,7 +50,16 @@ void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
         // whenever a fetch proves the clock is ahead.
         const int64_t bound_us = fetched_at_us -
             static_cast<int64_t>(clock_samples_ + count) * 1000000 / config.sample_rate;
-        clock_start_us_ = std::min(clock_start_us_, bound_us);
+        if (bound_us - clock_start_us_ > kMaxClockLagUs) {
+            vad_valid_samples_ = 0;
+            vad_speech_samples_ = 0;
+            clock_samples_ = samples_.size();
+            clock_start_us_ = fetched_at_us -
+                static_cast<int64_t>(count + samples_.size()) * 1000000 / config.sample_rate;
+            discontinuity_ = true;
+        } else {
+            clock_start_us_ = std::min(clock_start_us_, bound_us);
+        }
     }
     size_t offset = 0;
     while (offset < count) {
@@ -58,8 +74,15 @@ void VoicePcmAssembler::Append(const int16_t* samples, size_t count,
 
         VoicePcmFrame frame;
         frame.config = config;
-        frame.timestamp_ms = static_cast<uint32_t>((clock_start_us_ +
+        uint32_t timestamp_ms = static_cast<uint32_t>((clock_start_us_ +
             static_cast<int64_t>(clock_samples_) * 1000000 / config.sample_rate) / 1000);
+        if (!discontinuity_ && have_emitted_frame_ &&
+            static_cast<int32_t>(timestamp_ms - last_timestamp_ms_) <= 0) {
+            timestamp_ms = last_timestamp_ms_ + 1;
+        }
+        frame.timestamp_ms = timestamp_ms;
+        last_timestamp_ms_ = timestamp_ms;
+        have_emitted_frame_ = true;
         frame.samples = samples_;
         // Fetch and upload boundaries differ; vote using their overlapping samples.
         frame.vad_valid = !discontinuity_ && vad_valid_samples_ == frame_samples;

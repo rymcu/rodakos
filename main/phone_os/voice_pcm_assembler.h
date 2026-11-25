@@ -23,6 +23,8 @@ private:
     size_t vad_speech_samples_ = 0;
     int64_t clock_start_us_ = 0;
     uint64_t clock_samples_ = 0;
+    uint32_t last_timestamp_ms_ = 0;
+    bool have_emitted_frame_ = false;
     bool clock_initialized_ = false;
     bool discontinuity_ = false;
 };

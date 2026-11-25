@@ -30,6 +30,7 @@ bool audio_reads_released = false;
 int16_t audio_sample_value = 250;
 // Per task: the first callback must run only after the task reserved its lwIP semaphore.
 std::vector<std::thread::id> netconn_thread_inits;
+std::vector<std::string> audio_input_events;
 
 
 }
@@ -56,6 +57,7 @@ void Reset() {
     audio_read_release_through = 0;
     audio_sample_value = 250;
     netconn_thread_inits.clear();
+    audio_input_events.clear();
 }
 
 bool NetconnThreadInitialized() {
@@ -66,6 +68,10 @@ bool NetconnThreadInitialized() {
 size_t NetconnThreadInitCount() {
     std::lock_guard<std::mutex> lock(state_mutex);
     return netconn_thread_inits.size();
+}
+std::vector<std::string> AudioInputEvents() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return audio_input_events;
 }
 
 void SupplyAudioReads(size_t count) {
@@ -110,9 +116,16 @@ bool AudioCodecInput::Open(uint32_t, uint16_t, uint16_t, int, uint16_t) { return
 void AudioCodecInput::Close() {}
 bool AudioCodecInput::Read(void*, int) { return false; }
 bool AudioCodecInput::SetGain(int) { return true; }
-bool AudioCodecInput::OpenForOwner(const char*, int, uint32_t, uint16_t, uint16_t, int,
-                                   uint16_t, InputGainProfile) { return true; }
-void AudioCodecInput::CloseForOwner(const char*) {}
+bool AudioCodecInput::OpenForOwner(const char* owner, int, uint32_t, uint16_t, uint16_t, int,
+                                   uint16_t, InputGainProfile) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    if (owner != nullptr) audio_input_events.push_back(std::string("open:") + owner);
+    return true;
+}
+void AudioCodecInput::CloseForOwner(const char* owner) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    if (owner != nullptr) audio_input_events.push_back(std::string("close:") + owner);
+}
 bool AudioCodecInput::ReadForOwner(const char*, void* output, int bytes) {
     std::unique_lock<std::mutex> lock(state_mutex);
     if (supplied_audio_reads == 0) return false;

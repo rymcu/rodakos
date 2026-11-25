@@ -49,4 +49,5 @@ void ObserveDelete(void* pointer);
 void ResetAllocationObserver();
 bool NetconnThreadInitialized();
 size_t NetconnThreadInitCount();
+std::vector<std::string> AudioInputEvents();
 }  // namespace rodakos_test::voice_frontend

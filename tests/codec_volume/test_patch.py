@@ -22,7 +22,13 @@ class CodecPatchTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.component = self.root / "managed" / "codec"
         self.component.mkdir(parents=True)
-        for name in ("esp_codec_dev.c", "platform/audio_codec_data_i2s.c", "idf_component.yml", ".component_hash"):
+        for name in (
+            "esp_codec_dev.c",
+            "platform/audio_codec_data_i2s.c",
+            "device/es7210/es7210.c",
+            "idf_component.yml",
+            ".component_hash",
+        ):
             (self.component / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / "managed_components" / "espressif__esp_codec_dev" / name,
                             self.component / name)
@@ -84,6 +90,21 @@ class CodecPatchTests(unittest.TestCase):
         i2s_output.unlink()
         self.assertTrue(self.generate())
         self.assertEqual(i2s_output.read_bytes(), original)
+
+    def test_es7210_source_drift_rejects_all_outputs(self):
+        self.replace(self.component / "device/es7210/es7210.c", "GAIN_30DB", "GAIN_36DB")
+        self.assert_refused()
+        self.assertFalse((self.output.parent / "platform/audio_codec_data_i2s.c").exists())
+        self.assertFalse((self.output.parent / "device/es7210/es7210.c").exists())
+
+    def test_es7210_copy_is_reproducible_and_recreated(self):
+        self.generate()
+        es7210_output = self.output.parent / "device/es7210/es7210.c"
+        original = es7210_output.read_bytes()
+        self.assertIn(b"int ret = es7210_read_reg(codec, reg_addr, &regv);", original)
+        es7210_output.unlink()
+        self.assertTrue(self.generate())
+        self.assertEqual(es7210_output.read_bytes(), original)
 
     def test_source_drift_rejects_existing_output_without_overwriting_it(self):
         self.generate()

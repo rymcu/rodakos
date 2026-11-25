@@ -162,13 +162,17 @@ After the root CMake `project()` has resolved dependencies, `cmake/codec_volume_
 
 - The project's exact 1.5.7 pin and the lock's version, registry source and component hash.
 - The resolved `.component_hash` and component manifest, including the upstream repository commit.
-- The SHA-256 of complete original `esp_codec_dev.c` and `platform/audio_codec_data_i2s.c`;
-  line endings are normalized to LF. Both are validated before either generated file is written.
+- The SHA-256 of complete original `esp_codec_dev.c`, `platform/audio_codec_data_i2s.c` and
+  `device/es7210/es7210.c`; line endings are normalized to LF. All three are validated before any
+  generated file is written.
 
 Reviewed provenance and hashes are in `patches/esp_codec_dev/1.5.7/provenance.json`.
-The original managed files remain untouched. The generated source lives at
-`<build>/rodak_patches/esp_codec_dev/esp_codec_dev.c` and `platform/audio_codec_data_i2s.c`, and
-CMake replaces exactly those two entries on the resolved codec component target. Other codec sources, headers and compile settings remain
+The original managed files remain untouched. The generated sources live at
+`<build>/rodak_patches/esp_codec_dev/esp_codec_dev.c`, `platform/audio_codec_data_i2s.c` and
+`device/es7210/es7210.c`, and CMake replaces exactly those three entries on the resolved codec
+component target. `esp_codec_dev_set_in_gain` and `esp_codec_dev_set_in_channel_gain` preserve
+fractional dB values and propagate driver errors, while `es7210_update_reg_bit` and ES7210 format
+read-modify-write paths abort on register read failure instead of writing zeroed control bits. Other codec sources, headers and compile settings remain
 those of the resolved component. Fresh dependency resolution and existing dependency builds use
 the same hook; no manual pre-build patch command is required.
 

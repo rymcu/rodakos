@@ -16,12 +16,16 @@ constexpr uint32_t kPlaybackGraceMs = 400;
 // A pause inside the barge-in utterance must not end it.
 constexpr uint32_t kVadEndSilenceMs = 600;
 constexpr uint32_t kTimestampToleranceMs = 30;
-constexpr uint32_t kMinimumSpeechPower = 256 * 256;
 // On BigSmart, AEC+NS left injected near-end speech 4-29 dB (median 12 dB) below the
 // microphone input, and residual echo mostly more than 18 dB below it. Output more than
 // 15 dB below the input is treated as echo residual; -12 dB still rejected a third of
 // the speech frames on hardware.
 constexpr uint64_t kEchoResidualRatio = 32;
+// At high speaker volume the raw microphone is dominated by acoustic echo before AEC.
+// Strong post-AEC speech (-36 dBFS, 4x the floor) gets a wider echo headroom (-19.8 dB)
+// so real human double-talk is not rejected when the speaker is loud.
+constexpr uint32_t kStrongSpeechPower = 512 * 512;
+constexpr uint64_t kStrongSpeechEchoRatio = 96;
 }
 
 void VoiceVadEndPolicy::Reset() {
@@ -48,7 +52,6 @@ bool VoiceVadEndPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     if (have_frame_) {
         const int32_t delta = static_cast<int32_t>(frame_end_ms - last_frame_ms_);
         if (delta <= 0 ||
-            delta + static_cast<int32_t>(kTimestampToleranceMs) < static_cast<int32_t>(duration_ms) ||
             delta > static_cast<int32_t>(duration_ms + kTimestampToleranceMs)) {
             silence_ms_ = 0;
         }
@@ -79,6 +82,13 @@ bool VoicePlaybackEpochPolicy::AcceptStart(uint32_t epoch) {
 
 bool VoicePlaybackEpochPolicy::AcceptAudioOrStop(uint32_t epoch) const {
     return !IsStale(epoch) && epoch == current_epoch_;
+}
+
+bool VoicePlaybackEpochPolicy::AcceptStop(uint32_t epoch) const {
+    if (epoch == 0) {
+        return !IsStale(current_epoch_);
+    }
+    return AcceptAudioOrStop(epoch);
 }
 
 void VoicePlaybackEpochPolicy::Interrupt() {
@@ -156,7 +166,6 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     if (have_frame_) {
         const int32_t delta = static_cast<int32_t>(frame_end_ms - last_frame_ms_);
         if (delta <= 0 ||
-            delta + static_cast<int32_t>(kTimestampToleranceMs) < static_cast<int32_t>(duration_ms) ||
             delta > static_cast<int32_t>(duration_ms + kTimestampToleranceMs)) {
             ClearEvidence();
         }
@@ -166,8 +175,10 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     // WebRTC VAD also labels low-level residual playback as speech after AEC.
     // Require AC energy; DC offset must not turn a quiet frame into speech.
     const bool quiet = pcm_power < kMinimumSpeechPower;
+    const uint64_t allowed_ratio =
+        pcm_power >= kStrongSpeechPower ? kStrongSpeechEchoRatio : kEchoResidualRatio;
     const bool echo = !quiet && input_power != 0 &&
-                      static_cast<uint64_t>(pcm_power) * kEchoResidualRatio < input_power;
+                      static_cast<uint64_t>(pcm_power) * allowed_ratio < input_power;
     if (vad_speech) {
         stats_.vad_speech_ms += duration_ms;
         if (quiet) stats_.quiet_rejected_ms += duration_ms;
@@ -184,17 +195,34 @@ bool VoiceBargeInPolicy::Observe(uint32_t frame_end_ms, uint32_t duration_ms,
     if (!armed_) {
         return false;
     }
-    if (speech_ms_ == 0) {
+    const bool passed = !quiet && !echo;
+    const uint32_t prior_evidence_ms = RecentSpeechEvidenceMs(frame_end_ms);
+    if (speech_ms_ == 0 || (passed && prior_evidence_ms == 0)) {
         onset_ms_ = frame_end_ms - duration_ms;
     }
     speech_ms_ += duration_ms;
     // Speech energy dips between syllables, and AEC/NS cut it further during playback,
     // so the energy gates need only part of the recent VAD run, not every frame.
-    evidence_[evidence_index_] = {frame_end_ms, quiet || echo ? 0 : duration_ms};
+    evidence_[evidence_index_] = {frame_end_ms, passed ? duration_ms : 0};
     evidence_index_ = (evidence_index_ + 1) % evidence_.size();
     if (speech_ms_ < kSpeechConfirmMs ||
         RecentSpeechEvidenceMs(frame_end_ms) < kSpeechEvidenceMs) {
         return false;
+    }
+    uint32_t earliest_window_pass_ms = frame_end_ms;
+    for (const auto& entry : evidence_) {
+        if (entry.evidence_ms == 0 ||
+            static_cast<int32_t>(frame_end_ms - entry.frame_end_ms) >=
+                static_cast<int32_t>(kSpeechConfirmMs)) {
+            continue;
+        }
+        const uint32_t pass_start_ms = entry.frame_end_ms - entry.evidence_ms;
+        if (static_cast<int32_t>(earliest_window_pass_ms - pass_start_ms) > 0) {
+            earliest_window_pass_ms = pass_start_ms;
+        }
+    }
+    if (static_cast<int32_t>(earliest_window_pass_ms - onset_ms_) > 0) {
+        onset_ms_ = earliest_window_pass_ms;
     }
     fired_ = true;
     onset_ms = onset_ms_;

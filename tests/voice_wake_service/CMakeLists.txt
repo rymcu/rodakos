@@ -33,6 +33,8 @@ target_include_directories(rodakos_voice_wake_service_tests BEFORE PRIVATE
     "${RODAKOS_ROOT}/main" "${RODAKOS_ROOT}/managed_components/espressif__cjson/cJSON")
 if(VOICE_WAKE_BASELINE_INCLUDE)
     target_include_directories(rodakos_voice_wake_service_tests BEFORE PRIVATE "${VOICE_WAKE_BASELINE_INCLUDE}")
+    # The frozen header predates the assistant-handoff runtime hook.
+    target_compile_definitions(rodakos_voice_wake_service_tests PRIVATE RODAK_WAKE_BASELINE_HEADER=1)
 endif()
 target_compile_features(rodakos_voice_wake_service_tests PRIVATE cxx_std_20)
 target_compile_definitions(rodakos_voice_wake_service_tests PRIVATE CONFIG_SOC_CPU_CORES_NUM=2)

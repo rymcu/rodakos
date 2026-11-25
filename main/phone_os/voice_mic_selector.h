@@ -11,6 +11,8 @@ class VoiceMicSelector {
 public:
     static constexpr size_t kChannels = 4;
 
+    void Reset();
+    void ResetSession();
     void Update(const int16_t* tdm, size_t frames);
     int selected_mic() const { return selected_mic_; }
     size_t selected_slot() const { return selected_mic_ == 1 ? 0 : 2; }

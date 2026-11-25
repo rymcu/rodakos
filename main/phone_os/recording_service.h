@@ -31,7 +31,8 @@ struct RecordingConfig {
     uint16_t bits_per_sample = 16;
     int gain = 30;
     uint16_t input_channels = 4;
-    uint16_t input_channel_mask = 1U << 1;
+    // BigSmart ES7210 TDM places speaker loopback (MIC3) in slot 1 and main MIC2 in slot 2.
+    uint16_t input_channel_mask = 1U << 2;
 };
 
 struct RecordingState {

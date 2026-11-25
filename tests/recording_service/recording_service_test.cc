@@ -95,6 +95,8 @@ RODAK_TEST("normal recording publishes Saved only with complete header payload f
     RODAK_CHECK_EQ(f.focus.last_request.gain, AudioFocusGain::kExclusive);
     RODAK_CHECK_FALSE(f.focus.last_request.resume_on_release);
     RODAK_CHECK(f.focus.last_request.release_playback_hardware);
+    RODAK_CHECK_EQ(f.input.input_channels, 4u);
+    RODAK_CHECK_EQ(f.input.channel_mask, static_cast<uint16_t>(1U << 2));
     const auto events = recording_host::StdioEvents();
     const auto final = std::find(events.begin(), events.end(), "final-header");
     RODAK_CHECK(final != events.end());

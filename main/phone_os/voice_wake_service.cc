@@ -326,6 +326,9 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
     xSemaphoreTake(mutex_, portMAX_DELAY);
     const bool current = initialized_ && task_running_ && enabled_ && !service_stopping_ &&
         !identity_recovery_required_ && enable_generation_ == enable_generation;
+    if (current) {
+        handoff_pending_ = true;
+    }
     xSemaphoreGive(mutex_);
     if (!current) return;
 
@@ -347,6 +350,10 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
             !service_stopping_ && !identity_recovery_required_ &&
             enable_generation_ == enable_generation;
         const bool interrupted = can_interrupt && assistant_.InterruptSpeaking();
+        if (enable_generation_ == enable_generation && !listening_) {
+            handoff_pending_ = false;
+            runtime_.StopListening();
+        }
         xSemaphoreGive(mutex_);
         if (interrupted) {
             ESP_LOGI(TAG, "Wake word interrupted active TTS: %s", detected.c_str());
@@ -359,16 +366,20 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
         // 前端识别到唤醒词即自行停止采集；监督 tick 若先于本回调运行，会把 listening_ 清掉。
         // 播报场景下这是唯一的打断入口，不能因此丢掉这次唤醒（11-22 实测：音乐停了但没进对话）。
         if (initialized_ && task_running_ && enabled_ &&
-            (listening_ || announcing) &&
+            (listening_ || handoff_pending_ || announcing) &&
             !service_stopping_ && !assistant_starting_ &&
             enable_generation_ == enable_generation) {
-            runtime_.StopListening();
+            runtime_.PrepareForAssistantHandoff();
             listening_ = false;
+            handoff_pending_ = true;
             assistant_starting_ = true;
             assistant_start_generation_ = enable_generation;
             last_wake_word_ = detected;
             SetStatusLocked(VoiceWakeStatus::kAssistantActive, "Wake word detected");
             should_start = true;
+        } else if (enable_generation_ == enable_generation && !listening_ && !assistant_starting_) {
+            handoff_pending_ = false;
+            runtime_.StopListening();
         }
         xSemaphoreGive(mutex_);
     }
@@ -383,6 +394,11 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
     if (!should_start && assistant_starting_ &&
         assistant_start_generation_ == enable_generation) {
         assistant_starting_ = false;
+        handoff_pending_ = false;
+    }
+    if (!should_start && enable_generation_ == enable_generation && !listening_) {
+        handoff_pending_ = false;
+        runtime_.StopListening();
     }
     xSemaphoreGive(mutex_);
     if (!should_start) {
@@ -414,8 +430,13 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
             assistant_starting_ = false;
+            handoff_pending_ = false;
         }
         assistant_active_since_ticks_ = 0;
+        if (enable_generation_ == enable_generation && !listening_) {
+            handoff_pending_ = false;
+            runtime_.StopListening();
+        }
         if (initialized_ && task_running_ && enabled_ &&
             enable_generation_ == enable_generation) {
             SetStatusLocked(VoiceWakeStatus::kError, "Assistant start failed");
@@ -429,6 +450,7 @@ void VoiceWakeService::HandleWakeWordDetected(const std::string& wake_word,
                              !service_stopping_ && enable_generation_ == enable_generation;
     if (assistant_starting_ && assistant_start_generation_ == enable_generation) {
         assistant_starting_ = false;
+        handoff_pending_ = false;
     }
     if (keep_active) {
         assistant_active_since_ticks_ = xTaskGetTickCount();
@@ -570,7 +592,7 @@ void VoiceWakeService::SupervisorTick() {
         return;
     }
     LogHealthIfDueLocked();
-    if (listening_ && !runtime_.IsListening()) {
+    if (listening_ && !handoff_pending_ && !runtime_.IsListening()) {
         listening_ = false;
         SetStatusLocked(VoiceWakeStatus::kError, runtime_.LastErrorSnapshot().c_str());
         ESP_LOGW(TAG, "Wake runtime stopped capturing; re-arming");
@@ -687,10 +709,11 @@ bool VoiceWakeService::StartConfiguredRuntimeLocked() {
 }
 
 void VoiceWakeService::StopRuntimeLocked(const char* message) {
-    if (listening_) {
+    if (listening_ || handoff_pending_) {
         runtime_.StopListening();
     }
     listening_ = false;
+    handoff_pending_ = false;
     if (status_ == VoiceWakeStatus::kListening) {
         SetStatusLocked(VoiceWakeStatus::kDisabled, message);
     }
@@ -717,6 +740,7 @@ void VoiceWakeService::FreezeIdentityLocked(const std::string& error) {
     ++enable_generation_;
     runtime_.StopListening();
     listening_ = false;
+    handoff_pending_ = false;
     runtime_identity_configured_ = false;
     identity_recovery_required_ = true;
     voice_identity_status_ = "recovery_failed";
@@ -766,6 +790,7 @@ bool VoiceWakeService::ApplyIdentityRecordLocked(const VoiceIdentityRecord& next
     ++enable_generation_;
     runtime_.StopListening();
     listening_ = false;
+    handoff_pending_ = false;
     bool persisted = false;
     bool configured = ConfigureIdentityLocked(next.active, error);
     if (configured && record_changed) {
@@ -874,6 +899,7 @@ bool VoiceWakeService::ReconcileIdentityLocked(bool allow_initialization) {
                 ++enable_generation_;
                 runtime_.StopListening();
                 listening_ = false;
+                handoff_pending_ = false;
                 std::string error;
                 if (!ConfigureIdentityLocked(identity_record_.persistent, error) ||
                     (was_listening && !StartConfiguredRuntimeLocked())) {

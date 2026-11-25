@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -51,7 +52,7 @@ private:
 
     SemaphoreHandle_t mutex_ = nullptr;
     bool initialized_ = false;
-    int volume_ = 60;
+    std::atomic<int> volume_{60};
     uint32_t configuration_revision_ = 0;
     std::string owner_;
     AudioCodecOutput output_;
