@@ -31,6 +31,7 @@
     "CLOSE": "close-outline",
     "CLOUD": "cloud-outline",
     "COMPASS": "compass-outline",
+    "DOCUMENT": "document-outline",
     "EDIT": "create-outline",
     "FOLDER": "folder-outline",
     "GLOBE": "globe-outline",
@@ -59,6 +60,7 @@
     "SKIP_FORWARD": "play-skip-forward-outline",
     "STOP": "stop-outline",
     "STORAGE": "save-outline",
+    "TRASH": "trash-outline",
     "VOLUME": "volume-high-outline",
     "WIFI": "wifi-outline",
     "WIFI_OFF": "cloud-offline-outline"
