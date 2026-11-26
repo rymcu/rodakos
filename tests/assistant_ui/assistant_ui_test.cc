@@ -76,7 +76,14 @@ struct Fixture {
         ui.SetThemeName("dark");
         RODAK_CHECK(app.OnCreate(context)); Pump();
     }
-    ~Fixture() { if (!destroyed) app.OnDestroy(); Pump(); lv_obj_clean(lv_screen_active()); }
+    ~Fixture() {
+        if (!destroyed) app.OnDestroy();
+        // PhoneUi lives for the whole device boot; drain its toast timer before this stack
+        // fixture ends, as the Settings fixture does.
+        lv_test_wait(1850);
+        Pump();
+        lv_obj_clean(lv_screen_active());
+    }
     void Diagnose(rodakos::CloudDiagnosticCode code) {
         cloud_ui_test::state = {code, 100, rodakos::NextCloudDiagnosticRevision()};
         app.RefreshState();
