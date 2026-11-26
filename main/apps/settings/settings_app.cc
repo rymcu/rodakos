@@ -43,6 +43,11 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
     // Another app may open a page directly (Assistant -> Wi-Fi / 连接服务). Back from that page
     // returns to the caller rather than to the Settings main list.
     const std::string requested = context.navigation().TakeRequestedPage();
+    if (!requested.empty()) {
+        // Sub-pages copy main_body_'s size and position, which LVGL only resolves in a layout
+        // pass; one has not run yet inside OnCreate, so the page would be built at 0x0.
+        lv_obj_update_layout(root_);
+    }
     if (requested == "wifi") {
         ShowPage(SettingsPage::kWiFiList);
         opened_for_page_ = true;

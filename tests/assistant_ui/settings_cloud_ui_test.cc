@@ -221,6 +221,18 @@ RODAK_TEST("A page requested by another app opens first and back returns to that
         navigation.requested_page = "cloud";
         RODAK_CHECK(app.OnCreate(context)); Pump();
         RODAK_CHECK(app.current_page_ == SettingsPage::kDeviceCloud);
+        // The page is built inside OnCreate, before any layout pass; it must still get the
+        // body's 320x200 box, not 0x0 (which showed a blank page on the device).
+        lv_area_t body;
+        lv_obj_get_coords(app.device_cloud_body_, &body);
+        RODAK_CHECK_EQ(lv_area_get_width(&body), 320);
+        RODAK_CHECK_EQ(lv_area_get_height(&body), 200);
+        RODAK_CHECK_EQ(body.y1, 40);
+        RODAK_CHECK_FALSE(lv_obj_has_flag(app.device_cloud_body_, LV_OBJ_FLAG_HIDDEN));
+        lv_area_t card;
+        lv_obj_get_coords(app.cloud_status_card_, &card);
+        RODAK_CHECK(lv_area_get_width(&card) > 200);
+        RODAK_CHECK(card.y1 >= 40 && card.y2 < 240);
         RODAK_CHECK(navigation.requested_page.empty());
         RODAK_CHECK(app.OnBackRequested());
         Pump();
