@@ -23,6 +23,7 @@ bool log_blocked = false;
 bool log_released = false;
 std::vector<std::string> messages;
 std::atomic<int64_t> time_offset{0};
+std::atomic<void (*)(void*, SemaphorePoint)> semaphore_hook{nullptr};
 void* target_critical = nullptr;
 std::string critical_task;
 bool critical_blocked = false;
@@ -40,6 +41,7 @@ void Reset() {
     log_blocked = log_released = false;
     messages.clear();
     time_offset = 0;
+    semaphore_hook = nullptr;
     target_critical = nullptr;
     critical_task.clear();
     critical_blocked = critical_released = false;
@@ -63,7 +65,9 @@ void ReleaseSemaphore() {
     semaphore_released = true;
     changed.notify_all();
 }
+void SetSemaphoreHook(void (*hook)(void*, SemaphorePoint)) { semaphore_hook = hook; }
 void OnSemaphore(void* semaphore, SemaphorePoint point) {
+    if (const auto hook = semaphore_hook.load()) hook(semaphore, point);
     std::unique_lock<std::mutex> lock(mutex);
     if (semaphore_released || semaphore_blocked || semaphore != target_semaphore ||
         point != target_point || target_task != retirement_host::CurrentTaskName()) return;
