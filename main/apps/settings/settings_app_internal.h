@@ -14,6 +14,7 @@ inline constexpr const char* kBrightnessKey = "brightness";
 inline constexpr uint32_t kTimeSyncTimeoutPolls = 20;
 
 void DeferReturnHome(void* user_data);
+void DeferReturnToCaller(void* user_data);
 void DeferOpenThemes(void* user_data);
 std::string TrimServerName(const char* text);
 std::string TrimCloudUrl(const char* text);

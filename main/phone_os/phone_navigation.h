@@ -16,7 +16,11 @@ public:
     bool Launch(std::string_view app_id);
     // Opens `app_id` as a sub-page of `caller` (for example Settings -> 主题). The child's back
     // action then returns to the caller instead of the desktop. Any other launch forgets this.
-    bool LaunchFrom(std::string_view app_id, std::string_view caller);
+    // `page` names a page inside the child to open first (for example "wifi"); the child reads
+    // it once with TakeRequestedPage().
+    bool LaunchFrom(std::string_view app_id, std::string_view caller, std::string_view page = {});
+    // The page requested by the last LaunchFrom, cleared on read. Empty when none.
+    std::string TakeRequestedPage();
     // Back from an app opened with LaunchFrom: relaunches the caller, otherwise the desktop.
     bool ReturnToCaller();
     bool RefreshTheme();
@@ -39,4 +43,5 @@ private:
     DeferredNavigation deferred_;
     std::string child_app_;
     std::string caller_app_;
+    std::string requested_page_;
 };

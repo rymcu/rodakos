@@ -1,4 +1,5 @@
 #pragma once
+#include "phone_os/voice_identity.h"
 #include <string>
 namespace rodakos {
 enum class VoiceWakeStatus { kDisabled, kListening, kAssistantActive, kUnavailable, kError };
@@ -8,6 +9,7 @@ struct VoiceWakeState {
     VoiceWakeStatus status = VoiceWakeStatus::kDisabled;
     std::string runtime_name = "host-wake";
     std::string message;
+    VoiceIdentityConfig voice_identity{"罗达克", "你好达克", "ni hao da ke"};
 };
 class VoiceWakeService {
 public:

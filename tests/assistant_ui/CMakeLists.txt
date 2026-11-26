@@ -14,7 +14,6 @@ add_executable(assistant_ui_tests
     settings_other_pages.cc
     fake_cloud.cc
     "${RODAKOS_ROOT}/tests/home_ui/test_main.cc"
-    "${RODAKOS_ROOT}/tests/home_ui/fakes/test_fonts.cc"
     "${RODAKOS_ROOT}/main/apps/assistant/assistant_app.cc"
     "${RODAKOS_ROOT}/main/apps/settings/settings_app.cc"
     "${RODAKOS_ROOT}/main/apps/settings/settings_app_internal.cc"
@@ -26,14 +25,21 @@ add_executable(assistant_ui_tests
     "${RODAKOS_ROOT}/main/phone_ui/phone_ui.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_components.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_theme.cc"
-    "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc")
+    "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc"
+    # Production fonts (Montserrat -> Ionicons -> PuHui) so screenshots show real Chinese and icons.
+    "${RODAKOS_ROOT}/main/phone_ui/phone_fonts.cc"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/font_puhui_16_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_20_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_30_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/font_edix_36_4.c")
 target_include_directories(assistant_ui_tests BEFORE PRIVATE
-    fakes "${RODAKOS_ROOT}/tests/home_ui/fakes" "${RODAKOS_ROOT}/tests/home_ui"
+    fakes "${RODAKOS_ROOT}/tests/themes_ui/fakes" "${RODAKOS_ROOT}/tests/home_ui/fakes" "${RODAKOS_ROOT}/tests/home_ui"
     "${RODAKOS_ROOT}/main" "${RODAKOS_ROOT}/components/rodakos_fonts/include")
 find_package(Threads REQUIRED)
 target_link_libraries(assistant_ui_tests PRIVATE lvgl Threads::Threads m)
 target_link_options(assistant_ui_tests PRIVATE -Wl,--wrap=lv_async_call)
+target_compile_definitions(assistant_ui_tests PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 target_compile_options(assistant_ui_tests PRIVATE -Wall -Wextra -Wpedantic)
-set_source_files_properties(settings_cloud_ui_test.cc PROPERTIES COMPILE_OPTIONS -fno-access-control)
+set_source_files_properties(settings_cloud_ui_test.cc assistant_ui_test.cc PROPERTIES COMPILE_OPTIONS -fno-access-control)
 add_test(NAME assistant_ui COMMAND assistant_ui_tests)
 set_tests_properties(assistant_ui PROPERTIES TIMEOUT 60)

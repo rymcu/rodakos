@@ -197,3 +197,59 @@ RODAK_TEST("A stale worker delivery failure cannot replace the current UI failur
     RODAK_CHECK(f.app.cloud_refresh_guard_->refresh_failure.load() == SettingsCloudRefreshFailure::kTaskStart);
     RODAK_CHECK_EQ(f.bound_notifications, 0U);
 }
+
+RODAK_TEST("A page requested by another app opens first and back returns to that app") {
+    cloud_ui_test::Reset();
+    cloud_ui_test::task_create_ok = true;
+    cloud_ui_test::ui_lock_available = true;
+    // Bound and ready, so the 连接服务 page does not start its pairing poll.
+    cloud_ui_test::config.aiot_registered = true;
+    cloud_ui_test::config.aiot_activated = true;
+    cloud_ui_test::state.code = rodakos::CloudDiagnosticCode::kReady;
+    PhoneUi ui{320, 240};
+    PhoneNavigation navigation;
+    PhoneAppRegistry registry;
+    PhoneServices services;
+    Settings settings;
+    PhoneAppContext context{ui, navigation, registry, services, settings};
+    rodakos::DeviceCloudConfigService cloud;
+    WiFiAdapter wifi;
+    services.SetDeviceCloud(&cloud); services.SetWiFi(&wifi);
+    ui.SetThemeName("dark");
+    {
+        SettingsApp app;
+        navigation.requested_page = "cloud";
+        RODAK_CHECK(app.OnCreate(context)); Pump();
+        RODAK_CHECK(app.current_page_ == SettingsPage::kDeviceCloud);
+        RODAK_CHECK(navigation.requested_page.empty());
+        RODAK_CHECK(app.OnBackRequested());
+        Pump();
+        RODAK_CHECK_EQ(navigation.caller_count, 1);
+        RODAK_CHECK_EQ(navigation.launches.size(), 0U);
+        app.OnDestroy();
+    }
+    {
+        // Opened normally: back from a sub-page returns to the Settings list, not to a caller.
+        SettingsApp app;
+        RODAK_CHECK(app.OnCreate(context)); Pump();
+        RODAK_CHECK(app.current_page_ == SettingsPage::kMain);
+        app.ShowPage(SettingsPage::kDeviceCloud); Pump();
+        RODAK_CHECK(app.OnBackRequested());
+        Pump();
+        RODAK_CHECK(app.current_page_ == SettingsPage::kMain);
+        RODAK_CHECK_EQ(navigation.caller_count, 1);
+        app.OnDestroy();
+    }
+    {
+        // Destroyed before the deferred return runs: nothing navigates afterwards.
+        SettingsApp app;
+        navigation.requested_page = "cloud";
+        RODAK_CHECK(app.OnCreate(context)); Pump();
+        RODAK_CHECK(app.OnBackRequested());
+        app.OnDestroy();
+        Pump();
+        RODAK_CHECK_EQ(navigation.caller_count, 1);
+    }
+    cloud_ui_test::RunTask();
+    lv_test_wait(1850); Pump(); lv_obj_clean(lv_screen_active());
+}

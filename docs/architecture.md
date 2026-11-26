@@ -184,8 +184,9 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   Start admission is separate from Saved. Final WAV header, flush and close failures remain errors,
   and `library_error` does not overwrite a completed save. Path leases cover creation, data, final
   header and cleanup without holding the entire storage I/O lock. See [media save boundaries](media-save.md).
-- Assistant: configuration and status for the local "你好达克" monitor. Interaction runs as a
-  system service rather than an app-owned Talk/Stop session.
+- Assistant: status card (wake word, session phase, turn progress, cloud diagnosis with a fix
+  button) and rows for wake, the voice status light and 连接服务. Interaction runs as a system
+  service rather than an app-owned Talk/Stop session. See [voice assistant](voice-assistant.md).
 - Smart: light control. One light opens its control page; two or more open an overview. Every
   write is a one-field `ApplyLightPatch` by light id; brightness commits on release, and choosing a
   colour while the light is off saves it without switching the light on. A 500 ms poll shows MQTT

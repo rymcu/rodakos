@@ -236,6 +236,8 @@ private:
     lv_obj_t* cloud_edit_url_button_ = nullptr;
     lv_obj_t* cloud_manual_pair_button_ = nullptr;
     bool cloud_details_open_ = false;
+    // Opened by another app on one page; back from that page returns to the caller.
+    bool opened_for_page_ = false;
     rodakos_settings::DeviceCloudAction cloud_primary_action_ = rodakos_settings::DeviceCloudAction::kNone;
     rodakos_settings::DeviceCloudAction cloud_secondary_action_ = rodakos_settings::DeviceCloudAction::kNone;
     lv_obj_t* cloud_unbind_dialog_ = nullptr;

@@ -72,4 +72,37 @@ inline const char* CloudDiagnosticHint(CloudDiagnosticCode code) {
     return "Open Settings > Device Cloud.";
 }
 
+// Chinese user-facing text, shared by Settings > 连接服务 and the Assistant app so both pages
+// say the same thing. Like the English text above, it never includes server or credential text.
+inline const char* CloudDiagnosticTitleZh(CloudDiagnosticCode code) {
+    switch (code) {
+        case CloudDiagnosticCode::kReady: return "已连接";
+        case CloudDiagnosticCode::kUnconfigured: return "尚未连接";
+        case CloudDiagnosticCode::kRefreshing: return "正在更新凭据";
+        case CloudDiagnosticCode::kCredentialsRejected: return "设备凭据被拒绝";
+        case CloudDiagnosticCode::kCredentialsExpired: return "设备凭据需要更新";
+        case CloudDiagnosticCode::kRefreshFailed: return "凭据更新失败";
+        case CloudDiagnosticCode::kNetworkUnavailable: return "无法连接服务器";
+        case CloudDiagnosticCode::kVoiceUnavailable: return "语音服务不可用";
+        case CloudDiagnosticCode::kTrustUnavailable: return "服务器证书需要处理";
+        case CloudDiagnosticCode::kCancelled: return "连接已取消";
+        case CloudDiagnosticCode::kDeviceMemoryLow: return "设备内存不足";
+    }
+    return "连接需要处理";
+}
+
+inline const char* CloudDiagnosticHintZh(CloudDiagnosticCode code) {
+    switch (code) {
+        case CloudDiagnosticCode::kCredentialsRejected: return "请在服务端确认设备权限，然后点「重试」。";
+        case CloudDiagnosticCode::kCredentialsExpired:
+        case CloudDiagnosticCode::kRefreshFailed: return "请确认服务端在运行，然后点「重试」。";
+        case CloudDiagnosticCode::kNetworkUnavailable: return "请检查 Wi-Fi 和服务器地址，然后点「重试」。";
+        case CloudDiagnosticCode::kVoiceUnavailable: return "请在服务端启用语音，然后点「重试」。";
+        case CloudDiagnosticCode::kTrustUnavailable: return "服务器证书与固定的不一致。绑定会保留，请检查 USB 下发的服务器信任。";
+        case CloudDiagnosticCode::kDeviceMemoryLow: return "请关闭其他应用或重启设备后重试。";
+        default: break;
+    }
+    return "请点「重试」。";
+}
+
 }  // namespace rodakos
