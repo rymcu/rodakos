@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "src/font_puhui_16_4.c"
+        "src/font_puhui_lunar_12_4.c"
         "src/rodakos_icons_20_4.c"
         "src/rodakos_icons_30_4.c"
         "src/font_edix_36_4.c"
