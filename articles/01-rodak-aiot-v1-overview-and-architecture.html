@@ -1,0 +1,235 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rodak AIoT v1 协议全景与架构入门 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html" aria-current="page"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 01 篇 / 13</div><h1>Rodak AIoT v1 协议全景与架构入门</h1><blockquote>
+<p><strong>参考规范</strong>：本文基于 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a> 与 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 仓库整理，面向首次接入或维护 <code>rodak-aiot/v1</code> 协议的固件、服务端及模拟器开发者。</p>
+</blockquote>
+<blockquote>
+<p>固件版本与协议版本独立：本手册对照的 <a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/CMakeLists.txt">CMake 源码版本</a>为 0.1.6；线级标识仍为 rodak-aiot/v1、rodak-realtime-voice/v1。不要把 PROJECT_VER、主机测试通过或 CI 开发产物当成公开发布或设备已升级的证明。</p>
+</blockquote>
+<h2>1. 协议定位与权威边界</h2>
+<p><code>rodak-aiot/v1</code> 是 Rodak 服务端与 RodakOS 嵌入式设备之间的核心 AIoT 控制面与协同协议。在动手写代码之前，新人开发者需要先明确三处“单一事实来源”的边界：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">维度</th>
+<th style="text-align:left">权威归属</th>
+<th style="text-align:left">说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>服务端行为</strong></td>
+<td style="text-align:left">Rodak 服务端</td>
+<td style="text-align:left">当文档描述与服务端实际行为不一致时，以修复 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a> 文档为准。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>固件端实现</strong></td>
+<td style="text-align:left">RodakOS（<code>main/phone_os/</code>）</td>
+<td style="text-align:left">运行于 ESP32-S3（RYMCU BigSmart）平台，由系统服务承载协议状态机。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>机器可读契约</strong></td>
+<td style="text-align:left"><code>contracts/rodak-aiot/v1/</code></td>
+<td style="text-align:left">包含 OpenAPI、AsyncAPI、JSON Schema 2020-12 及正反例测试夹具，用于跨仓库双向校验。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>协议覆盖范围与明确不包含的内容</h3>
+<ul>
+<li><strong>覆盖范围</strong>：设备身份校验（Identity）、宿主绑定（Owner binding）、凭证管理（Credentials）、统一 MQTT（Unified MQTT）、设备影子（Shadow state）与 OTA 升级协同。</li>
+<li><strong>不包含实时语音传输层</strong>：实时语音（WebSocket + Opus）仅通过本协议的 <code>realtimeVoice</code> 描述符完成交接，其传输细节由独立契约 <code>Rodak realtime voice v1</code> 定义。</li>
+<li><strong>不包含 XiaoZhi 兼容</strong>：Rodak 当前不存在 XiaoZhi 适配器。固件与新设备实现<strong>严禁</strong>读取旧版 XiaoZhi 字段、WebSocket 凭证或旧 NVS 命名空间。</li>
+</ul>
+<h2>2. 按角色推荐的阅读路径</h2>
+<p>协议文档本身（§0）为不同岗位的开发者划分了重点阅读章节，配合本系列文章可以快速定位所需内容：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">开发者角色</th>
+<th style="text-align:left">协议原文重点章节</th>
+<th style="text-align:left">对应本系列文章</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>服务端开发 / 改造</strong></td>
+<td style="text-align:left">§2、§4、§5、§7、§8、§9、§12 及 Command semantics</td>
+<td style="text-align:left">全系列 4 篇（重点看第 2、3、4 篇）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备端 / 模拟器开发</strong></td>
+<td style="text-align:left">§2–§9、Command semantics 与 Implementation notes</td>
+<td style="text-align:left">第 1、2、3 篇（若涉及升级再看第 4 篇）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>RodakOS 固件维护者</strong></td>
+<td style="text-align:left">通读全文（含 §13 模块归属与 §14 契约验证）</td>
+<td style="text-align:left">全系列 4 篇通读</td>
+</tr>
+</tbody>
+</table></div>
+<h2>3. 系统参与方与核心模块分工</h2>
+<p>整个 <code>rodak-aiot/v1</code> 体系由**服务端（Rodak）<strong>和</strong>设备端（RodakOS）**两大阵营构成，双方通过 HTTP（控制面引导、绑定、鉴权、OTA 票据与包体）和 MQTT（长连接指令、影子、遥测、OTA 通知与进度）协同工作。</p>
+<h3>服务端（Rodak）三大部分</h3>
+<ol>
+<li><strong>HTTP API（<code>/api/v1/aiot</code>）</strong>：提供引导信息、绑定请求与轮询、局域网建信（Trust Setup）、Token 刷新、解绑以及 OTA 检查/票据/清单/包体/结果上报接口。</li>
+<li><strong>MQTT Broker</strong>：负责设备长连接认证与消息路由，承载影子同步、指令下发与回执、遥测、PC 状态同步和 OTA 通知。</li>
+<li><strong>Desktop Owner UI</strong>：供设备宿主（用户）在桌面端输入 8 位配对码确认绑定或完成局域网建信交互。</li>
+</ol>
+<h3>设备端（RodakOS）核心服务映射</h3>
+<p>在 RodakOS 固件中，协议职责被清晰地拆分到独立服务中（见协议 §1 与 §13）：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">服务类 / 模块</th>
+<th style="text-align:left">职责范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>DeviceCloudConfigService</code> (DCC)</td>
+<td style="text-align:left">管理设备身份、入网绑定流程、凭证生成与事务性持久化。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>UnifiedMqttService</code> (UMS)</td>
+<td style="text-align:left">维护 MQTT 连接生命周期、Topic 订阅/发布、Shadow 同步、指令分发与 Telemetry 上报。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>OtaUpdateService</code> (OTA)</td>
+<td style="text-align:left">负责 OTA 检查与下载、日志（journal）记录、Recovery 分区交接以及升级结果上报（配合出厂 Recovery 镜像）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>VoiceWakeService</code></td>
+<td style="text-align:left">语音唤醒服务，运行开关与参数通过 Shadow 影子状态控制。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>RodakRealtimeVoiceTransport</code></td>
+<td style="text-align:left">承接绑定/刷新返回的 <code>realtimeVoice</code> 描述符，建立实时语音通道。</td>
+</tr>
+</tbody>
+</table></div>
+<h2>4. 关键术语与身份强校验规则</h2>
+<p>新人最容易在“凭证种类”和“命名差异”上踩坑，以下术语请务必在编码前对齐：</p>
+<h3>4.1 五类核心标识与凭证</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">术语</th>
+<th style="text-align:left">格式与来源</th>
+<th style="text-align:left">核心用途与安全约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>Device key</strong></td>
+<td style="text-align:left">默认小写 Wi-Fi STA MAC（如 <code>aa:bb:cc:dd:ee:ff</code>）</td>
+<td style="text-align:left">设备的稳定唯一标识，同时用作 MQTT 连接的 <code>username</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Device secret</strong></td>
+<td style="text-align:left">设备端生成的 32 字节随机数，编码为 64 位小写十六进制</td>
+<td style="text-align:left">在绑定或刷新请求中作为 <code>deviceSecret</code> / <code>credentialSecret</code> 发送；服务端<strong>仅存储哈希</strong>，设备端严禁打印到日志或串口。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Request ID</strong></td>
+<td style="text-align:left">服务端下发的 32 位小写十六进制字符串</td>
+<td style="text-align:left">标识一次绑定请求，用于轮询状态与 Trust Setup 路径参数。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Request token</strong></td>
+<td style="text-align:left">32 字节随机数转 base64url（43 字符）</td>
+<td style="text-align:left">用于轮询 <code>/status</code> 与调用 <code>/trust</code> 的 <code>Bearer</code> 鉴权；在 LAN Trust Setup 成功后会被一次性替换。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Access token</strong></td>
+<td style="text-align:left">HS256 JWT（头部 <code>{&quot;alg&quot;:&quot;HS256&quot;}</code>，载荷含 <code>tv</code>、<code>exp</code> 及 <code>did</code>/<code>dk</code>/<code>pk</code> 子集）</td>
+<td style="text-align:left">用作 MQTT 连接密码（<code>password</code>）、OTA 与解绑接口的 HTTP <code>Bearer</code> 凭证，以及实时语音的 <code>Bearer</code> 凭证。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>4.2 身份常量与防踩坑提示</h3>
+<p>在协议 §3 中，设备身份包含以下固定字段：</p>
+<ul>
+<li><code>protocol</code>: <code>&quot;rodak-aiot&quot;</code></li>
+<li><code>protocolVersion</code>: <code>1</code></li>
+<li><code>productKey</code>: <code>&quot;rymcu-bigsmart&quot;</code></li>
+<li><code>application.name</code>: <code>&quot;rodakos&quot;</code></li>
+<li><code>board.type</code>: <code>&quot;rymcu_bigsmart&quot;</code></li>
+</ul>
+<blockquote>
+<p><strong>高频踩坑警告：<code>rymcu_bigsmart</code> ≠ <code>rymcu-bigsmart</code></strong>
+Espressif Board Manager 中使用的板型名称是下划线格式的 <code>rymcu_bigsmart</code>，而云端 <code>productKey</code> 是连字符格式的 <code>rymcu-bigsmart</code>。两者绝对不能混用。</p>
+</blockquote>
+<p>设备在调用 <code>GET /api/v1/aiot/devices/bootstrap</code> 后，<strong>必须执行强校验</strong>：只要响应中出现 <code>module != &quot;aiot&quot;</code>、<code>protocol != &quot;rodak-aiot&quot;</code>、<code>productKey != &quot;rymcu-bigsmart&quot;</code> 或 <code>protocolVersion != 1</code> 中的任意一项，就必须直接拒绝该引导响应，不得继续绑定。</p>
+<h3>4.3 两种安全模式：Legacy mode vs Pin mode</h3>
+<ul>
+<li><strong>Legacy mode</strong>：设备本地未安装服务端信任锚点，允许通过明文 HTTP/MQTT 及 <code>ws://</code> 通信，适合早期开发或无证书环境。</li>
+<li><strong>Pin mode</strong>：通过 USB 或局域网 Trust Setup 安装服务端信任锚点，并绑定固定 TLS 域名 <code>rodak-&lt;16 hex&gt;.local</code>，强制全链路加密通信（HTTPS、<code>mqtts</code>、<code>wss://</code>），并严格限制重定向与公共 CA 回退。</li>
+</ul>
+<h2>5. RodakOS 仓库结构与本地上手环境</h2>
+<p>如果你需要直接阅读或修改 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 固件源码，以下是核心技术栈与目录布局：</p>
+<ul>
+<li><strong>硬件与框架</strong>：ESP32-S3（RYMCU BigSmart，320x240 触控屏）、<strong>ESP-IDF 6.0.2</strong>、LVGL 9.3 + <code>esp_lvgl_port</code> 2.8、Espressif Board Manager + <code>rodakos_hal_boards</code>。</li>
+<li><strong>依赖锁定</strong>：<code>main/idf_component.yml</code> 声明直接依赖，<code>dependencies.lock</code> 锁定完整组件依赖图。</li>
+</ul>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">目录</th>
+<th style="text-align:left">作用说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>main/</code></td>
+<td style="text-align:left">主应用（运行于 <code>ota_0</code>），含入口 <code>main.cc</code>、内置应用 <code>apps/</code>、系统服务 <code>phone_os/</code>、LVGL 封装 <code>phone_ui/</code>、硬件适配 <code>rodakos_adapters/</code> 与 <code>usb_msc_mode.cc</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>recovery/</code></td>
+<td style="text-align:left">不可变的出厂 Recovery 应用，负责在 OTA 阶段安全写入 <code>ota_0</code> 分区。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>components/</code></td>
+<td style="text-align:left">本地与托管组件，含 <code>rodakos_hal_boards/</code>、<code>esp_board_manager/</code>、<code>esp_peer/</code>（WebRTC）、<code>rodak_ota_state/</code>（OTA 日志与签名格式）、<code>rodak_appearance/</code>、<code>rodakos_fonts/</code> 等。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>cmake/</code> 与 <code>patches/</code></td>
+<td style="text-align:left">构建期对托管组件（codec、MQTT、WebSocket、LVGL/LodePNG 等）应用的补丁覆盖。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>contracts/</code></td>
+<td style="text-align:left">跨仓库机器可读契约（如 <code>contracts/rodak-aiot/v1/</code>）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>tools/</code></td>
+<td style="text-align:left">OTA 签名校验、契约检查脚本（<code>check_aiot_contract.py</code>）、补丁生成与串口抓取工具。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>tests/</code></td>
+<td style="text-align:left">宿主单元测试套件（WSL/Linux 下无硬件运行，启用 ASan/UBSan）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>docs/</code></td>
+<td style="text-align:left">架构设计、协议契约（含 <code>rodak-aiot-contract-v1.md</code>）、测试证据与规划文档。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>快速构建与烧录命令（PowerShell）</h3>
+<p>项目严格依赖 <strong>ESP-IDF 6.0.2</strong>，切勿混用其他 IDF 版本：</p>
+<pre><code class="language-powershell"># 1. 激活校验过的 ESP-IDF 6.0.2 环境
+. .\activate_idf.ps1
+# 或显式指定版本：. .\activate_idf.ps1 -Version v6.0.2
+
+# 2. 首次构建或板型变更时执行全量构建脚本
+.\build_rodakos.ps1
+
+# 3. 日常仅修改主应用时的增量编译（ota_0）
+idf.py build
+
+# 4. 烧录并运行测试（首次迁移 Recovery 分区需追加 -Erase）
+.\flash_and_test.ps1 -Port COM3 -NoMonitor
+</code></pre>
+<blockquote>
+<p><strong>烧录红线</strong>：<strong>切勿</strong>在仓库根目录直接执行 <code>idf.py flash</code> 或 <code>idf.py app-flash</code>，否则会直接覆写较小的 factory（Recovery）分区，导致 OTA Recovery 机制损坏。</p>
+</blockquote>
+<hr />
+<p><strong>下一篇推荐</strong>：阅读《设备入网、宿主绑定、鉴权与安全模式实战》，掌握 9 步绑定流程、HTTP 信封错误处理陷阱以及 LAN Trust Setup 的实现细节。</p>
+<nav class="pager" aria-label="相邻章节"><a href="../index.html">← 总索引</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html">设备入网、宿主绑定、鉴权与安全模式实战 →</a></nav></main></div></body></html>

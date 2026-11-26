@@ -1,0 +1,182 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>统一 MQTT、指令系统、设备影子与实时语音交接指南 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html" aria-current="page"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 03 篇 / 13</div><h1>统一 MQTT、指令系统、设备影子与实时语音交接指南</h1><blockquote>
+<p><strong>参考规范</strong>：本文依据 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>（§7–§11）整理，帮助开发者实现 <code>UnifiedMqttService</code>（UMS）、设备指令处理、影子同步以及 <code>RodakRealtimeVoiceTransport</code> 的交接逻辑。</p>
+</blockquote>
+<h2>1. Unified MQTT 连接配置与 Topic 全景</h2>
+<p>绑定确认或刷新 Token 后，服务端返回的 <code>unifiedMqtt</code> 描述符给出了完整的 MQTT 连接与路由信息（对应的 AsyncAPI 定义位于 <code>contracts/rodak-aiot/v1/asyncapi.yaml</code>）：</p>
+<ul>
+<li><strong>核心连接字段</strong>：<code>protocol_version: 2</code>、<code>broker_address</code>、<code>broker_port</code>、<code>username</code>（即 <code>deviceKey</code>）、<code>password</code>（即 <code>accessToken</code>）、<code>keepalive: 240</code>、<code>device_key</code>、<code>http_base_url</code>、<code>http_bearer_token</code>、<code>home_enabled: 0</code> 以及完整的 <code>topics</code> 映射。</li>
+<li><strong>传输层安全</strong>：Legacy 模式允许明文 MQTT；Pin 模式强制使用 <code>mqtts</code> 并校验服务端信任锚点与固定域名。</li>
+</ul>
+<h3>Topic 订阅与发布清单</h3>
+<p>以下 <code>{k}</code> 代表设备的 <code>deviceKey</code>。全链路默认以 <strong>QoS 0</strong> 为主，唯一特例是 <code>ota/progress</code> 上报 <code>staged</code> 状态时 RodakOS 使用 <strong>QoS 1</strong> 确保送达。</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">方向</th>
+<th style="text-align:left">Topic 路径</th>
+<th style="text-align:left">默认 QoS</th>
+<th style="text-align:left">核心用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>设备订阅（下行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/shadow/desired</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">接收服务端下发的期望影子状态（如音量、唤醒配置等）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备订阅（下行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/ota/notify</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">接收 OTA 升级通知，触发检查与下载流程。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备订阅（下行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/commands/+</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">订阅 <code>devices/{k}/commands/{commandNo}</code> 接收单次指令。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备订阅（下行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/pc_status</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">接收宿主 PC 状态同步消息。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备发布（上行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/telemetry</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">上报设备周期性或事件触发的遥测数据。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备发布（上行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/shadow/report</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">上报设备当前实际影子状态。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备发布（上行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/ota/progress</code></td>
+<td style="text-align:left">0（<code>staged</code> 为 <strong>1</strong>）</td>
+<td style="text-align:left">上报 OTA 各阶段进度与最终结果。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备发布（上行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/effects/receipt</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">上报执行效果回执（用于证据等级声明）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>设备发布（上行）</strong></td>
+<td style="text-align:left"><code>devices/{k}/commands/{commandNo}/ack</code></td>
+<td style="text-align:left">0</td>
+<td style="text-align:left">回复对应 <code>commandNo</code> 指令的执行结果或错误码。</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p><strong>上线标准动作</strong>：设备成功连接 MQTT Broker 后，应立即完成 4 个下行 Topic 的订阅，并主动发布初始 <code>telemetry</code> 与 <code>shadow/report</code>。</p>
+</blockquote>
+<h2>2. 指令系统（Commands）实现规范</h2>
+<p>当设备从 <code>devices/{k}/commands/{commandNo}</code> 收到指令后，必须向对应的 <code>devices/{k}/commands/{commandNo}/ack</code> 发布回执。</p>
+<h3>2.1 标准 Ack 响应格式</h3>
+<ul>
+<li><strong>执行成功</strong>：</li>
+</ul>
+<pre><code class="language-json">{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;result&quot;: {}
+}
+</code></pre>
+<ul>
+<li><strong>执行失败或不支持</strong>：</li>
+</ul>
+<pre><code class="language-json">{
+  &quot;status&quot;: &quot;error&quot;,
+  &quot;errorCode&quot;: &quot;unsupported_command&quot;
+}
+</code></pre>
+<h3>2.2 支持的指令集与语义约束（§8）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">指令名</th>
+<th style="text-align:left">关键参数 / 机制</th>
+<th style="text-align:left">实现注意事项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>ping</code></td>
+<td style="text-align:left">连通性探测</td>
+<td style="text-align:left">立即返回 <code>status: &quot;ok&quot;</code> 响应。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>voice.announce</code></td>
+<td style="text-align:left">优先级支持 <code>normal</code> / <code>urgent</code></td>
+<td style="text-align:left">播报语音提示，需区分普通与紧急优先级队列。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>camera.stream.start</code> / <code>stop</code> / <code>signal</code></td>
+<td style="text-align:left">基于 WebRTC datachannel（固件侧依托 <code>components/esp_peer/</code>）</td>
+<td style="text-align:left"><strong>与屏幕推流互斥</strong>；启动前需校验当前无活跃的屏幕推流会话。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>display.stream.start</code> / <code>stop</code> / <code>signal</code></td>
+<td style="text-align:left">基于 WebRTC datachannel</td>
+<td style="text-align:left"><strong>与摄像头推流互斥</strong>；启动前需校验当前无活跃的摄像头推流会话。</td>
+</tr>
+<tr>
+<td style="text-align:left">其他未定义指令</td>
+<td style="text-align:left">—</td>
+<td style="text-align:left">必须明确回复 <code>{&quot;status&quot;: &quot;error&quot;, &quot;errorCode&quot;: &quot;unsupported_command&quot;}</code>，禁止静默丢弃。</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p><strong>设计边界提醒</strong>：<strong>音量控制不走指令系统</strong>，而是通过设备影子（Shadow）下发期望状态并上报实际状态。请勿自行扩展音量类 Command。</p>
+</blockquote>
+<h2>3. Telemetry、Shadow 同步与证据等级（§9 &amp; §10）</h2>
+<h3>3.1 遥测与影子协同</h3>
+<ul>
+<li><strong>Telemetry</strong>：按 <code>contracts/rodak-aiot/v1/schemas/</code> 定义的结构通过 <code>devices/{k}/telemetry</code> 上报设备运行指标。</li>
+<li><strong>Shadow</strong>：服务端通过 <code>shadow/desired</code> 下发期望配置（例如音量、<code>VoiceWakeService</code> 唤醒配置等），设备应用变更后通过 <code>shadow/report</code> 回报当前状态。注意：任何敏感凭证绝对不允许写入 Shadow。</li>
+</ul>
+<h3>3.2 证据等级（Evidence Levels，L0–L4）</h3>
+<p>为了客观衡量设备执行动作的可信度，协议 §10 定义了从 <strong>L0（仅完成 MQTT 发布）</strong> 到 <strong>L4（硬件物理观测闭环验证）</strong> 的五个证据等级：</p>
+<ul>
+<li>目前 RodakOS 固件对<strong>音量</strong>与<strong>灯光</strong>控制最高仅声明到 <strong>L3</strong>（通过 <code>devices/{k}/effects/receipt</code> 发布效果回执）。</li>
+<li>在回执中必须诚实标记 <code>physicalVerified: false</code>，不得在缺乏物理传感器闭环反馈的情况下虚报 L4。</li>
+</ul>
+<h2>4. 实时语音传输层交接（§11）</h2>
+<p>虽然实时语音的具体信令与帧格式由独立契约 <code>Rodak realtime voice v1</code> 规范，但设备端必须正确完成从 <code>rodak-aiot/v1</code> 到 <code>RodakRealtimeVoiceTransport</code> 的参数交接：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">交接项</th>
+<th style="text-align:left">规范要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>接入地址</strong></td>
+<td style="text-align:left">由 <code>realtimeVoice</code> 字段引导至 <code>&lt;ws|wss&gt;://&lt;http origin&gt;/api/v1/aiot/devices/realtime-voice</code>（Legacy 允许 <code>ws://</code>，Pin 强制 <code>wss://</code>）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>鉴权方式</strong></td>
+<td style="text-align:left">复用绑定/刷新获得的 <code>accessToken</code> 作为 <code>Bearer</code> 凭证。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>音频编码规格</strong></td>
+<td style="text-align:left"><strong>Opus</strong> 编码，上行 <strong>16 kHz</strong>、下行 <strong>24 kHz</strong>，帧长 <strong>60 ms</strong>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>协议能力集</strong></td>
+<td style="text-align:left">支持 <strong>7 种能力</strong>、<strong>12 种事件</strong>与 <strong>3 种 VAD 策略</strong>（其中首选 <code>hybrid-fallback</code>）。</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<p><strong>下一篇推荐</strong>：阅读《OTA 安全升级协同、契约校验与联调测试清单》，掌握 Manifest v2 验签、Recovery 分区升级闭环以及提交代码前的自动化校验流程。</p>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html">← 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html">OTA 安全升级协同、契约校验与联调测试清单 →</a></nav></main></div></body></html>

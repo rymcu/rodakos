@@ -1,0 +1,211 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>零硬件上手：Python 协议联调片段与离线 RAV1 验证 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html" aria-current="page"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 13 篇 / 13</div><h1>零硬件上手：Python 协议联调片段与离线 RAV1 验证</h1><blockquote>
+<p><strong>参考规范</strong>：以下为独立的联调片段与离线解析示例，使用仓库 AIoT 与语音正例作字段参考。绑定需要在隔离测试服务手动确认；语音片段没有发送真实上行 Opus，不能证明 ASR、TTS 或对话闭环。</p>
+</blockquote>
+<blockquote>
+<p>示例中的 1.4.0 是<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/contracts/rodak-aiot/v1/examples/valid/binding-request.rodakos.json">绑定与 Ping 夹具值</a>，不是当前固件版本。若要验证接受／进度事件，请从 <a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/contracts/rodak-realtime-voice/v1/examples/valid/session-open.turn-progress.json">session-open.turn-progress 正例</a>起步，在另一个用例里提供有效上行语音与协商所需的 VAD 行为；不要将只握手的收包片段当作事件验收。<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/contracts/rodak-realtime-voice/v1/examples/valid/rav1-frame.opus.json">RAV1 正例</a>只校验封装，不代表载荷适合解码。</p>
+</blockquote>
+<h2>1. 环境准备</h2>
+<p>示例脚本仅依赖 Python 3.10+ 与三个常见库（本地联调时安装）：</p>
+<pre><code class="language-bash">pip install requests 'paho-mqtt&gt;=2,&lt;3' 'websockets&gt;=14,&lt;16'
+</code></pre>
+<blockquote>
+<p><strong>联调前确认</strong>：联调用隔离测试服务和专用模拟设备标识。示例只覆盖受信测试网 Legacy 路径；端口按实际部署替换，MQTT 从描述符获取。Pin 模式需另行实现并验证信任锚点、固定 TLS 域名及 HTTPS／MQTTS／WSS，不是仅换 URL。</p>
+</blockquote>
+<h2>2. 第一步：Bootstrap 强校验与手动绑定（HTTP 控制面）</h2>
+<p>以下代码完整演示了协议 §2–§4 的两个核心防坑点：① 严格校验 <code>bootstrap</code> 固定身份字段；② <strong>先查 HTTP 状态码（处理 401），再查统一信封 <code>code == 200</code></strong>。</p>
+<pre><code class="language-python">import secrets
+import time
+import uuid
+import requests
+
+ORIGIN = &quot;http://rodak.local:9080&quot;  # 示例地址，改为隔离测试服务的实际地址
+DEVICE_KEY = &quot;aa:bb:cc:dd:ee:ff&quot;  # 小写 Wi-Fi STA MAC
+CLIENT_ID = str(uuid.uuid4())
+DEVICE_SECRET = secrets.token_hex(32)  # 32 字节随机数 -&gt; 64 位小写十六进制（严禁打印日志）
+
+
+def unwrap_envelope(resp: requests.Response) -&gt; dict:
+    &quot;&quot;&quot;严格执行两步检查：先 HTTP 状态码，再信封 code。&quot;&quot;&quot;
+    if resp.status_code == 401:
+        raise PermissionError(&quot;HTTP 401: accessToken 预检失败，需刷新凭据&quot;)
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get(&quot;code&quot;) != 200:
+        raise RuntimeError(f&quot;业务错误 code={body.get('code')} message={body.get('message')}&quot;)
+    return body[&quot;data&quot;]
+
+
+def bootstrap_and_bind() -&gt; dict:
+    # 1. GET /bootstrap 并执行 §3 强校验
+    boot = unwrap_envelope(requests.get(f&quot;{ORIGIN}/api/v1/aiot/devices/bootstrap&quot;, timeout=6))
+    assert boot.get(&quot;module&quot;) == &quot;aiot&quot;, &quot;拒绝非 aiot 模块&quot;
+    assert boot.get(&quot;protocol&quot;) == &quot;rodak-aiot&quot;, &quot;拒绝非 rodak-aiot 协议&quot;
+    assert boot.get(&quot;protocolVersion&quot;) == 1, &quot;拒绝不支持的协议版本&quot;
+    assert boot.get(&quot;productKey&quot;) == &quot;rymcu-bigsmart&quot;, &quot;拒绝不匹配的 productKey&quot;
+
+    # 2. POST /binding/request（对齐 binding-request.rodakos.json 夹具）
+    req_payload = {
+        &quot;protocol&quot;: &quot;rodak-aiot&quot;,
+        &quot;protocolVersion&quot;: 1,
+        &quot;productKey&quot;: &quot;rymcu-bigsmart&quot;,
+        &quot;product_key&quot;: &quot;rymcu-bigsmart&quot;,
+        &quot;deviceCode&quot;: DEVICE_KEY,
+        &quot;deviceKey&quot;: DEVICE_KEY,
+        &quot;deviceSecret&quot;: DEVICE_SECRET,
+        &quot;credentialSecret&quot;: DEVICE_SECRET,
+        &quot;deviceName&quot;: &quot;RodakOS Python Simulator&quot;,
+        &quot;clientId&quot;: CLIENT_ID,
+        &quot;firmwareVersion&quot;: &quot;1.4.0&quot;,
+        &quot;hardwareVersion&quot;: &quot;rymcu_bigsmart&quot;,  # 注意下划线，区别于 productKey
+        &quot;application&quot;: {&quot;name&quot;: &quot;rodakos&quot;, &quot;version&quot;: &quot;1.4.0&quot;},
+        &quot;board&quot;: {&quot;type&quot;: &quot;rymcu_bigsmart&quot;, &quot;productKey&quot;: &quot;rymcu-bigsmart&quot;},
+    }
+    created = unwrap_envelope(
+        requests.post(f&quot;{ORIGIN}/api/v1/aiot/devices/binding/request&quot;, json=req_payload, timeout=6)
+    )
+    request_id = created[&quot;requestId&quot;]
+    request_token = created[&quot;requestToken&quot;]
+    poll_interval = int(created.get(&quot;pollIntervalSeconds&quot;, 2))
+    print(f&quot;请在 Rodak 桌面端输入 8 位配对码: {created['pairingCode']}&quot;)
+
+    # 3. 轮询绑定状态直至 confirmed
+    headers = {&quot;Authorization&quot;: f&quot;Bearer {request_token}&quot;}
+    deadline = time.monotonic() + 600
+    while time.monotonic() &lt; deadline:
+        status_data = unwrap_envelope(
+            requests.get(
+                f&quot;{ORIGIN}/api/v1/aiot/devices/binding/requests/{request_id}/status&quot;,
+                headers=headers,
+                timeout=6,
+            )
+        )
+        st = status_data[&quot;status&quot;]
+        if st == &quot;confirmed&quot;:
+            print(&quot;绑定成功！已获取 accessToken、unifiedMqtt 与 realtimeVoice&quot;)
+            return status_data
+        if st in (&quot;expired&quot;, &quot;revoked&quot;):
+            raise RuntimeError(f&quot;绑定终止: {st}&quot;)
+        time.sleep(min(max(poll_interval, 1), max(0, deadline - time.monotonic())))
+    raise TimeoutError(&quot;绑定等待超时&quot;)
+</code></pre>
+<h2>3. 第二步：连接 Unified MQTT 并响应 <code>ping</code> 指令</h2>
+<p>拿到 <code>confirmed</code> 响应后，使用 <code>unifiedMqtt</code> 建立连接，订阅 4 个标准下行 Topic，并演示如何按 <code>command-ack.pong.json</code> 规范回复 <code>ping</code> 以及对未定义指令回复 <code>unsupported_command</code>。</p>
+<pre><code class="language-python">import json
+import paho.mqtt.client as mqtt
+
+
+def start_mqtt_simulator(confirmed: dict) -&gt; mqtt.Client:
+    cfg = confirmed[&quot;unifiedMqtt&quot;]
+    topics = cfg[&quot;topics&quot;]
+    device_key = cfg[&quot;device_key&quot;]
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=device_key)
+    client.username_pw_set(cfg[&quot;username&quot;], cfg[&quot;password&quot;])  # password 即 accessToken
+
+    def on_connect(c, userdata, flags, reason_code, properties):
+        print(f&quot;MQTT 已连接: {reason_code}&quot;)
+        for key in (&quot;shadow_desired&quot;, &quot;commands&quot;, &quot;ota_notify&quot;, &quot;pc_status&quot;):
+            c.subscribe(topics[key], qos=0)
+        # 上线即上报初始遥测与影子
+        c.publish(topics[&quot;telemetry&quot;], json.dumps({&quot;wifi_rssi&quot;: -45}), qos=0)
+        c.publish(topics[&quot;shadow_report&quot;], json.dumps({&quot;volume&quot;: 50}), qos=0)
+
+    def on_message(c, userdata, msg):
+        # 处理 devices/{k}/commands/{commandNo}
+        prefix = f&quot;devices/{device_key}/commands/&quot;
+        if msg.topic.startswith(prefix) and not msg.topic.endswith(&quot;/ack&quot;):
+            command_no = msg.topic[len(prefix):]
+            payload = json.loads(msg.payload.decode(&quot;utf-8&quot;))
+            cmd = payload.get(&quot;command&quot;)
+            if cmd == &quot;ping&quot;:
+                ack = {&quot;status&quot;: &quot;ok&quot;, &quot;result&quot;: {&quot;pong&quot;: True, &quot;firmware&quot;: &quot;1.4.0&quot;}}
+            else:
+                ack = {&quot;status&quot;: &quot;error&quot;, &quot;errorCode&quot;: &quot;unsupported_command&quot;}
+            c.publish(f&quot;{prefix}{command_no}/ack&quot;, json.dumps(ack), qos=0, retain=False)
+
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(cfg[&quot;broker_address&quot;], int(cfg[&quot;broker_port&quot;]), keepalive=int(cfg[&quot;keepalive&quot;]))
+    client.loop_start()
+    return client
+</code></pre>
+<h2>4. 第三步：实时语音握手与 RAV1 二进制帧编解码</h2>
+<p>以下异步代码演示了如何按 <code>rodak-realtime-voice/v1</code> 规范携带鉴权头建连、发送 <code>session.open</code> / <code>wake.detected</code> / <code>input.start</code>，以及严格校验下行 <strong>RAV1</strong> 二进制帧（可直接用仓库夹具 <code>52415631000000010000000778a1b2c3d4e5f6</code> 单元测试 <code>parse_rav1_frame</code>）。</p>
+<pre><code class="language-python">import asyncio
+import json
+import struct
+import websockets
+
+
+def parse_rav1_frame(frame: bytes, last_seq: int, max_audio_bytes: int = 8192) -&gt; tuple[int, bytes]:
+    &quot;&quot;&quot;解析并强校验 RAV1 (12 + N) 二进制音频帧。&quot;&quot;&quot;
+    if len(frame) &lt; 12 or frame[:4] != b&quot;RAV1&quot;:
+        raise ValueError(&quot;RAV1 魔数或头部长度无效&quot;)
+    seq, payload_len = struct.unpack(&quot;&gt;II&quot;, frame[4:12])
+    if seq == 0 or seq &lt;= last_seq:
+        raise ValueError(f&quot;RAV1 序列号非法或未严格递增: seq={seq}, last={last_seq}&quot;)
+    if payload_len &gt; max_audio_bytes or len(frame) - 12 != payload_len:
+        raise ValueError(f&quot;RAV1 载荷长度不匹配或超限: declared={payload_len}, actual={len(frame) - 12}&quot;)
+    return seq, frame[12:]
+
+
+async def run_voice_session(confirmed: dict, generation: int = 1) -&gt; None:
+    rv = confirmed[&quot;realtimeVoice&quot;]
+    endpoint = rv[&quot;endpoint&quot;]
+    max_audio = int(rv[&quot;limits&quot;][&quot;maxAudioFrameBytes&quot;])
+    headers = {
+        &quot;Authorization&quot;: f&quot;Bearer {confirmed['accessToken']}&quot;,
+        &quot;Protocol-Version&quot;: &quot;1&quot;,
+        &quot;Device-Id&quot;: DEVICE_KEY,
+        &quot;Client-Id&quot;: CLIENT_ID,
+    }
+
+    async with websockets.connect(endpoint, additional_headers=headers, open_timeout=10) as ws:
+        # 1. 发送 session.open（对齐 session-open.wake.json）
+        await ws.send(json.dumps({
+            &quot;event&quot;: &quot;session.open&quot;,
+            &quot;protocol&quot;: &quot;rodak-realtime-voice&quot;,
+            &quot;protocolVersion&quot;: 1,
+            &quot;generation&quot;: generation,
+            &quot;vadStrategies&quot;: [&quot;device-authoritative&quot;, &quot;server-authoritative&quot;, &quot;hybrid-fallback&quot;],
+            &quot;preferredVadStrategy&quot;: &quot;hybrid-fallback&quot;,
+            &quot;features&quot;: {&quot;mcp&quot;: False, &quot;device_vad_epoch&quot;: 1, &quot;turn_accepted&quot;: 1},
+            &quot;uplink&quot;: {&quot;codec&quot;: &quot;opus&quot;, &quot;sampleRateHz&quot;: 16000, &quot;channels&quot;: 1, &quot;frameDurationMs&quot;: 60},
+            &quot;downlink&quot;: {&quot;codec&quot;: &quot;opus&quot;, &quot;sampleRateHz&quot;: 24000, &quot;channels&quot;: 1, &quot;frameDurationMs&quot;: 60},
+        }))
+
+        # 2. 等待匹配 generation 的 session.ready
+        ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        assert ready.get(&quot;event&quot;) == &quot;session.ready&quot;
+        assert ready.get(&quot;generation&quot;) == generation
+        session_id = ready[&quot;sessionId&quot;].strip()
+        assert session_id, &quot;sessionId 不能为空&quot;
+
+        # 3. 首轮唤醒发送 wake.detected + input.start(realtime)
+        await ws.send(json.dumps({&quot;event&quot;: &quot;wake.detected&quot;, &quot;sessionId&quot;: session_id, &quot;text&quot;: &quot;你好达克&quot;}))
+        await ws.send(json.dumps({&quot;event&quot;: &quot;input.start&quot;, &quot;sessionId&quot;: session_id, &quot;mode&quot;: &quot;realtime&quot;}))
+
+        # 4. 仅握手／收包演示；无上行语音时不等待实际回复
+        last_seq = 0
+        deadline = asyncio.get_running_loop().time() + 10
+        while (remaining := deadline - asyncio.get_running_loop().time()) &gt; 0:
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break  # 没送上行语音，收到空闲超时属于正常退出
+            if isinstance(msg, bytes):
+                last_seq, opus_packet = parse_rav1_frame(msg, last_seq, max_audio)
+                print(f&quot;收到 RAV1 音频帧 seq={last_seq}, opus_bytes={len(opus_packet)}&quot;)
+            else:
+                evt = json.loads(msg)
+                print(f&quot;收到控制事件: {evt.get('event')}&quot;)
+                if evt.get(&quot;event&quot;) == &quot;session.end&quot;:
+                    break
+</code></pre>
+<h2>5. 本地校验你的模拟器是否符合契约</h2>
+<p>在开始针对真实 Rodak 服务端联调之前，建议先用仓库自带的契约与夹具验证你的解析逻辑：</p>
+<ol>
+<li><strong>验证 RAV1 夹具</strong>：将 <code>contracts/rodak-realtime-voice/v1/examples/valid/rav1-frame.opus.json</code> 中的十六进制 <code>&quot;52415631000000010000000778a1b2c3d4e5f6&quot;</code> 转为字节送入 <code>parse_rav1_frame</code>，应成功解出 <code>seq = 1</code> 与 7 字节载荷；将 <code>examples/invalid/rav1-frame.*.json</code> 送入则必须抛出异常。</li>
+<li><strong>全量契约一致性检查</strong>：运行 <code>python3 tools/check_aiot_contract.py</code>，确保你新增或修改的报文结构与 <code>contracts/rodak-aiot/v1/</code> 及 <code>contracts/rodak-realtime-voice/v1/</code> 完全对齐。</li>
+</ol>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/12-rodak-appearance-package-and-verification.html">← 外观资源包协议与签名校验机制（Appearance Customization）</a></nav></main></div></body></html>

@@ -1,0 +1,150 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OTA 安全升级协同、契约校验与联调测试清单 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html" aria-current="page"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 04 篇 / 13</div><h1>OTA 安全升级协同、契约校验与联调测试清单</h1><blockquote>
+<p><strong>参考规范</strong>：本文依据 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>（§12–§14）与 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 仓库工具链整理，覆盖 OTA 全链路协同、固件签名打包、机器可读契约验证以及新人提 PR 前的自检清单。</p>
+</blockquote>
+<blockquote>
+<p>验收按产物分开：0.1.6 是<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/CMakeLists.txt">当前 PROJECT_VER</a>，不是已公开发行的 OTA 包。选定候选包时记录固件源码 SHA、包内 manifest 和主应用 SHA-256，区分 PR 源提交、CI 合成合并提交和实刷二进制；主机检查或验签通过不等于完成 Recovery 刷写、启动确认和云端结果回报。<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/tools/run_release_host_checks.sh">发布前主机回归入口</a>不替代真机。</p>
+</blockquote>
+<h2>1. OTA 协同升级全流程（§12）</h2>
+<p>Rodak AIoT 的 OTA 机制采用 <strong>MQTT 通知与进度上报 + HTTP 票据与包体下载 + 不可变出厂 Recovery 分区写入 <code>ota_0</code></strong> 的混合安全架构，由 <code>OtaUpdateService</code>、本地组件 <code>components/rodak_ota_state/</code> 与 <code>recovery/</code> 共同完成。</p>
+<figure class="diagram"><figcaption>交互时序</figcaption><div class="scroll" tabindex="0" aria-label="交互时序"><table><thead><tr><th scope="col">序号</th><th scope="col">方向</th><th scope="col">内容</th></tr></thead><tbody><tr><td>1</td><td>Rodak MQTT Broker → 设备端 (OtaUpdateService / ota_0)</td><td>devices/{k}/ota/notify</td></tr><tr><td>2</td><td>设备端 (OtaUpdateService / ota_0) → Rodak MQTT Broker</td><td>ota/progress (stage=check, QoS 0)</td></tr><tr><td>3</td><td>设备端 (OtaUpdateService / ota_0) → Rodak HTTP API (Bearer accessToken)</td><td>GET /api/v1/ota/check</td></tr><tr><td>4</td><td>设备端 (OtaUpdateService / ota_0) → Rodak MQTT Broker</td><td>ota/progress (stage=prepare, QoS 0)</td></tr><tr><td>5</td><td>设备端 (OtaUpdateService / ota_0) → Rodak HTTP API (Bearer accessToken)</td><td>POST /api/v1/ota/download-ticket</td></tr><tr><td>6</td><td>Rodak HTTP API (Bearer accessToken) → 设备端 (OtaUpdateService / ota_0)</td><td>taskNo, ticketId</td></tr><tr><td>7</td><td>设备端 (OtaUpdateService / ota_0) → Rodak HTTP API (Bearer accessToken)</td><td>GET /api/v1/ota/manifest/{taskNo}?ticketId=... (Manifest v2)</td></tr><tr><td>8</td><td>设备端 (OtaUpdateService / ota_0) → Rodak MQTT Broker</td><td>ota/progress (stage=download, QoS 0)</td></tr><tr><td>9</td><td>设备端 (OtaUpdateService / ota_0) → Rodak HTTP API (Bearer accessToken)</td><td>GET /api/v1/ota/artifacts/{taskNo}?ticketId=...</td></tr><tr><td></td><td>设备端 (OtaUpdateService / ota_0)</td><td>校验 SHA-256 与 rsa2048-sha256 (RSA PKCS#1 v1.5 SHA-256) 签名</td></tr><tr><td>10</td><td>设备端 (OtaUpdateService / ota_0) → Rodak MQTT Broker</td><td>ota/progress (stage=staged, QoS 1)</td></tr><tr><td></td><td>设备端 (OtaUpdateService / ota_0)</td><td>写入 OTA journal，重启进入 Recovery</td></tr><tr><td>11</td><td>设备端 (OtaUpdateService / ota_0) → 出厂 Recovery 分区</td><td>移交控制权</td></tr><tr><td>12</td><td>出厂 Recovery 分区 → 出厂 Recovery 分区</td><td>安全刷写新固件至 ota_0 分区并重启</td></tr><tr><td></td><td>设备端 (OtaUpdateService / ota_0)</td><td>新固件启动，读取 OTA journal</td></tr><tr><td>13</td><td>设备端 (OtaUpdateService / ota_0) → Rodak HTTP API (Bearer accessToken)</td><td>POST /api/v1/ota/tasks/{taskNo}/result</td></tr><tr><td>14</td><td>设备端 (OtaUpdateService / ota_0) → Rodak MQTT Broker</td><td>ota/progress (success / failed / result_rejected)</td></tr></tbody></table></div><details><summary>Mermaid 源码</summary><pre><code>sequenceDiagram
+    autonumber
+    participant MQTT as Rodak MQTT Broker
+    participant Dev as 设备端 (OtaUpdateService / ota_0)
+    participant HTTP as Rodak HTTP API (Bearer accessToken)
+    participant Rec as 出厂 Recovery 分区
+
+    MQTT--&gt;&gt;Dev: devices/{k}/ota/notify
+    Dev-&gt;&gt;MQTT: ota/progress (stage=check, QoS 0)
+    Dev-&gt;&gt;HTTP: GET /api/v1/ota/check
+    Dev-&gt;&gt;MQTT: ota/progress (stage=prepare, QoS 0)
+    Dev-&gt;&gt;HTTP: POST /api/v1/ota/download-ticket
+    HTTP--&gt;&gt;Dev: taskNo, ticketId
+    Dev-&gt;&gt;HTTP: GET /api/v1/ota/manifest/{taskNo}?ticketId=... (Manifest v2)
+    Dev-&gt;&gt;MQTT: ota/progress (stage=download, QoS 0)
+    Dev-&gt;&gt;HTTP: GET /api/v1/ota/artifacts/{taskNo}?ticketId=...
+    Note over Dev: 校验 SHA-256 与 rsa2048-sha256 (RSA PKCS#1 v1.5 SHA-256) 签名
+    Dev-&gt;&gt;MQTT: ota/progress (stage=staged, QoS 1)
+    Note over Dev: 写入 OTA journal，重启进入 Recovery
+    Dev-&gt;&gt;Rec: 移交控制权
+    Rec-&gt;&gt;Rec: 安全刷写新固件至 ota_0 分区并重启
+    Note over Dev: 新固件启动，读取 OTA journal
+    Dev-&gt;&gt;HTTP: POST /api/v1/ota/tasks/{taskNo}/result
+    Dev-&gt;&gt;MQTT: ota/progress (success / failed / result_rejected)
+</code></pre></details></figure><h3>关键实现细则</h3>
+<ol>
+<li><strong>HTTP 鉴权与下载安全</strong>：所有 OTA HTTP 接口均携带 <code>Bearer accessToken</code>；在 Pin 模式下，下载环节严格遵守服务端信任锚点校验，禁止重定向降级或回退到公共 CA。</li>
+<li><strong>签名与完整性双校验</strong>：下载 Manifest v2 与固件产物后，必须同时校验 <strong>SHA-256 摘要</strong>与 <strong>RSA PKCS#1 v1.5 SHA-256 签名（<code>rsa2048-sha256</code>）</strong>。校验失败不得进入 <code>staged</code> 阶段。</li>
+<li><strong>QoS 级别差异</strong>：<code>check</code>、<code>prepare</code>、<code>download</code> 阶段通过 <code>devices/{k}/ota/progress</code> 使用 <strong>QoS 0</strong> 上报；进入 <code>staged</code>（即将重启移交 Recovery）时，RodakOS 使用 <strong>QoS 1</strong> 确保服务端可靠感知。</li>
+<li><strong>重启后闭环上报</strong>：Recovery 将新镜像写入 <code>ota_0</code> 并重启后，新系统必须调用 <code>POST /api/v1/ota/tasks/{taskNo}/result</code>，并同步通过 MQTT <code>ota/progress</code> 上报最终状态（<code>success</code>、<code>failed</code> 或 <code>result_rejected</code>）。</li>
+</ol>
+<h3>OTA 打包与签名命令（PowerShell）</h3>
+<p>在 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 仓库中，使用专用脚本打包带签名的 OTA 产物（支持本地私钥签名或追加 <code>-OfflineSigning</code> 进行离线签名）：</p>
+<pre><code class="language-powershell"># 激活 ESP-IDF 6.0.2 后执行
+.\build_ota_bundle.ps1
+# 离线签名模式
+.\build_ota_bundle.ps1 -OfflineSigning
+</code></pre>
+<blockquote>
+<p><strong>再次提醒</strong>：开发阶段刷机请使用 <code>.\flash_and_test.ps1 -Port COM3 -NoMonitor</code>（首次迁移 Recovery 分区加 <code>-Erase</code>），切勿直接运行 <code>idf.py flash</code> 或 <code>idf.py app-flash</code> 破坏出厂 Recovery 分区。</p>
+</blockquote>
+<h2>2. 机器可读契约与自动化验证（§14）</h2>
+<p>为了防止服务端与固件端在迭代中发生“口头对齐、代码漂移”，仓库在 <code>contracts/rodak-aiot/v1/</code> 目录下维护了完整的机器可读契约资产：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">目录 / 文件</th>
+<th style="text-align:left">用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>openapi.yaml</code></td>
+<td style="text-align:left">HTTP API 端点、请求/响应信封与字段契约定义。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>asyncapi.yaml</code></td>
+<td style="text-align:left">Unified MQTT Topic、QoS 与消息载荷契约定义。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>schemas/*.schema.json</code></td>
+<td style="text-align:left">JSON Schema 2020-12 精确数据模型校验规则。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>examples/valid/</code></td>
+<td style="text-align:left">合法报文正例夹具，必须全部通过校验。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>examples/invalid/</code></td>
+<td style="text-align:left">非法报文反例夹具，必须全部被拦截拒绝。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>ota-signing-public-key.pem</code></td>
+<td style="text-align:left">用于本地与 CI 验证 OTA 签名流程的测试公钥。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>双向验证命令</h3>
+<p>开发者修改任何协议字段、JSON 序列化逻辑或服务端接口后，都应运行以下校验：</p>
+<ol>
+<li><strong>Python 契约一致性检查</strong>：<pre><code class="language-bash">python3 tools/check_aiot_contract.py
+</code></pre>
+</li>
+<li><strong>固件宿主契约测试与单元测试（WSL / Linux，带 ASan/UBSan 内存检查）</strong>：
+<ul>
+<li>契约夹具测试位于固件宿主测试 <code>contract_fixture_test.cc</code>。</li>
+<li>单套宿主测试运行示例（以 <code>tests/app_model</code> 为例）：<pre><code class="language-bash">cmake -S tests/app_model -B ~/.cache/rodakos-app-model -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build ~/.cache/rodakos-app-model
+ctest --test-dir ~/.cache/rodakos-app-model --output-on-failure
+</code></pre>
+</li>
+<li><strong>全量发布前回归检查</strong>（需提前设置环境变量 <code>RODAKOS_IDF_PATH</code> 指向 ESP-IDF 6.0.2 源码树）：<pre><code class="language-bash">bash tools/run_release_host_checks.sh &quot;$HOME/.cache/rodakos-release&quot;
+</code></pre>
+</li>
+</ul>
+</li>
+</ol>
+<h2>3. 新人开发者提 PR 前自检清单</h2>
+<p>在提交涉及 <code>rodak-aiot/v1</code> 的代码前，请逐项核对以下高发问题：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">检查分类</th>
+<th style="text-align:left">自检项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>身份与引导</strong></td>
+<td style="text-align:left">是否严格区分了 <code>board.type</code>（<code>rymcu_bigsmart</code>）与 <code>productKey</code>（<code>rymcu-bigsmart</code>）？是否拒绝了不符合 <code>module</code>/<code>protocol</code>/<code>productKey</code>/<code>protocolVersion</code> 的 bootstrap 响应？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>历史隔离</strong></td>
+<td style="text-align:left">是否确认未引入任何 XiaoZhi 字段、旧 WebSocket 凭证或旧 NVS 命名空间？是否未调用废弃的 <code>/devices/register</code> 与 <code>/devices/activate</code>？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>HTTP 信封</strong></td>
+<td style="text-align:left">是否先检查 HTTP 状态码（处理 401 刷新），再检查信封 <code>code == 200</code>（防止将 HTTP 200 + 业务错误 400–503 误判为成功）？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>凭证与安全</strong></td>
+<td style="text-align:left"><code>deviceSecret</code>、<code>requestToken</code>、<code>accessToken</code> 是否做到零日志输出、零 Shadow 写入？绑定成功后的凭证与配置是否采用 pending 标记原子提交？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Pin 模式边界</strong></td>
+<td style="text-align:left">Pin 模式下是否强制使用 HTTPS / <code>mqtts</code> / <code>wss://</code>？Token 刷新返回 403/404 时，Pin 模式是否只上报 <code>credentials rejected</code> 而不自动重新配对？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>MQTT 与指令</strong></td>
+<td style="text-align:left">未定义指令是否统一返回 <code>unsupported_command</code>？摄像头与屏幕 WebRTC 推流是否实现了互斥？音量是否仅通过 Shadow 控制而非 Command？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>OTA 与证据</strong></td>
+<td style="text-align:left"><code>ota/progress</code> 的 <code>staged</code> 阶段是否使用了 QoS 1？下载后是否校验了 SHA-256 与 <code>rsa2048-sha256</code> 签名？音量/灯光回执是否如实标记 <code>physicalVerified: false</code>（L3）？</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>契约与回归</strong></td>
+<td style="text-align:left">是否通过 <code>python3 tools/check_aiot_contract.py</code>、<code>contract_fixture_test.cc</code> 及 <code>tools/run_release_host_checks.sh</code> 全量检查？</td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html">← 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html">Rodak Realtime Voice v1 架构、服务发现与控制面信令详解 →</a></nav></main></div></body></html>

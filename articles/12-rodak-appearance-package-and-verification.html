@@ -1,0 +1,177 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>外观资源包协议与签名校验机制（Appearance Customization） | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html" aria-current="page"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 12 篇 / 13</div><h1>外观资源包协议与签名校验机制（Appearance Customization）</h1><blockquote>
+<p><strong>参考规范</strong>：本文基于仓库内的 <code>docs/appearance-customization.md</code>、<code>docs/appearance-verification.md</code> 与 <code>components/rodak_appearance/</code> 源码整理，补齐 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a> 中外设外观定制（开机动画、主屏壁纸与全局主题）的协议契约、RAP1 二进制格式及安全校验边界。</p>
+</blockquote>
+<blockquote>
+<p>验收证据按版本解读：仓库保存了<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/appearance-verification.md">早期 COM3 无线资源采用与回退记录</a>；它不代表当前 0.1.6 或其他设备已复验。宿主用例可证明编解码、验签、策略及 LVGL 生命周期，<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/appearance-customization.md#device-workflow-and-publisher-pinning">实际触摸授权</a>、无线下载、重启采用、慢 SD 卡时序与屏幕可读性仍须在选定构建上独立验证。</p>
+</blockquote>
+<h2>1. 整体定位与发布端公钥固定（Publisher Pinning）</h2>
+<p>RodakOS 的外观定制采用<strong>桌面端预编译 + 设备端验签渲染</strong>的架构：文本、TTF 字体与 PNG/JPEG 素材全部由 Rodak 桌面端编译为像素数据与有界时间线，ESP32-S3 端<strong>不运行任何字体解析器或脚本引擎</strong>，且外观资源完全独立于主固件、出厂 Recovery 与分区表。</p>
+<h3>1.1 物理触摸信任门控（防远程篡改）</h3>
+<p>外观资源使用 <strong>RSA-2048 / SHA-256</strong> 签名，设备侧采用**公钥固定（Public-Key Pinning）**而非数字 PIN：</p>
+<ol>
+<li><code>keyId</code> 为发布端公钥 SPKI DER 的 SHA-256 摘要，设备界面展示其前 32 位十六进制字符（每 4 位分组）。</li>
+<li>用户在设备 <strong>Themes（主题）</strong> 应用 → <strong>发布端</strong> → <strong>读取/刷新</strong>，核对指纹与 Rodak 桌面端一致后，<strong>必须退出远程控制并用物理触摸点击“指纹一致，确认信任”</strong>（按下与点击事件都必须源自物理触摸，远程指针与串口事件均无法授予信任）。</li>
+<li>信任记录（完整 <code>keyId</code>、公钥与 Origin）持久化于 NVS <code>appearance</code> 命名空间。</li>
+</ol>
+<blockquote>
+<p><strong>信任变更边界</strong>：更换发布密钥、首次从 HTTP 升级到 HTTPS、或变更 HTTPS 端口都会改变 Origin，必须重新进行物理确认；普通 IP 变化保持逻辑主机名不变；设备解绑会清除发布端信任；局域网服务器发现（mDNS）<strong>绝不</strong>自动替用户更新 <code>appearance</code> 信任。</p>
+</blockquote>
+<h2>2. HTTP 端点、断点续传与 Shadow 状态协同</h2>
+<h3>2.1 四个固定 HTTP 端点</h3>
+<p>所有请求均需携带设备 <code>Bearer accessToken</code>，固件禁用自动重定向（Pin 模式下强制走已固定证书的 HTTPS，不回退公共 CA 或明文）：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">端点路径</th>
+<th style="text-align:left">作用与约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>GET /api/v1/aiot/appearance/publisher</code></td>
+<td style="text-align:left">拉取发布端公钥与 <code>keyId</code>，供首次核对指纹。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>POST /api/v1/aiot/appearance/download-ticket</code></td>
+<td style="text-align:left">申请下载票据（绑定设备、deployment 与 <code>tokenVersion</code>，<strong>10 分钟</strong>过期，拒绝已被取代的部署）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>GET /api/v1/aiot/appearance/manifests/:deploymentId?ticketId=…</code></td>
+<td style="text-align:left">获取已签名的部署清单（Manifest）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>GET /api/v1/aiot/appearance/artifacts/:deploymentId?ticketId=…</code></td>
+<td style="text-align:left">下载 RAP1 二进制包体，支持单段 <code>Range</code>。</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>断点续传与重试</strong>：首次发起完整 <code>GET</code>，存在合法部分文件时携带 <code>Range: bytes=N-</code> 续传；收到 <code>206</code> 时必须精确核对起始/结束/总长与剩余长度，收到 <code>200</code> 则清空文件重下。瞬态失败按 <strong>5 / 15 / 60 秒</strong>最多重试 <strong>3 次</strong>；<code>401</code> 仅触发一次鉴权刷新，再次被拒即终态失败。</li>
+</ul>
+<h3>2.2 Shadow 协同与 10 种状态机</h3>
+<ul>
+<li><strong>Desired Shadow</strong>：携带 <code>appearance.{deploymentId, releaseId, revision, mode, keyId}</code>（总长 ≤ 1024 字节，<strong>严格限定这 5 个协议字段</strong>，MQTT 解析时投影进固定 384 字节缓冲）。部分更新灯光等字段时必须保留 <code>appearance</code> 不被覆盖。</li>
+<li><strong>Reported Shadow</strong>：上报能力集、<code>activeRevision</code> / <code>pendingRevision</code>、状态/进度、发布端信息、失败原因、<code>themeSource</code>（<code>remote</code> / <code>local</code>）与加载耗时。</li>
+<li><strong>状态枚举</strong>：<code>idle</code>、<code>awaiting_trust</code>、<code>waiting_device</code>、<code>deferred_busy</code>、<code>downloading</code>、<code>pending_reboot</code>、<code>applied</code>、<code>failed</code>、<code>fallback</code>、<code>superseded</code>。只有 <code>applied</code> 代表新版本已实际生效。</li>
+<li><strong>下载让路条件（<code>deferred_busy</code>）</strong>：启动试用期、OTA 进行中、语音/录音活跃、摄像头/屏幕推流活跃，或内部最大连续空闲块 <strong>&lt; 8192 字节</strong>时，自动推迟下载并由 MQTT 主循环定期重新调度。</li>
+</ul>
+<h2>3. RAP1 二进制包格式与签名清单</h2>
+<h3>3.1 RAP1 文件结构（16 字节头 + UTF-8 JSON + 连续像素区）</h3>
+<p>ASCII 魔数后的所有整型字段均为<strong>小端序（Little-Endian）</strong>，资源偏移量均相对于像素区起始位置：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:right">字节偏移</th>
+<th style="text-align:right">长度（Byte）</th>
+<th style="text-align:left">含义与取值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right"><code>0</code></td>
+<td style="text-align:right"><code>4</code></td>
+<td style="text-align:left">ASCII 魔数 <code>RAP1</code></td>
+</tr>
+<tr>
+<td style="text-align:right"><code>4</code></td>
+<td style="text-align:right"><code>2</code></td>
+<td style="text-align:left">版本号 <code>1</code></td>
+</tr>
+<tr>
+<td style="text-align:right"><code>6</code></td>
+<td style="text-align:right"><code>2</code></td>
+<td style="text-align:left">屏幕宽度 <code>320</code></td>
+</tr>
+<tr>
+<td style="text-align:right"><code>8</code></td>
+<td style="text-align:right"><code>2</code></td>
+<td style="text-align:left">屏幕高度 <code>240</code></td>
+</tr>
+<tr>
+<td style="text-align:right"><code>10</code></td>
+<td style="text-align:right"><code>2</code></td>
+<td style="text-align:left">资源数量（Resource count）</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>12</code></td>
+<td style="text-align:right"><code>4</code></td>
+<td style="text-align:left">元数据 JSON 字节数（≤ 16 KiB）</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>JSON Schema（<code>rodak-appearance-v1</code>）</strong>：定义动画类型/模板/配色/时长（1000–5000 ms，默认 2500 ms）、最多 <strong>32 个</strong>动画单元（<code>resourceId/x/y/startMs/durationMs</code>，左上角坐标，SmoothStep 入场，33 ms LVGL 定时器按真实耗时推进，结束后 220 ms 淡出）、可选壁纸（RGB565，153,600 B / 150 KiB）、主题色与资源索引。</li>
+<li><strong>三种像素格式</strong>：
+<ul>
+<li><code>a4</code>：每行 <code>ceil(width/2)</code> 字节，高半字节为左像素，解码时每 nibble <code>× 17</code> 展开为 A8（仅用 ≤160 B 内部行缓冲）。</li>
+<li><code>rgb565</code>：小端 2 字节/像素，直接读入目标 PSRAM 缓冲。</li>
+<li><code>rgb565a8</code>：完整 RGB565 色彩平面后接完整 1 字节 Alpha 平面。</li>
+</ul>
+</li>
+</ul>
+<h3>3.2 签名清单（Signed Manifest）验签红线</h3>
+<p>Manifest 信封格式为 <code>{ signedPayload, signature, keyId }</code>，RSA-2048 / SHA-256 针对 <strong>Base64 解码后的原始 UTF-8 字节流</strong>签名。<strong>严禁先 JSON 解析再重新序列化后验签</strong>。载荷绑定部署 ID、设备 ID/Key、产品、版本号、模式、包大小与 SHA-256、分辨率及 <code>keyId</code>；从 SD 卡启动加载时会再次复核摘要与元数据边界。</p>
+<h2>4. 内存预算、SD 双槽落盘与启动试用回滚</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">预算 / 约束项</th>
+<th style="text-align:left">上限值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">包体大小 / 包内 JSON</td>
+<td style="text-align:left"><strong>≤ 512 KiB</strong> / <strong>≤ 16 KiB</strong></td>
+</tr>
+<tr>
+<td style="text-align:left">解码后像素总数据（动画 + 壁纸）</td>
+<td style="text-align:left"><strong>≤ 384 KiB</strong>（满屏 RGB565A8 Logo + RGB565 壁纸恰好 384,000 B）</td>
+</tr>
+<tr>
+<td style="text-align:left">私有有界 JSON 分配器</td>
+<td style="text-align:left"><strong>≤ 96 KiB</strong>（含 16 B 分配头，不修改全局 cJSON 钩子）</td>
+</tr>
+<tr>
+<td style="text-align:left">启动加载验收预算</td>
+<td style="text-align:left"><code>BeginBootLoad()</code> 起 <strong>1500 ms</strong>（超时或损坏则本次回退内置 EDIX）</td>
+</tr>
+<tr>
+<td style="text-align:left">下载前 SD 剩余空间</td>
+<td style="text-align:left">剩余包字节数 + <strong>8192 B</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>SD 双槽与续传元数据</strong>：位于 <code>/rodakos/appearance/</code>，维护 <code>a.rap</code> / <code>b.rap</code>、对应 <code>.manifest</code>、临时 <code>.rap.part</code> 及 <code>a.part.meta</code> / <code>b.part.meta</code>（续传前先校验 Origin 与已签名 Manifest，防止跨部署续传）。只有非活跃槽校验、落盘并重命名完成后，才更新 <code>appearance/state</code> 的 pending 状态。</li>
+<li><strong>启动试用与回滚</strong>：下载完成进入 <code>pending_reboot</code>（不强制重启当前应用）；下次开机先持久化为 boot trial，待系统启动与开机动画播完后在主循环确认转 <code>applied</code>。未确认的试用在下一次开机自动回退至上一有效包或内置 EDIX（默认暗色 <code>#79cbff</code>）。</li>
+<li><strong>本地主题覆盖与恢复内置</strong>：在 Themes 应用本地切换预设会立即生效并保存本地覆盖（保留自定义动画/壁纸），直到下一次在线发布更高版本才清除覆盖；“恢复内置”是一次不下载包体的已签名 <code>builtin</code> 部署，会清除本地覆盖。</li>
+</ul>
+<h2>5. 对应源码与主机测试套件</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">模块</th>
+<th style="text-align:left">核心源码</th>
+<th style="text-align:left">主机测试套件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>下载、Pin 与状态机</strong></td>
+<td style="text-align:left"><code>main/phone_os/appearance_service.*</code>、<code>appearance_status.h</code></td>
+<td style="text-align:left"><code>tests/themes_ui/</code>、<code>tests/appearance/</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>RAP1 编解码、验签与策略</strong></td>
+<td style="text-align:left"><code>components/rodak_appearance/</code>（<code>rodak_appearance.*</code>、<code>_crypto.*</code>、<code>_json.c</code>、<code>_policy.*</code>）</td>
+<td style="text-align:left"><code>tests/appearance/</code>（26 项编解码/RSA/策略/分配器用例）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>开机动画与主屏壁纸渲染</strong></td>
+<td style="text-align:left"><code>main/phone_ui/boot_animation.h</code>、<code>phone_ui.h</code></td>
+<td style="text-align:left"><code>tests/home_ui/</code>（43 项真 LVGL 渲染与生命周期用例）</td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html">← 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html">零硬件上手：Python 协议联调片段与离线 RAV1 验证 →</a></nav></main></div></body></html>

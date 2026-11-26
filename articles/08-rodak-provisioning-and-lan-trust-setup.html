@@ -1,0 +1,165 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html" aria-current="page"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 08 篇 / 13</div><h1>入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</h1><blockquote>
+<p><strong>参考规范</strong>：本文基于仓库内的 <code>docs/serial-provisioning.md</code>、<code>docs/qr-provisioning.md</code>、<code>docs/lan-onboarding-design.md</code> 与 <code>docs/trusted-server-discovery.md</code> 整理，衔接 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>，帮助开发者打通设备从“出厂空白 NVS”到“建立可信服务端连接”的完整前置链路。</p>
+</blockquote>
+<blockquote>
+<p>扫码配网的证据边界：当前二维码格式仍标为草案；固件解析、解码、持久化、扫码服务和设置页已实现，仓库记录有主机测试及固件构建，但<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/qr-provisioning.md#%E5%AE%9E%E6%9C%BA%E9%AA%8C%E6%94%B6">扫码实机验收清单</a>仍未完成。不要把串口配网或 LAN Trust 的验收结论套用到二维码路径。</p>
+</blockquote>
+<h2>1. 三条入网路径的定位与适用场景</h2>
+<p>在设备调用 <code>GET /api/v1/aiot/devices/bootstrap</code> 之前，必须先拿到 Wi-Fi 凭据与服务端引导地址（以及可选的服务端信任锚点）。RodakOS 提供了三条定位清晰、互不冲突的入网路径：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">入网路径</th>
+<th style="text-align:left">适用部署场景</th>
+<th style="text-align:left">是否下发信任锚点</th>
+<th style="text-align:left">核心限制与边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>USB 串口配网</strong></td>
+<td style="text-align:left">本地开发、产测、局域网首次装证书</td>
+<td style="text-align:left">可选（需 <code>server_trust:1</code> 能力）</td>
+<td style="text-align:left">复用 USB Serial/JTAG 控制台，单帧上限 <strong>2048 字节</strong>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>扫码配网（QR v1）</strong></td>
+<td style="text-align:left">公网 HTTPS 部署（跨网段、无 mDNS）</td>
+<td style="text-align:left">否（依赖内置公共 CA 包）</td>
+<td style="text-align:left">拒绝 <code>http</code>、IP、<code>.local</code> 及已固定证书的设备（<code>WIFI:</code> 纯配网码除外）。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>无 USB 局域网建信</strong></td>
+<td style="text-align:left">家庭/办公同一局域网，无需数据线</td>
+<td style="text-align:left">是（通过 SRP-6a 密封下发）</td>
+<td style="text-align:left">需 Rodak 开启 HTTPS；设备本地生成 <strong>6 位码</strong>，绝不经网络传输。</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p><strong>共同红线</strong>：无论走哪条配网路径，<strong>绝不</strong>在配网阶段直接下发 MQTT 凭据、Topic 名称或实时语音描述符；这些运行时配置统一在连网后从规范 AIoT <code>bootstrap</code> 与绑定流程中获取。</p>
+</blockquote>
+<h2>2. USB 串口配网协议（<code>RODAK_PROVISION_V1</code>）</h2>
+<h3>2.1 握手信标与行帧格式</h3>
+<p>串口配网直接复用 ESP-IDF 的 USB Serial/JTAG Console VFS（不额外安装 UART/USB 驱动，且配网期间<strong>禁止</strong>同时开启 REPL 或其他控制台读取器）。</p>
+<ol>
+<li><strong>等待就绪信标</strong>：服务启动后立即并每隔约 5 秒输出：<pre><code class="language-text">RODAK_PROVISION_READY {&quot;version&quot;:1,&quot;server_trust&quot;:1}
+</code></pre>
+因为日志与配网流共用同一控制台，主机端需兼容日志前缀紧邻信标的情况。若请求携带 <code>server_trust</code>，主机端<strong>必须</strong>先观测到 <code>server_trust:1</code>，切勿向旧固件发送未知字段。</li>
+<li><strong>发送配网帧</strong>（UTF-8 单行 JSON，支持 LF / CRLF，含前缀、载荷与换行符总长 <strong>≤ 2048 字节</strong>）：<pre><code class="language-text">RODAK_PROVISION_V1 {&quot;ssid&quot;:&quot;...&quot;,&quot;password&quot;:&quot;...&quot;,&quot;bootstrap_url&quot;:&quot;...&quot;}\n
+</code></pre>
+</li>
+<li><strong>接收结果帧</strong>（不回显任何密码或密钥）：<pre><code class="language-text">RODAK_PROVISION_RESULT {&quot;ok&quot;:true,&quot;deviceKey&quot;:&quot;44:1b:f6:c3:b4:30&quot;}\n
+RODAK_PROVISION_RESULT {&quot;ok&quot;:false,&quot;error&quot;:&quot;invalid_bootstrap_url&quot;}\n
+</code></pre>
+</li>
+</ol>
+<h3>2.2 校验规则、Nonce 绑定证明与事务流</h3>
+<ul>
+<li><strong>字段校验</strong>：SSID 限 1–32 字节；开放网络允许空 <code>password</code>，非空密码限 63 字节；<code>bootstrap_url</code> 仅接受 <code>http</code>/<code>https</code>、非空 authority、合法端口、无 userinfo/query/fragment，路径仅允许空、<code>/</code>、<code>/api/v1/aiot/devices/bootstrap</code> 或旧别名 <code>/xiaozhi/ota/</code>（自动规范化为规范路径）。超长帧拒收后会丢弃至下一个 LF，随后恢复正常接收。</li>
+<li><strong>自动绑定证明（可选 <code>binding_nonce</code>）</strong>：桌面端可附带 32 字节随机数的 64 位十六进制 ASCII 字符串 <code>binding_nonce</code>。固件在不覆盖已有身份的前提下确保 <code>deviceSecret</code> 已持久化，并返回 <code>bindingProof</code>（nonce 与 proof 均不落盘，长期密钥永不经串口回传）：<pre><code class="language-text">bindingProof = lowercaseHex(HMAC-SHA256(
+  key = SHA256(UTF8(deviceSecret)),
+  message = ASCII(binding_nonce)
+))
+</code></pre>
+注意：HMAC 的 <code>key</code> 是 <code>SHA256</code> 原始 32 字节摘要（而非十六进制文本），且计算时保留 <code>binding_nonce</code> 的大小写。</li>
+<li><strong>NVS 归属与事务顺序</strong>：<code>wifi</code> 存 <code>ssid</code>/<code>password</code>，<code>device_cloud</code> 存 <code>prov_url</code>、<code>server_pinned</code>/<code>server_auth</code> 及绑定身份。写入前先完整校验，再作为单一事务保存 Wi-Fi 与引导地址、失效旧 <code>realtime_voice</code>/<code>unified_mqtt</code> 缓存，提交成功后回复结果并重连 Wi-Fi；待结果刷出 USB 后触发云端刷新（若 Unified MQTT 已在运行则重启设备以隔离旧配置边界）。</li>
+</ul>
+<h2>3. 扫码配网协议（QR Provisioning v1）</h2>
+<p>扫码配网面向部署在公网 HTTPS（由公共 CA 签发完整证书链）的服务端，设备通过内置 <code>CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL</code> 校验证书与域名。</p>
+<h3>3.1 <code>RODAK:</code> 与 <code>WIFI:</code> 载荷语法</h3>
+<p>载荷采用 UTF-8 字节模式，最长 <strong>512 字节</strong>，以空字段 <code>;;</code> 结尾，字段顺序任意，重复字段直接判无效：</p>
+<pre><code class="language-text">RODAK:V:1;S:&lt;SSID&gt;;T:&lt;认证方式&gt;;P:&lt;密码&gt;;U:&lt;服务器地址&gt;;;
+</code></pre>
+<ul>
+<li><strong>转义规则</strong>：值中的 <code>\</code> 与 <code>;</code> 必须写成 <code>\\</code> 与 <code>\;</code>；可选转义 <code>,</code>、<code>:</code>、<code>&quot;</code>；其他反斜杠序列或尾部孤立 <code>\</code> 均非法。<code>RODAK:</code> 中 <code>&quot;</code> 按字面处理。</li>
+<li><strong>核心字段</strong>：<code>V</code>（必须为 <code>1</code>）、<code>S</code>（1–32 字节无控制字符）、<code>T</code>（生成方仅写 <code>WPA</code> 或 <code>nopass</code>；拒绝 <code>WEP</code>/含 <code>EAP</code> 的值，返回 <code>qr_auth_unsupported</code>）、<code>P</code>（<code>WPA*</code>/<code>SAE</code> 需 8–63 字节或 64 位十六进制；<code>nopass</code> 为空）、<code>U</code>（服务器地址）、<code>H</code>（隐藏网络标记，v1 忽略）。</li>
+<li><strong><code>U</code> 强校验规则</strong>（最大 256 字节）：
+<ol>
+<li>必须为 <code>https</code>（<code>http</code> 返回 <code>qr_url_insecure</code>）。</li>
+<li>主机必须为 ASCII 域名（国际化域名用 <code>xn--</code>），<strong>禁止</strong> IP 地址与 <code>.local</code>。</li>
+<li>端口 1–65535 可选（<code>:443</code> 规范化时去掉）；路径仅允许空、<code>/</code> 或 <code>/api/v1/aiot/devices/bootstrap</code>。</li>
+<li><strong>禁止</strong> <code>/xiaozhi/ota/</code> 与 <code>tenclass.net</code> 及其子域名（返回 <code>qr_url_legacy</code>，与串口配网不同）。</li>
+</ol>
+</li>
+<li><strong>兼容标准 <code>WIFI:</code> 码</strong>：如 <code>WIFI:T:WPA;S:HomeNet;P:s3cret-pass;;</code>，仅保存 Wi-Fi 不改服务器地址（即便设备已固定服务器证书也允许）。</li>
+</ul>
+<h3>3.2 设备端实现约束与服务端 Nginx 要点</h3>
+<ul>
+<li><strong>资源与事务</strong>：<code>main/phone_os/setup_qr_scan_service.cc</code> 使用 <strong>12 KiB PSRAM 栈</strong>（<code>quirc</code> 在 Xtensa 上约占 10 KiB 栈）独占音频焦点开 320×240 预览，识别后<strong>立即停相机并释放缓冲</strong>，再解析与确认（确认页只展示 SSID 与域名，不显示密码）。确认后的 NVS 写入必须切回<strong>内部 RAM 栈</strong>（PSRAM 栈不可写 NVS），并复用 <code>serial_prov/pending</code> 掉电恢复标记。</li>
+<li><strong>常见错误与结果码</strong>：解析错误含 <code>qr_not_provisioning</code>、<code>qr_version_unsupported</code>、<code>qr_syntax_invalid</code>、<code>qr_ssid_invalid</code>、<code>qr_auth_unsupported</code>、<code>qr_password_invalid</code>、<code>qr_url_invalid</code>、<code>qr_url_insecure</code>、<code>qr_url_legacy</code>、<code>qr_server_pinned</code>；保存结果 <code>SetupQrApplyStatusCode</code> 含 <code>qr_wifi_saved</code>、<code>qr_server_unchanged</code>、<code>qr_server_changed</code>、<code>qr_storage_failed</code>、<code>qr_state_uncertain</code>。</li>
+<li><strong>公网服务端（以 Nginx 为例）</strong>：<code>/api/v1/aiot/</code> <strong>禁止返回 301/302 重定向</strong>（固件关闭自动重定向）；语音 <code>wss://</code> 需配置 <code>Upgrade</code>/<code>Connection</code> 且 <code>proxy_read_timeout &gt; 30s</code>；未固定证书时当前固件连接明文 <code>mqtt://</code>（通常 1883），公网部署建议缩短 Token 有效期并收紧 Topic 权限。</li>
+</ul>
+<h2>4. 无 USB 局域网首次建信（LAN Trust Setup）</h2>
+<p>现有 8 位配对码由服务端经网络发给设备，在无证书信道下无法抵御中间人转发。LAN Trust Setup 通过 <strong>mDNS 发现 + 设备本地生成 6 位码 + SRP-6a 密钥交换 + 证书指纹绑定</strong>，在无数据线条件下获得与 USB 等价的 <code>server_trust</code>。</p>
+<h3>4.1 端到端交互时序</h3>
+<figure class="diagram"><figcaption>交互时序</figcaption><div class="scroll" tabindex="0" aria-label="交互时序"><table><thead><tr><th scope="col">序号</th><th scope="col">方向</th><th scope="col">内容</th></tr></thead><tbody><tr><td></td><td>设备端 (SRP Server / esp_srp)</td><td>查 _rodak._tcp 选服务器，本地生成 6 位码（不经网络发出）</td></tr><tr><td>1</td><td>设备端 (SRP Server / esp_srp) → Rodak HTTPS (SRP Client / srp6a-client)</td><td>POST /binding/request (指纹记录 TLS，带 trustSetup:{srpSalt, srpB, seenSpki}，不带 deviceSecret)</td></tr><tr><td>2</td><td>Rodak HTTPS (SRP Client / srp6a-client) → 设备端 (SRP Server / esp_srp)</td><td>requestId, requestToken, trustSetup:{required:true} (有效期 5 分钟，尝试 1 次)</td></tr><tr><td>3</td><td>Desktop Owner UI → Rodak HTTPS (SRP Client / srp6a-client)</td><td>用户输入设备屏幕 6 位码</td></tr><tr><td></td><td>Rodak HTTPS (SRP Client / srp6a-client)</td><td>计算 SRP A、M1、K 及 serverBind HMAC，状态转为 awaiting-device</td></tr><tr><td>4</td><td>设备端 (SRP Server / esp_srp) → Rodak HTTPS (SRP Client / srp6a-client)</td><td>GET /binding/requests/{id}/status (Bearer requestToken)</td></tr><tr><td>5</td><td>Rodak HTTPS (SRP Client / srp6a-client) → 设备端 (SRP Server / esp_srp)</td><td>status=&quot;awaiting-device&quot;, trustSetup:{srpA, srpM1, serverBind}</td></tr><tr><td></td><td>设备端 (SRP Server / esp_srp)</td><td>校验 M1 与 serverBind（绑定 seenSpki，防 MITM）</td></tr><tr><td>6</td><td>设备端 (SRP Server / esp_srp) → Rodak HTTPS (SRP Client / srp6a-client)</td><td>POST /binding/requests/{id}/trust (srpM2, deviceBind, AES-GCM 加密的 deviceSecret)</td></tr><tr><td>7</td><td>Rodak HTTPS (SRP Client / srp6a-client) → 设备端 (SRP Server / esp_srp)</td><td>status=&quot;confirmed&quot;, sealed:{AES-GCM 加密的 serverTrust + 新 requestToken}</td></tr><tr><td></td><td>设备端 (SRP Server / esp_srp)</td><td>校验 server_id==seen_spki 与 tls_name，原子写入 server_trust</td></tr><tr><td>8</td><td>设备端 (SRP Server / esp_srp) → Rodak HTTPS (SRP Client / srp6a-client)</td><td>切换固定证书 + 新 requestToken 轮询 status 领取 AIoT token</td></tr></tbody></table></div><details><summary>Mermaid 源码</summary><pre><code>sequenceDiagram
+    autonumber
+    participant Dev as 设备端 (SRP Server / esp_srp)
+    participant Srv as Rodak HTTPS (SRP Client / srp6a-client)
+    participant UI as Desktop Owner UI
+
+    Note over Dev: 查 _rodak._tcp 选服务器，本地生成 6 位码（不经网络发出）
+    Dev-&gt;&gt;Srv: POST /binding/request (指纹记录 TLS，带 trustSetup:{srpSalt, srpB, seenSpki}，不带 deviceSecret)
+    Srv--&gt;&gt;Dev: requestId, requestToken, trustSetup:{required:true} (有效期 5 分钟，尝试 1 次)
+    UI-&gt;&gt;Srv: 用户输入设备屏幕 6 位码
+    Note over Srv: 计算 SRP A、M1、K 及 serverBind HMAC，状态转为 awaiting-device
+    Dev-&gt;&gt;Srv: GET /binding/requests/{id}/status (Bearer requestToken)
+    Srv--&gt;&gt;Dev: status=&quot;awaiting-device&quot;, trustSetup:{srpA, srpM1, serverBind}
+    Note over Dev: 校验 M1 与 serverBind（绑定 seenSpki，防 MITM）
+    Dev-&gt;&gt;Srv: POST /binding/requests/{id}/trust (srpM2, deviceBind, AES-GCM 加密的 deviceSecret)
+    Srv--&gt;&gt;Dev: status=&quot;confirmed&quot;, sealed:{AES-GCM 加密的 serverTrust + 新 requestToken}
+    Note over Dev: 校验 server_id==seen_spki 与 tls_name，原子写入 server_trust
+    Dev-&gt;&gt;Srv: 切换固定证书 + 新 requestToken 轮询 status 领取 AIoT token
+</code></pre></details></figure><h3>4.2 密码学设计与两个必避的 <code>esp_srp</code> 坑</h3>
+<ul>
+<li><strong>SRP-6a 参数</strong>：RFC 5054 3072 位、SHA-512，username 固定为 <code>rodak-trust-setup/v1</code>，16 字节随机 salt，口令为 6 位码去掉分隔符后的 ASCII。因 ESP-IDF <code>esp_srp</code> 仅实现服务端，故<strong>设备做 SRP Server、Rodak 做 SRP Client</strong>。
+<ul>
+<li><strong>避坑 1（前导零截断）</strong>：<code>esp_srp_gen_salt_verifier</code> 在 salt 首字节为 0 时会丢失字节，设备必须自行生成 16 字节 salt 并计算 verifier，通过 <code>esp_srp_set_salt_verifier</code> 注入。</li>
+<li><strong>避坑 2（<code>A mod N == 0</code> 未定义行为）</strong>：调用 <code>esp_srp_get_session_key</code> 前必须先预检 <code>A</code> 长度为 384 字节且 <code>A mod N != 0</code>。</li>
+</ul>
+</li>
+<li><strong>证书绑定 HMAC</strong>：从 64 字节会话密钥 <code>K</code> 派生 <code>bind_key = HKDF-SHA256(K, 空, &quot;rodak-trust-setup/v1 bind&quot;, 32)</code>，对 2 字节大端长度前缀拼接的 <code>(&quot;rodak-trust-setup/v1&quot; || requestId || deviceKey || seen_spki || server_spki || role)</code> 计算 HMAC-SHA256（<code>role</code> 为 <code>&quot;server&quot;</code> / <code>&quot;device&quot;</code> 防反射）。只要中间人替换了 TLS 证书，<code>seen_spki != server_spki</code>，双方校验立即中止。</li>
+<li><strong>凭据加密与令牌轮换</strong>：<code>binding/request</code> 带 <code>trustSetup</code> 时<strong>严禁携带 <code>deviceSecret</code></strong>；<code>/trust</code> 双向使用独立 AES-256-GCM 密钥（<code>dev_key</code> info <code>&quot;rodak-trust-setup/v1 device&quot;</code>，<code>srv_key</code> info <code>&quot;rodak-trust-setup/v1 server&quot;</code>，12 字节随机 nonce，AAD 为 UTF-8 <code>requestId</code>，16 字节 tag 附于密文尾）。成功后旧 <code>requestToken</code> 立即作废，防止中间人持旧令牌领取 AIoT Token。</li>
+<li><strong>抗暴力破解</strong>：单码仅 1 次尝试、5 分钟过期；设备校验 <code>M1</code> 失败时向 <code>/trust</code> 发送 <code>{&quot;abort&quot;:&quot;proof_mismatch&quot;}</code> 立即吊销申请；连续 3 个码失败锁定入口 <strong>60 秒</strong>；<code>/trust</code> 重放返回 409。</li>
+</ul>
+<h2>5. 可信服务器持久化与换网自动发现（Pin Mode）</h2>
+<p>无论是 USB 还是 LAN Trust Setup 安装的信任锚点，最终都落地为同一份 <code>server_trust</code> 结构（证书 PEM ≤ 1536 字节，固定 TLS 域名 <code>rodak-&lt;server_id 前 16 位&gt;.local</code>，默认安全端口 HTTPS/WSS <code>9443</code>、MQTTS <code>8883</code>）：</p>
+<ul>
+<li><strong>Fail-Closed 持久化</strong>：<code>device_cloud/server_pinned</code> 先于权威记录落盘；一旦置位，若 <code>device_cloud/server_auth</code>（当前写入 <strong>Version 3</strong>，限 3999 字节，在根部共享 <code>active</code>/<code>pending</code> 的 trust 对象）缺失或损坏，设备<strong>闭环失败</strong>，绝不降级回明文 HTTP。</li>
+<li><strong>有界 mDNS 找回</strong>：换 Wi-Fi 或笔记本 IP 变化后，已绑定设备通过常驻 PSRAM 栈的 <code>espressif/mdns</code> 1.14.0 查询 <code>_rodak._tcp</code>（超时 <strong>1500 ms</strong>、最多 8 条结果、严格匹配预期主机名 + 唯一 <code>v=1</code> + 完整 <code>id</code>）。最多尝试 <strong>6 个</strong>不同地址/端口组合，每个共享 <strong>6 秒</strong>超时（总上限 36 秒），拒绝 loopback、组播、<code>169.254/16</code> 与 scoped IPv6。</li>
+<li><strong>先验权、后晋升</strong>：mDNS 记录只是未认证的路由线索。设备直连候选数字 IP 时仍强制使用已固定证书与固定 TLS 域名/SNI；只有在同一候选路由上完成 TLS <code>/auth/token</code> 鉴权<strong>且</strong>拿到完整安全描述符后，才晋升并持久化该 <code>connect_address</code>。纯数字路由变更可在不重启设备的情况下替换 MQTT 客户端。</li>
+</ul>
+<h2>6. 对应源码与主机测试套件</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">模块 / 能力</th>
+<th style="text-align:left">核心固件源码（<code>main/phone_os/</code>）</th>
+<th style="text-align:left">主机测试套件（<code>tests/</code>）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>USB 串口配网</strong></td>
+<td style="text-align:left"><code>serial_provisioning_protocol.*</code>、<code>serial_provisioning_binding.*</code>、<code>serial_provisioning_service.*</code></td>
+<td style="text-align:left"><code>tests/serial_provisioning/</code>、<code>tests/app_model/serial_provisioning_frame_test.cc</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>扫码配网（QR）</strong></td>
+<td style="text-align:left"><code>setup_qr_payload.*</code>、<code>setup_qr_decoder.*</code>、<code>setup_qr_provisioning.*</code>、<code>setup_qr_scan_service.*</code></td>
+<td style="text-align:left"><code>tests/setup_qr_decoder/</code>、<code>tests/app_model/setup_qr_*</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>LAN SRP-6a 建信</strong></td>
+<td style="text-align:left"><code>trust_setup_protocol.*</code>、<code>trust_setup_transport.*</code>、<code>lan_onboarding_service.*</code></td>
+<td style="text-align:left"><code>tests/lan_trust_setup/</code>（含 <code>srp6a-esp-vectors.json</code> 与 <code>trust-setup-protocol-vectors.json</code>）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>可信发现与 Pin 存储</strong></td>
+<td style="text-align:left"><code>server_trust.*</code>、<code>server_trust_discovery.cc</code>、<code>server_trust_route.cc</code>、<code>server_trust_transport.*</code></td>
+<td style="text-align:left"><code>tests/server_trust/</code>（29 项 ASan/UBSan 用例）、<code>tests/server_trust_nvs_storage/</code></td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html">← 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html">MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份 →</a></nav></main></div></body></html>

@@ -1,0 +1,178 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WebRTC 摄像头/屏幕推流与远程输入控制实战 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html" aria-current="page"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 10 篇 / 13</div><h1>WebRTC 摄像头/屏幕推流与远程输入控制实战</h1><blockquote>
+<p><strong>参考规范</strong>：本文基于仓库内的 <code>docs/esp-peer-integration.md</code>、<code>contracts/rodak-aiot/v1/</code> 推流指令示例以及 <code>main/phone_os/webrtc_*</code>、<code>remote_input_controller.*</code>、<code>display_control_ack_tracker.h</code> 源码整理，帮助开发者掌握 BigSmart 的 WebRTC DataChannel 推流、远程控制协议以及 ESP32-S3 内部内存排障要点。</p>
+</blockquote>
+<blockquote>
+<p>排查当前版本时，从 <a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/TROUBLESHOOTING.md#internal-sram-pressure">Main health</a> 同时记录 internal_largest 与 dma_largest，在<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/esp-peer-integration.md">相机启动、关闭</a>及语音对话前后分别对照，不用总 PSRAM 代替 DMA 连续块。0.1.6 已包含常驻任务和 LVGL 的 PSRAM 调整；LCD/DVP 等 DMA 路径仍须按各自约束验收。</p>
+</blockquote>
+<h2>1. 整体架构与 MQTT 信令协同</h2>
+<p>RodakOS 采用乐鑫 <code>components/esp_peer</code>（<strong>v1.5.6</strong>，搭配 ESP32-S3 预编译库 <code>libpeer_default.a</code>）作为 PeerConnection 引擎，所有音视频/画面帧均通过<strong>有序、可靠的 WebRTC DataChannel</strong> 传输，而 SDP 与 ICE Candidate 的交换完全复用 <code>rodak-aiot/v1</code> 的 MQTT 指令与边带回执通道：</p>
+<figure class="diagram"><figcaption>交互时序</figcaption><div class="scroll" tabindex="0" aria-label="交互时序"><table><thead><tr><th scope="col">序号</th><th scope="col">方向</th><th scope="col">内容</th></tr></thead><tbody><tr><td>1</td><td>Rodak 服务端 / 桌面端 → RodakOS (UnifiedMqtt + WebRtcService)</td><td>commands/{startNo}: display.stream.start (含 sessionId, width/height/fps/quality, _meta.rodak/videoSignal)</td></tr><tr><td>2</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>commands/{startNo}/ack: {status:&quot;ok&quot;, result:{sessionId, transport:&quot;webrtc-datachannel&quot;, startCommandNo}}</td></tr><tr><td>3</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>commands/{startNo}/ack (边带): result.displayStream {event:&quot;signal&quot;, ...} (本地 SDP / ICE)</td></tr><tr><td>4</td><td>Rodak 服务端 / 桌面端 → RodakOS (UnifiedMqtt + WebRtcService)</td><td>commands/{sigNo}: display.stream.signal {sessionId, type:&quot;sdp&quot;|&quot;candidate&quot;, data:&quot;&lt;base64&gt;&quot;}</td></tr><tr><td>5</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>commands/{sigNo}/ack: {status:&quot;ok&quot;, result:{sessionId}}</td></tr><tr><td></td><td>Rodak 服务端 / 桌面端 / RodakOS (UnifiedMqtt + WebRtcService)</td><td>ICE + DTLS-SRTP + SCTP 建连，打开 screen-jpeg 与 screen-control 通道</td></tr><tr><td>6</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>commands/{startNo}/ack (边带): result.displayStream {event:&quot;state&quot;, state:&quot;connected&quot;}</td></tr><tr><td>7</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>DataChannel [screen-jpeg]: 分片 JPEG 帧</td></tr><tr><td>8</td><td>Rodak 服务端 / 桌面端 → RodakOS (UnifiedMqtt + WebRtcService)</td><td>DataChannel [screen-control]: version=1 JSON 控制指令</td></tr><tr><td>9</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>DataChannel [screen-control]: 控制结果 ACK</td></tr><tr><td>10</td><td>Rodak 服务端 / 桌面端 → RodakOS (UnifiedMqtt + WebRtcService)</td><td>commands/{stopNo}: display.stream.stop {sessionId, startCommandNo}</td></tr><tr><td>11</td><td>RodakOS (UnifiedMqtt + WebRtcService) → Rodak 服务端 / 桌面端</td><td>commands/{stopNo}/ack: {status:&quot;ok&quot;, result:{sessionId, startCommandNo, stopOutcome:&quot;stopped&quot;}}</td></tr></tbody></table></div><details><summary>Mermaid 源码</summary><pre><code>sequenceDiagram
+    autonumber
+    participant Srv as Rodak 服务端 / 桌面端
+    participant Dev as RodakOS (UnifiedMqtt + WebRtcService)
+
+    Srv-&gt;&gt;Dev: commands/{startNo}: display.stream.start (含 sessionId, width/height/fps/quality, _meta.rodak/videoSignal)
+    Dev--&gt;&gt;Srv: commands/{startNo}/ack: {status:&quot;ok&quot;, result:{sessionId, transport:&quot;webrtc-datachannel&quot;, startCommandNo}}
+    Dev--&gt;&gt;Srv: commands/{startNo}/ack (边带): result.displayStream {event:&quot;signal&quot;, ...} (本地 SDP / ICE)
+    Srv-&gt;&gt;Dev: commands/{sigNo}: display.stream.signal {sessionId, type:&quot;sdp&quot;|&quot;candidate&quot;, data:&quot;&lt;base64&gt;&quot;}
+    Dev--&gt;&gt;Srv: commands/{sigNo}/ack: {status:&quot;ok&quot;, result:{sessionId}}
+    Note over Srv,Dev: ICE + DTLS-SRTP + SCTP 建连，打开 screen-jpeg 与 screen-control 通道
+    Dev--&gt;&gt;Srv: commands/{startNo}/ack (边带): result.displayStream {event:&quot;state&quot;, state:&quot;connected&quot;}
+    Dev-&gt;&gt;Srv: DataChannel [screen-jpeg]: 分片 JPEG 帧
+    Srv-&gt;&gt;Dev: DataChannel [screen-control]: version=1 JSON 控制指令
+    Dev-&gt;&gt;Srv: DataChannel [screen-control]: 控制结果 ACK
+    Srv-&gt;&gt;Dev: commands/{stopNo}: display.stream.stop {sessionId, startCommandNo}
+    Dev--&gt;&gt;Srv: commands/{stopNo}/ack: {status:&quot;ok&quot;, result:{sessionId, startCommandNo, stopOutcome:&quot;stopped&quot;}}
+</code></pre></details></figure><h3>信令编解码的两个高频坑</h3>
+<ol>
+<li><strong>Base64 缓冲区长度</strong>：使用 Mbed TLS 进行 Base64 编码时，输出缓冲区必须至少为 <code>4 * ceil(n / 3) + 1</code> 字节（预留末尾 <code>\0</code>），否则所有非空 SDP/ICE 消息都会报 <code>BUFFER_TOO_SMALL</code>。</li>
+<li><strong>SDP 结尾空字符</strong>：MQTT 解码出的 SDP 原始文本不带 <code>\0</code>；传给 <code>esp_peer_send_msg</code> 前必须补 <code>\0</code>，同时保持 <code>message.size</code> 等于不含 <code>\0</code> 的纯文本长度。</li>
+</ol>
+<h2>2. <code>esp_peer</code> 共享配置、双业务对比与必选编译项</h2>
+<h3>2.1 ESP-IDF 6.0.2 必选配置与本地补丁</h3>
+<p>ESP-IDF 6.0.2 编译 <code>esp_peer</code> DTLS-SRTP 必须开启以下配置（其中 <code>CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y</code> 将 DTLS 缓冲与密钥材料放入 PSRAM，避免语音唤醒与 DVP 相机 DMA 并发时 <code>esp_peer_open</code> 报 <code>ESP_PEER_ERR_NO_MEM (-2)</code>）：</p>
+<pre><code class="language-ini">CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_SSL_DTLS_SRTP=y
+CONFIG_MBEDTLS_X509_CREATE_C=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+</code></pre>
+<p>升级 <code>components/esp_peer</code> 时必须保留本地 <code>src/</code> 的 4 处改动：① ESP-IDF 6.0+ 选用 <code>src/dtls_srtp_v6.c</code>；② PSA ECDSA 算法与证书匹配；③ <code>src/media_lib_weak.c</code> 走 PSRAM 分配；④ <code>dtls_srtp_v6.c</code> 修复 <code>CTR_DRBG</code> 互斥锁泄漏，且源码与 <code>libs/</code> 预编译库版本必须严格一致。</p>
+<h3>2.2 Peer 共享参数（<code>main/phone_os/webrtc-peer-config.h</code>）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">配置项</th>
+<th style="text-align:left">设定值</th>
+<th style="text-align:left">设计原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>max_candidates</code></td>
+<td style="text-align:left"><strong>32</strong></td>
+<td style="text-align:left">预编译 S3 库中传 <code>0</code> 实际仅分配 <strong>10</strong> 个（而非头文件注释写的 16 个），显式设为 32 兼顾多网卡宿主。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>agent_recv_timeout</code></td>
+<td style="text-align:left"><strong>50 ms</strong></td>
+<td style="text-align:left">发送 JPEG 等待 SCTP 空间时保持 API 锁响应。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>send_cache_size</code> / <code>recv_cache_size</code></td>
+<td style="text-align:left">各 <strong>400 KiB</strong></td>
+<td style="text-align:left">满足分片 JPEG 与控制流突发缓冲。</td>
+</tr>
+<tr>
+<td style="text-align:left">IPv6 / TCP candidates</td>
+<td style="text-align:left">关闭</td>
+<td style="text-align:left">仅走 IPv4 UDP 局域网/直连路径，降低开销。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.3 Camera 推流 vs Display 推流差异</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">对比维度</th>
+<th style="text-align:left"><code>WebRtcCameraService</code></th>
+<th style="text-align:left"><code>WebRtcDisplayService</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>DataChannel</strong></td>
+<td style="text-align:left">单通道 <code>camera-jpeg</code></td>
+<td style="text-align:left">双通道：<code>screen-jpeg</code>（默认只读）+ <code>screen-control</code>（需显式授权）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>默认分辨率 / 帧率 / 分片</strong></td>
+<td style="text-align:left"><code>320×240</code>，<code>5 fps</code>，<code>chunk_size = 10000 B</code></td>
+<td style="text-align:left"><code>320×240</code>（LVGL 局部刷新，仅保留最新帧），<code>5 fps</code>，<code>chunk_size = 20000 B</code>（减少 SCTP 往返）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>建连截止时间</strong></td>
+<td style="text-align:left"><code>connect_timeout_ms = 20000</code>（拒绝 <code>0</code>），打开 <code>camera-jpeg</code> 后清除</td>
+<td style="text-align:left">依赖流租约与 Peer 生命周期</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p><strong>为什么 Camera 必须有 20 秒建连看门狗？</strong>
+当 DTLS 握手因 <code>MBEDTLS_ERR_SSL_ALLOC_FAILED</code> 异常重试时，<code>esp_peer</code> 主循环可能持续空转而不发出终态回调。20 秒截止时间略大于 Rodak 渲染层 15 秒首帧超时，既不误杀正常等待，又能确保超时后强制按 <code>CONNECT_FAILED</code> 释放 Peer 与相机。</p>
+</blockquote>
+<h2>3. 远程输入控制协议（<code>screen-control</code> DataChannel）</h2>
+<p>远程控制消息在 <code>screen-control</code> 通道上以 UTF-8 JSON 传输，要求外层携带 <code>&quot;version&quot;: 1</code> 与 <code>&quot;kind&quot;</code>，并经过两层防护：</p>
+<ol>
+<li><strong>序列与回执跟踪（<code>DisplayControlAckTracker</code>）</strong>：每个 Peer 实例分配永不复用的不透明 <code>InstancePtr</code>；控制消息序号 <code>seq</code> 必须非零且严格递增；待发 ACK 队列上限 <strong>32 条</strong>，一旦溢出或内存分配失败即置 <code>overflowed_</code> 触发 Peer <strong>fail-closed 终止</strong>（绝不静默丢弃已执行结果的回执）。</li>
+<li><strong>租约与有界队列（<code>RemoteInputController</code>）</strong>：绑定当前 <code>StreamLeasePtr</code>，过期租约直接返回 <code>stale_control_lease</code>。待执行队列严格有界：<strong>16 条动作</strong>（<code>text</code>/<code>shortcut</code>）、<strong>32 条指针事件</strong>、<strong>1 条延迟导航</strong>；取消时使用固定大小 <code>CancelledReplies</code>（49 槽，零堆分配）回复 <code>control_disabled</code>。</li>
+</ol>
+<h3>3.1 四类 <code>kind</code> 消息契约</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left"><code>kind</code></th>
+<th style="text-align:left">关键字段与校验规则</th>
+<th style="text-align:left">行为与拒绝原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>control</code></td>
+<td style="text-align:left"><code>action</code>: <code>&quot;enable&quot;</code> | <code>&quot;disable&quot;</code></td>
+<td style="text-align:left">默认未开启控制；必须先发 <code>enable</code> 获取 <code>ControlGrant</code> 后才受理输入。<code>disable</code>、Stop 或断连会立即清空队列并取消按住手势。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>pointer</code></td>
+<td style="text-align:left"><code>action</code>: <code>&quot;down&quot;</code> | <code>&quot;move&quot;</code> | <code>&quot;up&quot;</code>，整数 <code>0 ≤ x &lt; 320</code>、<code>0 ≤ y &lt; 240</code></td>
+<td style="text-align:left">连续 <code>move</code> 自动合并（旧项回复 <code>coalesced</code>）；<strong>本地触摸优先</strong>；取消按住手势时递增 <code>cancel_generation</code> 重置 LVGL 状态，<strong>不伪造 <code>up</code></strong>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>text</code></td>
+<td style="text-align:left"><code>text</code>: 合法 UTF-8 字符串，长度 <strong>≤ 1024 字节</strong></td>
+<td style="text-align:left">输入到当前可见且聚焦的文本框；无目标返回 <code>text_target_unavailable</code>，非法编码返回 <code>invalid_utf8</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>shortcut</code></td>
+<td style="text-align:left"><code>shortcut</code> 白名单：<code>back</code>、<code>home</code>、<code>enter</code>、<code>escape</code>、<code>backspace</code>、<code>delete</code></td>
+<td style="text-align:left"><code>home</code> 与 <code>back</code> 走延迟导航路径（与 <code>PhoneSystem</code> 有界导航队列协作）；动作队列满返回 <code>input_queue_full</code>。</td>
+</tr>
+</tbody>
+</table></div>
+<h2>4. ESP32-S3 内部 RAM 碎片化避坑（3 个真实缺陷案例）</h2>
+<p>下文 8 KiB／8,296 B 是 WebRTC 相机排障中记录的连续块现象，不是当前版本的固定剩余量，也不是 TLS 或所有场景通用的成功阈值。下面三个历史缺陷及修复仍可作为定位线索：</p>
+<ol>
+<li><strong>DTLS <code>CTR_DRBG</code> 互斥锁泄漏（<code>components/esp_peer/src/dtls_srtp_v6.c</code>）</strong>：首次自签证书路径对同一 <code>ctr_drbg</code> 连续两次调用 <code>mbedtls_ctr_drbg_seed</code>，泄漏 84 B FreeRTOS 互斥锁将 8 KiB 块劈成 6 KiB。修复：二次 seed 前先 <code>free</code> 再 <code>init</code>。</li>
+<li><strong>DVP 首次取流延迟安装 GPIO ISR 表（<code>main/main.cc</code>）</strong>：首次 <code>VIDIOC_STREAMON</code> 分配 392 B 永不释放的 ISR 句柄表。修复：<code>app_main</code> 在 <code>esp_board_manager_init</code> 前预先调用 <code>gpio_install_isr_service(ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM)</code>。</li>
+<li><strong>GDMA RX 中断向量描述符碎片（<code>main/main.cc</code>）</strong>：首次使用新 CPU 中断线会永久分配 16 B <code>vector_desc_t</code>。修复：启动早期通过 <code>esp_ipc_call_blocking</code> 在 CPU 0（10 条）与 CPU 1（15 条）预热分配并释放全部未用中断线，将描述符锁定在低地址区。</li>
+</ol>
+<blockquote>
+<p><strong>排障诊断命令</strong>：使用 <code>RODAKOS_RELEASE_TESTS=ON</code> 构建的测试固件提供 5 条串口命令：<code>RODAK_RELEASE_TEST_V1 heap_map</code>、<code>heap_trace_start</code>、<code>heap_trace_dump</code>、<code>hold_dma &lt;limit&gt;</code>、<code>release_dma</code>（普通发布固件不含这些命令；切勿将 <code>CONFIG_HEAP_TRACING_STANDALONE=y</code> 提交进 <code>sdkconfig</code>）。</p>
+</blockquote>
+<h2>5. 对应源码与主机测试套件</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">模块</th>
+<th style="text-align:left">核心固件源码（<code>main/phone_os/</code>）</th>
+<th style="text-align:left">主机测试套件（<code>tests/</code>）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>Peer 配置与推流服务</strong></td>
+<td style="text-align:left"><code>webrtc-peer-config.h</code>、<code>webrtc_camera_service.*</code>、<code>webrtc_display_service.*</code></td>
+<td style="text-align:left"><code>tests/display_control_ack_service/</code>（含负变体与任务退休测试）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>屏幕采集与 JPEG 分配</strong></td>
+<td style="text-align:left"><code>display_service.*</code>、<code>screen_jpeg_allocation.*</code></td>
+<td style="text-align:left"><code>tests/display_service/</code>、<code>tests/screen_jpeg_allocator/</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>远程输入与 ACK 跟踪</strong></td>
+<td style="text-align:left"><code>remote_input_controller.*</code>、<code>display_control_ack_tracker.h</code></td>
+<td style="text-align:left"><code>tests/remote_input/</code>、<code>tests/home_ui/remote_text_input_test.cc</code></td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html">← MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html">固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册 →</a></nav></main></div></body></html>

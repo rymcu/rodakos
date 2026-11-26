@@ -1,0 +1,209 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rodak Realtime Voice v1 架构、服务发现与控制面信令详解 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html" aria-current="page"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 05 篇 / 13</div><h1>Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</h1><blockquote>
+<p><strong>参考规范</strong>：本文依据 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-realtime-voice-contract-v1.md">rodak-realtime-voice-contract-v1.md</a> 与 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a> 整理，面向需要实现或联调实时语音协议的固件端、服务端及模拟器开发者。</p>
+</blockquote>
+<blockquote>
+<p>区分<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/rodak-realtime-voice-contract-v1.md#61-turn-acceptance-and-progress-draft">描述符和会话事件</a>：描述符保留 mcp 只是兼容标记，普通 RodakOS 会话声明 features.mcp: false，不使用该控制事件。turn.accepted 和 turn.progress 不加入描述符 events，而通过普通 session.open 的两个特性位协商（progress 依赖 accepted）；纯下行 Announce 不请求这两项。接受后可显示紫色等待灯；<a href="https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/voice-assistant.md#turn-progress-on-home">进度在 Home 显示</a>，过期或乱序被丢弃，不延长超时。</p>
+</blockquote>
+<h2>1. 协议定位、模块归属与历史隔离</h2>
+<p><code>rodak-realtime-voice/v1</code> 是 RodakOS 与规范服务端（Rodak）之间的标准实时语音线级契约（Wire Contract），基于 <strong>WebSocket</strong> 承载控制面 JSON 信令与二进制 Opus 音频帧。</p>
+<ul>
+<li><strong>单一真值来源</strong>：以 Rodak 服务端实际行为为准；机器可读规范位于 <code>contracts/rodak-realtime-voice/v1/</code>；固件侧核心实现位于 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 仓库的 <code>main/phone_os/realtime_voice_contract.*</code> 和 <code>main/phone_os/realtime_voice_transport.*</code>。</li>
+<li><strong>与 XiaoZhi 协议彻底隔离</strong>：规范解析器<strong>必须拒绝</strong>任何 XiaoZhi 相关字段或标记（包括 <code>hello</code>、<code>listen</code>、<code>tts</code>、<code>goodbye</code>、旧式 <code>type</code> / <code>session_id</code>、遗留 WebSocket 描述符及 <code>/xiaozhi</code> 路径）。运行时必须使用独立的协议无关会话控制器与门控，<strong>严禁</strong>复用历史 <code>xiaozhiSessionMachine</code>。</li>
+</ul>
+<h2>2. 通过 AIoT 描述符完成服务发现</h2>
+<p>实时语音不独立做配网，而是由 <code>rodak-aiot/v1</code> 在 <code>bootstrap</code> 与每次 AIoT Token 响应中下发 <code>realtimeVoice</code> 描述符（固件同时兼容 <code>realtime_voice</code> 别名；对于纯 MQTT 服务端，该字段视为可选）。</p>
+<h3>2.1 描述符核心字段与强校验规则</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">字段</th>
+<th style="text-align:left">规范值 / 要求</th>
+<th style="text-align:left">说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>schema</code></td>
+<td style="text-align:left"><code>&quot;rodak-realtime-voice/v1&quot;</code></td>
+<td style="text-align:left">描述符结构标识。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>protocol</code> / <code>protocolVersion</code></td>
+<td style="text-align:left"><code>&quot;rodak-realtime-voice&quot;</code> / <code>1</code></td>
+<td style="text-align:left">协议名与版本号。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>transport</code> / <code>authMode</code></td>
+<td style="text-align:left"><code>&quot;websocket&quot;</code> / <code>&quot;device-token&quot;</code></td>
+<td style="text-align:left">传输方式与设备令牌鉴权模式。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>endpoint</code></td>
+<td style="text-align:left"><code>ws://</code> 或 <code>wss://</code> 地址</td>
+<td style="text-align:left"><strong>必须</strong>包含 authority 与 path；<strong>必须拒绝</strong>含 query、fragment、userinfo 或 <code>/xiaozhi</code> 等遗留路径的 URL。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>uplink</code> / <code>downlink</code></td>
+<td style="text-align:left">上下行音频编解码参数</td>
+<td style="text-align:left">规定 Opus 采样率、声道数与帧长。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>limits</code></td>
+<td style="text-align:left"><code>maxAudioFrameBytes</code>、<code>maxControlBytes</code></td>
+<td style="text-align:left">约束单帧音频与单条控制 JSON 的最大字节数。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>capabilities</code></td>
+<td style="text-align:left">7 项能力集合</td>
+<td style="text-align:left"><code>session</code>、<code>audio-input</code>、<code>audio-output</code>、<code>speech-boundaries</code>、<code>interrupt</code>、<code>assistant-events</code>、<code>mcp</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>events</code></td>
+<td style="text-align:left">12 个描述符兼容事件名</td>
+<td style="text-align:left"><code>session.open</code>、<code>session.ready</code>、<code>input.start</code>、<code>input.stop</code>、<code>wake.detected</code>、<code>playback.abort</code>、<code>vad</code>、<code>output.start</code>、<code>output.stop</code>、<code>session.end</code>、<code>mcp</code>、<code>error</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>vadStrategies</code> / <code>preferredVadStrategy</code></td>
+<td style="text-align:left">VAD 策略列表与首选策略</td>
+<td style="text-align:left">缺失 <code>vadStrategies</code> 时安全默认仅启用 <code>server-authoritative</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>features</code></td>
+<td style="text-align:left">服务端特性字符串数组</td>
+<td style="text-align:left">不得包含任何历史遗留标记。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.2 建连时机与鉴权请求头</h3>
+<p>设备在空闲监听本地唤醒词时<strong>不会</strong>保持云端 WebSocket 长连接，仅在以下两种场景按需建连：</p>
+<ol>
+<li>本地 MultiNet 引擎检测到唤醒词，发起语音对话。</li>
+<li>收到 MQTT <code>voice.announce</code> 指令，进入服务端主动播报（纯下行）会话。</li>
+</ol>
+<p>建立 WebSocket 连接时，设备端必须携带以下 HTTP 请求头：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">Header</th>
+<th style="text-align:left">格式与来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>Authorization</code></td>
+<td style="text-align:left"><code>Bearer &lt;AIoT access token&gt;</code>（若 token 已自带 auth scheme 则原样使用）</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>Protocol-Version</code></td>
+<td style="text-align:left"><code>1</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><code>Device-Id</code></td>
+<td style="text-align:left">设备 Wi-Fi STA MAC 地址</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>Client-Id</code></td>
+<td style="text-align:left">持久化的客户端 UUID</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.3 安全与凭证红线</h3>
+<ul>
+<li><strong>Pin 模式强制加密</strong>：若设备安装了服务端信任锚点（见仓库 <code>trusted-server-discovery.md</code>），运行时<strong>必须</strong>验证当前语音地址对应固定 HTTPS 源站的 <code>wss://</code> 与固定预期 TLS 域名，确认无误后才可发送 <code>Bearer</code> Token。</li>
+<li><strong>唯一凭证来源</strong>：AIoT 下发是语音端点与访问令牌的唯一权威来源，<strong>禁止</strong>通过串口配网协议提交语音 token 或端点。</li>
+<li><strong>零日志泄露</strong>：令牌、密钥及原始 <code>Authorization</code> 请求头严禁打印到日志或串口。</li>
+</ul>
+<h2>3. 控制面消息封装与解析限制</h2>
+<p>所有控制面消息均为 UTF-8 编码的 JSON 对象，解析前必须通过以下三道硬性门槛：</p>
+<ol>
+<li><strong>大小限制</strong>：单条控制消息不得超过有效传输或协商的 <code>maxControlBytes</code> 上限（协商上限最大 <strong>256 KiB</strong>，默认 <strong>64 KiB / 65536 字节</strong>；注意当前固件 WebSocket 帧累积器对入站文本硬性限制在 <strong>64 KiB</strong>）。超限消息直接丢弃，不送入状态机。</li>
+<li><strong>嵌套深度限制</strong>：外层控制 JSON 在解析前限制最大 <strong>12 层嵌套</strong>，防止深层嵌套耗尽嵌入式栈空间。</li>
+<li><strong>必备字段</strong>：必须包含 <code>event</code> 字段；握手完成后的事件必须携带非空（trim 后不为空白）的 <code>sessionId</code>。</li>
+</ol>
+<h2>4. 握手信令（<code>session.open</code> 与 <code>session.ready</code>）</h2>
+<p>每个 WebSocket 连接代次（<code>generation</code>）执行且仅执行一次握手：</p>
+<ul>
+<li><strong><code>session.open</code>（Device → Server）</strong>：
+<ul>
+<li>包含 <code>protocol</code>、<code>protocolVersion</code>、<code>generation</code>、<code>vadStrategies</code>、<code>preferredVadStrategy</code>、<code>uplink</code>、<code>downlink</code> 以及 <code>features</code> 对象（布尔或数值标志，例如 <code>mcp: false</code>、<code>device_vad_epoch: 0</code>、<code>turn_accepted: 1</code>、<code>turn_progress: 1</code>）。</li>
+<li>若为服务端主动播报会话，还需携带 <code>&quot;announce&quot;: true</code> / <code>features.announce: true</code> 与 <code>&quot;announceSeq&quot;: &lt;N&gt;</code>。</li>
+</ul>
+</li>
+<li><strong><code>session.ready</code>（Server → Device）</strong>：
+<ul>
+<li>服务端返回一次匹配的 <code>session.ready</code>，包含匹配的连接 <code>generation</code>、<code>transport: &quot;websocket&quot;</code>、非空 <code>sessionId</code>、协商后的单声道 Opus <code>downlink</code> 参数以及可选的 <code>vadStrategy</code>（未提供时默认为 <code>server-authoritative</code>；若提供则必须在描述符已声明的策略列表内）。</li>
+<li><strong>严格防重入</strong>：重复或延迟到达的 <code>session.ready</code> 一律视为协议错误，绝不能重置正在进行的播放状态或音频序列号计数器。</li>
+</ul>
+</li>
+</ul>
+<h2>5. 会话内控制事件全表</h2>
+<p>握手完成后，设备端与服务端通过以下事件协同完成多轮对话、打断、状态反馈与错误处理：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">方向</th>
+<th style="text-align:left">事件名</th>
+<th style="text-align:left">关键字段与协议语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Device → Server</td>
+<td style="text-align:left"><code>wake.detected</code></td>
+<td style="text-align:left"><code>sessionId</code>、<code>text</code>（配置的唤醒词）。<strong>仅首轮唤醒发送</strong>，同一会话的后续追问轮次直接发 <code>input.start</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left">Device → Server</td>
+<td style="text-align:left"><code>input.start</code></td>
+<td style="text-align:left"><code>sessionId</code>，可选 <code>mode</code>（<code>auto-stop</code> / <code>manual-stop</code> / <code>realtime</code>；唤醒首轮使用 <code>realtime</code>）。</td>
+</tr>
+<tr>
+<td style="text-align:left">Device → Server</td>
+<td style="text-align:left"><code>input.stop</code></td>
+<td style="text-align:left"><code>sessionId</code>，标识当前上行语音输入结束。</td>
+</tr>
+<tr>
+<td style="text-align:left">Device → Server</td>
+<td style="text-align:left"><code>playback.abort</code></td>
+<td style="text-align:left"><code>sessionId</code>、<code>reason</code>（<code>user</code> / <code>wake-word</code> / <code>vad_detected</code>），可选 <code>playbackEpoch</code>。用于触发播报打断（barge-in）。</td>
+</tr>
+<tr>
+<td style="text-align:left">Device → Server</td>
+<td style="text-align:left"><code>vad</code></td>
+<td style="text-align:left"><code>sessionId</code>、<code>state</code>（<code>start</code> / <code>end</code>）、<code>source</code>、正整数 <code>sequence</code>、<code>triggerMs</code>，可选 epoch。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>turn.accepted</code>（契约草案，RodakOS 已实现）</td>
+<td style="text-align:left"><code>sessionId</code>、正整数 <code>turnId</code>（每会话从 1 递增）。仅当 <code>session.open</code> 声明 <code>features.turn_accepted: 1</code> 时发送，表示服务端已决定回复该轮话语（静默、空识别或回声丢弃不发送）。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>turn.progress</code>（契约草案，RodakOS 已实现）</td>
+<td style="text-align:left"><code>sessionId</code>、<code>turnId</code>、正整数 <code>seq</code>（每轮从 1 递增）、<code>stage</code>（<code>thinking</code> / <code>tool</code> / <code>composing</code>），可选 <code>label</code>（≤32 Unicode 码点的固定文案，<strong>严禁</strong>包含工具名、参数或用户原话）。需 <code>features.turn_progress: 1</code> 且依赖 <code>turn_accepted: 1</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>output.start</code></td>
+<td style="text-align:left"><code>sessionId</code>，可选 <code>text</code> 与 <code>playbackEpoch</code>。收到后设备准备解码下行 RAV1 二进制 Opus 帧。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>output.stop</code></td>
+<td style="text-align:left"><code>sessionId</code>，可选 <code>reason</code> 与 <code>playbackEpoch</code>。自然结束时表示没有更多下行音频，设备排空本地尾音后再进入下一轮；打断后的确认不应被误判为自然结束并截断已保留的插话。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>session.end</code></td>
+<td style="text-align:left"><code>sessionId</code>，可选 <code>reason</code>（如 <code>goodbye-intent</code>、<code>wake-arbitration-lost</code>、<code>announce-finished</code>、<code>announce-expired</code>）。设备统一按普通会话结束处理并重新布防本地唤醒；注意 <code>goodbye</code> <strong>不是</strong>线级事件。</td>
+</tr>
+<tr>
+<td style="text-align:left">Server → Device</td>
+<td style="text-align:left"><code>error</code></td>
+<td style="text-align:left">可选 <code>sessionId</code>，必填非空 <code>code</code>、非空 <code>message</code>、布尔值 <code>retryable</code>（缺任一必填字段将被拒绝）。</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<p><strong>下一篇推荐</strong>：阅读《RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战》，掌握下行二进制帧解析、多设备同屋唤醒防撞以及 MQTT 触发的纯下行播报闭环。</p>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html">← OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html">RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战 →</a></nav></main></div></body></html>

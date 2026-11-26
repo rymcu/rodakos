@@ -1,0 +1,165 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>设备入网、宿主绑定、鉴权与安全模式实战 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html" aria-current="page"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 02 篇 / 13</div><h1>设备入网、宿主绑定、鉴权与安全模式实战</h1><blockquote>
+<p><strong>参考规范</strong>：本文依据 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>（§2–§6）整理，重点拆解 <code>DeviceCloudConfigService</code>（设备端）与 <code>/api/v1/aiot</code>（服务端）在入网、绑定、Token 刷新与安全持久化方面的实现契约。</p>
+</blockquote>
+<h2>1. 完整入网与绑定 9 步流程</h2>
+<p>一台新设备（或已解绑设备）接入 Rodak 服务端，必须严格按以下 9 步推进：</p>
+<figure class="diagram"><figcaption>交互时序</figcaption><div class="scroll" tabindex="0" aria-label="交互时序"><table><thead><tr><th scope="col">序号</th><th scope="col">方向</th><th scope="col">内容</th></tr></thead><tbody><tr><td>1</td><td>设备端 (RodakOS / 模拟器) → Rodak HTTP API (/api/v1/aiot)</td><td>GET /devices/bootstrap</td></tr><tr><td>2</td><td>Rodak HTTP API (/api/v1/aiot) → 设备端 (RodakOS / 模拟器)</td><td>module, protocol, productKey, mqttPort, realtimeVoice</td></tr><tr><td></td><td>设备端 (RodakOS / 模拟器)</td><td>强校验 bootstrap 字段；若无 deviceSecret 则生成 32B 随机数并持久化</td></tr><tr><td>3</td><td>设备端 (RodakOS / 模拟器) → Rodak HTTP API (/api/v1/aiot)</td><td>POST /devices/binding/request (身份 + deviceSecret)</td></tr><tr><td>4</td><td>Rodak HTTP API (/api/v1/aiot) → 设备端 (RodakOS / 模拟器)</td><td>requestId, requestToken, 8位 pairingCode, expiresAt(+10m), pollIntervalSeconds(2)</td></tr><tr><td></td><td>设备端 (RodakOS / 模拟器)</td><td>屏幕展示 8 位 pairingCode</td></tr><tr class="group"><td></td><td>循环</td><td>每隔 pollIntervalSeconds (Bearer requestToken)</td></tr><tr><td>5</td><td>设备端 (RodakOS / 模拟器) → Rodak HTTP API (/api/v1/aiot)</td><td>GET /devices/binding/requests/{requestId}/status</td></tr><tr><td>6</td><td>Rodak HTTP API (/api/v1/aiot) → 设备端 (RodakOS / 模拟器)</td><td>status = pending</td></tr><tr class="group"><td></td><td>结束分支</td><td></td></tr><tr><td>7</td><td>Desktop Owner UI (宿主) → Rodak HTTP API (/api/v1/aiot)</td><td>用户在桌面端输入 pairingCode 确认绑定</td></tr><tr><td>8</td><td>设备端 (RodakOS / 模拟器) → Rodak HTTP API (/api/v1/aiot)</td><td>GET /devices/binding/requests/{requestId}/status</td></tr><tr><td>9</td><td>Rodak HTTP API (/api/v1/aiot) → 设备端 (RodakOS / 模拟器)</td><td>status = confirmed + accessToken + unifiedMqtt + mqttConnectInfo + realtimeVoice</td></tr><tr><td></td><td>设备端 (RodakOS / 模拟器)</td><td>通过 pending 标记机制，原子提交单一事务快照</td></tr><tr><td>10</td><td>设备端 (RodakOS / 模拟器) → Rodak MQTT Broker</td><td>CONNECT (username=deviceKey, password=accessToken)</td></tr><tr><td>11</td><td>设备端 (RodakOS / 模拟器) → Rodak MQTT Broker</td><td>SUBSCRIBE shadow/desired, ota/notify, commands/+, pc_status</td></tr><tr><td>12</td><td>设备端 (RodakOS / 模拟器) → Rodak MQTT Broker</td><td>PUBLISH telemetry, shadow/report</td></tr></tbody></table></div><details><summary>Mermaid 源码</summary><pre><code>sequenceDiagram
+    autonumber
+    participant Dev as 设备端 (RodakOS / 模拟器)
+    participant Srv as Rodak HTTP API (/api/v1/aiot)
+    participant UI as Desktop Owner UI (宿主)
+    participant MQTT as Rodak MQTT Broker
+
+    Dev-&gt;&gt;Srv: GET /devices/bootstrap
+    Srv--&gt;&gt;Dev: module, protocol, productKey, mqttPort, realtimeVoice
+    Note over Dev: 强校验 bootstrap 字段；若无 deviceSecret 则生成 32B 随机数并持久化
+    Dev-&gt;&gt;Srv: POST /devices/binding/request (身份 + deviceSecret)
+    Srv--&gt;&gt;Dev: requestId, requestToken, 8位 pairingCode, expiresAt(+10m), pollIntervalSeconds(2)
+    Note over Dev: 屏幕展示 8 位 pairingCode
+    loop 每隔 pollIntervalSeconds (Bearer requestToken)
+        Dev-&gt;&gt;Srv: GET /devices/binding/requests/{requestId}/status
+        Srv--&gt;&gt;Dev: status = pending
+    end
+    UI-&gt;&gt;Srv: 用户在桌面端输入 pairingCode 确认绑定
+    Dev-&gt;&gt;Srv: GET /devices/binding/requests/{requestId}/status
+    Srv--&gt;&gt;Dev: status = confirmed + accessToken + unifiedMqtt + mqttConnectInfo + realtimeVoice
+    Note over Dev: 通过 pending 标记机制，原子提交单一事务快照
+    Dev-&gt;&gt;MQTT: CONNECT (username=deviceKey, password=accessToken)
+    Dev-&gt;&gt;MQTT: SUBSCRIBE shadow/desired, ota/notify, commands/+, pc_status
+    Dev-&gt;&gt;MQTT: PUBLISH telemetry, shadow/report
+</code></pre></details></figure><h3>关键步骤实现要点</h3>
+<ol>
+<li><strong>引导强校验（步骤 1）</strong>：收到 <code>/bootstrap</code> 后必须核对 <code>module == &quot;aiot&quot;</code>、<code>protocol == &quot;rodak-aiot&quot;</code>、<code>productKey == &quot;rymcu-bigsmart&quot;</code>、<code>protocolVersion == 1</code>，任意不匹配即终止流程。</li>
+<li><strong>密钥本地生成（步骤 2）</strong>：若本地尚无 <code>deviceSecret</code>，使用密码学安全随机源生成 32 字节随机数并转为 64 位小写十六进制字符串后持久化。</li>
+<li><strong>配对码展示与轮询（步骤 3–6）</strong>：<code>pairingCode</code> 为 8 位码，有效期 <code>+10 分钟</code>，默认轮询间隔 <code>pollIntervalSeconds = 2</code>。轮询时在请求头携带 <code>Authorization: Bearer &lt;requestToken&gt;</code>。</li>
+<li><strong>原子快照落盘（步骤 8）</strong>：轮询得到 <code>status=confirmed</code> 后，必须将 AIoT 身份、<code>accessToken</code>、<code>unifiedMqtt</code>、<code>realtimeVoice</code> 作为<strong>单个事务快照</strong>写入持久存储，避免断电导致“有 Token 却无 MQTT 配置”的半写入状态。</li>
+<li><strong>已绑定设备跳过绑定</strong>：若设备已经完成绑定，仅是 <code>accessToken</code> 过期，则<strong>跳过步骤 3–9</strong>，直接调用 <code>POST /api/v1/aiot/devices/auth/token</code> 刷新凭证。</li>
+</ol>
+<h2>2. 绑定状态机设计</h2>
+<p>协议 §5 定义了清晰的状态转换模型，建议设备端与模拟器严格按状态机驱动 UI 与网络重试：</p>
+<figure class="diagram"><figcaption>状态转换</figcaption><div class="scroll" tabindex="0" aria-label="状态转换"><table><thead><tr><th scope="col">序号</th><th scope="col">方向</th><th scope="col">内容</th></tr></thead><tbody><tr><td>1</td><td>[*] → unbound</td><td></td></tr><tr><td>2</td><td>unbound → pending</td><td>发起 POST /binding/request</td></tr><tr><td>3</td><td>pending → awaiting</td><td>LAN Trust Setup 阶段进入 awaiting-device</td></tr><tr><td>4</td><td>pending → bound</td><td>轮询返回 confirmed 且事务快照提交成功</td></tr><tr><td>5</td><td>awaiting → bound</td><td>完成 /trust 校验并轮询到 confirmed</td></tr><tr><td>6</td><td>pending → unbound</td><td>状态为 expired / revoked 或用户取消</td></tr><tr><td>7</td><td>awaiting → unbound</td><td>校验失败 / expired / revoked</td></tr><tr><td>8</td><td>bound → unbinding</td><td>发起 POST /binding/unbind</td></tr><tr><td>9</td><td>unbinding → unbound</td><td>解绑完成并清理本地凭证</td></tr></tbody></table></div><details><summary>Mermaid 源码</summary><pre><code>stateDiagram-v2
+    [*] --&gt; unbound
+    unbound --&gt; pending: 发起 POST /binding/request
+    pending --&gt; awaiting: LAN Trust Setup 阶段进入 awaiting-device
+    pending --&gt; bound: 轮询返回 confirmed 且事务快照提交成功
+    awaiting --&gt; bound: 完成 /trust 校验并轮询到 confirmed
+    pending --&gt; unbound: 状态为 expired / revoked 或用户取消
+    awaiting --&gt; unbound: 校验失败 / expired / revoked
+    bound --&gt; unbinding: 发起 POST /binding/unbind
+    unbinding --&gt; unbound: 解绑完成并清理本地凭证
+</code></pre></details></figure><p>状态接口 <code>GET /binding/requests/{requestId}/status</code> 可能返回的 5 种业务状态：<code>pending</code>、<code>awaiting-device</code>、<code>confirmed</code>、<code>expired</code>、<code>revoked</code>。</p>
+<h2>3. HTTP API 契约与限流规则</h2>
+<p>所有端点均挂载在配置的服务端 Origin 下，完整的请求/响应 Schema 见仓库中的 <code>contracts/rodak-aiot/v1/openapi.yaml</code>：</p>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">端点路径</th>
+<th style="text-align:left">鉴权方式</th>
+<th style="text-align:left">核心说明与约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>GET /api/v1/aiot/devices/bootstrap</code></td>
+<td style="text-align:left">无鉴权</td>
+<td style="text-align:left">获取引导信息与协议版本元数据。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>POST /api/v1/aiot/devices/binding/request</code></td>
+<td style="text-align:left">无鉴权</td>
+<td style="text-align:left">发起绑定请求。<strong>服务端限流</strong>：全局最多 256 个未过期请求、单设备最多 3 个 <code>pending</code>、每 60 秒最多 20 次请求。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>GET /api/v1/aiot/devices/binding/requests/{requestId}/status</code></td>
+<td style="text-align:left"><code>Bearer requestToken</code></td>
+<td style="text-align:left">轮询绑定状态；<code>confirmed</code> 时返回完整 Token 与连接描述符。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>POST /api/v1/aiot/devices/binding/requests/{requestId}/trust</code></td>
+<td style="text-align:left"><code>Bearer requestToken</code></td>
+<td style="text-align:left"><strong>仅 HTTPS 可用</strong>，用于 LAN Trust Setup 提交 SRP 证明。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>POST /api/v1/aiot/devices/auth/token</code></td>
+<td style="text-align:left">无鉴权（请求体带密钥）</td>
+<td style="text-align:left">已绑定设备刷新 <code>accessToken</code>。</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>POST /api/v1/aiot/devices/binding/unbind</code></td>
+<td style="text-align:left"><code>Bearer accessToken</code></td>
+<td style="text-align:left">解除绑定，请求体必须为 <code>{}</code>。</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p><strong>禁止使用的端点</strong>：服务端虽保留了心跳、遥测、影子、命令拉取等 HTTP fallback 接口，但 RodakOS 并不使用；<code>POST /devices/register</code> 与 <code>/devices/activate</code> 属于历史迁移端点，<strong>设备端严禁调用</strong>。</p>
+</blockquote>
+<h2>4. 必避深坑：HTTP 状态码与统一响应信封</h2>
+<p>这是新手对接 HTTP API 时最容易写出 Bug 的地方（协议 §4.1）：</p>
+<p>服务端所有业务接口均采用统一 JSON 信封格式：</p>
+<pre><code class="language-json">{
+  &quot;code&quot;: 200,
+  &quot;message&quot;: &quot;...&quot;,
+  &quot;data&quot;: {}
+}
+</code></pre>
+<p><strong>核心解析规则（必须按两步检查）</strong>：</p>
+<ol>
+<li><strong>先检查 HTTP 状态码</strong>：只有当 <code>accessToken</code> 预检失败时，服务端才会返回 <strong>HTTP 401</strong>（此时应触发 Token 刷新逻辑）；除此之外，绝大多数业务错误（信封内 <code>code</code> 为 <code>400</code>–<code>503</code>）返回的 <strong>HTTP 状态码仍然是 200</strong>，且 <code>data</code> 为 <code>null</code>（仅 <code>/api/v1/aiot/appearance/</code> 外观资源路由除外）。</li>
+<li><strong>再检查信封 <code>code</code> 字段</strong>：只有 <code>HTTP 200</code> <strong>且</strong> <code>code == 200</code> 才代表业务成功；切勿仅凭 HTTP 200 就直接解析 <code>data</code> 字段，否则会引发空指针或错误的状态跳转。</li>
+</ol>
+<h2>5. LAN Trust Setup（无 USB 局域网建信）</h2>
+<p>在没有 USB 线缆烧录证书的场景下，设备可通过局域网建信进入 Pin 模式：</p>
+<ol>
+<li>设备在 HTTPS 监听条件下调用 <code>POST /binding/request</code>，并在请求中携带 <code>trustSetup</code> 参数（用 SRP 密钥交换替代 8 位配对码）。</li>
+<li>轮询状态从 <code>pending</code> 流转到 <code>awaiting-device</code>。</li>
+<li>设备向 <code>POST /api/v1/aiot/devices/binding/requests/{requestId}/trust</code>（携带 <code>Bearer requestToken</code>）提交 SRP 证明。</li>
+<li>服务端校验通过后，返回<strong>密封（sealed）的服务端信任锚点</strong>以及<strong>一次性替换后的新 <code>requestToken</code></strong>。</li>
+<li>设备使用新 <code>requestToken</code> 继续轮询直至 <code>confirmed</code>，并切换至 Pin 模式。</li>
+</ol>
+<h2>6. 凭证安全、事务持久化与两种模式对比</h2>
+<h3>6.1 事务性持久化与日志脱敏（§6.1）</h3>
+<ul>
+<li><strong>先写 Pending 标记，失败即回滚</strong>：AIoT 身份、<code>accessToken</code>、<code>realtimeVoice</code> 描述符与 <code>unifiedMqtt</code> 配置必须作为同一原子快照提交。写入前先落盘 pending 标记，只有全部写入校验通过后才清除标记；若中途失败或重启，自动回滚至上一份完整快照。</li>
+<li><strong>零泄露原则</strong>：<code>deviceSecret</code>、<code>requestToken</code>、<code>accessToken</code> 等任何密钥材料<strong>严禁</strong>打印到日志、串口终端，也<strong>严禁</strong>写入设备 Shadow。</li>
+</ul>
+<h3>6.2 Legacy mode 与 Pin mode 行为差异（§4.4 &amp; §6.2）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">对比维度</th>
+<th style="text-align:left">Legacy mode</th>
+<th style="text-align:left">Pin mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>信任锚点与域名</strong></td>
+<td style="text-align:left">无服务端信任锚点</td>
+<td style="text-align:left">已安装服务端信任锚点，绑定固定 TLS 域名 <code>rodak-&lt;16 hex&gt;.local</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>HTTP / MQTT 传输</strong></td>
+<td style="text-align:left">允许明文 HTTP / MQTT</td>
+<td style="text-align:left">强制加密（HTTPS / <code>mqtts</code>）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>实时语音传输</strong></td>
+<td style="text-align:left">允许 <code>ws://</code></td>
+<td style="text-align:left">强制 <code>wss://</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>TLS 安全策略</strong></td>
+<td style="text-align:left">无严格 Pin 限制</td>
+<td style="text-align:left">禁止不安全重定向与回退到公共 CA；OTA 与 Appearance 资源下载均受校验约束</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Token 刷新返回 403/404</strong></td>
+<td style="text-align:left">清空本地 Token 与 MQTT 配置，自动退回绑定流程</td>
+<td style="text-align:left">保留设备身份、上报 <code>credentials rejected</code>，<strong>不自动重新发起配对</strong></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<p><strong>下一篇推荐</strong>：阅读《统一 MQTT、指令系统、设备影子与实时语音交接指南》，掌握长连接 Topic 规范、指令回执、WebRTC 互斥推流以及实时语音参数交接。</p>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html">← Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html">统一 MQTT、指令系统、设备影子与实时语音交接指南 →</a></nav></main></div></body></html>

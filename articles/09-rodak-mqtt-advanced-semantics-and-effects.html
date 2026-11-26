@@ -1,0 +1,136 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份 | RodakOS</title><link rel="stylesheet" href="../assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="../index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar"><summary>手册目录</summary><nav aria-label="手册章节"><a href="../index.html"><span>00</span> 总索引</a><a href="../articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="../articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="../articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="../articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="../articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="../articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="../articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/09-rodak-mqtt-advanced-semantics-and-effects.html" aria-current="page"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="../articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="../articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="../articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">第 09 篇 / 13</div><h1>MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</h1><blockquote>
+<p><strong>参考规范</strong>：本文基于仓库内的 <code>docs/mqtt-command-semantics.md</code>、<code>docs/mqtt-volume-effects.md</code>、<code>docs/mqtt-light-effects.md</code>、<code>docs/mqtt-credential-refresh.md</code> 与 <code>docs/voice-identity-wake-word.md</code> 整理，衔接 <a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>，面向需要深入实现或排障 <code>UnifiedMqttService</code> 与服务端协同逻辑的开发者。</p>
+</blockquote>
+<h2>1. 指令去重账本、精确推流 Stop 与断连回执边界</h2>
+<p>在真实弱网与重连环境中，同一条 MQTT 指令可能被重复投递，旧连接的异步回调也可能在新连接上迟到。<code>docs/mqtt-command-semantics.md</code> 定义了以下三道防线：</p>
+<h3>1.1 易失性 64 条指令重放账本（Replay Ledger）</h3>
+<p>固件在同一 <code>Authority</code>（签发当前凭据的服务端身份）内维护最近 <strong>64 条</strong>已准入 <code>commandNo</code> 的内存账本：</p>
+<ul>
+<li><strong>精确重放</strong>：按原始载荷字节计算 <strong>SHA-256</strong>；字节完全一致时直接重放首次终态 ACK，<strong>不重入业务处理器</strong>。</li>
+<li><strong>冲突拦截</strong>：同一 <code>commandNo</code> 但原始字节不同（哪怕只是 JSON 空格变化）直接返回 <code>command_conflict</code>；若原请求仍在执行中（in-flight），重复到达的报文静默忽略。</li>
+<li><strong>容量与墓碑（Tombstone）</strong>：<code>commandNo ≤ 128 B</code>，输入载荷 <code>≤ 256 KiB</code>，缓存的 ACK 响应体共享 <strong>64 KiB</strong> 预算。若某条响应体超出缓存预算，账本仅保留其 ID 作为墓碑，后续重放返回 <code>command_result_unavailable</code>（不重新执行）。满载时按首次准入顺序淘汰最早的已完成记录（不淘汰 in-flight）。</li>
+<li><strong>生命周期</strong>：同设备重启前，普通重连、Token 刷新与同对象 Stop/Start 均保留账本；更换 Authority 清空账本；设备重启后不提供跨启动 exactly-once 保证。</li>
+</ul>
+<h3>1.2 精确推流 Stop（026）与流租约（Stream Lease）</h3>
+<p>每个流会话通过四元组 <strong>Stream Lease</strong>（<code>generation</code>、<code>connection epoch</code>、永不复用的 <code>instance nonce</code>、<code>sessionId</code>）绑定，避免同名 <code>sessionId</code> 的新旧会话互相误杀：</p>
+<ul>
+<li><strong>精确 Stop</strong>：<code>display.stream.stop</code> / <code>camera.stream.stop</code> 携带首次 Start 的 <code>startCommandNo</code>（非空，≤ 128 B），成功返回 <code>result: {sessionId, startCommandNo, stopOutcome}</code>：
+<ul>
+<li><code>stopOutcome: &quot;stopped&quot;</code>：本次请求撤销了匹配的活跃实例且原生 Stop 已返回。</li>
+<li><code>stopOutcome: &quot;already_stopped&quot;</code>：同 <code>generation</code> / <code>epoch</code> / <code>Authority</code> 下，最新一次成功 Start 的实例已完成原生清理（依赖每类流仅保留 1 份的易失性 <code>completed-cleanup proof</code>）。</li>
+</ul>
+</li>
+<li><strong>边带回调与有界发送队列</strong>：摄像头/屏幕的 <code>signal</code>/<code>state</code> 异步回调复用 Start 指令的 <code>/ack</code> Topic（位于 <code>result.cameraStream</code> / <code>result.displayStream</code>），服务端将其视为边带消息，不会覆盖首条终态 ACK。固件结果队列上限为 <strong>8 条、单条 ≤ 64 KiB、总计 ≤ 128 KiB、Topic ≤ 512 B</strong>，通过 SDK <code>MQTT_USER_EVENT</code> 在锁外直接以 QoS 0（<code>retain=false</code>）发送，切换 <code>epoch</code> 时自动丢弃过期回调。</li>
+</ul>
+<h2>2. 音量与灯光 Effect 协议及 L3 软件回执</h2>
+<p>RodakOS 已经移除会话级语音音量 MCP 工具，<strong>音量控制与板载 RGB 灯光控制均走 Shadow 单次派发 + 独立回执通道</strong>，不走 <code>commands/+</code>。</p>
+<h3>2.1 单次派发格式（Non-retained <code>shadow/desired</code>）</h3>
+<p>服务端在一次**非保留（non-retained）**的 <code>devices/{deviceKey}/shadow/desired</code> 发布中附加 <code>_meta[&quot;rodak/deviceEffect&quot;]</code>（不落盘进持久化 desired，避免重连同步时误重放）：</p>
+<ul>
+<li><strong>强一致性校验</strong>：外层 <code>deviceKey</code> 必须匹配当前身份；<code>shadowVersion</code> 与可选 <code>version</code> 必须一致；<code>desired</code> / <code>state.desired</code> 中的目标字段必须与 <code>_meta</code> 中的 <code>requested</code> 与 <code>shadowVersion</code> 完全一致。</li>
+<li><strong>域隔离与零降级</strong>：一条报文只能触发一种 Effect（灯光帧绝不顺带应用旧的 desired 音量，反之亦然）；一旦携带了已知 <code>_meta</code> 但校验失败，<strong>绝不降级</strong>走旧版无元数据 setter。</li>
+</ul>
+<h3>2.2 独立回执通道（<code>devices/{deviceKey}/effects/receipt</code>）</h3>
+<p>设备以 <strong>QoS 0、retain=false</strong> 发布软件回执（普通 <code>shadow/report</code> 永远不包含 <code>effectId</code>）。回执中明确声明 <code>persistence: &quot;volatile&quot;</code> 与 <code>physicalVerified: false</code>（仅代表驱动/Codec API 受理，不宣称 I2C 回读或物理声光实测）。若在执行前被协议层拒绝，则只返回互斥的外层 <code>errorCode</code>（绝不同时包含 <code>receipt</code> 与 <code>errorCode</code>）。</p>
+<h3>2.3 音量 Effect vs 灯光 Effect 关键差异对比</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">对比项</th>
+<th style="text-align:left">音量 Effect（<code>mqtt-volume-effects.md</code>）</th>
+<th style="text-align:left">灯光 Effect（<code>mqtt-light-effects.md</code>）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>请求 / 回执 Schema</strong></td>
+<td style="text-align:left"><code>rodak.mqtt-volume-effect.v1</code> / <code>rodakos.mqtt-volume-result.v1</code></td>
+<td style="text-align:left"><code>rodak.mqtt-light-effect.v1</code> / <code>rodakos.mqtt-light-result.v1</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>控制范围</strong></td>
+<td style="text-align:left">绝对音量 <code>0–100</code>（相对调节由服务端基于 report 换算）</td>
+<td style="text-align:left">Board Manager 发现的 RGB 灯（如 <code>board_rgb</code>），不含 LCD 背光；支持 <code>enabled</code>、<code>brightness</code>（0–100）、<code>color</code>（完整 <code>r/g/b</code>）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong><code>effectId</code> 格式</strong></td>
+<td style="text-align:left">1–128 字符 <code>[A-Za-z0-9:_-]</code></td>
+<td style="text-align:left">固定 <code>light:&lt;shadowVersion&gt;:&lt;UUID&gt;</code>（防淘汰后篡改版本）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>原生执行结果状态</strong></td>
+<td style="text-align:left"><code>deferred</code>（Codec 关闭）/ <code>codec-applied</code> / <code>rejected</code>（<code>codec-volume-rejected</code>）</td>
+<td style="text-align:left"><code>driver-applied</code> / <code>unverified</code>（<code>light-driver-rejected</code>，置 <code>available=false</code>）</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>账本容量与淘汰策略</strong></td>
+<td style="text-align:left">最多 <strong>64 条，不淘汰</strong>，满载返回 <code>effect-capacity</code></td>
+<td style="text-align:left">保留最近 <strong>64 条，按最旧淘汰</strong>，结合全局与单灯水位线防回退</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>执行前拒绝 <code>errorCode</code></strong></td>
+<td style="text-align:left"><code>stale-shadow</code>、<code>effect-conflict</code>、<code>effect-capacity</code>、<code>invalid-request</code>、<code>outcome-unknown</code></td>
+<td style="text-align:left"><code>stale-shadow</code>、<code>effect-conflict</code>、<code>invalid-request</code>、<code>outcome-unknown</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2>3. 同 Authority 凭据刷新与无重启 SDK 客户端替换（025）</h2>
+<p>为解决旧 ESP-MQTT 句柄热更新凭据时的状态残留问题，025 规范要求在<strong>同一 Authority 下始终完整替换整个 SDK Client</strong>（而不是在旧句柄上调用 <code>set_config + reconnect</code>），从而在<strong>不重启整机</strong>的前提下平滑恢复连接。</p>
+<h3>3.1 免重启边界：<code>HasSameEffectAuthority()</code> 与 <code>GOT_IP</code> 迁址例外</h3>
+<ul>
+<li><strong>常规条件</strong>：固定服务器信任、连接地址、Broker/端口、设备/用户名、所有 Topic、Provisioning URL、绑定 Secret 与绑定状态全部一致（仅密码 / <code>accessToken</code> 轮换）。</li>
+<li><strong>受限 <code>GOT_IP</code> 例外</strong>：当 STA 的 IP/子网掩码/网关三元组变化触发网络版本递增时，若设备处于已固定证书（Pin）模式，经真实 <code>DeviceCloud</code> TLS 校验与原凭据认证后，<strong>允许仅变更数值连接地址</strong>而免重启替换客户端；若证书、端口、Topic 或 Authority 发生变化，仍维持整机重启隔离。</li>
+</ul>
+<h3>3.2 替换流程与严苛锁序</h3>
+<ol>
+<li><strong>摘除旧实例</strong>：在短临界区（<code>client_api_mutex_ → mqtt_mutex_</code>）摘下旧实例唯一 owner，推进 <code>generation</code>/<code>epoch</code>，清空半包、发布队列与流租约。</li>
+<li><strong>锁外清理与停止</strong>：释放两锁后清理已撤销的媒体流，再<strong>仅持 <code>client_api_mutex_</code></strong> 停止并销毁旧 SDK（绝不持 <code>mqtt_mutex_</code> 等待 SDK 回调，防止与 ESP-MQTT 内部递归锁形成死锁）。</li>
+<li><strong>精确快照附着</strong>：新建空 <code>DeviceCloudConfig</code> 构造并注册候选 SDK，最后调用 <code>ApplyIfMqttConfigCurrent()</code>（锁序 <code>client_api_mutex_ → DeviceCloud config_mutex_ → mqtt_mutex_</code>）在配置锁内做最终精确比对与附着，锁外再 <code>start</code> SDK 任务。</li>
+<li><strong>失败底线</strong>：
+<ul>
+<li>若候选创建或附着失败，释放未启动候选并按 <strong>2 s → 60 s</strong> 退避重读配置（不重复已成功的 HTTP 刷新）。</li>
+<li>若旧 SDK <code>stop</code> <strong>未确认成功</strong>，严禁销毁可能仍在运行的句柄或新建客户端，必须保留隔离 owner 并执行 <strong>fail-safe 整机重启</strong>。</li>
+</ul>
+</li>
+</ol>
+<h2>4. Shadow 语音身份与动态唤醒词同步（<code>voice_identity</code>）</h2>
+<p><code>voice_identity</code> 通过设备影子动态同步设备称呼与本地唤醒词（初始身份 <code>罗达克（Rodak）</code>，默认展示唤醒词 <code>你好达克</code>）：</p>
+<ul>
+<li><strong>ESP-SR 运行时边界</strong>：固件加载 <code>espressif/esp-sr</code> 2.2.2 与中文 <code>mn5q8_cn</code> MultiNet 模型，通过 <code>esp_mn_commands_add()</code> + <code>esp_mn_commands_update()</code> 在运行时更新拼音指令（因此展示词 <code>wakeWord</code> 与拼音指令 <code>wakeCommand</code> 拆分为两个字段；当前基线阈值从 <code>0.20</code> 调至 <code>0.14</code> 以提升远场召回，需权衡误唤醒）。</li>
+<li><strong>Desired 契约</strong>：<code>name</code> 与 <code>wakeWord</code> 各限 <strong>32 字节 UTF-8</strong>，<code>wakeCommand</code> 限 <strong>128 字节</strong>，拒绝控制字符；<code>revision</code> 为正 <code>uint32</code>；<code>mode: &quot;temporary&quot;</code> 必须携带正整数 Unix 毫秒时间戳 <code>expiresAtMs</code>。</li>
+<li><strong>Reported 与防误注入</strong>：上报对象包含 <code>revisionWatermark</code>、<code>activeConfirmed</code>、<code>status</code>、<code>runtime</code>、<code>model</code> 与可选 <code>error</code>。只有 <code>applied</code> / <code>expired</code> 代表配置与存储均已确认；处于 <code>pending</code>、<code>pending_clock</code>、<code>recovery_failed</code> 时，<code>activeConfirmed</code> 不成立，<strong>服务端绝不可将未确认候选注入 Base System Prompt</strong>。</li>
+<li><strong>存储与时钟保护</strong>：NVS <code>voice_wake/identity</code> 以单条 schema-1 JSON 原子保存 <code>persistent</code>、<code>active</code>、<code>lastAccepted</code>（保存后强制新句柄回读校验；结果不确定时冻结更新并停用身份驱动监听）。临时身份过期采用 2020 年时钟合理性底线，并用单调 uptime 计算剩余寿命（防止系统时钟回拨延长过期时间）；重启后时钟尚未同步时先回退至 <code>persistent</code> 并上报 <code>pending_clock</code>。</li>
+</ul>
+<h2>5. 对应源码与主机测试套件</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">能力模块</th>
+<th style="text-align:left">核心固件源码（<code>main/phone_os/</code>）</th>
+<th style="text-align:left">主机测试套件（<code>tests/</code>）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>指令账本与精确 Stop</strong></td>
+<td style="text-align:left"><code>mqtt_command_ledger.*</code>、<code>unified_mqtt_service.*</code>、<code>stream_lease.h</code></td>
+<td style="text-align:left"><code>tests/mqtt_volume_service/mqtt_command_*</code>、<code>mqtt_stream_lifecycle_test.cc</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>音量 / 灯光 Effect</strong></td>
+<td style="text-align:left"><code>mqtt_volume_effect.*</code>、<code>mqtt_light_effect.*</code>、<code>light_service.*</code></td>
+<td style="text-align:left"><code>tests/app_model/mqtt_volume_effect_test.cc</code>、<code>tests/light_service/</code>、<code>tests/mqtt_volume_service/</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>凭据无重启替换与迁址</strong></td>
+<td style="text-align:left"><code>mqtt_credential_refresh_policy.*</code>、<code>cloud_credential_freshness.h</code>、<code>cloud_credential_renewal.h</code></td>
+<td style="text-align:left"><code>tests/mqtt_volume_service/mqtt_credential_replacement_test.cc</code>、<code>mqtt_network_route_test.cc</code>、<code>tests/mqtt_cloud_integration/</code></td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Shadow 语音身份</strong></td>
+<td style="text-align:left"><code>voice_identity.*</code>、<code>voice_identity_record.cc</code>、<code>voice_wake_service.*</code></td>
+<td style="text-align:left"><code>tests/app_model/voice_identity*</code>、<code>tests/voice_identity_integration/</code>、<code>tests/voice_wake_service/</code></td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="../articles/08-rodak-provisioning-and-lan-trust-setup.html">← 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="../articles/10-rodak-webrtc-streaming-and-remote-control.html">WebRTC 摄像头/屏幕推流与远程输入控制实战 →</a></nav></main></div></body></html>

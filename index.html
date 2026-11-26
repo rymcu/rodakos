@@ -1,0 +1,136 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rodak 协议开发者上手手册总索引与学习路线图 | RodakOS</title><link rel="stylesheet" href="assets/style.css"></head><body><a class="skip" href="#chapter">跳到正文</a><header class="top"><div><a class="brand" href="index.html">RodakOS / 开发者文档</a><a href="https://github.com/rymcu/rodakos">GitHub 仓库 ↗</a></div></header><div class="wrap"><details class="sidebar" open><summary>手册目录</summary><nav aria-label="手册章节"><a href="index.html" aria-current="page"><span>00</span> 总索引</a><a href="articles/01-rodak-aiot-v1-overview-and-architecture.html"><span>01</span> Rodak AIoT v1 协议全景与架构入门</a><a href="articles/02-rodak-aiot-v1-binding-auth-and-security.html"><span>02</span> 设备入网、宿主绑定、鉴权与安全模式实战</a><a href="articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html"><span>03</span> 统一 MQTT、指令系统、设备影子与实时语音交接指南</a><a href="articles/04-rodak-aiot-v1-ota-and-contract-verification.html"><span>04</span> OTA 安全升级协同、契约校验与联调测试清单</a><a href="articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html"><span>05</span> Rodak Realtime Voice v1 架构、服务发现与控制面信令详解</a><a href="articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html"><span>06</span> RAV1 二进制音频帧、VAD 策略、多设备仲裁与主动播报实战</a><a href="articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html"><span>07</span> 实时语音四重代次门控、超时重连与契约测试指南</a><a href="articles/08-rodak-provisioning-and-lan-trust-setup.html"><span>08</span> 入网前置协议：USB 串口配网、扫码配网与无 USB 局域网建信实战</a><a href="articles/09-rodak-mqtt-advanced-semantics-and-effects.html"><span>09</span> MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份</a><a href="articles/10-rodak-webrtc-streaming-and-remote-control.html"><span>10</span> WebRTC 摄像头/屏幕推流与远程输入控制实战</a><a href="articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html"><span>11</span> 固件源码导读、构建期补丁避坑与真机语音/OTA 排障手册</a><a href="articles/12-rodak-appearance-package-and-verification.html"><span>12</span> 外观资源包协议与签名校验机制（Appearance Customization）</a><a href="articles/13-rodak-protocol-minimal-simulator-walkthrough.html"><span>13</span> 零硬件上手：Python 协议联调片段与离线 RAV1 验证</a></nav></details><main class="paper" id="chapter"><div class="eyebrow">协议开发者上手手册</div><h1>Rodak 协议开发者上手手册总索引与学习路线图</h1><blockquote>
+<p><strong>系列定位</strong>：本套技术文档基于 <a href="https://github.com/rymcu/rodakos">rymcu/rodakos</a> 仓库的权威契约（<a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md">rodak-aiot-contract-v1.md</a>、<a href="https://github.com/rymcu/rodakos/blob/main/docs/rodak-realtime-voice-contract-v1.md">rodak-realtime-voice-contract-v1.md</a>）及各子系统设计文档编写，帮助新人开发者从零理解协议边界、落地代码实现并通过自动化契约与真机验收。</p>
+</blockquote>
+<blockquote>
+<p>版本基线（2026-11-26）：<a href="https://github.com/rymcu/rodakos/commit/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5">RodakOS main @ f4d834d3</a>，源码版本 0.1.6。协议与实现定位以该固定提交为准；草案事件可已实现，主机检查、开发包和指定端云组合的真机验收分别取证。入口：<a href="articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html">语音信令（05）</a>、<a href="articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html">验收界限（07）</a>、<a href="articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html">固件排障（11）</a>、<a href="articles/13-rodak-protocol-minimal-simulator-walkthrough.html">模拟器（13）</a>。</p>
+</blockquote>
+<h2>1. 全系列文章目录（共 13 篇实战指南）</h2>
+<h3>第一部分：Rodak AIoT v1 核心控制面（<code>01</code>–<code>04</code>）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:center">编号</th>
+<th style="text-align:left">文件名</th>
+<th style="text-align:left">核心内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>01</code></td>
+<td style="text-align:left"><a href="articles/01-rodak-aiot-v1-overview-and-architecture.html">01_rodak_aiot_v1_overview_and_architecture.md</a></td>
+<td style="text-align:left">协议权威边界、核心模块分工、5 类凭证术语、<code>rymcu_bigsmart</code> vs <code>rymcu-bigsmart</code> 防坑、ESP-IDF 6.0.2 构建与烧录红线。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>02</code></td>
+<td style="text-align:left"><a href="articles/02-rodak-aiot-v1-binding-auth-and-security.html">02_rodak_aiot_v1_binding_auth_and_security.md</a></td>
+<td style="text-align:left">9 步入网绑定时序、状态机、HTTP 统一信封错误码陷阱、Token 刷新、LAN Trust Setup 概览与 Legacy/Pin 模式对比。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>03</code></td>
+<td style="text-align:left"><a href="articles/03-rodak-aiot-v1-mqtt-commands-shadow-and-voice.html">03_rodak_aiot_v1_mqtt_commands_shadow_and_voice.md</a></td>
+<td style="text-align:left">Unified MQTT 连接与 Topic 清单、指令回执与推流互斥、Shadow/Telemetry、L0–L4 证据等级、实时语音交接。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>04</code></td>
+<td style="text-align:left"><a href="articles/04-rodak-aiot-v1-ota-and-contract-verification.html">04_rodak_aiot_v1_ota_and_contract_verification.md</a></td>
+<td style="text-align:left">OTA 协同流程与 Recovery 分区刷写、<code>contracts/rodak-aiot/v1/</code> 机器可读契约校验、宿主测试与提 PR 自检清单。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>第二部分：Rodak Realtime Voice v1 实时语音（<code>05</code>–<code>07</code>）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:center">编号</th>
+<th style="text-align:left">文件名</th>
+<th style="text-align:left">核心内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>05</code></td>
+<td style="text-align:left"><a href="articles/05-rodak-realtime-voice-v1-architecture-and-signaling.html">05_rodak_realtime_voice_v1_architecture_and_signaling.md</a></td>
+<td style="text-align:left"><code>realtimeVoice</code> 服务发现、WebSocket 鉴权头、12 层 JSON 嵌套与大小限制、固定的 12 项描述符兼容事件名，以及握手后实际控制事件（含协商的接受与进度）。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>06</code></td>
+<td style="text-align:left"><a href="articles/06-rodak-realtime-voice-v1-audio-rav1-vad-and-announce.html">06_rodak_realtime_voice_v1_audio_rav1_vad_and_announce.md</a></td>
+<td style="text-align:left">Opus 上下行规格、RAV1 <code>12+N</code> 二进制帧、3 种 VAD 策略、1.5 秒多设备唤醒仲裁、MQTT 触发的 Announce 纯下行播报。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>07</code></td>
+<td style="text-align:left"><a href="articles/07-rodak-realtime-voice-v1-reliability-gating-and-testing.html">07_rodak_realtime_voice_v1_reliability_gating_and_testing.md</a></td>
+<td style="text-align:left">四重代次门控（<code>generation</code> / <code>sessionId</code> / <code>playbackEpoch</code> / RAV1 序号）、重连资格矩阵、20s/120s/130s 看门狗与测试套件。</td>
+</tr>
+</tbody>
+</table></div>
+<h3>第三部分：进阶子系统、固件落地与零硬件联调（<code>08</code>–<code>13</code>）</h3>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:center">编号</th>
+<th style="text-align:left">文件名</th>
+<th style="text-align:left">核心内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>08</code></td>
+<td style="text-align:left"><a href="articles/08-rodak-provisioning-and-lan-trust-setup.html">08_rodak_provisioning_and_lan_trust_setup.md</a></td>
+<td style="text-align:left">USB 串口配网（<code>RODAK_PROVISION_V1</code> + <code>bindingProof</code>）、扫码配网（<code>RODAK:</code>/<code>WIFI:</code>）、无 USB SRP-6a 局域网建信与 mDNS 可信发现。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>09</code></td>
+<td style="text-align:left"><a href="articles/09-rodak-mqtt-advanced-semantics-and-effects.html">09_rodak_mqtt_advanced_semantics_and_effects.md</a></td>
+<td style="text-align:left">64 条指令去重账本与精确 Stop（026）、音量/灯光 Effect 与 L3 回执、025 同 Authority 无重启替换客户端、Shadow 语音身份。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>10</code></td>
+<td style="text-align:left"><a href="articles/10-rodak-webrtc-streaming-and-remote-control.html">10_rodak_webrtc_streaming_and_remote_control.md</a></td>
+<td style="text-align:left"><code>esp_peer</code> 1.5.6 推流与 MQTT 边带信令、<code>screen-control</code> 远程输入协议、ESP32-S3 内部 RAM 8 KiB 碎片化 3 大真实缺陷。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>11</code></td>
+<td style="text-align:left"><a href="articles/11-rodak-firmware-source-map-patches-and-troubleshooting.html">11_rodak_firmware_source_map_patches_and_troubleshooting.md</a></td>
+<td style="text-align:left">协议到 <code>main/phone_os/</code> 源码定位表、<code>patches/</code> 补丁清单、16 MiB Flash 分区与离线生产签名、后台 Token 续期与 AEC 串口诊断。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>12</code></td>
+<td style="text-align:left"><a href="articles/12-rodak-appearance-package-and-verification.html">12_rodak_appearance_package_and_verification.md</a></td>
+<td style="text-align:left">外观资源包物理触摸公钥固定、断点续传、RAP1 二进制格式、RSA-2048 清单验签、内存/SD 双槽预算与启动试用回滚。</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>13</code></td>
+<td style="text-align:left"><a href="articles/13-rodak-protocol-minimal-simulator-walkthrough.html">13_rodak_protocol_minimal_simulator_walkthrough.md</a></td>
+<td style="text-align:left">基于仓库夹具的 Python 分段联调示例：Bootstrap、绑定、MQTT Ping/ACK、WebSocket 握手与离线 RAV1 解析；并非完整语音闭环。</td>
+</tr>
+</tbody>
+</table></div>
+<h2>2. 按角色推荐的上手路线</h2>
+<div class="scroll" tabindex="0" aria-label="表格"><table>
+<thead>
+<tr>
+<th style="text-align:left">开发者角色</th>
+<th style="text-align:left">推荐必读顺序</th>
+<th style="text-align:left">重点关注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>服务端开发（Rodak / IntelliConnect）</strong></td>
+<td style="text-align:left"><code>01</code> → <code>02</code> → <code>03</code> → <code>05</code> → <code>06</code> → <code>08</code> → <code>09</code> → <code>13</code></td>
+<td style="text-align:left">HTTP 信封、SRP-6a 建信、QR 公网 Nginx 限制、Effect 回执、RAV1 与多设备仲裁。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>固件开发（RodakOS / ESP32-S3）</strong></td>
+<td style="text-align:left"><code>01</code> → <code>04</code> → <code>07</code> → <code>08</code> → <code>09</code> → <code>10</code> → <code>11</code> → <code>12</code></td>
+<td style="text-align:left">锁序与四重门控、内部 SRAM 连续块与场景相关的内存预算、构建期补丁、<code>ota_state</code> Recovery ABI 与主机测试。</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>测试 / 模拟器 / 协议联调</strong></td>
+<td style="text-align:left"><code>01</code> → <code>02</code> → <code>03</code> → <code>05</code> → <code>06</code> → <code>07</code> → <code>13</code></td>
+<td style="text-align:left"><code>contracts/</code> 正反例夹具、<code>check_aiot_contract.py</code>、<code>RODAK_VOICE_TEST_V1</code> 与 Python 模拟器。</td>
+</tr>
+</tbody>
+</table></div>
+<nav class="pager" aria-label="相邻章节"><a href="articles/01-rodak-aiot-v1-overview-and-architecture.html">Rodak AIoT v1 协议全景与架构入门 →</a></nav></main></div></body></html>
