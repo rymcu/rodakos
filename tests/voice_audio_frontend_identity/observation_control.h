@@ -12,6 +12,9 @@ void ArmSemaphore(void* semaphore, const char* task, SemaphorePoint point,
                   std::function<bool()> predicate = {});
 bool WaitSemaphoreBlocked();
 void ReleaseSemaphore();
+// Runs before the armed point on every semaphore event, so a test can park one task while
+// ArmSemaphore holds another.
+void SetSemaphoreHook(void (*hook)(void* semaphore, SemaphorePoint point));
 void OnSemaphore(void* semaphore, SemaphorePoint point);
 void ArmLog(const std::string& contains);
 bool WaitLogBlocked();

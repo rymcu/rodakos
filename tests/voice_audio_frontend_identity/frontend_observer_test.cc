@@ -100,9 +100,12 @@ struct Fixture {
 
 retirement_host::Gate between_read_gate;
 std::atomic<rodakos::VoiceAudioFrontend*> between_read_frontend{nullptr};
-void PauseBetweenReads(TickType_t) {
+// Capture no longer sleeps after a successful read, so park it where the next loop iteration
+// takes the business mutex; the producer stage is still kBetweenReads there.
+void PauseBetweenReads(void* semaphore, Point point) {
     auto* frontend = between_read_frontend.load();
-    if (frontend != nullptr && std::string(retirement_host::CurrentTaskName()) == "voice_frontend" &&
+    if (frontend != nullptr && point == Point::kBeforeTake && semaphore == frontend->mutex_ &&
+        std::string(retirement_host::CurrentTaskName()) == "voice_frontend" &&
         frontend->afe_producer_diagnostics_.Snapshot().stage == Stage::kBetweenReads)
         between_read_gate.Enter();
 }
@@ -278,7 +281,7 @@ RODAK_TEST("TEST frontend never lends an unfinished feed slot to the same numeri
     RODAK_CHECK(observe::WaitSemaphoreBlocked());
     const auto rejections_before = platform::RejectedCaptureTries();
     between_read_frontend = &fixture.frontend;
-    retirement_host::SetDelayHook(PauseBetweenReads);
+    observe::SetSemaphoreHook(PauseBetweenReads);
     platform::FailNextCaptureTry();
     flow::ReleaseFirstFeed();
     const bool paused_between_reads = between_read_gate.Wait();
@@ -289,7 +292,7 @@ RODAK_TEST("TEST frontend never lends an unfinished feed slot to the same numeri
     observe::ReleaseSemaphore();
     const bool open_logged = WaitUntil([&] { return !UnalignedOpenReport(producer, logs_before).empty(); });
     const auto report = UnalignedOpenReport(producer, logs_before);
-    retirement_host::SetDelayHook(nullptr);
+    observe::SetSemaphoreHook(nullptr);
     between_read_frontend = nullptr;
     between_read_gate.Release();
     // Cleanup comes before assertions so the precise negative cannot strand the real Capture.
