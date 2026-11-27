@@ -50,6 +50,9 @@ struct RecordingState {
     size_t file_size = 0;
     uint32_t duration_ms = 0;
     int gain = 0;
+    // Peak of the last captured chunk while recording, 0..100 on a dBFS scale (0 is -48 dBFS or
+    // quieter, 100 is full scale); 0 whenever the service is not recording.
+    uint8_t input_level = 0;
 };
 
 struct RecordingEntry {
@@ -76,6 +79,8 @@ public:
     bool DeleteRecording(const std::string& path);
 
     static bool IsRecordingFile(const std::string& name);
+    // Maps a 16-bit absolute peak to the 0..100 input_level scale.
+    static uint8_t LevelForPeak(uint16_t peak);
 
 private:
     static void RecordingTaskEntry(void* arg);
@@ -101,7 +106,7 @@ private:
     void ClearTask();
     void SetState(RecordingStatus status, const char* message = nullptr);
     void SetError(const std::string& error);
-    void UpdateProgress(size_t bytes_written);
+    void UpdateProgress(size_t bytes_written, uint16_t chunk_peak);
     uint32_t DurationForBytes(size_t bytes) const;
 
     AudioCodecInput& input_;

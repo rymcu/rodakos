@@ -181,7 +181,10 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   定格 (freeze), and a six-axis page with centred bars. A sensor failure shows a 重试 page.
 - System (`system_info`): firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
-- Recorder: captures microphone audio through the recording service and stores it through FileService.
+- Recorder: a recording page (timer, 20-bar live input level, shutter-style record button, speaker
+  test, replay of the newest recording) and a list page (play with progress, confirmed delete).
+  `RecordingState::input_level` carries the last chunk peak on a 48 dB scale. Captures microphone
+  audio through the recording service and stores it through FileService.
   Start admission is separate from Saved. Final WAV header, flush and close failures remain errors,
   and `library_error` does not overwrite a completed save. Path leases cover creation, data, final
   header and cleanup without holding the entire storage I/O lock. See [media save boundaries](media-save.md).

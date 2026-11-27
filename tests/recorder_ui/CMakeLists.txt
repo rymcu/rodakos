@@ -13,7 +13,6 @@ add_subdirectory("${RODAKOS_ROOT}/managed_components/lvgl__lvgl" "${CMAKE_CURREN
 add_executable(rodakos_recorder_ui_tests
     recorder_ui_test.cc
     "${RODAKOS_ROOT}/tests/home_ui/test_main.cc"
-    "${RODAKOS_ROOT}/tests/home_ui/fakes/test_fonts.cc"
     "${RODAKOS_ROOT}/tests/audio_playback_service/host_runtime.cc"
     "${RODAKOS_ROOT}/tests/recording_service/stdio_faults.cc"
     "${RODAKOS_ROOT}/main/apps/recorder/recorder_app.cc"
@@ -23,11 +22,18 @@ add_executable(rodakos_recorder_ui_tests
     "${RODAKOS_ROOT}/main/phone_ui/phone_components.cc"
     "${RODAKOS_ROOT}/main/phone_ui/phone_theme.cc"
     "${RODAKOS_ROOT}/main/phone_ui/rodakos_theme.cc"
+    # Production fonts (Montserrat -> Ionicons -> PuHui) so screenshots show real Chinese and icons.
+    "${RODAKOS_ROOT}/main/phone_ui/phone_fonts.cc"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/font_puhui_16_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_20_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/rodakos_icons_30_4.c"
+    "${RODAKOS_ROOT}/components/rodakos_fonts/src/font_edix_36_4.c"
 )
 target_include_directories(rodakos_recorder_ui_tests BEFORE PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/fakes"
     "${RODAKOS_ROOT}/tests/recording_service/fakes"
     "${RODAKOS_ROOT}/tests/audio_playback_service/fakes"
+    "${RODAKOS_ROOT}/tests/themes_ui/fakes"
     "${RODAKOS_ROOT}/tests/home_ui/fakes"
     "${RODAKOS_ROOT}/tests/home_ui"
     "${RODAKOS_ROOT}/tests/recording_service"
@@ -45,5 +51,7 @@ target_link_options(rodakos_recorder_ui_tests PRIVATE
     -Wl,--wrap=lv_timer_create
 )
 target_compile_options(rodakos_recorder_ui_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(rodakos_recorder_ui_tests PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
+set_source_files_properties(recorder_ui_test.cc PROPERTIES COMPILE_OPTIONS -fno-access-control)
 add_test(NAME rodakos_recorder_ui COMMAND rodakos_recorder_ui_tests)
 set_tests_properties(rodakos_recorder_ui PROPERTIES TIMEOUT 60)
