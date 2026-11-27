@@ -9,6 +9,34 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace rodakos {
+enum class CameraCaptureFailureStage : uint8_t {
+    kNone,
+    kServiceUnavailable,
+    kNoFrame,
+    kJpegInputAlloc,
+    kJpegEncoderOpen,
+    kJpegOutputAlloc,
+    kJpegEncodeProcess,
+    kJpegCompactAlloc,
+    kStorageUnavailable,
+    kDirectoryFailed,
+    kPathSelectionFailed,
+    kWriteFailed,
+};
+
+struct CameraCaptureOutcome {
+    bool ok = false;
+    CameraCaptureFailureStage stage = CameraCaptureFailureStage::kNone;
+    int native_error = 0;
+};
+
+inline const char* CameraCaptureFailureStageName(CameraCaptureFailureStage) {
+    return "fake capture stage";
+}
+}
+
 namespace camera_test {
 class Gate {
 public:
@@ -34,9 +62,8 @@ private:
     bool released_ = false;
 };
 struct CaptureOutcome {
-    bool ok = true;
+    rodakos::CameraCaptureOutcome result{true, rodakos::CameraCaptureFailureStage::kNone, 0};
     std::string path = "/photos/test.jpg";
-    std::string error;
     std::shared_ptr<Gate> gate;
 };
 }
@@ -90,9 +117,9 @@ public:
         return state;
     }
     std::string last_error() const {
-        return camera_test::capture_worker ? capture_error_ : preview_error;
+        return preview_error;
     }
-    bool CapturePhoto(std::string& saved_path) {
+    CameraCaptureOutcome CapturePhotoWithOutcome(std::string& saved_path) {
         camera_test::CaptureOutcome outcome;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -100,10 +127,9 @@ public:
             if (index < outcomes_.size()) outcome = outcomes_[index];
         }
         if (outcome.gate) outcome.gate->Enter();
-        saved_path = outcome.ok ? outcome.path : std::string{};
-        capture_error_ = outcome.error;
+        saved_path = outcome.result.ok ? outcome.path : std::string{};
         ++completed;
-        return outcome.ok;
+        return outcome.result;
     }
     void Outcomes(std::vector<camera_test::CaptureOutcome> outcomes) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -127,6 +153,5 @@ public:
 private:
     std::mutex mutex_;
     std::vector<camera_test::CaptureOutcome> outcomes_;
-    inline static thread_local std::string capture_error_;
 };
 }

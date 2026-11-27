@@ -17,14 +17,16 @@ ctest --test-dir build-host-media-save/camera-ui-debug --output-on-failure -V
 ASan/UBSan 在独立构建目录为 C/C++ 添加 `-fsanitize=address,undefined -fno-omit-frame-pointer`，
 运行时设置 `ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1`。
 
-14 项测试覆盖 worker 不访问 LVGL、完成结果延迟消费、缺卡失败后重试、重复点击、预览失败时仍能
+15 项测试覆盖 worker 不访问 LVGL、完成结果延迟消费、缺卡失败后重试、重复点击、预览失败时仍能
 消费结果并可点「重试」恢复预览、任务与 timer 分配失败、旧 generation、App 销毁与真实主题重建、
-焦点释放、取景区尺寸与结果提示不越出取景区且自动消失，以及 UI 销毁等待 LVGL 所有权。独立结果 timer 消费共享 guard，worker 不持 App 指针、不依赖
+焦点释放、取景区尺寸与结果提示不越出取景区且自动消失，以及 UI 销毁等待 LVGL 所有权。
+新增用例验证结果提示使用本次拍照的失败阶段与原生错误码。
+独立结果 timer 消费共享 guard，worker 不持 App 指针、不依赖
 `lv_async_call` 或 LVGL lock 来交付结果。销毁撤销 guard，并在对象释放前删除全部 timer。
 
 Camera Back/Home 现在走启动时预建的导航队列；拒绝显示“返回桌面失败，请重试”，不会自动重试。
 这与拍照 worker 的完成结果 timer 是两个独立合同。队列的 30 ms 周期不保证导航完成时间，
-也没有将其他 app 的异步入口一并迁移。本轮记录 13 项 Debug 回归通过；设备和发布验收仍需
+也没有将其他 app 的异步入口一并迁移。设备和发布验收仍需
 按 [030 软件合同](../../docs/task-retirement.md) 单独取证。
 
 构建目录输出保存成功、存储错误、预览失败及不可用状态的截图。结果提示是半透明黑底白字，

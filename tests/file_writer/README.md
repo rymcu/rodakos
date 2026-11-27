@@ -1,8 +1,8 @@
 # 文件保存结果宿主测试
 
 本目标编译生产 `WriteFileBytes`，使用真实临时目录和 libc 文件操作，通过 linker wrapper 注入
-打开、短写、stream error、flush、close 和清理失败。10 项用例验证新建文件的排他性、并发单一
-胜者、完整内容、失败清理及重试，并保留普通替换/追加语义。
+打开、短写、stream error、flush、close 和清理失败。13 项用例验证新建文件的排他性、并发单一
+胜者、完整内容、失败清理、首个 `errno` 的保留及重试，并保留普通替换/追加语义。
 
 ```sh
 cmake -S tests/file_writer -B build-host-media-save/file-writer-debug -G Ninja \

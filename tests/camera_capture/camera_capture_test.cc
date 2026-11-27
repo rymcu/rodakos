@@ -10,6 +10,7 @@
 #include <new>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -21,6 +22,7 @@
 namespace {
 using namespace rodakos;
 using Bytes = std::vector<uint8_t>;
+using Stage = CameraCaptureFailureStage;
 
 struct Fixture {
     std::string root;
@@ -70,6 +72,37 @@ struct Fixture {
                                                 std::filesystem::directory_iterator{}));
     }
 };
+
+class StorageWithoutErrno : public FileService {
+public:
+    bool Init() override { return true; }
+    void Deinit() override {}
+    bool IsMounted() const override { return true; }
+    const char* GetMountPoint() const override { return "/sdcard"; }
+    FileSystemType GetFileSystemType() const override { return FileSystemType::FATFS; }
+    MediumType GetMediumType() const override { return MediumType::SDCard; }
+    bool GetCapacity(Capacity&) override { return false; }
+    bool ListDirectory(const std::string&, std::vector<FileEntry>&) override { return false; }
+    bool ReadFile(const std::string&, Bytes&) override { return false; }
+    bool WriteFile(const std::string&, const Bytes&, bool) override { return false; }
+    bool DeleteFile(const std::string&) override { return false; }
+    bool DeleteDirectory(const std::string&) override { return false; }
+    bool Rename(const std::string&, const std::string&) override { return false; }
+    size_t GetFileSize(const std::string&) override { return 0; }
+    bool Exists(const std::string& path) override { return directory_exists && path == "/photos"; }
+    bool CreateDirectory(const std::string&) override {
+        mkdir_errno = errno;
+        return false;
+    }
+    bool WriteNewFile(const std::string&, const Bytes&) override {
+        write_errno = errno;
+        return false;
+    }
+
+    bool directory_exists = false;
+    int mkdir_errno = -1;
+    int write_errno = -1;
+};
 }
 
 RODAK_TEST("camera reports a saved path only after real exclusive file output succeeds") {
@@ -86,13 +119,18 @@ RODAK_TEST("camera reports a saved path only after real exclusive file output su
 RODAK_TEST("missing camera frame or file service never publishes stale caller output") {
     Fixture f;
     std::string path = "/photos/old.jpg";
-    RODAK_CHECK_FALSE(f.camera->CapturePhoto(path));
+    const auto no_frame = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(no_frame.ok);
+    RODAK_CHECK(no_frame.stage == Stage::kNoFrame);
     RODAK_CHECK(path.empty());
     RODAK_CHECK(f.camera->GetState().last_saved_path.empty());
     CameraService no_files(nullptr);
     f.Preview(&no_files);
     path = "/photos/old.jpg";
-    RODAK_CHECK_FALSE(no_files.CapturePhoto(path));
+    const auto no_storage = no_files.CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(no_storage.ok);
+    RODAK_CHECK(no_storage.stage == Stage::kStorageUnavailable);
+    RODAK_CHECK_EQ(no_storage.native_error, ENODEV);
     RODAK_CHECK(path.empty());
     RODAK_CHECK_EQ(no_files.last_error(), "File service is not available");
     RODAK_CHECK_EQ(f.PhotoCount(), 0u);
@@ -117,16 +155,74 @@ RODAK_TEST("encoder and input allocation failures preserve prior success and all
     RODAK_CHECK_EQ(f.Read(saved), camera_host::EncodedBytes());
 }
 
+RODAK_TEST("JPEG failures identify the stage and report once before freeing live scratch") {
+    Fixture f; f.Preview();
+    struct Fault {
+        Stage stage;
+        int error;
+        unsigned buffers_at_failure;
+        unsigned encoders_at_failure;
+    };
+    const Fault faults[] = {
+        {Stage::kJpegInputAlloc, ENOMEM, 0, 0},
+        {Stage::kJpegEncoderOpen, -1, 1, 0},
+        {Stage::kJpegEncoderOpen, ENOMEM, 1, 0},
+        {Stage::kJpegOutputAlloc, ENOMEM, 1, 1},
+        {Stage::kJpegEncodeProcess, -1, 2, 1},
+        {Stage::kJpegCompactAlloc, ENOMEM, 1, 0},
+    };
+    for (size_t i = 0; i < std::size(faults); ++i) {
+        unsigned reports = 0, buffers = 0, encoders = 0;
+        camera_host::caller_log_hook = [&](const char* format) {
+            if (std::strstr(format, "Capture failed: stage=") == nullptr) return;
+            ++reports;
+            buffers = camera_host::aligned_buffers;
+            encoders = camera_host::encoder_handles;
+        };
+        camera_host::fail_allocation = i == 0;
+        camera_host::fail_encoder_open = i == 1;
+        camera_host::fail_encoder_open_oom = i == 2;
+        camera_host::fail_aligned_size = i == 3 ? 96 * 1024 : 0;
+        camera_host::fail_encoder_process = i == 4;
+        if (i == 5) camera_host::FailNew(8, 1, 1, camera_host::AllocationThread::kCaller);
+        std::string path = "stale";
+        const auto outcome = f.camera->CapturePhotoWithOutcome(path);
+        camera_host::ClearNewFailures();
+        camera_host::caller_log_hook = {};
+
+        RODAK_CHECK_FALSE(outcome.ok);
+        RODAK_CHECK(outcome.stage == faults[i].stage);
+        RODAK_CHECK_EQ(outcome.native_error, faults[i].error);
+        RODAK_CHECK_EQ(reports, 1u);
+        RODAK_CHECK_EQ(buffers, faults[i].buffers_at_failure);
+        RODAK_CHECK_EQ(encoders, faults[i].encoders_at_failure);
+        RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
+        RODAK_CHECK_EQ(camera_host::encoder_handles.load(), 0u);
+        RODAK_CHECK(path.empty());
+    }
+    RODAK_CHECK_EQ(camera_host::unscoped_encoder_calls.load(), 0u);
+    RODAK_CHECK_EQ(f.PhotoCount(), 0u);
+}
+
 RODAK_TEST("mount and directory creation failures leave no saved result and can retry") {
     Fixture f; f.Preview();
     camera_host::fail_mount = true;
     std::string path = "old";
-    RODAK_CHECK_FALSE(f.camera->CapturePhoto(path));
+    const auto mount = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(mount.ok);
+    RODAK_CHECK(mount.stage == Stage::kStorageUnavailable);
+    RODAK_CHECK_EQ(mount.native_error, ENODEV);
     RODAK_CHECK(path.empty());
     RODAK_CHECK_EQ(f.camera->last_error(), "SD card is not available");
     camera_host::fail_mount = false;
     camera_host::fail_directory = true;
-    RODAK_CHECK_FALSE(f.camera->CapturePhoto(path));
+    camera_host::caller_log_hook = [](const char* format) {
+        if (std::strstr(format, "Failed to create directory") != nullptr) errno = EBADF;
+    };
+    const auto directory = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(directory.ok);
+    RODAK_CHECK(directory.stage == Stage::kDirectoryFailed);
+    RODAK_CHECK_EQ(directory.native_error, EACCES);
     RODAK_CHECK(path.empty());
     RODAK_CHECK_EQ(f.camera->last_error(), "Failed to create /photos on SD card");
     RODAK_CHECK(f.camera->GetState().last_saved_path.empty());
@@ -141,7 +237,13 @@ RODAK_TEST("short write flush and close failures cannot report photos or damage 
         if (fault == 1) camera_host::fail_flush = true;
         if (fault == 2) camera_host::fail_close = true;
         std::string path = previous;
-        RODAK_CHECK_FALSE(f.camera->CapturePhoto(path));
+        camera_host::caller_log_hook = [](const char* format) {
+            if (std::strstr(format, "Failed to save new file") != nullptr) errno = EBADF;
+        };
+        const auto result = f.camera->CapturePhotoWithOutcome(path);
+        RODAK_CHECK_FALSE(result.ok);
+        RODAK_CHECK(result.stage == Stage::kWriteFailed);
+        RODAK_CHECK_EQ(result.native_error, fault == 2 ? EIO : ENOSPC);
         RODAK_CHECK(path.empty());
         RODAK_CHECK_EQ(f.camera->GetState().last_saved_path, previous);
         RODAK_CHECK_EQ(f.camera->last_error(), "Failed to save photo");
@@ -152,6 +254,85 @@ RODAK_TEST("short write flush and close failures cannot report photos or damage 
         RODAK_CHECK_EQ(f.Read(retried), camera_host::EncodedBytes());
         RODAK_CHECK(f.camera->last_error().empty());
     }
+}
+
+RODAK_TEST("storage implementations that omit errno cannot leak the lookup ENOENT") {
+    Fixture f;
+    StorageWithoutErrno storage;
+    CameraService camera(&storage);
+    f.Preview(&camera);
+    std::string path;
+
+    const auto directory = camera.CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(directory.ok);
+    RODAK_CHECK(directory.stage == Stage::kDirectoryFailed);
+    RODAK_CHECK_EQ(directory.native_error, EIO);
+    RODAK_CHECK_EQ(storage.mkdir_errno, 0);
+    RODAK_CHECK_EQ(storage.write_errno, -1);
+    RODAK_CHECK(path.empty());
+
+    storage.directory_exists = true;
+    const auto write = camera.CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(write.ok);
+    RODAK_CHECK(write.stage == Stage::kWriteFailed);
+    RODAK_CHECK_EQ(write.native_error, EIO);
+    RODAK_CHECK_EQ(storage.write_errno, 0);
+    RODAK_CHECK(path.empty());
+}
+
+RODAK_TEST("a stat EIO stops directory and filename selection without creating anything") {
+    Fixture f; f.Preview();
+    camera_host::lookup_fault = camera_host::LookupFault::kDirectory;
+    std::string path;
+    const auto directory = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(directory.ok);
+    RODAK_CHECK(directory.stage == Stage::kDirectoryFailed);
+    RODAK_CHECK_EQ(directory.native_error, EIO);
+    RODAK_CHECK_EQ(camera_host::lookup_failures.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::photo_mkdir_calls.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::exclusive_create_calls.load(), 0u);
+    RODAK_CHECK(path.empty());
+
+    camera_host::lookup_fault = camera_host::LookupFault::kNone;
+    const auto previous = f.Save();
+    camera_host::lookup_fault = camera_host::LookupFault::kFilename;
+    const auto filename = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(filename.ok);
+    RODAK_CHECK(filename.stage == Stage::kPathSelectionFailed);
+    RODAK_CHECK_EQ(filename.native_error, EIO);
+    RODAK_CHECK_EQ(camera_host::lookup_failures.load(), 2u);
+    RODAK_CHECK_EQ(camera_host::photo_mkdir_calls.load(), 1u);
+    RODAK_CHECK_EQ(camera_host::exclusive_create_calls.load(), 1u);
+    RODAK_CHECK(path.empty());
+    RODAK_CHECK_EQ(f.camera->GetState().last_saved_path, previous);
+    RODAK_CHECK_EQ(f.Read(previous), camera_host::EncodedBytes());
+
+    camera_host::lookup_fault = camera_host::LookupFault::kNone;
+    const auto success = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK(success.ok);
+    RODAK_CHECK(success.stage == Stage::kNone);
+    RODAK_CHECK_EQ(success.native_error, 0);
+    RODAK_CHECK_NE(path, previous);
+}
+
+RODAK_TEST("stat failures without errno are EIO even with a stale ENOENT") {
+    Fixture f;
+    RODAK_CHECK(f.files->Init());
+    camera_host::lookup_fault = camera_host::LookupFault::kDirectoryWithoutErrno;
+    for (const int incoming_error : {0, ENOENT}) {
+        int error = 0;
+        errno = incoming_error;
+        const auto status = f.files->LookupPath("/photos", &error);
+        RODAK_CHECK(status == PathLookupStatus::kError);
+        RODAK_CHECK_EQ(error, EIO);
+        RODAK_CHECK_EQ(errno, EIO);
+
+        errno = incoming_error;
+        RODAK_CHECK_FALSE(f.files->CreateDirectory("/photos"));
+        RODAK_CHECK_EQ(errno, EIO);
+    }
+    RODAK_CHECK_EQ(camera_host::photo_mkdir_calls.load(), 0u);
+    RODAK_CHECK_EQ(camera_host::lookup_failures.load(), 4u);
 }
 
 RODAK_TEST("a concurrent external create is preserved and the next capture chooses a new path") {
@@ -472,6 +653,35 @@ template <typename F> bool WaitFor(F&& predicate) {
     return predicate();
 }
 using AllocationThread = camera_host::AllocationThread;
+}
+
+RODAK_TEST("a zero-height camera frame skips JPEG allocation") {
+    Fixture f;
+    camera_host::zero_frame_height = true;
+    f.Preview();
+
+    camera_host::fail_allocation = true;
+    std::string path;
+    const auto outcome = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(outcome.ok);
+    RODAK_CHECK(outcome.stage == Stage::kNoFrame);
+    RODAK_CHECK_EQ(outcome.native_error, 0);
+    RODAK_CHECK(path.empty());
+}
+
+RODAK_TEST("a preview allocation failure cannot replace an earlier shutter outcome") {
+    Fixture f; f.Preview();
+    camera_host::fail_write = true;
+    std::string path;
+    const auto shutter = f.camera->CapturePhotoWithOutcome(path);
+    camera_host::FailNew(8, 1, SIZE_MAX, AllocationThread::kPreview);
+    const bool preview_oom = WaitFor([&] { return f.camera->last_error() == "Camera OOM"; });
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(preview_oom);
+    RODAK_CHECK_FALSE(shutter.ok);
+    RODAK_CHECK(shutter.stage == Stage::kWriteFailed);
+    RODAK_CHECK_EQ(shutter.native_error, ENOSPC);
+    RODAK_CHECK(path.empty());
 }
 
 RODAK_TEST("preview allocation failures requeue buffers and recover without revoking owners") {

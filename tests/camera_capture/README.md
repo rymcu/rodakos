@@ -6,7 +6,7 @@ the real frame snapshot/conversion/capture path calls a fake JPEG encoder. Board
 unique temporary host directory, and photo selection, exclusive creation, writing, flushing,
 closing and cleanup use real host filesystem operations.
 
-The 47 tests cover:
+The 54 test cases cover:
 
 - Publishing `saved_path` and `last_saved_path` only after a successful save, including a blocked
   write where the candidate path must remain unpublished.
@@ -15,6 +15,12 @@ The 47 tests cover:
   allocator routing is covered by `tests/screen_jpeg_allocator` and the final-ELF audit.
 - Missing frame/service/storage/directory, encoder open/process/empty output and input allocation
   failures, with an empty per-call result and a retry after recovery.
+- Per-shutter failure stages and errno, including input, encoder, output and compact-buffer OOM.
+  The diagnostics fire once with the remaining JPEG buffers still live. Preview OOM cannot
+  overwrite an earlier shutter result.
+- A directory or filename `stat` returning `EIO` stops the save before it can create anything.
+- Failed `stat`, directory creation, and file writes that omit `errno` report `EIO`.
+- A zero-height frame bypasses JPEG allocation and reports `no_frame`.
 - `FileServiceImpl::ListDirectory` clears stale entries and reports `ENODEV` when
   unmounted, and preserves a real missing-directory `ENOENT` across adapter logging.
 - Short writes, flush and close failures, cleanup of failed newly created files, and preservation

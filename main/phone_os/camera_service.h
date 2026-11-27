@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <freertos/FreeRTOS.h>
@@ -18,6 +19,29 @@
 namespace rodakos {
 
 class FileService;
+
+enum class CameraCaptureFailureStage : uint8_t {
+    kNone,
+    kServiceUnavailable,
+    kNoFrame,
+    kJpegInputAlloc,
+    kJpegEncoderOpen,
+    kJpegOutputAlloc,
+    kJpegEncodeProcess,
+    kJpegCompactAlloc,
+    kStorageUnavailable,
+    kDirectoryFailed,
+    kPathSelectionFailed,
+    kWriteFailed,
+};
+
+struct CameraCaptureOutcome {
+    bool ok = false;
+    CameraCaptureFailureStage stage = CameraCaptureFailureStage::kNone;
+    int native_error = 0;
+};
+
+const char* CameraCaptureFailureStageName(CameraCaptureFailureStage stage);
 
 struct CameraFrame {
     int width = 0;
@@ -63,12 +87,13 @@ public:
     // Encodes the newest RGB565 preview frame as a standalone JPEG buffer.
     // The caller owns the returned bytes and may forward them to a transport.
     bool CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence = nullptr,
-                     int64_t* timestamp_us = nullptr);
+                     int64_t* timestamp_us = nullptr, CameraCaptureOutcome* outcome = nullptr);
     // Starts a bounded-rate JPEG producer over the already running preview.
     // The callback is invoked outside the service mutex and owns the moved bytes.
     bool StartJpegStream(uint8_t fps, JpegFrameCallback callback);
     void StopJpegStream();
     bool CapturePhoto(std::string& saved_path);
+    CameraCaptureOutcome CapturePhotoWithOutcome(std::string& saved_path);
     CameraState GetState() const;
     bool IsAvailable() const;
     std::string last_error() const;
@@ -92,8 +117,11 @@ private:
     bool& PreviewLease(PreviewOwner owner);
     bool ShouldStopPreview() const;
     void MarkPreviewStopped();
-    void SetError(const std::string& error);
-    std::string BuildPhotoPath();
+    void SetError(std::string_view error);
+    void SetLastError(std::string_view error);
+    CameraCaptureOutcome CaptureFailure(CameraCaptureFailureStage stage, int native_error,
+                                        const char* error);
+    std::string BuildPhotoPath(int& native_error);
 
     FileService* file_service_ = nullptr;
     CameraDevice camera_device_;

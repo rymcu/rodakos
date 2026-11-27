@@ -4,6 +4,7 @@
 #include "phone_os/phone_app.h"
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <fstream>
 #include <functional>
@@ -53,6 +54,8 @@ lv_timer_t* __wrap_lv_timer_create(lv_timer_cb_t callback, uint32_t period, void
 }
 }
 namespace {
+using FailureStage = rodakos::CameraCaptureFailureStage;
+
 void Pump(uint32_t milliseconds = 130) {
     std::lock_guard<std::recursive_timed_mutex> outer_lock(camera_test::ui_mutex);
     lv_test_wait(milliseconds);
@@ -158,11 +161,12 @@ RODAK_TEST("capture completion does not need a worker LVGL lock or async allocat
 
 RODAK_TEST("storage failure is shown and a second click can save successfully") {
     Fixture f;
-    f.camera.Outcomes({{false, "", "SD card is not available", {}}, {true, "/photos/retry.jpg", "", {}}});
+    f.camera.Outcomes({{{false, FailureStage::kStorageUnavailable, 0}, "", {}},
+                       {{true, FailureStage::kNone, 0}, "/photos/retry.jpg", {}}});
     f.Create();
     f.Click();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，SD 卡不可用");
     RODAK_CHECK_FALSE(f.Disabled());
     SaveScreenshot("camera-storage-error.ppm");
     // The error pill retires on its own after a few seconds.
@@ -174,10 +178,55 @@ RODAK_TEST("storage failure is shown and a second click can save successfully") 
     RODAK_CHECK_EQ(f.camera.captures.load(), 2U);
 }
 
+RODAK_TEST("capture failure toast uses the attempt stage and native error despite preview errors") {
+    const struct {
+        FailureStage stage;
+        int native_error;
+        const char* expected;
+    } cases[] = {
+        {FailureStage::kJpegInputAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegOutputAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegCompactAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegEncoderOpen, ENOMEM, "保存失败，内存不足"},
+        {FailureStage::kWriteFailed, ENOMEM, "保存失败，内存不足"},
+        {FailureStage::kWriteFailed, ENOSPC, "保存失败，SD 卡空间不足"},
+        {FailureStage::kWriteFailed, ENODEV, "保存失败，SD 卡不可用"},
+        {FailureStage::kPathSelectionFailed, ENXIO, "保存失败，SD 卡不可用"},
+        {FailureStage::kDirectoryFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kPathSelectionFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kWriteFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kJpegEncoderOpen, -1, "保存失败，请重试"},
+        {FailureStage::kJpegEncodeProcess, -1, "保存失败，请重试"},
+        {FailureStage::kNoFrame, 0, "保存失败，请重试"},
+        {FailureStage::kServiceUnavailable, 0, "保存失败，请重试"},
+    };
+    Fixture f;
+    std::vector<camera_test::CaptureOutcome> outcomes;
+    for (const auto& test : cases) {
+        outcomes.push_back({{false, test.stage, test.native_error}, "", {}});
+    }
+    f.camera.Outcomes(std::move(outcomes));
+    f.camera.preview_error = "Camera OOM";
+    f.Create();
+
+    for (const auto& test : cases) {
+        f.Click();
+        f.Complete();
+        RODAK_CHECK_EQ(f.Status(), test.expected);
+        RODAK_CHECK(f.StatusVisible());
+        RODAK_CHECK_FALSE(f.Disabled());
+        lv_area_t box{}, status{};
+        lv_obj_get_coords(f.app().preview_box_, &box);
+        lv_obj_get_coords(f.app().status_label_, &status);
+        RODAK_CHECK(status.x1 >= box.x1 && status.x2 <= box.x2);
+        RODAK_CHECK(status.y1 >= box.y1 && status.y2 <= box.y2);
+    }
+}
+
 RODAK_TEST("slow capture accepts only one task and retains its result until UI polling") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/slow.jpg", "", gate}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/slow.jpg", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -213,7 +262,7 @@ RODAK_TEST("task creation failure leaves the button retryable") {
 RODAK_TEST("preview failure does not remove the separate capture result consumer") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{false, "", "SD write failed", gate}});
+    f.camera.Outcomes({{{false, FailureStage::kWriteFailed, EIO}, "", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -226,7 +275,7 @@ RODAK_TEST("preview failure does not remove the separate capture result consumer
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app().notice_title_)), "相机没有画面");
     gate->Release();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，SD 卡写入失败");
     RODAK_CHECK(f.Disabled());
     RODAK_CHECK(lv_obj_has_state(f.app().calibration_button_, LV_STATE_DISABLED));
     SaveScreenshot("camera-preview-failed.ppm");
@@ -242,8 +291,8 @@ RODAK_TEST("preview failure does not remove the separate capture result consumer
 RODAK_TEST("theme recreation rejects the old worker result and preserves the new instance") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/old-theme.jpg", "", gate},
-                       {true, "/photos/new-theme.jpg", "", {}}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/old-theme.jpg", gate},
+                       {{true, FailureStage::kNone, 0}, "/photos/new-theme.jpg", {}}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -271,7 +320,7 @@ RODAK_TEST("theme recreation rejects the old worker result and preserves the new
 RODAK_TEST("destroyed app is not retained or called by its late worker") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{false, "", "Late SD failure", gate}});
+    f.camera.Outcomes({{{false, FailureStage::kWriteFailed, EIO}, "", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -290,14 +339,14 @@ RODAK_TEST("destroyed app is not retained or called by its late worker") {
 RODAK_TEST("stale generation cannot finish a later capture in the same app") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/first.jpg", "", {}},
-                       {true, "/photos/second.jpg", "", gate}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/first.jpg", {}},
+                       {{true, FailureStage::kNone, 0}, "/photos/second.jpg", gate}});
     f.Create();
     f.Click();
     f.Complete();
     f.Click();
     RODAK_CHECK(gate->Wait());
-    f.app().OnCaptureComplete(true, "/photos/stale.jpg", "", 1);
+    f.app().OnCaptureComplete({true, FailureStage::kNone, 0}, "/photos/stale.jpg", 1);
     RODAK_CHECK_EQ(f.Status(), "正在保存…");
     RODAK_CHECK(f.Disabled());
     gate->Release();

@@ -11,6 +11,7 @@
 #include "rodakos_adapters/file_service.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cinttypes>
 #include <cstdlib>
 #include <cstdio>
@@ -24,9 +25,9 @@
 #include <esp_log.h>
 
 struct CameraCaptureResult {
-    bool ok = false;
+    rodakos::CameraCaptureOutcome outcome{
+        false, rodakos::CameraCaptureFailureStage::kServiceUnavailable, 0};
     std::string saved_path;
-    std::string error;
     uint64_t generation = 0;
 };
 
@@ -100,6 +101,27 @@ const char* PreviewErrorText(const std::string& error) {
     return "请重试";
 }
 
+const char* CaptureErrorText(const rodakos::CameraCaptureOutcome& outcome) {
+    using Stage = rodakos::CameraCaptureFailureStage;
+    if (outcome.native_error == ENOMEM || outcome.stage == Stage::kJpegInputAlloc ||
+        outcome.stage == Stage::kJpegOutputAlloc || outcome.stage == Stage::kJpegCompactAlloc) {
+        return "保存失败，内存不足";
+    }
+    if (outcome.native_error == ENOSPC) return "保存失败，SD 卡空间不足";
+    if (outcome.stage == Stage::kStorageUnavailable || outcome.native_error == ENODEV ||
+        outcome.native_error == ENXIO) {
+        return "保存失败，SD 卡不可用";
+    }
+    switch (outcome.stage) {
+        case Stage::kDirectoryFailed:
+        case Stage::kPathSelectionFailed:
+        case Stage::kWriteFailed:
+            return "保存失败，SD 卡写入失败";
+        default:
+            return "保存失败，请重试";
+    }
+}
+
 void CaptureTask(void* arg) {
     // RTOS task deletion does not unwind the stack; release the payload first.
     {
@@ -108,12 +130,7 @@ void CaptureTask(void* arg) {
             CameraCaptureResult result;
             result.generation = payload->generation;
             if (payload->camera != nullptr) {
-                result.ok = payload->camera->CapturePhoto(result.saved_path);
-                if (!result.ok) {
-                    result.error = payload->camera->last_error();
-                }
-            } else {
-                result.error = "Camera service is not available";
+                result.outcome = payload->camera->CapturePhotoWithOutcome(result.saved_path);
             }
             std::lock_guard<std::mutex> lock(payload->guard->mutex);
             if (!payload->guard->revoked && payload->guard->running &&
@@ -509,9 +526,8 @@ void CameraApp::CapturePhoto() {
     }
 }
 
-void CameraApp::OnCaptureComplete(bool ok,
+void CameraApp::OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,
                                   const std::string& saved_path,
-                                  const std::string& error,
                                   uint64_t generation) {
     if (!capture_guard_) return;
     {
@@ -524,12 +540,13 @@ void CameraApp::OnCaptureComplete(bool ok,
     }
     SetControlsEnabled(preview_ready_);
 
-    if (ok) {
+    if (outcome.ok) {
         ESP_LOGI(TAG, "Photo saved: %s", saved_path.c_str());
         UpdateStatus(ICON_CHECK " 已保存到相册", false, kSavedToastMs);
     } else {
-        ESP_LOGW(TAG, "Photo capture failed: %s", error.c_str());
-        UpdateStatus("保存失败，检查 SD 卡", true, kErrorToastMs);
+        ESP_LOGW(TAG, "Photo capture failed: stage=%s native_error=%d",
+                 rodakos::CameraCaptureFailureStageName(outcome.stage), outcome.native_error);
+        UpdateStatus(CaptureErrorText(outcome), true, kErrorToastMs);
     }
 }
 
@@ -554,7 +571,7 @@ void CameraApp::ConsumeCaptureResult() {
         capture_guard_->result.reset();
     }
     if (result) {
-        OnCaptureComplete(result->ok, result->saved_path, result->error, result->generation);
+        OnCaptureComplete(result->outcome, result->saved_path, result->generation);
     }
     // The result timer already runs every 120 ms, so it also retires the pill without a timer of its own.
     if (status_hide_after_ms_ != 0 && lv_tick_elaps(status_shown_at_) >= status_hide_after_ms_) {

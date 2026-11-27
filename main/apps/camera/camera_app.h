@@ -43,8 +43,8 @@ private:
     void UpdatePreview();
     void ConsumeCaptureResult();
     bool CaptureInFlight() const;
-    void OnCaptureComplete(bool ok, const std::string& saved_path,
-                           const std::string& error, uint64_t generation);
+    void OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,
+                           const std::string& saved_path, uint64_t generation);
     // Shows a short message in a pill at the bottom-left of the viewfinder. hide_after_ms 0 keeps it.
     void UpdateStatus(const char* text, bool error = false, uint32_t hide_after_ms = 0);
     void HideStatus();

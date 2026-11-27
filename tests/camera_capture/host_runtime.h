@@ -12,8 +12,14 @@ namespace camera_host {
 extern std::array<std::array<uint8_t, 256>, 2> sensor_registers;
 extern std::atomic<bool> fail_mount, fail_directory, fail_write, fail_flush, fail_close;
 extern std::atomic<bool> fail_encoder_open, fail_encoder_process, fail_allocation, empty_encoded;
+extern std::atomic<bool> fail_encoder_open_oom;
+extern std::atomic<size_t> fail_aligned_size;
+enum class LookupFault { kNone, kDirectory, kFilename, kDirectoryWithoutErrno };
+extern std::atomic<LookupFault> lookup_fault;
+extern std::atomic<unsigned> lookup_failures, photo_mkdir_calls, exclusive_create_calls;
 extern std::atomic<bool> collide_on_create;
 extern std::atomic<bool> fail_dequeue;
+extern std::atomic<bool> zero_frame_height;
 extern std::atomic<bool> pause_frames, frames_paused;
 extern std::atomic<unsigned> encoder_handles, frame_mappings;
 // Encoder open/close calls made while the current thread was outside ScreenJpegAllocationScope.
@@ -29,6 +35,7 @@ extern std::function<void()> write_hook;
 extern std::function<void()> preview_state_query_hook;
 extern std::function<void()> streamoff_hook;
 extern std::function<void(const char*)> log_hook;
+extern thread_local std::function<void(const char*)> caller_log_hook;
 extern std::atomic<int> streamon_result, streamoff_result;
 extern std::atomic<unsigned> streamon_calls, streamoff_calls;
 extern std::atomic<unsigned> test_pattern_calls;
