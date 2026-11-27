@@ -195,7 +195,11 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   write is a one-field `ApplyLightPatch` by light id; brightness commits on release, and choosing a
   colour while the light is off saves it without switching the light on. A 500 ms poll shows MQTT
   changes and the voice status light overlay.
-- Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
+- Wake: persists up to 8 network devices and sends validated Wake-on-LAN magic packets over UDP
+  broadcast. Cards open a grouped form on the left and send on a separate power button on the right
+  (2 s confirmation); each field is edited on a full-screen input page above the soft keyboard.
+  Offline, the Wi-Fi strip links to Settings > Wi-Fi. A corrupt list resets only after confirmation;
+  a newer-schema list stays read-only.
 
 ## Service Notes
 
