@@ -791,13 +791,24 @@ RODAK_TEST("camera gate timeout skips encoding and permits recover before the SD
 
     bool gate_free_during_write = false;
     camera_host::write_hook = [&]() {
+        // Output scratch and encoder are freed before the SD write; the single shared
+        // RGB888 input buffer stays leased while preview is active.
         gate_free_during_write = static_cast<bool>(f.jpeg_gate.TryAcquireStream()) &&
-                                 camera_host::aligned_buffers == 0 && camera_host::encoder_handles == 0;
+                                 camera_host::aligned_buffers == 1 && camera_host::encoder_handles == 0;
     };
     RODAK_CHECK(f.camera->CapturePhotoWithOutcome(path).ok);
     camera_host::write_hook = {};
     RODAK_CHECK(gate_free_during_write);
     RODAK_CHECK_FALSE(path.empty());
+
+    // Subsequent shutter reuses the shared RGB888 input buffer without allocating it again.
+    camera_host::fail_aligned_size = 2 * 2 * 3;
+    std::string second_path;
+    RODAK_CHECK(f.camera->CapturePhotoWithOutcome(second_path).ok);
+    camera_host::fail_aligned_size = 0;
+    RODAK_CHECK_FALSE(second_path.empty());
+    f.camera->StopPreview();
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
 }
 
 RODAK_TEST("camera JPEG stream skips a held gate and releases it before callback") {
@@ -808,7 +819,7 @@ RODAK_TEST("camera JPEG stream skips a held gate and releases it before callback
     std::atomic<bool> permit_available{false};
     RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) {
         permit_available = static_cast<bool>(f.jpeg_gate.TryAcquireStream()) &&
-                           camera_host::aligned_buffers == 0 && camera_host::encoder_handles == 0;
+                           camera_host::aligned_buffers == 1 && camera_host::encoder_handles == 0;
         ++delivered;
     }));
     std::this_thread::sleep_for(std::chrono::milliseconds(75));
@@ -816,9 +827,11 @@ RODAK_TEST("camera JPEG stream skips a held gate and releases it before callback
     active = {};
     const bool resumed = WaitFor([&] { return delivered > 0; });
     f.camera->StopJpegStream();
+    f.camera->StopPreview();
     RODAK_CHECK(skipped);
     RODAK_CHECK(resumed);
     RODAK_CHECK(permit_available);
+    RODAK_CHECK_EQ(camera_host::aligned_buffers.load(), 0u);
 }
 
 RODAK_TEST("preview allocation failures requeue buffers and recover without revoking owners") {

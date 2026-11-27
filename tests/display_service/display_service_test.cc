@@ -405,19 +405,31 @@ RODAK_TEST("uncontended Display encode releases gate and scratch before delivery
     RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
     RODAK_CHECK_EQ(jpeg.size(), host::kJpegBytes);
 
+    std::atomic<int> callbacks{0};
     RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&& frame, auto, auto) {
-        auto shutter = gate.AcquirePriority(0);
-        permit_available = static_cast<bool>(shutter);
-        const auto state = host::Snapshot();
-        scratch_released = state.bytes == 0 && state.encoders == 0;
-        callback_bytes = frame.size();
-        finished = true;
+        const int count = ++callbacks;
+        if (count == 1) {
+            auto shutter = gate.AcquirePriority(0);
+            permit_available = static_cast<bool>(shutter);
+            const auto state = host::Snapshot();
+            // Output scratch and encoder are freed before delivery; the single shared
+            // RGB888 input buffer stays leased while the stream is active.
+            scratch_released = state.bytes == host::kRgbBytes && state.buffers == 1 &&
+                               state.encoders == 0;
+            callback_bytes = frame.size();
+            // Rejecting future RGB888 allocations proves frame 2 reuses the shared buffer.
+            host::FailHeap(host::kRgbBytes);
+            finished = true;
+        }
     }));
     RODAK_CHECK(Wait([&] { return finished.load(); }));
+    fixture.Publish();
+    RODAK_CHECK(Wait([&] { return callbacks.load() >= 2; }));
     fixture.service.StopJpegStream();
     RODAK_CHECK(permit_available.load());
     RODAK_CHECK(scratch_released.load());
     RODAK_CHECK_EQ(callback_bytes.load(), host::kJpegBytes);
+    RODAK_CHECK_EQ(host::Snapshot().heap_failures, 2u);
     CheckReleased();
 }
 #endif

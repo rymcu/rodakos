@@ -248,8 +248,15 @@ DisplayService::EncodeStatus DisplayService::EncodeLatestJpeg(
         return EncodeStatus::kSkipped;
     }
     const size_t rgb888_size = pixel_count * 3;
-    HeapBuffer aligned_rgb888(AllocAligned(rgb888_size));
-    if (!aligned_rgb888) {
+    HeapBuffer local_rgb888;
+    uint8_t* aligned_rgb888 = nullptr;
+    if (permit) {
+        aligned_rgb888 = permit.AcquireInputBuffer(rgb888_size);
+    } else {
+        local_rgb888.reset(AllocAligned(rgb888_size));
+        aligned_rgb888 = local_rgb888.get();
+    }
+    if (aligned_rgb888 == nullptr) {
         error = "Not enough memory for display JPEG input";
         return EncodeStatus::kFailed;
     }
@@ -263,7 +270,7 @@ DisplayService::EncodeStatus DisplayService::EncodeLatestJpeg(
             error = "No new display frame is ready yet";
             return EncodeStatus::kFailed;
         }
-        std::memcpy(aligned_rgb888.get(), latest_frame_.rgb565.data(), rgb565_size);
+        std::memcpy(aligned_rgb888, latest_frame_.rgb565.data(), rgb565_size);
         sequence = latest_frame_.sequence;
         timestamp_us = latest_frame_.timestamp_us;
     }
@@ -272,21 +279,21 @@ DisplayService::EncodeStatus DisplayService::EncodeLatestJpeg(
     // 这样锁内只有一次 memcpy，避免 12-34 ms 全帧转换阻塞 LVGL flush。
     const int64_t conversion_started_us = esp_timer_get_time();
     for (size_t i = pixel_count; i-- > 0;) {
-        const uint16_t pixel = static_cast<uint16_t>(aligned_rgb888.get()[i * 2]) |
-                               (static_cast<uint16_t>(aligned_rgb888.get()[i * 2 + 1]) << 8);
+        const uint16_t pixel = static_cast<uint16_t>(aligned_rgb888[i * 2]) |
+                               (static_cast<uint16_t>(aligned_rgb888[i * 2 + 1]) << 8);
         const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
         const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
         const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
-        aligned_rgb888.get()[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
-        aligned_rgb888.get()[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
-        aligned_rgb888.get()[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+        aligned_rgb888[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+        aligned_rgb888[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+        aligned_rgb888[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
     }
     if (metrics != nullptr) {
         metrics->conversion_us = esp_timer_get_time() - conversion_started_us;
     }
 
     try {
-        if (!EncodeJpeg(aligned_rgb888.get(), rgb888_size, width, height, jpeg, metrics)) {
+        if (!EncodeJpeg(aligned_rgb888, rgb888_size, width, height, jpeg, metrics)) {
             error = "Display JPEG encode failed";
             return EncodeStatus::kFailed;
         }
@@ -590,6 +597,8 @@ void DisplayService::JpegStreamTaskEntry(void* arg) {
 }
 
 void DisplayService::JpegStreamTask() {
+    auto scratch_lease = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->AcquireScratchLease()
+                                                      : JpegEncodeGate::ScratchLease{};
     while (true) {
         {
             SemaphoreLock lock(mutex_);

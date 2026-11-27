@@ -609,8 +609,15 @@ std::string CameraService::last_error() const {
     }
 
     const size_t rgb888_size = static_cast<size_t>(width) * height * 3;
-    HeapBuffer aligned_input(AllocAlignedJpegInput(rgb888_size));
-    if (!aligned_input) {
+    HeapBuffer local_input;
+    uint8_t* aligned_input = nullptr;
+    if (jpeg_encode_gate_ != nullptr && jpeg_encode_gate_->IsHeldByCurrentTask()) {
+        aligned_input = jpeg_encode_gate_->AcquireInputBufferForCurrentOwner(rgb888_size);
+    } else {
+        local_input.reset(AllocAlignedJpegInput(rgb888_size));
+        aligned_input = local_input.get();
+    }
+    if (aligned_input == nullptr) {
         return fail(Stage::kJpegInputAlloc, ENOMEM, "Not enough memory for JPEG input");
     }
 
@@ -619,7 +626,7 @@ std::string CameraService::last_error() const {
     {
         SemaphoreLock lock(mutex_);
         frame_ready = has_frame_ && latest_frame_.width == width && latest_frame_.height == height &&
-                      CopyRgb565LeToRgb888(latest_frame_, aligned_input.get(), rgb888_size);
+                      CopyRgb565LeToRgb888(latest_frame_, aligned_input, rgb888_size);
         if (frame_ready) {
             captured_sequence = latest_frame_.sequence;
             captured_timestamp_us = latest_frame_.timestamp_us;
@@ -654,7 +661,7 @@ std::string CameraService::last_error() const {
         return fail(Stage::kJpegOutputAlloc, ENOMEM, "Not enough memory for JPEG output");
     }
     int out_len = 0;
-    const jpeg_error_t enc_ret = jpeg_enc_process(encoder, aligned_input.get(),
+    const jpeg_error_t enc_ret = jpeg_enc_process(encoder, aligned_input,
                                                   static_cast<int>(rgb888_size),
                                                   encoded.get(),
                                                   static_cast<int>(kJpegOutputCapacity),
@@ -665,7 +672,7 @@ std::string CameraService::last_error() const {
         return fail(Stage::kJpegEncodeProcess, native_error, "JPEG encode failed");
     }
     owned_encoder.reset();
-    aligned_input.reset();
+    local_input.reset();
     try {
         jpeg.assign(encoded.get(), encoded.get() + out_len);
     } catch (const std::bad_alloc&) {
@@ -926,6 +933,8 @@ void CameraService::JpegStreamTask() {
 }
 
 void CameraService::PreviewTask() {
+    auto scratch_lease = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->AcquireScratchLease()
+                                                      : JpegEncodeGate::ScratchLease{};
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     const size_t frame_size = static_cast<size_t>(active_stride_) * active_height_;
