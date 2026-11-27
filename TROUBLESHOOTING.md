@@ -240,8 +240,8 @@ The limit is the largest contiguous internal block, not total free heap or PSRAM
 - A task stack may live in PSRAM (`xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)`) only if the
   task never reaches NVS, OTA, or direct flash/partition access (`esp_partition_read()` and
   `esp_flash_read()` included). Those turn the flash cache off, and IDF asserts when the current
-  stack is outside internal RAM. `touch_poll`, `voice_light`, `btn_bind` and `qmi8658_motion`
-  use PSRAM stacks. `btn_bind` therefore reads button bindings from a RAM cache that `Init`
+  stack is outside internal RAM. `touch_poll`, `voice_light`, `btn_bind`, `qmi8658_motion` and
+  `camera_capture` use PSRAM stacks. `btn_bind` therefore reads button bindings from a RAM cache that `Init`
   loads and `SetBinding`/`ResetBinding` update. `mqtt_worker`, `serial_prov` and `wake_notify`
   reach NVS through cloud-config, WiFi and provisioning paths and keep internal stacks.
 - A WithCaps task that exits must use the shared task retirement path:

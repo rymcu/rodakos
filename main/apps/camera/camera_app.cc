@@ -11,10 +11,9 @@
 #include "rodakos_adapters/file_service.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cinttypes>
 #include <cstdlib>
-#include <cstdio>
-#include <cstring>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -24,9 +23,9 @@
 #include <esp_log.h>
 
 struct CameraCaptureResult {
-    bool ok = false;
+    rodakos::CameraCaptureOutcome outcome{
+        false, rodakos::CameraCaptureFailureStage::kServiceUnavailable, 0};
     std::string saved_path;
-    std::string error;
     uint64_t generation = 0;
 };
 
@@ -49,7 +48,8 @@ constexpr lv_coord_t kCaptureButtonSize = 44;
 constexpr lv_coord_t kShutterDot = 30;
 constexpr uint32_t kSavedToastMs = 2000;
 constexpr uint32_t kErrorToastMs = 4000;
-constexpr uint32_t kCaptureTaskStackBytes = 4096;
+// CaptureTask runs in PSRAM; 6 KiB leaves headroom for FATFS/SDMMC and logging.
+constexpr uint32_t kCaptureTaskStackBytes = 6144;
 constexpr uint32_t kPreviewStartDelayMs = 30;
 constexpr size_t kMinimumCameraDmaHeadroom = 4096;
 constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
@@ -100,30 +100,49 @@ const char* PreviewErrorText(const std::string& error) {
     return "请重试";
 }
 
+const char* CaptureErrorText(const rodakos::CameraCaptureOutcome& outcome) {
+    using Stage = rodakos::CameraCaptureFailureStage;
+    if (outcome.native_error == ENOMEM || outcome.stage == Stage::kJpegInputAlloc ||
+        outcome.stage == Stage::kJpegOutputAlloc || outcome.stage == Stage::kJpegCompactAlloc) {
+        return "保存失败，内存不足";
+    }
+    if (outcome.native_error == ENOSPC) return "保存失败，SD 卡空间不足";
+    if (outcome.stage == Stage::kStorageUnavailable || outcome.native_error == ENODEV ||
+        outcome.native_error == ENXIO) {
+        return "保存失败，SD 卡不可用";
+    }
+    switch (outcome.stage) {
+        case Stage::kDirectoryFailed:
+        case Stage::kPathSelectionFailed:
+        case Stage::kWriteFailed:
+            return "保存失败，SD 卡写入失败";
+        default:
+            return "保存失败，请重试";
+    }
+}
+
+// Process-lifetime owner so OnDestroy() never blocks LVGL on an in-flight SD write;
+// app_main's PumpTaskRetirements() reaps any late worker once it exits.
+rodakos::TaskRetirementOwner& CaptureTaskRetirementOwner() {
+    static rodakos::TaskRetirementOwner owner;
+    return owner;
+}
+
 void CaptureTask(void* arg) {
-    // RTOS task deletion does not unwind the stack; release the payload first.
-    {
-        std::unique_ptr<CameraCapturePayload> payload(static_cast<CameraCapturePayload*>(arg));
-        if (payload != nullptr && payload->guard != nullptr) {
-            CameraCaptureResult result;
-            result.generation = payload->generation;
-            if (payload->camera != nullptr) {
-                result.ok = payload->camera->CapturePhoto(result.saved_path);
-                if (!result.ok) {
-                    result.error = payload->camera->last_error();
-                }
-            } else {
-                result.error = "Camera service is not available";
-            }
-            std::lock_guard<std::mutex> lock(payload->guard->mutex);
-            if (!payload->guard->revoked && payload->guard->running &&
-                payload->guard->generation == result.generation) {
-                // The UI polls this owned result; completion needs no LVGL allocation or lock.
-                payload->guard->result = std::move(result);
-            }
+    std::unique_ptr<CameraCapturePayload> payload(static_cast<CameraCapturePayload*>(arg));
+    if (payload != nullptr && payload->guard != nullptr) {
+        CameraCaptureResult result;
+        result.generation = payload->generation;
+        if (payload->camera != nullptr) {
+            result.outcome = payload->camera->CapturePhotoWithOutcome(result.saved_path);
+        }
+        std::lock_guard<std::mutex> lock(payload->guard->mutex);
+        if (!payload->guard->revoked && payload->guard->running &&
+            payload->guard->generation == result.generation) {
+            // The UI polls this owned result; completion needs no LVGL allocation or lock.
+            payload->guard->result = std::move(result);
         }
     }
-    vTaskDelete(nullptr);
 }
 
 void LogCaptureTaskCreateFailure() {
@@ -327,6 +346,7 @@ void CameraApp::OnDestroy() {
     ESP_LOGI(TAG, "Destroy: audio release complete");
 
     preview_paused_for_transition_ = false;
+    capture_retirement_.Reset();
     capture_guard_.reset();
     // Joins the calibration worker before the camera service pointer goes away.
     calibration_.reset();
@@ -370,8 +390,8 @@ void CameraApp::DestroyUi() {
     notice_ = notice_title_ = notice_detail_ = retry_button_ = nullptr;
     status_hide_after_ms_ = 0;
     if (calibration_) calibration_->Stop();
-    std::vector<uint8_t>().swap(preview_pixels_);
-    std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
+    preview_frame_ = {};
+    preview_dsc_ = {};
     displayed_sequence_ = 0;
     preview_ready_ = false;
 }
@@ -472,6 +492,13 @@ void CameraApp::CapturePhoto() {
     if (camera_ == nullptr || capture_guard_ == nullptr || !preview_ready_) {
         return;
     }
+    if (CaptureInFlight()) {
+        return;
+    }
+    // Reclaim the prior finished capture worker before claiming another retirement slot.
+    capture_retirement_.Join();
+    capture_retirement_.Reset();
+
     auto* payload = new (std::nothrow) CameraCapturePayload();
     if (payload == nullptr) {
         UpdateStatus("保存失败，内存不足", true, kErrorToastMs);
@@ -495,9 +522,17 @@ void CameraApp::CapturePhoto() {
         lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
     }
     if (calibration_button_ != nullptr) lv_obj_add_state(calibration_button_, LV_STATE_DISABLED);
-    const BaseType_t ret =
-        xTaskCreate(CaptureTask, "camera_capture", kCaptureTaskStackBytes, payload, 3, nullptr);
+    auto ticket =
+        rodakos::ReserveTaskRetirement(CaptureTaskRetirementOwner(), CaptureTask, payload);
+    TaskHandle_t handle = nullptr;
+    // CaptureTask only runs JPEG encoding and SDMMC/FATFS I/O (never NVS or SPI flash),
+    // so its stack can live in PSRAM and preserve contiguous internal DMA RAM.
+    const BaseType_t ret = !ticket ? pdFAIL
+        : xTaskCreateWithCaps(rodakos::TaskRetirementEntry, "camera_capture",
+                              kCaptureTaskStackBytes, rodakos::TaskRetirementContext(ticket), 3,
+                              &handle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
+        if (ticket) rodakos::CancelTaskRetirement(ticket);
         {
             std::lock_guard<std::mutex> lock(capture_guard_->mutex);
             capture_guard_->running = false;
@@ -506,12 +541,14 @@ void CameraApp::CapturePhoto() {
         SetControlsEnabled(preview_ready_);
         LogCaptureTaskCreateFailure();
         UpdateStatus("保存失败，请重试", true, kErrorToastMs);
+        return;
     }
+    capture_retirement_ = std::move(ticket);
+    rodakos::PublishTaskRetirement(capture_retirement_, handle);
 }
 
-void CameraApp::OnCaptureComplete(bool ok,
+void CameraApp::OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,
                                   const std::string& saved_path,
-                                  const std::string& error,
                                   uint64_t generation) {
     if (!capture_guard_) return;
     {
@@ -524,12 +561,13 @@ void CameraApp::OnCaptureComplete(bool ok,
     }
     SetControlsEnabled(preview_ready_);
 
-    if (ok) {
+    if (outcome.ok) {
         ESP_LOGI(TAG, "Photo saved: %s", saved_path.c_str());
         UpdateStatus(ICON_CHECK " 已保存到相册", false, kSavedToastMs);
     } else {
-        ESP_LOGW(TAG, "Photo capture failed: %s", error.c_str());
-        UpdateStatus("保存失败，检查 SD 卡", true, kErrorToastMs);
+        ESP_LOGW(TAG, "Photo capture failed: stage=%s native_error=%d",
+                 rodakos::CameraCaptureFailureStageName(outcome.stage), outcome.native_error);
+        UpdateStatus(CaptureErrorText(outcome), true, kErrorToastMs);
     }
 }
 
@@ -554,7 +592,7 @@ void CameraApp::ConsumeCaptureResult() {
         capture_guard_->result.reset();
     }
     if (result) {
-        OnCaptureComplete(result->ok, result->saved_path, result->error, result->generation);
+        OnCaptureComplete(result->outcome, result->saved_path, result->generation);
     }
     // The result timer already runs every 120 ms, so it also retires the pill without a timer of its own.
     if (status_hide_after_ms_ != 0 && lv_tick_elaps(status_shown_at_) >= status_hide_after_ms_) {
@@ -574,8 +612,8 @@ void CameraApp::UpdatePreview() {
         return;
     }
 
-    rodakos::CameraFrame frame;
-    if (!camera_->GetLatestFrame(frame)) {
+    const auto copy_status = camera_->CopyLatestFrameIfNewer(displayed_sequence_, preview_frame_);
+    if (copy_status == rodakos::FrameCopyStatus::kUnavailable) {
         const auto state = camera_->GetState();
         if (!state.preview_running && !state.last_error.empty()) {
             preview_ready_ = false;
@@ -591,32 +629,49 @@ void CameraApp::UpdatePreview() {
         }
         return;
     }
-    if (frame.sequence == displayed_sequence_) {
+    if (copy_status != rodakos::FrameCopyStatus::kUpdated) {
         return;
     }
+
+    const auto& frame = preview_frame_;
     if (frame.width <= 0 || frame.height <= 0 || frame.stride <= 0 || frame.rgb565.empty()) {
         return;
     }
 
-    const bool first_displayed_frame = displayed_sequence_ == 0;
+    const bool first_displayed_frame = !preview_ready_;
     preview_ready_ = true;
-    preview_pixels_ = std::move(frame.rgb565);
     displayed_sequence_ = frame.sequence;
 
-    std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
-    preview_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    preview_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
-    preview_dsc_.header.w = frame.width;
-    preview_dsc_.header.h = frame.height;
-    preview_dsc_.header.stride = frame.stride;
-    preview_dsc_.data = preview_pixels_.data();
-    preview_dsc_.data_size = preview_pixels_.size();
+    if (preview_dsc_.data != frame.rgb565.data() || preview_dsc_.header.w != frame.width ||
+        preview_dsc_.header.h != frame.height || preview_dsc_.header.stride != frame.stride ||
+        preview_dsc_.data_size != frame.rgb565.size() ||
+        lv_image_get_src(preview_image_) != &preview_dsc_) {
+        preview_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+        preview_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
+        preview_dsc_.header.w = static_cast<uint16_t>(frame.width);
+        preview_dsc_.header.h = static_cast<uint16_t>(frame.height);
+        preview_dsc_.header.stride = static_cast<uint16_t>(frame.stride);
+        preview_dsc_.data = frame.rgb565.data();
+        preview_dsc_.data_size = static_cast<uint32_t>(frame.rgb565.size());
+        lv_image_set_src(preview_image_, &preview_dsc_);
+        UpdatePreviewLayout();
+    }
+    lv_obj_invalidate(preview_image_);
 
-    lv_image_set_src(preview_image_, nullptr);
-    lv_image_set_src(preview_image_, &preview_dsc_);
+    if (first_displayed_frame) {
+        if (placeholder_label_ != nullptr) lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
+        if (!CaptureInFlight()) SetControlsEnabled(true);
+        ESP_LOGI(TAG, "Camera preview image updated: sequence=%" PRIu32, frame.sequence);
+    }
+}
 
-    const int32_t scale_w = (kPreviewBoxWidth * LV_SCALE_NONE) / frame.width;
-    const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / frame.height;
+void CameraApp::UpdatePreviewLayout() {
+    const int width = preview_dsc_.header.w;
+    const int height = preview_dsc_.header.h;
+    if (!preview_ready_ || preview_image_ == nullptr || width == 0 || height == 0) return;
+
+    const int32_t scale_w = (kPreviewBoxWidth * LV_SCALE_NONE) / width;
+    const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / height;
     // Show the whole 4:3 frame: the 266x200 viewfinder matches the sensor aspect, so nothing is
     // cropped. Calibration uses 0.7x left-aligned (kCalibrationScale in camera_calibration_page.cc)
     // so its result panel fits to the right.
@@ -627,18 +682,10 @@ void CameraApp::UpdatePreview() {
     if (calibrating) {
         // LVGL scales around the centre of the unscaled image; offset so the scaled image's
         // left edge sits at x=0 of the preview box.
-        const lv_coord_t scaled_w = static_cast<lv_coord_t>(frame.width * scale / LV_SCALE_NONE);
-        lv_obj_align(preview_image_, LV_ALIGN_LEFT_MID, (scaled_w - frame.width) / 2, 0);
+        const lv_coord_t scaled_w = static_cast<lv_coord_t>(width * scale / LV_SCALE_NONE);
+        lv_obj_align(preview_image_, LV_ALIGN_LEFT_MID, (scaled_w - width) / 2, 0);
     } else {
         lv_obj_center(preview_image_);
-    }
-
-    if (placeholder_label_ != nullptr) {
-        lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (!CaptureInFlight()) SetControlsEnabled(true);
-    if (first_displayed_frame) {
-        ESP_LOGI(TAG, "Camera preview image updated: sequence=%" PRIu32, frame.sequence);
     }
 }
 

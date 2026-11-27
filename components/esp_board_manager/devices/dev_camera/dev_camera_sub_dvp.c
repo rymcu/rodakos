@@ -6,6 +6,8 @@
  */
 
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_video_init.h"
 #include "dev_camera.h"
@@ -88,7 +90,16 @@ int dev_camera_sub_dvp_deinit(void *device_handle)
 
     // Deinitialize DVP camera
     // In the current version of esp_video(1.4.0), it will deinit all cameras that have been initialized
-    esp_err_t ret = esp_video_deinit();
+    // ESP-IDF 6.0.2 i2c_master_bus_rm_device() returns ESP_ERR_INVALID_STATE if another task
+    // is mid-transfer on the shared I2C bus; retry briefly so transient contention completes here.
+    esp_err_t ret = ESP_OK;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        ret = esp_video_deinit();
+        if (ret != ESP_ERR_INVALID_STATE) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to deinitialize DVP camera: %s", esp_err_to_name(ret));
         // esp_video_deinit() may leave the SCCB/video/controller graph alive

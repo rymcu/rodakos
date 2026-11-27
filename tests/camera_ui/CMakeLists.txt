@@ -36,7 +36,9 @@ find_package(Threads REQUIRED)
 target_link_libraries(rodakos_camera_ui_tests PRIVATE lvgl Threads::Threads m)
 target_link_options(rodakos_camera_ui_tests PRIVATE
     "-Wl,--wrap=lv_async_call"
+    "-Wl,--wrap=lv_image_set_src"
     "-Wl,--wrap=lv_label_set_text"
+    "-Wl,--wrap=lv_obj_invalidate"
     "-Wl,--wrap=lv_timer_create"
 )
 target_compile_options(rodakos_camera_ui_tests PRIVATE -Wall -Wextra -Wpedantic)

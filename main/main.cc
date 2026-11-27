@@ -3,6 +3,7 @@
 #include "rodakos_adapters/wifi_config.h"
 #include "rodakos_adapters/file_service.h"
 #include "rodakos_adapters/audio_codec_input.h"
+#include "rodakos_adapters/i2c_bus_guard.h"
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_navigation.h"
@@ -30,6 +31,7 @@
 #include "phone_os/camera_service.h"
 #include "phone_os/webrtc_camera_service.h"
 #include "phone_os/display_service.h"
+#include "phone_os/jpeg_encode_gate.h"
 #include "phone_os/webrtc_display_service.h"
 #include "phone_os/voice_audio_frontend.h"
 #include "phone_os/voice_wake_echo_diagnostic.h"
@@ -249,7 +251,11 @@ void TouchPollTask(void* arg) {
     const TickType_t period = pdMS_TO_TICKS(20);
 
     while (touch->running) {
-        esp_err_t ret = esp_lcd_touch_read_data(touch->handle);
+        esp_err_t ret = ESP_OK;
+        {
+            rodakos::I2cBusAccessLock i2c_lock;
+            ret = esp_lcd_touch_read_data(touch->handle);
+        }
         bool pressed = false;
         uint8_t point_count = 0;
         uint16_t x = 0;
@@ -794,7 +800,8 @@ extern "C" void app_main(void) {
     EXT_RAM_BSS_ATTR static rodakos::WebFileSystemService web_files_service(file_service);
     ESP_LOGI(TAG, "Web file system ready - start from Settings when needed");
 
-    EXT_RAM_BSS_ATTR static rodakos::CameraService camera_service(file_service);
+    static rodakos::JpegEncodeGate jpeg_encode_gate;
+    EXT_RAM_BSS_ATTR static rodakos::CameraService camera_service(file_service, &jpeg_encode_gate);
     ESP_LOGI(TAG, "Camera service ready - camera opens on demand");
     static rodakos::WebRtcCameraService web_rtc_camera_service(&camera_service);
     EXT_RAM_BSS_ATTR static rodakos::SetupQrScanService setup_qr_scan_service(
@@ -821,7 +828,7 @@ extern "C" void app_main(void) {
                      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
     });
     ESP_LOGI(TAG, "WebRTC camera service ready - starts on MQTT camera.stream.start");
-    static rodakos::DisplayService display_service(disp);
+    static rodakos::DisplayService display_service(disp, &jpeg_encode_gate);
     if (lvgl_port_lock(1000)) {
         if (!display_service.Attach()) {
             ESP_LOGW(TAG, "Display capture listener unavailable");

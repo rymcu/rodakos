@@ -1,4 +1,5 @@
 #include "phone_os/display_service.h"
+#include "phone_os/jpeg_encode_gate.h"
 #include "phone_os/screen_jpeg_allocation.h"
 
 #include <algorithm>
@@ -21,6 +22,7 @@ constexpr const char* TAG = "DisplayService";
 constexpr uint8_t kJpegQuality = 65;
 constexpr size_t kJpegOutputCapacity = 100 * 1024;
 constexpr uint32_t kTaskStackSize = 8192;
+constexpr uint32_t kJpegGateRetryMs = 20;
 constexpr int64_t kJpegStatsIntervalUs = 5 * 1000 * 1000;
 constexpr std::array<const char*, 4> kEncoderHeapStages = {
     "before_open", "after_open", "after_process", "after_close"};
@@ -158,8 +160,9 @@ bool HasRgb565Frame(const DisplayFrame& frame) {
 }
 }  // namespace
 
-bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
-                                std::vector<uint8_t>& jpeg, EncodeMetrics* metrics) {
+[[gnu::noinline]] bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size,
+                                                 int width, int height, std::vector<uint8_t>& jpeg,
+                                                 EncodeMetrics* metrics) {
     // 先于 Encoder 构造，使失败和异常退出都先关闭编码器，再恢复当前任务策略。
     ScreenJpegAllocationScope allocation_scope;
     if (metrics != nullptr) metrics->heap[0] = ReadEncoderHeap();
@@ -212,9 +215,9 @@ bool DisplayService::EncodeJpeg(const uint8_t* input, size_t input_size, int wid
     return true;
 }
 
-bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
-                                      uint32_t& sequence, int64_t& timestamp_us,
-                                      EncodeMetrics* metrics, const char*& error) {
+DisplayService::EncodeStatus DisplayService::EncodeLatestJpeg(
+    uint32_t previous_sequence, std::vector<uint8_t>& jpeg, uint32_t& sequence,
+    int64_t& timestamp_us, EncodeMetrics* metrics, const char*& error) {
     jpeg.clear();
     sequence = 0;
     timestamp_us = 0;
@@ -227,7 +230,7 @@ bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<ui
         if (!capture_running_ || !has_frame_ || latest_frame_.sequence == previous_sequence ||
             !HasRgb565Frame(latest_frame_)) {
             error = "No new display frame is ready yet";
-            return false;
+            return EncodeStatus::kFailed;
         }
         width = latest_frame_.width;
         height = latest_frame_.height;
@@ -236,13 +239,26 @@ bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<ui
     const size_t pixel_count = static_cast<size_t>(width) * height;
     if (pixel_count > SIZE_MAX / 3) {
         error = "Display frame dimensions are too large";
-        return false;
+        return EncodeStatus::kFailed;
+    }
+    auto permit = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->TryAcquireStream()
+                                               : JpegEncodeGate::Permit{};
+    if (jpeg_encode_gate_ != nullptr && !permit) {
+        error = "Display JPEG encoder is busy";
+        return EncodeStatus::kSkipped;
     }
     const size_t rgb888_size = pixel_count * 3;
-    HeapBuffer aligned_rgb888(AllocAligned(rgb888_size));
-    if (!aligned_rgb888) {
+    HeapBuffer local_rgb888;
+    uint8_t* aligned_rgb888 = nullptr;
+    if (permit) {
+        aligned_rgb888 = permit.AcquireInputBuffer(rgb888_size);
+    } else {
+        local_rgb888.reset(AllocAligned(rgb888_size));
+        aligned_rgb888 = local_rgb888.get();
+    }
+    if (aligned_rgb888 == nullptr) {
         error = "Not enough memory for display JPEG input";
-        return false;
+        return EncodeStatus::kFailed;
     }
 
     const size_t rgb565_size = pixel_count * 2;
@@ -252,9 +268,9 @@ bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<ui
             latest_frame_.width != width || latest_frame_.height != height ||
             !HasRgb565Frame(latest_frame_)) {
             error = "No new display frame is ready yet";
-            return false;
+            return EncodeStatus::kFailed;
         }
-        std::memcpy(aligned_rgb888.get(), latest_frame_.rgb565.data(), rgb565_size);
+        std::memcpy(aligned_rgb888, latest_frame_.rgb565.data(), rgb565_size);
         sequence = latest_frame_.sequence;
         timestamp_us = latest_frame_.timestamp_us;
     }
@@ -263,32 +279,33 @@ bool DisplayService::EncodeLatestJpeg(uint32_t previous_sequence, std::vector<ui
     // 这样锁内只有一次 memcpy，避免 12-34 ms 全帧转换阻塞 LVGL flush。
     const int64_t conversion_started_us = esp_timer_get_time();
     for (size_t i = pixel_count; i-- > 0;) {
-        const uint16_t pixel = static_cast<uint16_t>(aligned_rgb888.get()[i * 2]) |
-                               (static_cast<uint16_t>(aligned_rgb888.get()[i * 2 + 1]) << 8);
+        const uint16_t pixel = static_cast<uint16_t>(aligned_rgb888[i * 2]) |
+                               (static_cast<uint16_t>(aligned_rgb888[i * 2 + 1]) << 8);
         const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1f);
         const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3f);
         const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1f);
-        aligned_rgb888.get()[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
-        aligned_rgb888.get()[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
-        aligned_rgb888.get()[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+        aligned_rgb888[i * 3] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+        aligned_rgb888[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+        aligned_rgb888[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
     }
     if (metrics != nullptr) {
         metrics->conversion_us = esp_timer_get_time() - conversion_started_us;
     }
 
     try {
-        if (!EncodeJpeg(aligned_rgb888.get(), rgb888_size, width, height, jpeg, metrics)) {
+        if (!EncodeJpeg(aligned_rgb888, rgb888_size, width, height, jpeg, metrics)) {
             error = "Display JPEG encode failed";
-            return false;
+            return EncodeStatus::kFailed;
         }
-        return true;
+        return EncodeStatus::kEncoded;
     } catch (const std::bad_alloc&) {
         error = "Not enough memory for display JPEG output";
-        return false;
+        return EncodeStatus::kFailed;
     }
 }
 
-DisplayService::DisplayService(lv_display_t* display) : display_(display) {
+DisplayService::DisplayService(lv_display_t* display, JpegEncodeGate* jpeg_encode_gate)
+    : display_(display), jpeg_encode_gate_(jpeg_encode_gate) {
     mutex_ = xSemaphoreCreateMutex();
     frame_ready_semaphore_ = xSemaphoreCreateBinary();
 }
@@ -456,7 +473,8 @@ bool DisplayService::CaptureJpeg(std::vector<uint8_t>& jpeg) {
     uint32_t sequence = 0;
     int64_t timestamp_us = 0;
     const char* error = nullptr;
-    const bool encoded = EncodeLatestJpeg(0, jpeg, sequence, timestamp_us, nullptr, error);
+    const bool encoded =
+        EncodeLatestJpeg(0, jpeg, sequence, timestamp_us, nullptr, error) == EncodeStatus::kEncoded;
     if (!encoded && error != nullptr) SetError(error);
     return encoded;
 }
@@ -579,6 +597,8 @@ void DisplayService::JpegStreamTaskEntry(void* arg) {
 }
 
 void DisplayService::JpegStreamTask() {
+    auto scratch_lease = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->AcquireScratchLease()
+                                                      : JpegEncodeGate::ScratchLease{};
     while (true) {
         {
             SemaphoreLock lock(mutex_);
@@ -590,10 +610,12 @@ void DisplayService::JpegStreamTask() {
     }
     uint32_t last_sequence = 0;
     int64_t last_attempt_at_us = -1;
+    bool retry_skipped_frame = false;
     int64_t stats_started_us = esp_timer_get_time();
     uint32_t stats_attempts = 0;
     uint32_t stats_encoded = 0;
     uint32_t stats_failed = 0;
+    uint32_t stats_skipped = 0;
     int64_t stats_conversion_us = 0;
     int64_t stats_open_us = 0;
     int64_t stats_process_us = 0;
@@ -628,11 +650,15 @@ void DisplayService::JpegStreamTask() {
 
         // 尚未发布画面，或上次编码期间已经消费通知时，等待新的发布事件。
         // 超时用于在没有新的刷新时仍能观察到停止标记。
-        if (frame_ready_semaphore_ != nullptr) {
-            xSemaphoreTake(frame_ready_semaphore_, pdMS_TO_TICKS(std::max(20, 1000 / static_cast<int>(fps))));
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(std::max(20, 1000 / static_cast<int>(fps))));
+        if (!retry_skipped_frame) {
+            const auto wait_ticks = pdMS_TO_TICKS(std::max(20, 1000 / static_cast<int>(fps)));
+            if (frame_ready_semaphore_ != nullptr) {
+                xSemaphoreTake(frame_ready_semaphore_, wait_ticks);
+            } else {
+                vTaskDelay(wait_ticks);
+            }
         }
+        retry_skipped_frame = false;
 
         {
             SemaphoreLock lock(mutex_);
@@ -647,8 +673,15 @@ void DisplayService::JpegStreamTask() {
             uint32_t sequence = 0;
             int64_t timestamp_us = 0;
             const char* error = nullptr;
-            ++stats_attempts;
-            if (EncodeLatestJpeg(last_sequence, jpeg, sequence, timestamp_us, &metrics, error)) {
+            const auto status =
+                EncodeLatestJpeg(last_sequence, jpeg, sequence, timestamp_us, &metrics, error);
+            retry_skipped_frame = status == EncodeStatus::kSkipped;
+            if (retry_skipped_frame) {
+                ++stats_skipped;
+            } else {
+                ++stats_attempts;
+            }
+            if (status == EncodeStatus::kEncoded) {
                 last_sequence = sequence;
                 ++stats_encoded;
                 stats_conversion_us += metrics.conversion_us;
@@ -663,7 +696,7 @@ void DisplayService::JpegStreamTask() {
                     ++stats_failed;
                     SetError("Not enough memory to deliver display JPEG");
                 }
-            } else {
+            } else if (status == EncodeStatus::kFailed) {
                 ++stats_failed;
             }
             if (!heap_first_logged && metrics.heap[0].at_us >= 0) {
@@ -675,14 +708,14 @@ void DisplayService::JpegStreamTask() {
             }
             const int64_t now_us = esp_timer_get_time();
             // 复制或编码失败也消耗一次尝试，避免持续刷新在 OOM 时形成忙循环。
-            last_attempt_at_us = now_us;
+            if (!retry_skipped_frame) last_attempt_at_us = now_us;
             if (now_us - stats_started_us >= kJpegStatsIntervalUs) {
                 const uint32_t sample_count = stats_encoded;
                 ESP_LOGI(TAG,
                          "JPEG stats: attempts=%" PRIu32 " encoded=%" PRIu32
-                         " failed=%" PRIu32 " fps=%.2f avg_us(cvt/open/proc/close)="
+                         " failed=%" PRIu32 " skipped=%" PRIu32 " fps=%.2f avg_us(cvt/open/proc/close)="
                          "%.0f/%.0f/%.0f/%.0f avg_bytes=%u",
-                         stats_attempts, stats_encoded, stats_failed,
+                         stats_attempts, stats_encoded, stats_failed, stats_skipped,
                          static_cast<double>(stats_encoded) * 1000000.0 /
                              static_cast<double>(std::max<int64_t>(1, now_us - stats_started_us)),
                          sample_count == 0 ? 0.0 : static_cast<double>(stats_conversion_us) / sample_count,
@@ -697,12 +730,16 @@ void DisplayService::JpegStreamTask() {
                 stats_attempts = 0;
                 stats_encoded = 0;
                 stats_failed = 0;
+                stats_skipped = 0;
                 stats_conversion_us = 0;
                 stats_open_us = 0;
                 stats_process_us = 0;
                 stats_close_us = 0;
                 stats_output_bytes = 0;
             }
+        }
+        if (retry_skipped_frame) {
+            vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(kJpegGateRetryMs)));
         }
     }
     LogEncoderHeapWindow(heap_window, "final");

@@ -17,6 +17,8 @@
 
 namespace rodakos {
 
+class JpegEncodeGate;
+
 struct DisplayFrame {
     int width = 0;
     int height = 0;
@@ -31,7 +33,7 @@ public:
     using JpegFrameCallback =
         std::function<void(std::vector<uint8_t>&&, uint32_t sequence, int64_t timestamp_us)>;
 
-    explicit DisplayService(lv_display_t* display);
+    explicit DisplayService(lv_display_t* display, JpegEncodeGate* jpeg_encode_gate = nullptr);
     ~DisplayService();
 
     DisplayService(const DisplayService&) = delete;
@@ -49,6 +51,7 @@ public:
 
 private:
     struct EncodeMetrics;
+    enum class EncodeStatus { kEncoded, kFailed, kSkipped };
 
     static void OnDisplayEvent(lv_event_t* event);
     static void JpegStreamTaskEntry(void* arg);
@@ -58,12 +61,13 @@ private:
     void JpegStreamTask();
     bool EncodeJpeg(const uint8_t* input, size_t input_size, int width, int height,
                     std::vector<uint8_t>& jpeg, EncodeMetrics* metrics);
-    bool EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
-                          uint32_t& sequence, int64_t& timestamp_us, EncodeMetrics* metrics,
-                          const char*& error);
+    EncodeStatus EncodeLatestJpeg(uint32_t previous_sequence, std::vector<uint8_t>& jpeg,
+                                  uint32_t& sequence, int64_t& timestamp_us, EncodeMetrics* metrics,
+                                  const char*& error);
     void SetError(const char* error);
 
     lv_display_t* display_ = nullptr;
+    JpegEncodeGate* const jpeg_encode_gate_;
     bool event_attached_ = false;
     mutable std::mutex lifecycle_mutex_;
     SemaphoreHandle_t mutex_ = nullptr;

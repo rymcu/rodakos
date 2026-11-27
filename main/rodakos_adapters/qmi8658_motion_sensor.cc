@@ -1,4 +1,5 @@
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
+#include "rodakos_adapters/i2c_bus_guard.h"
 
 #include <esp_board_manager_defs.h>
 #include <esp_board_periph.h>
@@ -24,6 +25,8 @@ constexpr uint8_t kRegStatus0 = 0x2E;
 constexpr uint8_t kRegAxL = 0x35;
 constexpr uint8_t kRegReset = 0x60;
 constexpr int kI2cTimeoutMs = 100;
+constexpr int kI2cRemoveMaxAttempts = 5;
+constexpr int kI2cRemoveRetryDelayMs = 5;
 constexpr int kSampleIntervalMs = 100;
 // Stop runs in the LVGL task and joins the sampler, so the idle wait is sliced to bound that join.
 constexpr int kStopPollMs = 10;
@@ -141,6 +144,13 @@ bool Qmi8658MotionSensor::Read(MotionSample& sample) {
 }
 
 esp_err_t Qmi8658MotionSensor::InitializeHardware() {
+    if (i2c_dev_ != nullptr || i2c_bus_ != nullptr) {
+        ReleaseHardware();
+        if (i2c_dev_ != nullptr || i2c_bus_ != nullptr) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     void* periph_handle = nullptr;
     esp_err_t ret = esp_board_periph_ref_handle(ESP_BOARD_PERIPH_NAME_I2C_MASTER, &periph_handle);
     if (ret != ESP_OK) {
@@ -215,9 +225,23 @@ void Qmi8658MotionSensor::ReleaseHardware() {
         if (initialized_) {
             WriteRegister(kRegCtrl7, 0x00);
         }
-        esp_err_t ret = i2c_master_bus_rm_device(i2c_dev_);
+        esp_err_t ret = ESP_OK;
+        {
+            I2cBusAccessLock i2c_lock;
+            for (int attempt = 0; attempt < kI2cRemoveMaxAttempts; ++attempt) {
+                ret = i2c_master_bus_rm_device(i2c_dev_);
+                if (ret != ESP_ERR_INVALID_STATE) {
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(kI2cRemoveRetryDelayMs));
+            }
+        }
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to remove QMI8658 I2C device: %s", esp_err_to_name(ret));
+            // Retain i2c_dev_ and the bus reference so a later Start/Stop can retry
+            // removal instead of leaking the device node on the shared I2C bus.
+            initialized_ = false;
+            return;
         }
         i2c_dev_ = nullptr;
     }

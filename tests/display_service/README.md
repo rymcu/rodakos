@@ -4,7 +4,7 @@
 不替换 RGB565 → RGB888 转换、`EncodeJpeg`、worker 或 Stop 路径。
 配置时将生产源码 SHA-256 写入构建目录 `production-sources.json`。
 
-33 个用例覆盖：
+35 个用例覆盖：
 
 - StartCapture 第一／第二份帧缓冲分配失败、初始刷新排队失败；失败后能取得锁并重新启动。
 - GetLatestFrame 复制失败清除调用方旧数据、释放锁并允许重试；没有新帧时不返回旧 JPEG。
@@ -19,6 +19,9 @@
   以独立 producer 每 10 ms 持续发布 flush 唤醒，验证失败尝试仍间隔至少 190 ms，
   避免将 semaphore 自身等待误算为节流。RGB888 持续分配失败验证 Stop 有界；这些失败
   共用同一尝试节流路径。恢复后只发送最新帧，没有新帧时不分配 153600 字节副本。
+- 快门持有 JPEG 编码许可时，Display 按 20 ms 间隔重试，单独统计 `skipped`，且不分配
+  RGB888 缓冲。许可解除后可以继续交付同一待处理帧。回调能立即取得快门许可，并观察到
+  encoder 与临时缓冲已释放。RGB888 分配失败也会释放许可。
 - callback 抛出 `bad_alloc` 后不重放同一序号、下一新帧可用；callback 自停、外部 Stop
   等待已进入 callback、持续分配失败时及时停止、callback 所有权及异步刷新注销。
 - callback 最后一个共享引用在 service mutex 外析构，析构重入 service 不会死锁；旧流 Stop

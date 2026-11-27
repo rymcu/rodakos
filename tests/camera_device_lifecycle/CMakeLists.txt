@@ -3,6 +3,7 @@ project(rodakos_camera_device_lifecycle_tests LANGUAGES C CXX)
 
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
 
 get_filename_component(RODAKOS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -42,6 +43,7 @@ function(configure_camera_target target source)
     target_compile_features(${target} PRIVATE c_std_11 cxx_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT=1 CONFIG_ESP_BOARD_DEV_POWER_CTRL_SUPPORT=0)
     target_compile_options(${target} PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-unused-function)
+    target_link_libraries(${target} PRIVATE Threads::Threads)
     target_link_options(${target} PRIVATE -Wl,--gc-sections)
 endfunction()
 
@@ -56,12 +58,15 @@ add_test(NAME camera_device_invalid_handle_cleanup_retry
     COMMAND rodakos_camera_device_lifecycle_tests invalid_handle_cleanup_retry)
 add_test(NAME camera_device_missing_subtype_callback
     COMMAND rodakos_camera_device_lifecycle_tests missing_subtype_callback)
+add_test(NAME camera_device_release_i2c_serialization
+    COMMAND rodakos_camera_device_lifecycle_tests release_i2c_serialization)
 add_test(NAME camera_device_legacy_negative
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_negative.py"
         --executable "\$<TARGET_FILE:rodakos_camera_device_lifecycle_legacy_tests>"
         --output "${CMAKE_CURRENT_BINARY_DIR}/legacy-negative.json")
 set_tests_properties(camera_device_release_failure_retry camera_device_invalid_handle_cleanup_retry
-    camera_device_missing_subtype_callback PROPERTIES TIMEOUT 10)
+    camera_device_missing_subtype_callback camera_device_release_i2c_serialization
+    PROPERTIES TIMEOUT 10)
 set_tests_properties(camera_device_legacy_negative PROPERTIES TIMEOUT 15)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -71,4 +76,5 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_device_lifecycle_test.cc"
     "${RODAKOS_ROOT}/components/esp_board_manager/src/esp_board_device.c"
     "${RODAKOS_ROOT}/components/esp_board_manager/devices/dev_camera/dev_camera.c"
-    "${RODAKOS_ROOT}/main/rodakos_adapters/camera_device.cc")
+    "${RODAKOS_ROOT}/main/rodakos_adapters/camera_device.cc"
+    "${RODAKOS_ROOT}/main/rodakos_adapters/i2c_bus_guard.h")

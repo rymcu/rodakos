@@ -15,6 +15,7 @@ bool WriteFileBytes(const std::string& full_path, const std::vector<uint8_t>& da
         if (fd < 0) {
             return false;
         }
+        errno = 0;
         file = fdopen(fd, "wb");
         if (file == nullptr) {
             const int first_error = errno != 0 ? errno : EIO;

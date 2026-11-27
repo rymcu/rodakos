@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cerrno>
 #include <string>
 #include <vector>
 #include <functional>
@@ -7,6 +8,8 @@
 #include <utility>
 
 namespace rodakos {
+
+enum class PathLookupStatus { kExists, kMissing, kError };
 
 /**
  * @brief File entry information
@@ -119,7 +122,10 @@ public:
 
     // Implementations must create exclusively and include flush/close in success.
     // An implementation without this capability must never fall back to overwrite.
-    virtual bool WriteNewFile(const std::string&, const std::vector<uint8_t>&) { return false; }
+    virtual bool WriteNewFile(const std::string&, const std::vector<uint8_t>&) {
+        errno = ENOSYS;
+        return false;
+    }
 
     // Reserves the normalized path and its ancestor/descendant namespace for
     // the duration of operation. The callback runs without the FileService I/O
@@ -162,6 +168,22 @@ public:
      * @return true if exists
      */
     virtual bool Exists(const std::string& path) = 0;
+
+    // error_out receives zero for an existing path, or the lookup errno on failure.
+    virtual PathLookupStatus LookupPath(const std::string& path, int* error_out = nullptr) {
+        const int previous_error = errno;
+        errno = 0;
+        const bool exists = Exists(path);
+        const int error = exists ? 0 : (errno != 0 ? errno : ENOENT);
+        if (error_out != nullptr) {
+            *error_out = error;
+        }
+        errno = exists ? previous_error : error;
+        if (exists) {
+            return PathLookupStatus::kExists;
+        }
+        return error == ENOENT ? PathLookupStatus::kMissing : PathLookupStatus::kError;
+    }
 
     /**
      * @brief Get file size

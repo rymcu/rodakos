@@ -4,6 +4,7 @@
 #include "phone_os/phone_app.h"
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <fstream>
 #include <functional>
@@ -23,6 +24,7 @@
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "esp_lvgl_port.h"
+#include <esp_heap_caps.h>
 #include "settings.h"
 #include <src/others/test/lv_test.h>
 
@@ -32,6 +34,9 @@ std::atomic<int> worker_async_attempts{0};
 std::atomic<int> worker_ui_writes{0};
 int timer_creations = 0;
 int fail_timer_creation = 0;
+const lv_obj_t* preview_target = nullptr;
+size_t preview_source_changes = 0;
+size_t preview_invalidations = 0;
 }
 extern "C" {
 lv_result_t __real_lv_async_call(lv_async_cb_t, void*);
@@ -45,6 +50,16 @@ void __wrap_lv_label_set_text(lv_obj_t* label, const char* text) {
     if (camera_test::capture_worker) ++camera_test::worker_ui_writes;
     __real_lv_label_set_text(label, text);
 }
+void __real_lv_image_set_src(lv_obj_t*, const void*);
+void __wrap_lv_image_set_src(lv_obj_t* image, const void* src) {
+    if (image == camera_test::preview_target) ++camera_test::preview_source_changes;
+    __real_lv_image_set_src(image, src);
+}
+void __real_lv_obj_invalidate(const lv_obj_t*);
+void __wrap_lv_obj_invalidate(const lv_obj_t* obj) {
+    if (obj == camera_test::preview_target) ++camera_test::preview_invalidations;
+    __real_lv_obj_invalidate(obj);
+}
 lv_timer_t* __real_lv_timer_create(lv_timer_cb_t, uint32_t, void*);
 lv_timer_t* __wrap_lv_timer_create(lv_timer_cb_t callback, uint32_t period, void* data) {
     const int call = ++camera_test::timer_creations;
@@ -53,6 +68,8 @@ lv_timer_t* __wrap_lv_timer_create(lv_timer_cb_t callback, uint32_t period, void
 }
 }
 namespace {
+using FailureStage = rodakos::CameraCaptureFailureStage;
+
 void Pump(uint32_t milliseconds = 130) {
     std::lock_guard<std::recursive_timed_mutex> outer_lock(camera_test::ui_mutex);
     lv_test_wait(milliseconds);
@@ -102,6 +119,8 @@ struct Fixture {
         camera_test::fail_next_ui_lock = false;
         camera_test::timer_creations = 0;
         camera_test::fail_timer_creation = 0;
+        camera_test::ResetTaskStats();
+        camera_test::ResetRetirementStats();
         services.SetCamera(&camera);
         services.SetAudioFocus(&focus);
         descriptor.id = "camera";
@@ -109,12 +128,15 @@ struct Fixture {
         descriptor.create = [] { return std::make_unique<CameraApp>(); };
     }
     ~Fixture() {
+        camera_test::preview_target = nullptr;
         camera.ReleaseGates();
         camera_test::JoinTasks();
         host.CloseCurrent();
         Pump(2000);
         lv_obj_clean(lv_screen_active());
         lv_obj_clean(lv_layer_top());
+        camera_test::ResetTaskStats();
+        camera_test::ResetRetirementStats();
         camera_test::reject_async = false;
         camera_test::fail_timer_creation = 0;
     }
@@ -127,6 +149,11 @@ struct Fixture {
     bool StatusVisible() { return !lv_obj_has_flag(app().status_label_, LV_OBJ_FLAG_HIDDEN); }
     bool Disabled() { return lv_obj_has_state(app().capture_button_, LV_STATE_DISABLED); }
     void Click() { lv_obj_send_event(app().capture_button_, LV_EVENT_CLICKED, nullptr); }
+    void TrackPreview() {
+        camera_test::preview_target = app().preview_image_;
+        camera_test::preview_source_changes = 0;
+        camera_test::preview_invalidations = 0;
+    }
     void Complete() {
         camera_test::JoinTasks();
         Pump(140);
@@ -158,11 +185,12 @@ RODAK_TEST("capture completion does not need a worker LVGL lock or async allocat
 
 RODAK_TEST("storage failure is shown and a second click can save successfully") {
     Fixture f;
-    f.camera.Outcomes({{false, "", "SD card is not available", {}}, {true, "/photos/retry.jpg", "", {}}});
+    f.camera.Outcomes({{{false, FailureStage::kStorageUnavailable, 0}, "", {}},
+                       {{true, FailureStage::kNone, 0}, "/photos/retry.jpg", {}}});
     f.Create();
     f.Click();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，SD 卡不可用");
     RODAK_CHECK_FALSE(f.Disabled());
     SaveScreenshot("camera-storage-error.ppm");
     // The error pill retires on its own after a few seconds.
@@ -174,10 +202,150 @@ RODAK_TEST("storage failure is shown and a second click can save successfully") 
     RODAK_CHECK_EQ(f.camera.captures.load(), 2U);
 }
 
+RODAK_TEST("capture failure toast uses the attempt stage and native error despite preview errors") {
+    const struct {
+        FailureStage stage;
+        int native_error;
+        const char* expected;
+    } cases[] = {
+        {FailureStage::kJpegInputAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegOutputAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegCompactAlloc, 0, "保存失败，内存不足"},
+        {FailureStage::kJpegEncoderOpen, ENOMEM, "保存失败，内存不足"},
+        {FailureStage::kWriteFailed, ENOMEM, "保存失败，内存不足"},
+        {FailureStage::kWriteFailed, ENOSPC, "保存失败，SD 卡空间不足"},
+        {FailureStage::kWriteFailed, ENODEV, "保存失败，SD 卡不可用"},
+        {FailureStage::kPathSelectionFailed, ENXIO, "保存失败，SD 卡不可用"},
+        {FailureStage::kDirectoryFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kPathSelectionFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kWriteFailed, EIO, "保存失败，SD 卡写入失败"},
+        {FailureStage::kJpegEncoderOpen, -1, "保存失败，请重试"},
+        {FailureStage::kJpegEncodeProcess, -1, "保存失败，请重试"},
+        {FailureStage::kGateTimeout, ETIMEDOUT, "保存失败，请重试"},
+        {FailureStage::kNoFrame, 0, "保存失败，请重试"},
+        {FailureStage::kServiceUnavailable, 0, "保存失败，请重试"},
+    };
+    Fixture f;
+    std::vector<camera_test::CaptureOutcome> outcomes;
+    for (const auto& test : cases) {
+        outcomes.push_back({{false, test.stage, test.native_error}, "", {}});
+    }
+    f.camera.Outcomes(std::move(outcomes));
+    f.camera.preview_error = "Camera OOM";
+    f.Create();
+
+    for (const auto& test : cases) {
+        f.Click();
+        f.Complete();
+        RODAK_CHECK_EQ(f.Status(), test.expected);
+        RODAK_CHECK(f.StatusVisible());
+        RODAK_CHECK_FALSE(f.Disabled());
+        lv_area_t box{}, status{};
+        lv_obj_get_coords(f.app().preview_box_, &box);
+        lv_obj_get_coords(f.app().status_label_, &status);
+        RODAK_CHECK(status.x1 >= box.x1 && status.x2 <= box.x2);
+        RODAK_CHECK(status.y1 >= box.y1 && status.y2 <= box.y2);
+    }
+}
+
+RODAK_TEST("steady preview reuses the frame buffer and invalidates only when pixels update") {
+    Fixture f;
+    f.camera.frame_width = 320;
+    f.camera.frame_height = 240;
+    f.Create();
+    auto& app = f.app();
+    const auto* pixels = app.preview_dsc_.data;
+    RODAK_CHECK_EQ(app.preview_dsc_.data_size, 320U * 240 * 2);
+    RODAK_CHECK_EQ(pixels, app.preview_frame_.rgb565.data());
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(f.camera.frame_copies, 1U);
+    f.TrackPreview();
+
+    f.camera.frame_pixel_byte = 0xA4;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, 1U);
+    RODAK_CHECK_EQ(pixels[0], 0x58);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 0U);
+
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, 2U);
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(pixels[0], 0xA4);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 0U);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 1U);
+
+    f.camera.frame_width = 160;
+    f.camera.frame_height = 120;
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.w, 160U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.h, 120U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.stride, 320U);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 1U);
+}
+
+RODAK_TEST("preview allocation failure leaves the displayed image valid and retries the frame") {
+    Fixture f;
+    f.Create();
+    auto& app = f.app();
+    const auto* pixels = app.preview_dsc_.data;
+    const uint32_t displayed = app.displayed_sequence_;
+    f.TrackPreview();
+
+    f.camera.frame_width = 320;
+    f.camera.frame_height = 240;
+    f.camera.frame_pixel_byte = 0xA4;
+    f.camera.fail_frame_allocation = true;
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(app.displayed_sequence_, displayed);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(pixels[0], 0x58);
+    RODAK_CHECK_EQ(lv_image_get_src(app.preview_image_), &app.preview_dsc_);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 0U);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 0U);
+    RODAK_CHECK_FALSE(f.Disabled());
+
+    f.camera.fail_frame_allocation = false;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(app.displayed_sequence_, f.camera.sequence);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.w, 320U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.h, 240U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.stride, 640U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data_size, 320U * 240 * 2);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, app.preview_frame_.rgb565.data());
+    RODAK_CHECK_EQ(app.preview_dsc_.data[0], 0xA4);
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 2U);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 1U);
+    RODAK_CHECK(camera_test::preview_invalidations > 0);
+}
+
+RODAK_TEST("calibration repositions the current image without a new frame") {
+    Fixture f;
+    f.Create();
+    auto& app = f.app();
+    const auto viewfinder_scale = lv_image_get_scale(app.preview_image_);
+    const auto frame_copies = f.camera.frame_copies;
+
+    app.OpenCalibration();
+    RODAK_CHECK_EQ(lv_image_get_scale(app.preview_image_), LV_SCALE_NONE * 7 / 10);
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, frame_copies);
+
+    app.CloseCalibration();
+    RODAK_CHECK_EQ(lv_image_get_scale(app.preview_image_), viewfinder_scale);
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, frame_copies);
+}
+
 RODAK_TEST("slow capture accepts only one task and retains its result until UI polling") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/slow.jpg", "", gate}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/slow.jpg", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -199,21 +367,43 @@ RODAK_TEST("slow capture accepts only one task and retains its result until UI p
 RODAK_TEST("task creation failure leaves the button retryable") {
     Fixture f;
     f.Create();
+    camera_test::ResetTaskStats();
+    camera_test::ResetRetirementStats();
+    camera_test::fail_retirement_reserve = true;
+    f.Click();
+    RODAK_CHECK_FALSE(f.app().CaptureInFlight());
+    RODAK_CHECK_FALSE(f.Disabled());
+    RODAK_CHECK_EQ(f.Status(), "保存失败，请重试");
+    RODAK_CHECK_EQ(camera_test::with_caps_task_creations.load(), 0U);
+    camera_test::fail_retirement_reserve = false;
+
     camera_test::fail_task_creation = true;
     f.Click();
     RODAK_CHECK_FALSE(f.app().CaptureInFlight());
     RODAK_CHECK_FALSE(f.Disabled());
     RODAK_CHECK_EQ(f.Status(), "保存失败，请重试");
+    RODAK_CHECK_EQ(camera_test::retirement_cancels.load(), 1U);
     camera_test::fail_task_creation = false;
+
     f.Click();
     f.Complete();
     RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
+    RODAK_CHECK_EQ(camera_test::internal_task_creations.load(), 0U);
+    RODAK_CHECK_EQ(camera_test::last_task_caps.load(),
+                   static_cast<uint32_t>(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    RODAK_CHECK_EQ(camera_test::retirement_publishes.load(), 1U);
+
+    // Second capture joins the prior finished ticket before creating another worker.
+    f.Click();
+    f.Complete();
+    RODAK_CHECK_EQ(camera_test::retirement_joins.load(), 1U);
+    RODAK_CHECK_EQ(camera_test::retirement_publishes.load(), 2U);
 }
 
 RODAK_TEST("preview failure does not remove the separate capture result consumer") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{false, "", "SD write failed", gate}});
+    f.camera.Outcomes({{{false, FailureStage::kWriteFailed, EIO}, "", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -226,7 +416,7 @@ RODAK_TEST("preview failure does not remove the separate capture result consumer
     RODAK_CHECK_EQ(std::string(lv_label_get_text(f.app().notice_title_)), "相机没有画面");
     gate->Release();
     f.Complete();
-    RODAK_CHECK_EQ(f.Status(), "保存失败，检查 SD 卡");
+    RODAK_CHECK_EQ(f.Status(), "保存失败，SD 卡写入失败");
     RODAK_CHECK(f.Disabled());
     RODAK_CHECK(lv_obj_has_state(f.app().calibration_button_, LV_STATE_DISABLED));
     SaveScreenshot("camera-preview-failed.ppm");
@@ -242,8 +432,8 @@ RODAK_TEST("preview failure does not remove the separate capture result consumer
 RODAK_TEST("theme recreation rejects the old worker result and preserves the new instance") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/old-theme.jpg", "", gate},
-                       {true, "/photos/new-theme.jpg", "", {}}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/old-theme.jpg", gate},
+                       {{true, FailureStage::kNone, 0}, "/photos/new-theme.jpg", {}}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -271,7 +461,7 @@ RODAK_TEST("theme recreation rejects the old worker result and preserves the new
 RODAK_TEST("destroyed app is not retained or called by its late worker") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{false, "", "Late SD failure", gate}});
+    f.camera.Outcomes({{{false, FailureStage::kWriteFailed, EIO}, "", gate}});
     f.Create();
     f.Click();
     RODAK_CHECK(gate->Wait());
@@ -290,14 +480,14 @@ RODAK_TEST("destroyed app is not retained or called by its late worker") {
 RODAK_TEST("stale generation cannot finish a later capture in the same app") {
     Fixture f;
     auto gate = std::make_shared<camera_test::Gate>();
-    f.camera.Outcomes({{true, "/photos/first.jpg", "", {}},
-                       {true, "/photos/second.jpg", "", gate}});
+    f.camera.Outcomes({{{true, FailureStage::kNone, 0}, "/photos/first.jpg", {}},
+                       {{true, FailureStage::kNone, 0}, "/photos/second.jpg", gate}});
     f.Create();
     f.Click();
     f.Complete();
     f.Click();
     RODAK_CHECK(gate->Wait());
-    f.app().OnCaptureComplete(true, "/photos/stale.jpg", "", 1);
+    f.app().OnCaptureComplete({true, FailureStage::kNone, 0}, "/photos/stale.jpg", 1);
     RODAK_CHECK_EQ(f.Status(), "正在保存…");
     RODAK_CHECK(f.Disabled());
     gate->Release();
