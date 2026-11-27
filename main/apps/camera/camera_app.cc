@@ -48,7 +48,8 @@ constexpr lv_coord_t kCaptureButtonSize = 44;
 constexpr lv_coord_t kShutterDot = 30;
 constexpr uint32_t kSavedToastMs = 2000;
 constexpr uint32_t kErrorToastMs = 4000;
-constexpr uint32_t kCaptureTaskStackBytes = 4096;
+// CaptureTask runs in PSRAM; 6 KiB leaves headroom for FATFS/SDMMC and logging.
+constexpr uint32_t kCaptureTaskStackBytes = 6144;
 constexpr uint32_t kPreviewStartDelayMs = 30;
 constexpr size_t kMinimumCameraDmaHeadroom = 4096;
 constexpr size_t kHomeReturnReserveSizes[] = {12288, 10240, 8192};
@@ -120,25 +121,28 @@ const char* CaptureErrorText(const rodakos::CameraCaptureOutcome& outcome) {
     }
 }
 
+// Process-lifetime owner so OnDestroy() never blocks LVGL on an in-flight SD write;
+// app_main's PumpTaskRetirements() reaps any late worker once it exits.
+rodakos::TaskRetirementOwner& CaptureTaskRetirementOwner() {
+    static rodakos::TaskRetirementOwner owner;
+    return owner;
+}
+
 void CaptureTask(void* arg) {
-    // RTOS task deletion does not unwind the stack; release the payload first.
-    {
-        std::unique_ptr<CameraCapturePayload> payload(static_cast<CameraCapturePayload*>(arg));
-        if (payload != nullptr && payload->guard != nullptr) {
-            CameraCaptureResult result;
-            result.generation = payload->generation;
-            if (payload->camera != nullptr) {
-                result.outcome = payload->camera->CapturePhotoWithOutcome(result.saved_path);
-            }
-            std::lock_guard<std::mutex> lock(payload->guard->mutex);
-            if (!payload->guard->revoked && payload->guard->running &&
-                payload->guard->generation == result.generation) {
-                // The UI polls this owned result; completion needs no LVGL allocation or lock.
-                payload->guard->result = std::move(result);
-            }
+    std::unique_ptr<CameraCapturePayload> payload(static_cast<CameraCapturePayload*>(arg));
+    if (payload != nullptr && payload->guard != nullptr) {
+        CameraCaptureResult result;
+        result.generation = payload->generation;
+        if (payload->camera != nullptr) {
+            result.outcome = payload->camera->CapturePhotoWithOutcome(result.saved_path);
+        }
+        std::lock_guard<std::mutex> lock(payload->guard->mutex);
+        if (!payload->guard->revoked && payload->guard->running &&
+            payload->guard->generation == result.generation) {
+            // The UI polls this owned result; completion needs no LVGL allocation or lock.
+            payload->guard->result = std::move(result);
         }
     }
-    vTaskDelete(nullptr);
 }
 
 void LogCaptureTaskCreateFailure() {
@@ -342,6 +346,7 @@ void CameraApp::OnDestroy() {
     ESP_LOGI(TAG, "Destroy: audio release complete");
 
     preview_paused_for_transition_ = false;
+    capture_retirement_.Reset();
     capture_guard_.reset();
     // Joins the calibration worker before the camera service pointer goes away.
     calibration_.reset();
@@ -487,6 +492,13 @@ void CameraApp::CapturePhoto() {
     if (camera_ == nullptr || capture_guard_ == nullptr || !preview_ready_) {
         return;
     }
+    if (CaptureInFlight()) {
+        return;
+    }
+    // Reclaim the prior finished capture worker before claiming another retirement slot.
+    capture_retirement_.Join();
+    capture_retirement_.Reset();
+
     auto* payload = new (std::nothrow) CameraCapturePayload();
     if (payload == nullptr) {
         UpdateStatus("保存失败，内存不足", true, kErrorToastMs);
@@ -510,9 +522,17 @@ void CameraApp::CapturePhoto() {
         lv_obj_add_state(capture_button_, LV_STATE_DISABLED);
     }
     if (calibration_button_ != nullptr) lv_obj_add_state(calibration_button_, LV_STATE_DISABLED);
-    const BaseType_t ret =
-        xTaskCreate(CaptureTask, "camera_capture", kCaptureTaskStackBytes, payload, 3, nullptr);
+    auto ticket =
+        rodakos::ReserveTaskRetirement(CaptureTaskRetirementOwner(), CaptureTask, payload);
+    TaskHandle_t handle = nullptr;
+    // CaptureTask only runs JPEG encoding and SDMMC/FATFS I/O (never NVS or SPI flash),
+    // so its stack can live in PSRAM and preserve contiguous internal DMA RAM.
+    const BaseType_t ret = !ticket ? pdFAIL
+        : xTaskCreateWithCaps(rodakos::TaskRetirementEntry, "camera_capture",
+                              kCaptureTaskStackBytes, rodakos::TaskRetirementContext(ticket), 3,
+                              &handle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
+        if (ticket) rodakos::CancelTaskRetirement(ticket);
         {
             std::lock_guard<std::mutex> lock(capture_guard_->mutex);
             capture_guard_->running = false;
@@ -521,7 +541,10 @@ void CameraApp::CapturePhoto() {
         SetControlsEnabled(preview_ready_);
         LogCaptureTaskCreateFailure();
         UpdateStatus("保存失败，请重试", true, kErrorToastMs);
+        return;
     }
+    capture_retirement_ = std::move(ticket);
+    rodakos::PublishTaskRetirement(capture_retirement_, handle);
 }
 
 void CameraApp::OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,

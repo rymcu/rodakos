@@ -188,6 +188,16 @@ class CameraDmaHeadroomContractTest(unittest.TestCase):
         self.assertLess(release, retry)
         self.assertLess(start.index("ReleaseHomeReturnMemory()"), start.index("RequestAudioResources()"))
 
+    def test_capture_task_uses_psram_stack_and_task_retirement(self) -> None:
+        source = CAMERA_APP_SOURCE.read_text(encoding="utf-8")
+        capture = function_body(source, "CameraApp::CapturePhoto")
+        self.assertIn("ReserveTaskRetirement", capture)
+        self.assertIn("xTaskCreateWithCaps", capture)
+        self.assertIn("MALLOC_CAP_SPIRAM", capture)
+        self.assertIn("PublishTaskRetirement", capture)
+        self.assertIn("CancelTaskRetirement", capture)
+        self.assertNotIn("xTaskCreate(", capture)
+
 
 if __name__ == "__main__":
     unittest.main()

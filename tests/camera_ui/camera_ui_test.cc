@@ -24,6 +24,7 @@
 #include "phone_ui/phone_fonts.h"
 #include "phone_ui/phone_ui.h"
 #include "esp_lvgl_port.h"
+#include <esp_heap_caps.h>
 #include "settings.h"
 #include <src/others/test/lv_test.h>
 
@@ -118,6 +119,8 @@ struct Fixture {
         camera_test::fail_next_ui_lock = false;
         camera_test::timer_creations = 0;
         camera_test::fail_timer_creation = 0;
+        camera_test::ResetTaskStats();
+        camera_test::ResetRetirementStats();
         services.SetCamera(&camera);
         services.SetAudioFocus(&focus);
         descriptor.id = "camera";
@@ -132,6 +135,8 @@ struct Fixture {
         Pump(2000);
         lv_obj_clean(lv_screen_active());
         lv_obj_clean(lv_layer_top());
+        camera_test::ResetTaskStats();
+        camera_test::ResetRetirementStats();
         camera_test::reject_async = false;
         camera_test::fail_timer_creation = 0;
     }
@@ -362,15 +367,37 @@ RODAK_TEST("slow capture accepts only one task and retains its result until UI p
 RODAK_TEST("task creation failure leaves the button retryable") {
     Fixture f;
     f.Create();
+    camera_test::ResetTaskStats();
+    camera_test::ResetRetirementStats();
+    camera_test::fail_retirement_reserve = true;
+    f.Click();
+    RODAK_CHECK_FALSE(f.app().CaptureInFlight());
+    RODAK_CHECK_FALSE(f.Disabled());
+    RODAK_CHECK_EQ(f.Status(), "保存失败，请重试");
+    RODAK_CHECK_EQ(camera_test::with_caps_task_creations.load(), 0U);
+    camera_test::fail_retirement_reserve = false;
+
     camera_test::fail_task_creation = true;
     f.Click();
     RODAK_CHECK_FALSE(f.app().CaptureInFlight());
     RODAK_CHECK_FALSE(f.Disabled());
     RODAK_CHECK_EQ(f.Status(), "保存失败，请重试");
+    RODAK_CHECK_EQ(camera_test::retirement_cancels.load(), 1U);
     camera_test::fail_task_creation = false;
+
     f.Click();
     f.Complete();
     RODAK_CHECK_EQ(f.Status(), ICON_CHECK " 已保存到相册");
+    RODAK_CHECK_EQ(camera_test::internal_task_creations.load(), 0U);
+    RODAK_CHECK_EQ(camera_test::last_task_caps.load(),
+                   static_cast<uint32_t>(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    RODAK_CHECK_EQ(camera_test::retirement_publishes.load(), 1U);
+
+    // Second capture joins the prior finished ticket before creating another worker.
+    f.Click();
+    f.Complete();
+    RODAK_CHECK_EQ(camera_test::retirement_joins.load(), 1U);
+    RODAK_CHECK_EQ(camera_test::retirement_publishes.load(), 2U);
 }
 
 RODAK_TEST("preview failure does not remove the separate capture result consumer") {

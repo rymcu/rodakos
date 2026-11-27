@@ -4,6 +4,7 @@
 #include "phone_os/camera_service.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/camera_calibration_service.h"
+#include "phone_os/task-retirement.h"
 
 #include <memory>
 #include <string>
@@ -89,6 +90,7 @@ private:
     void* home_return_reserve_ = nullptr;
     size_t home_return_reserve_size_ = 0;
     std::shared_ptr<CameraCaptureGuard> capture_guard_;
+    rodakos::TaskRetirementTicket capture_retirement_;
     // Calibration page: drawn over the preview box, worker created on first open.
     std::unique_ptr<rodakos::CameraCalibrationService> calibration_;
     lv_obj_t* calibration_button_ = nullptr;
