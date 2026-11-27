@@ -177,10 +177,14 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   confirmed delete that calls `DeleteFile` directly (never under `/rodakos`). Free space is read
   by a short task. See [media browsing](media-browsing.md) for error propagation and the
   synchronous I/O boundary.
-- Gyro: motion capability surface for gyroscope/accelerometer samples.
+- Gyro: bubble level (154×154 RGB565 canvas) with roll, pitch and yaw, 归零 (relative zero) and
+  定格 (freeze), and a six-axis page with centred bars. A sensor failure shows a 重试 page.
 - System (`system_info`): firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
-- Recorder: captures microphone audio through the recording service and stores it through FileService.
+- Recorder: a recording page (timer, 20-bar live input level, shutter-style record button, speaker
+  test, replay of the newest recording) and a list page (play with progress, confirmed delete).
+  `RecordingState::input_level` carries the last chunk peak on a 48 dB scale. Captures microphone
+  audio through the recording service and stores it through FileService.
   Start admission is separate from Saved. Final WAV header, flush and close failures remain errors,
   and `library_error` does not overwrite a completed save. Path leases cover creation, data, final
   header and cleanup without holding the entire storage I/O lock. See [media save boundaries](media-save.md).
@@ -191,7 +195,11 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   write is a one-field `ApplyLightPatch` by light id; brightness commits on release, and choosing a
   colour while the light is off saves it without switching the light on. A 500 ms poll shows MQTT
   changes and the voice status light overlay.
-- Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
+- Wake: persists up to 8 network devices and sends validated Wake-on-LAN magic packets over UDP
+  broadcast. Cards open a grouped form on the left and send on a separate power button on the right
+  (2 s confirmation); each field is edited on a full-screen input page above the soft keyboard.
+  Offline, the Wi-Fi strip links to Settings > Wi-Fi. A corrupt list resets only after confirmation;
+  a newer-schema list stays read-only.
 
 ## Service Notes
 
