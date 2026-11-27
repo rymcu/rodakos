@@ -14,6 +14,11 @@ The normative wire details live in [Rodak realtime voice v1](rodak-realtime-voic
 - Rodak owns ASR, intent/agent execution, LLM generation, TTS, conversation state, and audit data.
 - Idle wake monitoring is local. It must not keep a WebSocket, ASR stream, or cloud session alive.
 - The Assistant app is a configuration and status surface. It is not a Talk/Stop interaction page.
+  It shows the confirmed wake word from `voice_identity`, the session phase and turn progress,
+  and the cloud diagnosis in the shared Chinese text (`CloudDiagnosticTitleZh`). A fix button
+  opens Settings on the right page: Wi-Fi when the link is down, 连接服务 for server,
+  credential, trust and voice-service problems, and none for low memory, refreshing or a
+  cancelled preparation. Settings opened this way returns to Assistant on back.
 - If the `voice_wake/enabled` preference is missing, the device sets it to enabled and commits it
   to NVS. A
   subsequent explicit disable remains authoritative across app launches and device restarts.
@@ -162,7 +167,7 @@ Rules:
   ordinary `session.open`. With a server that does not send it, the light goes from listening to
   speaking directly. `turn.progress` stages are not shown on the
   light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Home
-  status bar shows them instead (see [turn progress on Home](#turn-progress-on-home)).
+  status bar shows them instead (see [turn progress on Home](#turn-progress-on-home-and-assistant)).
 - There is no light state for a slow server. A timer-based warning would fire on a late but healthy
   turn, and the device deadlines already end a dead one.
 - A background task (contract §6.1, long-running tasks) has no light state. The turn ends normally
@@ -190,12 +195,13 @@ Risk to check on hardware: GPIO43 is also UART0 TXD. The console uses USB-Serial
 no conflict at run time, but ROM boot output on UART0 can flash the LED at power-on. If it does,
 disable the ROM boot log.
 
-## Turn Progress on Home
+## Turn Progress on Home and Assistant
 
 > Status: implemented. Needs a server that sends `turn.progress` (contract §6.1).
 
 Every ordinary `session.open` asks for `features.turn_progress: 1`. Between `turn.accepted` and
-`output.start`, the Home status bar shows one line between the clock and the Wi-Fi/battery icons:
+`output.start`, the Home status bar shows one line between the clock and the Wi-Fi/battery icons,
+and the Assistant app shows the same text as the title of its status card:
 
 | What the device has | Text |
 | --- | --- |
@@ -219,7 +225,10 @@ Rules:
   it as a space, so the label stays on one line; a long label ends in "…".
 - The label is not written to the log. The log line has the turn, `seq` and stage only.
 - Home reads `VoiceAssistantService::GetTurnProgressSnapshot()` through `VoiceTurnProgressProvider`
-  every 250 ms and changes the label only when the text changes. Other apps do not show progress.
+  every 250 ms and changes the label only when the text changes.
+- The Assistant app reads `awaiting_reply`, `turn_stage` and `turn_label` from
+  `VoiceAssistantState` on its 500 ms poll and redraws only when the text changes. Its subtitle
+  is 等待<assistant name>回复…. Other apps do not show progress.
 
 Code: `ParseRealtimeVoiceTurnProgress` and `RealtimeVoiceSessionGate::AcceptTurnProgress` in
 `realtime_voice_contract.*`, the `kTurnProgress` case in `voice_assistant_service.cc`, and

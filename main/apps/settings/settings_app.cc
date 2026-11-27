@@ -40,6 +40,25 @@ bool SettingsApp::OnCreate(PhoneAppContext& context) {
         return false;
     }
 
+    // Another app may open a page directly (Assistant -> Wi-Fi / 连接服务). Back from that page
+    // returns to the caller rather than to the Settings main list.
+    const std::string requested = context.navigation().TakeRequestedPage();
+    if (!requested.empty()) {
+        // Sub-pages copy main_body_'s size and position, which LVGL only resolves in a layout
+        // pass; one has not run yet inside OnCreate, so the page would be built at 0x0.
+        lv_obj_update_layout(root_);
+    }
+    if (requested == "wifi") {
+        ShowPage(SettingsPage::kWiFiList);
+        opened_for_page_ = true;
+    } else if (requested == "cloud") {
+        ShowPage(SettingsPage::kDeviceCloud);
+        opened_for_page_ = true;
+    } else if (requested == "datetime") {
+        ShowPage(SettingsPage::kDateTime);
+        opened_for_page_ = true;
+    }
+
     ESP_LOGI(TAG, "Settings app created");
     return true;
 }
@@ -87,11 +106,13 @@ void SettingsApp::OnDestroy() {
     if (ui_ != nullptr) {
         PhoneUiLock lock(*ui_);
         if (lock.locked()) {
+            if (context_ != nullptr) lv_async_call_cancel(DeferReturnToCaller, context_);
             DestroyUi();
         }
     }
     context_ = nullptr;
     ui_ = nullptr;
+    opened_for_page_ = false;
     wifi_async_guard_.reset();
 }
 
@@ -390,6 +411,11 @@ void SettingsApp::NavigateBack() {
         current_page_ == SettingsPage::kButtons ||
         current_page_ == SettingsPage::kDeviceCloud ||
         current_page_ == SettingsPage::kWebFiles) {
+        if (opened_for_page_) {
+            opened_for_page_ = false;
+            lv_async_call(DeferReturnToCaller, context_);
+            return;
+        }
         ShowPage(SettingsPage::kMain);
         return;
     }

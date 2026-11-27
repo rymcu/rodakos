@@ -16,7 +16,7 @@ for rodak_suite in app_model home_ui assistant_ui ota_security codec_volume mqtt
     voice_prepare_priority_observer voice_prepare_priority_transport voice_prepare_priority_diagnostic \
     file_path_lease web_file_upload file_directory audio_playback_service music_ui themes_ui system_info_ui file_writer \
     recording_service recorder_ui camera_capture camera_teardown_diagnostics camera_teardown_patch camera_worker_lifecycle board_periph_lifecycle camera_device_lifecycle dvp_deinit dvp_rcc aes_dma_cleanup \
-    camera_ui file_manager_ui photos_ui display_service screen_jpeg_allocator lodepng_decode; do
+    camera_ui file_manager_ui photos_ui smart_ui calendar_ui lunar_calendar display_service screen_jpeg_allocator lodepng_decode; do
     rodak_target="$rodak_checks/asan-$rodak_suite"
     rodak_suite_options=()
     if [[ "$rodak_suite" == mqtt_event_patch || "$rodak_suite" == websocket_redirect_patch || "$rodak_suite" == server_trust_nvs_storage || "$rodak_suite" == lan_trust_setup || "$rodak_suite" == camera_teardown_patch || "$rodak_suite" == camera_worker_lifecycle || "$rodak_suite" == dvp_deinit || "$rodak_suite" == dvp_rcc || "$rodak_suite" == aes_dma_cleanup ]]; then

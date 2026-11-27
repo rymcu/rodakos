@@ -33,16 +33,28 @@ bool PhoneNavigation::RequestHome() {
 bool PhoneNavigation::Launch(std::string_view app_id) {
     child_app_.clear();
     caller_app_.clear();
+    requested_page_.clear();
     return system_.LaunchApp(app_id);
 }
 
-bool PhoneNavigation::LaunchFrom(std::string_view app_id, std::string_view caller) {
-    if (!Launch(app_id)) {
-        return false;
-    }
+bool PhoneNavigation::LaunchFrom(std::string_view app_id, std::string_view caller, std::string_view page) {
     child_app_.assign(app_id);
     caller_app_.assign(caller);
+    // Set before the launch: the child's OnCreate runs inside LaunchApp and reads it there.
+    requested_page_.assign(page);
+    if (!system_.LaunchApp(app_id)) {
+        child_app_.clear();
+        caller_app_.clear();
+        requested_page_.clear();
+        return false;
+    }
     return true;
+}
+
+std::string PhoneNavigation::TakeRequestedPage() {
+    std::string page = std::move(requested_page_);
+    requested_page_.clear();
+    return page;
 }
 
 bool PhoneNavigation::ReturnToCaller() {
@@ -60,6 +72,7 @@ bool PhoneNavigation::RefreshTheme() {
 bool PhoneNavigation::ReturnHome() {
     child_app_.clear();
     caller_app_.clear();
+    requested_page_.clear();
     return system_.ReturnHome();
 }
 

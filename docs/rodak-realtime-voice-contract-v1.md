@@ -408,7 +408,7 @@ local wake. `output.start` then switches to the 20 s reply-stall rule. The statu
 "waiting for a reply" between `turn.accepted` and `output.start` (see
 [voice assistant: status light](voice-assistant.md#status-light)). The Home status bar shows the
 latest `turn.progress` label, or device text for its stage, until `output.start` (see
-[voice assistant: turn progress on Home](voice-assistant.md#turn-progress-on-home)).
+[voice assistant: turn progress on Home](voice-assistant.md#turn-progress-on-home-and-assistant)).
 `turn.progress` does not move the deadline. The device rejects a label that is not valid UTF-8, and
 shows a control character in a label as a space.
 

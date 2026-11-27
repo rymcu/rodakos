@@ -16,6 +16,11 @@ void DeferReturnHome(void* user_data) {
     }
 }
 
+void DeferReturnToCaller(void* user_data) {
+    auto* context = static_cast<PhoneAppContext*>(user_data);
+    if (context != nullptr) context->navigation().ReturnToCaller();
+}
+
 void DeferOpenThemes(void* user_data) {
     auto* context = static_cast<PhoneAppContext*>(user_data);
     if (context != nullptr) {

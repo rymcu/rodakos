@@ -51,6 +51,7 @@ set(SOURCES
     "phone_os/screen_jpeg_allocation.cc"
     "phone_os/webrtc_display_service.cc"
     "phone_os/time_service.cc"
+    "phone_os/lunar_calendar.cc"
     "phone_os/voice_audio_frontend.cc"
     "phone_os/voice_wake_frontend.cc"
     "phone_os/voice_wake_echo_diagnostic.cc"

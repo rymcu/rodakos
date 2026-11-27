@@ -169,10 +169,14 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   short FileService I/O lock protects the write. A UI teardown can revoke the shared result guard
   while an already admitted capture finishes independently. See [media save boundaries](media-save.md).
 - Clock: local display and network time sync entry points.
-- Calendar: local month navigation and current-day selection.
+- Calendar: whole-month grid with lunar dates, solar terms and festivals in each cell (offline
+  `lunar_calendar`, 1900–2100), a day page, swipe or ‹ › to change month, and an in-app SNTP
+  sync when the clock is not set.
 - Files (`file_manager`): browses FileService-backed storage, clears stale/partial lists after read failures
-  and retries the attempted folder or image. See [media browsing](media-browsing.md) for error
-  propagation and the synchronous I/O boundary.
+  and retries the attempted folder or image. Images open full screen; the info page offers a
+  confirmed delete that calls `DeleteFile` directly (never under `/rodakos`). Free space is read
+  by a short task. See [media browsing](media-browsing.md) for error propagation and the
+  synchronous I/O boundary.
 - Gyro: motion capability surface for gyroscope/accelerometer samples.
 - System (`system_info`): firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
@@ -180,9 +184,13 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   Start admission is separate from Saved. Final WAV header, flush and close failures remain errors,
   and `library_error` does not overwrite a completed save. Path leases cover creation, data, final
   header and cleanup without holding the entire storage I/O lock. See [media save boundaries](media-save.md).
-- Assistant: configuration and status for the local "你好达克" monitor. Interaction runs as a
-  system service rather than an app-owned Talk/Stop session.
-- Smart: light/smart-device control surface.
+- Assistant: status card (wake word, session phase, turn progress, cloud diagnosis with a fix
+  button) and rows for wake, the voice status light and 连接服务. Interaction runs as a system
+  service rather than an app-owned Talk/Stop session. See [voice assistant](voice-assistant.md).
+- Smart: light control. One light opens its control page; two or more open an overview. Every
+  write is a one-field `ApplyLightPatch` by light id; brightness commits on release, and choosing a
+  colour while the light is off saves it without switching the light on. A 500 ms poll shows MQTT
+  changes and the voice status light overlay.
 - Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
 
 ## Service Notes
