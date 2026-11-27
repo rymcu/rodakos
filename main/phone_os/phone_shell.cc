@@ -587,18 +587,10 @@ void PhoneShell::ApplyVoiceFrame(const rodakos::VoiceOverlayFrame& frame) {
             return;
         }
     }
+    // Progress and captions share one look: centred text on the same glass, no icon. Progress is a
+    // single line; a caption may wrap to two.
     const bool caption = frame.mode == rodakos::VoiceOverlayMode::kCaption;
-    // A caption is the reply itself and needs no marker; the progress pill keeps the assistant
-    // glyph so a waiting turn reads as the assistant's.
-    if (caption) {
-        lv_obj_add_flag(voice_icon_, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_clear_flag(voice_icon_, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(voice_icon_, ICON_ASSISTANT);
-    }
     lv_label_set_long_mode(voice_label_, caption ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(voice_label_, caption ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT,
-                                0);
     lv_label_set_text(voice_label_, frame.text.c_str());
     StyleVoiceOverlay();
     lv_obj_update_layout(voice_overlay_);
@@ -627,21 +619,15 @@ void PhoneShell::CreateVoiceOverlay() {
     lv_obj_set_style_shadow_width(voice_overlay_, 18, 0);
     lv_obj_set_style_shadow_offset_y(voice_overlay_, 4, 0);
     lv_obj_set_style_shadow_spread(voice_overlay_, 0, 0);
-    lv_obj_set_layout(voice_overlay_, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(voice_overlay_, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(voice_overlay_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_column(voice_overlay_, 8, 0);
     lv_obj_clear_flag(voice_overlay_, LV_OBJ_FLAG_SCROLLABLE);
     // The bar takes its own presses so a tap never reaches a Home icon underneath; a tap hides
     // it until the text changes.
     lv_obj_add_flag(voice_overlay_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(voice_overlay_, VoiceOverlayClicked, LV_EVENT_CLICKED, this);
 
-    voice_icon_ = lv_label_create(voice_overlay_);
-    lv_obj_set_style_text_font(voice_icon_, PhoneIconFont(), 0);
     voice_label_ = lv_label_create(voice_overlay_);
-    lv_obj_set_flex_grow(voice_label_, 1);
+    lv_obj_set_width(voice_label_, LV_PCT(100));
+    lv_obj_set_style_text_align(voice_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(voice_label_, &phone_font_14, 0);
     lv_obj_set_style_text_line_space(voice_label_, 1, 0);
     // Two lines at most; static, never scrolling, so the SPI bus stays free for audio.
@@ -652,13 +638,12 @@ void PhoneShell::StyleVoiceOverlay() {
     if (voice_overlay_ == nullptr) {
         return;
     }
-    const bool progress = voice_frame_.mode == rodakos::VoiceOverlayMode::kProgress;
     // Tint from the theme background so the glass reads as light glass on light themes and smoked
     // glass on dark ones; the text colour already contrasts with that background.
     const lv_color_t base = rodakos_theme_bg_secondary();
     const bool light = lv_color_luminance(base) > 128;
     const lv_color_t sheen = lv_color_mix(lv_color_white(), base, light ? LV_OPA_60 : LV_OPA_20);
-    lv_obj_set_style_radius(voice_overlay_, progress ? 18 : 16, 0);
+    lv_obj_set_style_radius(voice_overlay_, 16, 0);
     lv_obj_set_style_bg_color(voice_overlay_, sheen, 0);
     lv_obj_set_style_bg_grad_color(voice_overlay_, base, 0);
     lv_obj_set_style_bg_main_opa(voice_overlay_, light ? LV_OPA_80 : LV_OPA_70, 0);
@@ -668,7 +653,6 @@ void PhoneShell::StyleVoiceOverlay() {
     lv_obj_set_style_border_opa(voice_overlay_, light ? LV_OPA_70 : LV_OPA_20, 0);
     lv_obj_set_style_shadow_color(voice_overlay_, lv_color_black(), 0);
     lv_obj_set_style_shadow_opa(voice_overlay_, light ? LV_OPA_20 : LV_OPA_40, 0);
-    lv_obj_set_style_text_color(voice_icon_, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_color(voice_label_, rodakos_theme_text_primary(), 0);
 }
 
@@ -677,7 +661,6 @@ void PhoneShell::DestroyVoiceOverlay() {
         lv_obj_delete(voice_overlay_);
     }
     voice_overlay_ = nullptr;
-    voice_icon_ = nullptr;
     voice_label_ = nullptr;
 }
 

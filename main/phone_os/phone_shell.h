@@ -87,7 +87,6 @@ private:
     // Bottom voice bar on lv_layer_top(): turn progress before a reply, then reply captions.
     // It lives below the Lock Screen and Control Center objects, which are moved to the front.
     lv_obj_t* voice_overlay_ = nullptr;
-    lv_obj_t* voice_icon_ = nullptr;
     lv_obj_t* voice_label_ = nullptr;
     lv_timer_t* voice_timer_ = nullptr;
     rodakos::VoiceOverlayModel voice_model_;

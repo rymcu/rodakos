@@ -537,7 +537,8 @@ answer shows 待核对 and is retried only with its original `opId`. The Home st
 red dot while something is unread, and the Lock Screen shows counts only.
 
 *Informative:* Rodak behavior. Records are household-visible todos and household notices for the
-agent the device is bound to; a device without a bound agent gets an empty list. Completed todos
+agent the device speaks as: the agent it is bound to, or the home's default assistant when it has
+no binding. Completed todos
 stay visible for 24 hours. Each device has its own `inboxRevision`, per-record `revision` and read
 state; read state follows the reminder, so the next reminder of a recurring todo is unread again.
 The server publishes `inbox/changed` right after the device subscribes and when its list changes,
