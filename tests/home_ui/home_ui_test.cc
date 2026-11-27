@@ -547,7 +547,8 @@ RODAK_TEST("status bar shows a fixed message center entry between clock and stat
     HomeFixture fixture(4, {}, &inbox);
     RODAK_CHECK(fixture.home.inbox_button_ != nullptr);
     RODAK_CHECK(fixture.home.inbox_timer_ != nullptr);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "消息");
+    // No unread: nothing shows in the header.
+    RODAK_CHECK(lv_obj_has_flag(fixture.home.inbox_button_, LV_OBJ_FLAG_HIDDEN));
 
     lv_obj_update_layout(lv_screen_active());
     lv_area_t entry_area;
@@ -564,15 +565,20 @@ RODAK_TEST("status bar shows a fixed message center entry between clock and stat
     inbox.summary.unread = 3;
     inbox.summary.revision = 2;
     fixture.home.UpdateInboxEntry();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "3");
-    inbox.summary.unread = 120;
-    inbox.summary.revision = 3;
-    fixture.home.UpdateInboxEntry();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "99+");
-    // Same revision: the label is not rewritten.
+    RODAK_CHECK_FALSE(lv_obj_has_flag(fixture.home.inbox_button_, LV_OBJ_FLAG_HIDDEN));
+    // The dot sits inside the entry and the header.
+    lv_obj_update_layout(lv_screen_active());
+    lv_area_t dot_area;
+    lv_obj_get_coords(fixture.home.inbox_dot_, &dot_area);
+    RODAK_CHECK(dot_area.x1 >= entry_area.x1 && dot_area.x2 <= entry_area.x2);
+    RODAK_CHECK(dot_area.y1 >= 0 && dot_area.y2 < 28);
+    // Same revision: nothing is rewritten.
     inbox.summary.unread = 0;
     fixture.home.UpdateInboxEntry();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "99+");
+    RODAK_CHECK_FALSE(lv_obj_has_flag(fixture.home.inbox_button_, LV_OBJ_FLAG_HIDDEN));
+    inbox.summary.revision = 3;
+    fixture.home.UpdateInboxEntry();
+    RODAK_CHECK(lv_obj_has_flag(fixture.home.inbox_button_, LV_OBJ_FLAG_HIDDEN));
 }
 
 RODAK_TEST("tapping the message center entry queues a deferred launch") {
@@ -580,7 +586,10 @@ RODAK_TEST("tapping the message center entry queues a deferred launch") {
     ResetSettings();
     FixedInboxProvider inbox;
     inbox.summary.bound = true;
+    inbox.summary.unread = 1;
+    inbox.summary.revision = 1;
     HomeFixture fixture(4, {}, &inbox);
+    RODAK_CHECK_FALSE(lv_obj_has_flag(fixture.home.inbox_button_, LV_OBJ_FLAG_HIDDEN));
     Click(fixture.home.inbox_button_);
     // The click itself only queues; the launch runs from the async call.
     Pump();

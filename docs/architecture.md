@@ -197,6 +197,7 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
 - Messages (`messages`): notices and todo reminders from `InboxService`, a RAM-only copy of the
   server records synced over pinned HTTPS after an `inbox/changed` signal. Todos can be completed
   or snoozed 10/30/60 minutes with an idempotent `opId`; text is hidden during any display share.
+  Home shows only a red status dot after the clock while something is unread; the dot opens the app.
   See [AIoT contract §7.6](rodak-aiot-contract-v1.md).
 
 ## Service Notes

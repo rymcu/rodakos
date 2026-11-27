@@ -533,8 +533,8 @@ It truncates long text at a character boundary, rejects a snapshot with a malfor
 clears everything at unbind or rebind, discarding late responses. One worker task makes one
 request at a time and waits while a voice session, a WebRTC stream, an OTA or an appearance
 download is active. Known offline, completion and snooze are disabled; a request without an
-answer shows 待核对 and is retried only with its original `opId`. The Home status bar shows a fixed
-entry with the unread count, and the Lock Screen shows counts only.
+answer shows 待核对 and is retried only with its original `opId`. The Home status bar shows only a
+red dot while something is unread, and the Lock Screen shows counts only.
 
 *Informative:* Rodak behavior. Records are household-visible todos and household notices for the
 agent the device is bound to; a device without a bound agent gets an empty list. Completed todos

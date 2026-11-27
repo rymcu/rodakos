@@ -588,8 +588,17 @@ void PhoneShell::ApplyVoiceFrame(const rodakos::VoiceOverlayFrame& frame) {
         }
     }
     const bool caption = frame.mode == rodakos::VoiceOverlayMode::kCaption;
-    lv_label_set_text(voice_icon_, caption ? ICON_VOLUME : ICON_ASSISTANT);
+    // A caption is the reply itself and needs no marker; the progress pill keeps the assistant
+    // glyph so a waiting turn reads as the assistant's.
+    if (caption) {
+        lv_obj_add_flag(voice_icon_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(voice_icon_, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(voice_icon_, ICON_ASSISTANT);
+    }
     lv_label_set_long_mode(voice_label_, caption ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(voice_label_, caption ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT,
+                                0);
     lv_label_set_text(voice_label_, frame.text.c_str());
     StyleVoiceOverlay();
     lv_obj_update_layout(voice_overlay_);
@@ -608,10 +617,16 @@ void PhoneShell::CreateVoiceOverlay() {
     lv_obj_remove_style_all(voice_overlay_);
     lv_obj_set_width(voice_overlay_, kVoiceOverlayWidth);
     lv_obj_set_height(voice_overlay_, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_hor(voice_overlay_, 10, 0);
-    lv_obj_set_style_pad_ver(voice_overlay_, 6, 0);
-    lv_obj_set_style_bg_opa(voice_overlay_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(voice_overlay_, 12, 0);
+    lv_obj_set_style_pad_ver(voice_overlay_, 7, 0);
     lv_obj_set_style_border_width(voice_overlay_, 1, 0);
+    // Glass look without a backdrop blur (LVGL 9.3 has none, and a snapshot blur would compete with
+    // audio for the CPU): a translucent tinted fill with a vertical sheen, a light hairline edge and
+    // a soft shadow that lifts the bar off the content below.
+    lv_obj_set_style_bg_grad_dir(voice_overlay_, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_shadow_width(voice_overlay_, 18, 0);
+    lv_obj_set_style_shadow_offset_y(voice_overlay_, 4, 0);
+    lv_obj_set_style_shadow_spread(voice_overlay_, 0, 0);
     lv_obj_set_layout(voice_overlay_, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(voice_overlay_, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(voice_overlay_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
@@ -638,10 +653,21 @@ void PhoneShell::StyleVoiceOverlay() {
         return;
     }
     const bool progress = voice_frame_.mode == rodakos::VoiceOverlayMode::kProgress;
-    lv_obj_set_style_radius(voice_overlay_, progress ? 16 : 12, 0);
-    lv_obj_set_style_bg_color(voice_overlay_, rodakos_theme_bg_secondary(), 0);
-    lv_obj_set_style_border_color(voice_overlay_,
-                                  progress ? rodakos_theme_primary() : rodakos_theme_border(), 0);
+    // Tint from the theme background so the glass reads as light glass on light themes and smoked
+    // glass on dark ones; the text colour already contrasts with that background.
+    const lv_color_t base = rodakos_theme_bg_secondary();
+    const bool light = lv_color_luminance(base) > 128;
+    const lv_color_t sheen = lv_color_mix(lv_color_white(), base, light ? LV_OPA_60 : LV_OPA_20);
+    lv_obj_set_style_radius(voice_overlay_, progress ? 18 : 16, 0);
+    lv_obj_set_style_bg_color(voice_overlay_, sheen, 0);
+    lv_obj_set_style_bg_grad_color(voice_overlay_, base, 0);
+    lv_obj_set_style_bg_main_opa(voice_overlay_, light ? LV_OPA_80 : LV_OPA_70, 0);
+    lv_obj_set_style_bg_grad_opa(voice_overlay_, light ? LV_OPA_70 : LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(voice_overlay_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(voice_overlay_, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(voice_overlay_, light ? LV_OPA_70 : LV_OPA_20, 0);
+    lv_obj_set_style_shadow_color(voice_overlay_, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(voice_overlay_, light ? LV_OPA_20 : LV_OPA_40, 0);
     lv_obj_set_style_text_color(voice_icon_, rodakos_theme_primary(), 0);
     lv_obj_set_style_text_color(voice_label_, rodakos_theme_text_primary(), 0);
 }

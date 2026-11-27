@@ -195,8 +195,7 @@ private:
     // Fixed message center entry between the clock and the status cluster. It stays on the
     // first screen even when the user's layout moves the Messages app to a later page.
     lv_obj_t* inbox_button_ = nullptr;
-    lv_obj_t* inbox_icon_ = nullptr;
-    lv_obj_t* inbox_label_ = nullptr;
+    lv_obj_t* inbox_dot_ = nullptr;
     uint32_t inbox_revision_shown_ = UINT32_MAX;
     lv_timer_t* clock_timer_ = nullptr;
     lv_timer_t* inbox_timer_ = nullptr;

@@ -49,8 +49,11 @@ constexpr int32_t kTileTapSlopSquared = kTileTapSlop * kTileTapSlop;
 constexpr int kBatteryRefreshTicks = 30;
 constexpr const char* kMessagesAppId = "messages";
 // The header has 14 px left padding; x is relative to that content box.
-constexpr lv_coord_t kInboxEntryX = 66;
-constexpr lv_coord_t kInboxEntryWidth = 56;
+// Only a status dot right after the clock, shown while something is unread. The Messages app icon
+// stays the ordinary entry; the dot is a quiet hint that also opens it.
+constexpr lv_coord_t kInboxEntryX = 58;
+constexpr lv_coord_t kInboxEntryWidth = 20;
+constexpr lv_coord_t kInboxDotSize = 8;
 
 const std::vector<rodakos::HomeAppIdMigration> kHomeAppIdMigrations;
 rodakos::HomePageSession g_home_page_session;
@@ -599,25 +602,21 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
         inbox_button_ = lv_button_create(header);
         if (inbox_button_ != nullptr) {
             lv_obj_remove_style_all(inbox_button_);
-            lv_obj_set_size(inbox_button_, kInboxEntryWidth, 20);
-            lv_obj_set_ext_click_area(inbox_button_, 4);
+            lv_obj_set_size(inbox_button_, kInboxEntryWidth, 24);
+            // The dot is tiny; widen the press area so a finger still hits it.
+            lv_obj_set_ext_click_area(inbox_button_, 8);
             lv_obj_align(inbox_button_, LV_ALIGN_LEFT_MID, kInboxEntryX, 0);
-            lv_obj_set_style_radius(inbox_button_, 10, 0);
-            lv_obj_set_style_bg_opa(inbox_button_, LV_OPA_COVER, 0);
-            lv_obj_set_style_pad_hor(inbox_button_, 6, 0);
-            lv_obj_set_style_translate_y(inbox_button_, 1, LV_STATE_PRESSED);
-            lv_obj_set_layout(inbox_button_, LV_LAYOUT_FLEX);
-            lv_obj_set_flex_flow(inbox_button_, LV_FLEX_FLOW_ROW);
-            lv_obj_set_flex_align(inbox_button_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                                  LV_FLEX_ALIGN_CENTER);
-            lv_obj_set_style_pad_column(inbox_button_, 3, 0);
+            lv_obj_set_style_bg_opa(inbox_button_, LV_OPA_TRANSP, 0);
             lv_obj_clear_flag(inbox_button_, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_event_cb(inbox_button_, InboxButtonEvent, LV_EVENT_CLICKED, this);
-            inbox_icon_ = lv_label_create(inbox_button_);
-            lv_label_set_text(inbox_icon_, ICON_NOTIFICATIONS);
-            lv_obj_set_style_text_font(inbox_icon_, PhoneIconFont(), 0);
-            inbox_label_ = lv_label_create(inbox_button_);
-            lv_obj_set_style_text_font(inbox_label_, &phone_font_12, 0);
+            lv_obj_add_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
+            inbox_dot_ = lv_obj_create(inbox_button_);
+            lv_obj_remove_style_all(inbox_dot_);
+            lv_obj_set_size(inbox_dot_, kInboxDotSize, kInboxDotSize);
+            lv_obj_set_style_radius(inbox_dot_, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_opa(inbox_dot_, LV_OPA_COVER, 0);
+            lv_obj_center(inbox_dot_);
+            lv_obj_clear_flag(inbox_dot_, LV_OBJ_FLAG_CLICKABLE);
         }
     }
     LogHomeResources("status-bar");
@@ -2441,8 +2440,7 @@ void HomeApp::ResetUiPointers() {
     battery_icon_ = nullptr;
     battery_label_ = nullptr;
     inbox_button_ = nullptr;
-    inbox_icon_ = nullptr;
-    inbox_label_ = nullptr;
+    inbox_dot_ = nullptr;
     inbox_revision_shown_ = UINT32_MAX;
     battery_refresh_ticks_ = 0;
     page_tiles_.clear();
@@ -2484,7 +2482,7 @@ void HomeApp::UpdateClock() {
 }
 
 void HomeApp::UpdateInboxEntry() {
-    if (inbox_button_ == nullptr || inbox_label_ == nullptr || context_ == nullptr) {
+    if (inbox_button_ == nullptr || inbox_dot_ == nullptr || context_ == nullptr) {
         return;
     }
     auto* provider = context_->services().inbox_summary();
@@ -2493,23 +2491,13 @@ void HomeApp::UpdateInboxEntry() {
         return;
     }
     inbox_revision_shown_ = summary.revision;
-    const bool unread = summary.unread > 0;
-    char text[16] = {};
-    if (unread) {
-        if (summary.unread > 99) {
-            std::snprintf(text, sizeof(text), "99+");
-        } else {
-            std::snprintf(text, sizeof(text), "%u", static_cast<unsigned>(summary.unread));
-        }
+    // Only a dot, no icon or count: the header stays calm and the Messages app shows the numbers.
+    if (summary.unread > 0) {
+        lv_obj_clear_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
     } else {
-        std::snprintf(text, sizeof(text), "%s", "消息");
+        lv_obj_add_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(inbox_label_, text);
-    const lv_color_t background = unread ? rodakos_theme_error() : rodakos_theme_bg_tertiary();
-    const lv_color_t foreground = unread ? rodakos_theme_on_error() : rodakos_theme_text_secondary();
-    lv_obj_set_style_bg_color(inbox_button_, background, 0);
-    lv_obj_set_style_text_color(inbox_icon_, foreground, 0);
-    lv_obj_set_style_text_color(inbox_label_, foreground, 0);
+    lv_obj_set_style_bg_color(inbox_dot_, rodakos_theme_error(), 0);
 }
 
 void HomeApp::InboxButtonEvent(lv_event_t* event) {

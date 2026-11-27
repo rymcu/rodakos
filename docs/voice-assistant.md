@@ -201,8 +201,14 @@ disable the ROM boot log.
 > captions need `output.caption` (contract §6.2) or a short `output.start` `text`.
 
 One Shell bar at the bottom of the screen shows the voice turn in every app. Before the reply it is
-a one-line progress pill; while the reply plays it is a caption of up to two lines. It replaces the
-earlier progress label in the Home status bar, whose middle now holds the message center entry.
+a one-line progress pill with the assistant glyph; while the reply plays it is a centred caption of
+up to two lines without an icon. It replaces the earlier progress label in the Home status bar,
+which now shows only a red unread dot after the clock.
+
+The bar is styled as frosted glass without a real backdrop blur, which LVGL 9.3 does not provide
+and which would cost a full-strip render during playback: a translucent fill tinted from the theme
+background with a lighter top, a white hairline edge and a soft shadow. Light themes get lighter
+glass and dark themes smoked glass.
 
 | What the device has | Text |
 | --- | --- |
