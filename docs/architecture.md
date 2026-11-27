@@ -177,7 +177,8 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   confirmed delete that calls `DeleteFile` directly (never under `/rodakos`). Free space is read
   by a short task. See [media browsing](media-browsing.md) for error propagation and the
   synchronous I/O boundary.
-- Gyro: motion capability surface for gyroscope/accelerometer samples.
+- Gyro: bubble level (154×154 RGB565 canvas) with roll, pitch and yaw, 归零 (relative zero) and
+  定格 (freeze), and a six-axis page with centred bars. A sensor failure shows a 重试 page.
 - System (`system_info`): firmware, WiFi, memory, and storage status.
 - Music: scans `/music` and plays supported audio through the music/audio services. Separate library/error snapshots, worker-backed retry, revision-bound selection and asynchronous playback results are described in [music playback](music-playback.md).
 - Recorder: captures microphone audio through the recording service and stores it through FileService.
