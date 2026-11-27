@@ -1,6 +1,7 @@
 #include "phone_os/resource_failure_injection.h"
 #include "phone_os/camera_service.h"
 #include "phone_os/camera-teardown-diagnostics.h"
+#include "phone_os/jpeg_encode_gate.h"
 #include "phone_os/screen_jpeg_allocation.h"
 
 #include "rodakos_adapters/file_service.h"
@@ -323,6 +324,7 @@ const char* CameraCaptureFailureStageName(CameraCaptureFailureStage stage) {
         case CameraCaptureFailureStage::kNone: return "none";
         case CameraCaptureFailureStage::kServiceUnavailable: return "service_unavailable";
         case CameraCaptureFailureStage::kNoFrame: return "no_frame";
+        case CameraCaptureFailureStage::kGateTimeout: return "gate_timeout";
         case CameraCaptureFailureStage::kJpegInputAlloc: return "jpeg_input_alloc";
         case CameraCaptureFailureStage::kJpegEncoderOpen: return "jpeg_encoder_open";
         case CameraCaptureFailureStage::kJpegOutputAlloc: return "jpeg_output_alloc";
@@ -336,7 +338,8 @@ const char* CameraCaptureFailureStageName(CameraCaptureFailureStage stage) {
     return "unknown";
 }
 
-CameraService::CameraService(FileService* file_service) : file_service_(file_service) {
+CameraService::CameraService(FileService* file_service, JpegEncodeGate* jpeg_encode_gate)
+    : file_service_(file_service), jpeg_encode_gate_(jpeg_encode_gate) {
     mutex_ = xSemaphoreCreateMutex();
 }
 
@@ -746,8 +749,15 @@ CameraCaptureOutcome CameraService::CapturePhotoWithOutcome(std::string& saved_p
     saved_path.clear();
     std::vector<uint8_t> encoded;
     CameraCaptureOutcome outcome;
-    if (!CaptureJpeg(encoded, nullptr, nullptr, &outcome)) {
-        return outcome;
+    {
+        auto permit = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->AcquirePriority()
+                                                  : JpegEncodeGate::Permit{};
+        if (jpeg_encode_gate_ != nullptr && !permit) {
+            return CaptureFailure(Stage::kGateTimeout, ETIMEDOUT, "Timed out waiting for JPEG encoder");
+        }
+        if (!CaptureJpeg(encoded, nullptr, nullptr, &outcome)) {
+            return outcome;
+        }
     }
 
     if (file_service_ == nullptr) {
@@ -882,7 +892,15 @@ void CameraService::JpegStreamTask() {
                 std::vector<uint8_t> jpeg;
                 uint32_t sequence = 0;
                 int64_t timestamp_us = 0;
-                if (CaptureJpeg(jpeg, &sequence, &timestamp_us) && sequence != last_sequence) {
+                bool captured = false;
+                {
+                    auto permit = jpeg_encode_gate_ != nullptr ? jpeg_encode_gate_->TryAcquireStream()
+                                                              : JpegEncodeGate::Permit{};
+                    if (jpeg_encode_gate_ == nullptr || permit) {
+                        captured = CaptureJpeg(jpeg, &sequence, &timestamp_us);
+                    }
+                }
+                if (captured && sequence != last_sequence) {
                     last_sequence = sequence;
                     callback(std::move(jpeg), sequence, timestamp_us);
                 }

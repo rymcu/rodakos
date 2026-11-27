@@ -2,6 +2,7 @@
 #include "host_runtime.h"
 #include "../task_retirement/task_retirement_host.h"
 #include "phone_os/camera_service.h"
+#include "phone_os/jpeg_encode_gate.h"
 #include "phone_os/task-retirement.h"
 #include "rodakos_adapters/file_service.h"
 
@@ -26,16 +27,17 @@ using Stage = CameraCaptureFailureStage;
 
 struct Fixture {
     std::string root;
+    JpegEncodeGate jpeg_gate;
     std::unique_ptr<FileService> files;
     std::unique_ptr<CameraService> camera;
-    Fixture() {
+    explicit Fixture(bool use_jpeg_gate = false) {
         char name[] = "/tmp/rodakos-camera-capture-XXXXXX";
         const char* path = mkdtemp(name);
         RODAK_CHECK(path != nullptr);
         root = path;
         camera_host::Reset(root);
         files.reset(CreateFileService());
-        camera = std::make_unique<CameraService>(files.get());
+        camera = std::make_unique<CameraService>(files.get(), use_jpeg_gate ? &jpeg_gate : nullptr);
     }
     ~Fixture() {
         camera_host::ClearNewFailures();
@@ -736,6 +738,87 @@ RODAK_TEST("a preview allocation failure cannot replace an earlier shutter outco
     RODAK_CHECK(shutter.stage == Stage::kWriteFailed);
     RODAK_CHECK_EQ(shutter.native_error, ENOSPC);
     RODAK_CHECK(path.empty());
+}
+
+RODAK_TEST("a waiting shutter takes the next permit while stream attempts skip") {
+    JpegEncodeGate gate;
+    auto active = gate.TryAcquireStream();
+    RODAK_CHECK(active);
+    RODAK_CHECK_FALSE(gate.TryAcquireStream());
+    RODAK_CHECK_FALSE(gate.AcquirePriority(1));
+    std::promise<void> waiting, entered, release;
+    auto released = release.get_future();
+    auto shutter = std::async(std::launch::async, [&]() {
+        waiting.set_value();
+        auto permit = gate.AcquirePriority(1000);
+        entered.set_value();
+        released.wait();
+        return static_cast<bool>(permit);
+    });
+    waiting.get_future().wait();
+    auto priority_entered = entered.get_future();
+    const bool waited = priority_entered.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    active = {};
+    const bool stream_skipped = !gate.TryAcquireStream();
+    const bool acquired = priority_entered.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    const bool skipped_while_active = !gate.TryAcquireStream();
+    release.set_value();
+    const bool priority_owned = shutter.get();
+    RODAK_CHECK(waited);
+    RODAK_CHECK(stream_skipped);
+    RODAK_CHECK(acquired);
+    RODAK_CHECK(skipped_while_active);
+    RODAK_CHECK(priority_owned);
+    auto next = gate.TryAcquireStream();
+    auto moved = std::move(next);
+    RODAK_CHECK(moved);
+    RODAK_CHECK_FALSE(next);
+    RODAK_CHECK_FALSE(gate.TryAcquireStream());
+}
+
+RODAK_TEST("camera gate timeout skips encoding and permits recover before the SD write") {
+    Fixture f(true); f.Preview();
+    auto active = f.jpeg_gate.TryAcquireStream();
+    RODAK_CHECK(active);
+    std::string path = "old";
+    const auto timeout = f.camera->CapturePhotoWithOutcome(path);
+    RODAK_CHECK_FALSE(timeout.ok);
+    RODAK_CHECK(timeout.stage == Stage::kGateTimeout);
+    RODAK_CHECK_EQ(timeout.native_error, ETIMEDOUT);
+    RODAK_CHECK_EQ(camera_host::exclusive_create_calls.load(), 0u);
+    RODAK_CHECK(path.empty());
+    active = {};
+
+    bool gate_free_during_write = false;
+    camera_host::write_hook = [&]() {
+        gate_free_during_write = static_cast<bool>(f.jpeg_gate.TryAcquireStream()) &&
+                                 camera_host::aligned_buffers == 0 && camera_host::encoder_handles == 0;
+    };
+    RODAK_CHECK(f.camera->CapturePhotoWithOutcome(path).ok);
+    camera_host::write_hook = {};
+    RODAK_CHECK(gate_free_during_write);
+    RODAK_CHECK_FALSE(path.empty());
+}
+
+RODAK_TEST("camera JPEG stream skips a held gate and releases it before callback") {
+    Fixture f(true); f.Preview();
+    auto active = f.jpeg_gate.AcquirePriority(0);
+    RODAK_CHECK(active);
+    std::atomic<unsigned> delivered{0};
+    std::atomic<bool> permit_available{false};
+    RODAK_CHECK(f.camera->StartJpegStream(30, [&](Bytes&&, uint32_t, int64_t) {
+        permit_available = static_cast<bool>(f.jpeg_gate.TryAcquireStream()) &&
+                           camera_host::aligned_buffers == 0 && camera_host::encoder_handles == 0;
+        ++delivered;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(75));
+    const bool skipped = delivered == 0;
+    active = {};
+    const bool resumed = WaitFor([&] { return delivered > 0; });
+    f.camera->StopJpegStream();
+    RODAK_CHECK(skipped);
+    RODAK_CHECK(resumed);
+    RODAK_CHECK(permit_available);
 }
 
 RODAK_TEST("preview allocation failures requeue buffers and recover without revoking owners") {

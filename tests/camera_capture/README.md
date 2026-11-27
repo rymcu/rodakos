@@ -6,7 +6,7 @@ the real frame snapshot/conversion/capture path calls a fake JPEG encoder. Board
 unique temporary host directory, and photo selection, exclusive creation, writing, flushing,
 closing and cleanup use real host filesystem operations.
 
-The 55 test cases cover:
+The 58 test cases cover:
 
 - Publishing `saved_path` and `last_saved_path` only after a successful save, including a blocked
   write where the candidate path must remain unpublished.
@@ -23,6 +23,8 @@ The 55 test cases cover:
 - Sequence-aware preview copies leave the destination intact on OOM and reuse its buffer for
   same-size updates. An unchanged sequence makes no allocation. A zero-height frame leaves
   the displayed pixels intact and bypasses JPEG allocation.
+- The shared JPEG gate gives the waiting shutter priority, reports timeout, and allows the next
+  encode before the shutter's SD write or the stream callback begins.
 - `FileServiceImpl::ListDirectory` clears stale entries and reports `ENODEV` when
   unmounted, and preserves a real missing-directory `ENOENT` across adapter logging.
 - Short writes, flush and close failures, cleanup of failed newly created files, and preservation

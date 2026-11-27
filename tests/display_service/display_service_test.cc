@@ -3,6 +3,7 @@
 #include "host_heap.h"
 #include "esp_heap_caps.h"
 #include "phone_os/display_service.h"
+#include "phone_os/jpeg_encode_gate.h"
 #include "phone_os/task-retirement.h"
 #include "task_retirement_host.h"
 
@@ -27,6 +28,10 @@ struct Fixture {
     lv_display_t display;
     std::array<uint8_t, host::kFrameBytes> pixels{};
     Service service{&display};
+#ifdef RODAKOS_DISPLAY_TEST_JPEG_GATE
+    Fixture() = default;
+    explicit Fixture(rodakos::JpegEncodeGate* gate) : service(&display, gate) {}
+#endif
     ~Fixture() {
         host::ClearFailures();
         service.StopJpegStream();
@@ -354,6 +359,68 @@ RODAK_TEST("worker callback runs after the codec scope has restored its task pol
     RODAK_CHECK(original_policy.load());
     CheckReleased();
 }
+#ifdef RODAKOS_DISPLAY_TEST_JPEG_GATE
+RODAK_TEST("shutter contention is paced and recorded as skips without allocating RGB888") {
+    rodakos::JpegEncodeGate gate;
+    std::atomic<int> callbacks{0};
+    Fixture fixture(&gate);
+    fixture.Start();
+    fixture.Publish();
+    auto shutter = gate.AcquirePriority(0);
+    RODAK_CHECK(shutter);
+    std::vector<uint8_t> jpeg{9};
+    RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+    RODAK_CHECK(jpeg.empty());
+    RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&&, auto, auto) { ++callbacks; }));
+    RODAK_CHECK(Wait([] { return host::LatestJpegStats().windows != 0; }, 6500ms));
+    const auto stats = host::LatestJpegStats();
+    RODAK_CHECK_EQ(stats.attempts, 0u);
+    RODAK_CHECK_EQ(stats.encoded, 0u);
+    RODAK_CHECK_EQ(stats.failed, 0u);
+    RODAK_CHECK(stats.skipped > 1);
+    RODAK_CHECK(stats.skipped <= 500);
+    RODAK_CHECK_EQ(host::Snapshot().peak_bytes, 0u);
+    RODAK_CHECK_EQ(callbacks.load(), 0);
+
+    shutter = {};
+    RODAK_CHECK(Wait([&] { return callbacks.load() == 1; }));
+    fixture.service.StopJpegStream();
+    CheckReleased();
+}
+
+RODAK_TEST("uncontended Display encode releases gate and scratch before delivery") {
+    rodakos::JpegEncodeGate gate;
+    std::atomic<bool> finished{false}, permit_available{false}, scratch_released{false};
+    std::atomic<size_t> callback_bytes{0};
+    Fixture fixture(&gate);
+    fixture.Start();
+    fixture.Publish();
+    host::FailHeap(host::kRgbBytes);
+    std::vector<uint8_t> jpeg;
+    RODAK_CHECK_FALSE(fixture.service.CaptureJpeg(jpeg));
+    {
+        auto shutter = gate.AcquirePriority(0);
+        RODAK_CHECK(shutter);
+    }
+    RODAK_CHECK(fixture.service.CaptureJpeg(jpeg));
+    RODAK_CHECK_EQ(jpeg.size(), host::kJpegBytes);
+
+    RODAK_CHECK(fixture.service.StartJpegStream(5, [&](auto&& frame, auto, auto) {
+        auto shutter = gate.AcquirePriority(0);
+        permit_available = static_cast<bool>(shutter);
+        const auto state = host::Snapshot();
+        scratch_released = state.bytes == 0 && state.encoders == 0;
+        callback_bytes = frame.size();
+        finished = true;
+    }));
+    RODAK_CHECK(Wait([&] { return finished.load(); }));
+    fixture.service.StopJpegStream();
+    RODAK_CHECK(permit_available.load());
+    RODAK_CHECK(scratch_released.load());
+    RODAK_CHECK_EQ(callback_bytes.load(), host::kJpegBytes);
+    CheckReleased();
+}
+#endif
 RODAK_TEST("stream callback storage and task startup failures leave capture restartable") {
     Fixture fixture;
     fixture.Start();

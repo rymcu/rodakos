@@ -15,6 +15,7 @@ enum class CameraCaptureFailureStage : uint8_t {
     kNone,
     kServiceUnavailable,
     kNoFrame,
+    kGateTimeout,
     kJpegInputAlloc,
     kJpegEncoderOpen,
     kJpegOutputAlloc,

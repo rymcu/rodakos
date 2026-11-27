@@ -216,6 +216,7 @@ RODAK_TEST("capture failure toast uses the attempt stage and native error despit
         {FailureStage::kWriteFailed, EIO, "保存失败，SD 卡写入失败"},
         {FailureStage::kJpegEncoderOpen, -1, "保存失败，请重试"},
         {FailureStage::kJpegEncodeProcess, -1, "保存失败，请重试"},
+        {FailureStage::kGateTimeout, ETIMEDOUT, "保存失败，请重试"},
         {FailureStage::kNoFrame, 0, "保存失败，请重试"},
         {FailureStage::kServiceUnavailable, 0, "保存失败，请重试"},
     };

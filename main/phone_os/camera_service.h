@@ -19,11 +19,13 @@
 namespace rodakos {
 
 class FileService;
+class JpegEncodeGate;
 
 enum class CameraCaptureFailureStage : uint8_t {
     kNone,
     kServiceUnavailable,
     kNoFrame,
+    kGateTimeout,
     kJpegInputAlloc,
     kJpegEncoderOpen,
     kJpegOutputAlloc,
@@ -80,7 +82,7 @@ public:
     using JpegFrameCallback =
         std::function<void(std::vector<uint8_t>&&, uint32_t sequence, int64_t timestamp_us)>;
 
-    explicit CameraService(FileService* file_service);
+    explicit CameraService(FileService* file_service, JpegEncodeGate* jpeg_encode_gate = nullptr);
     ~CameraService();
 
     bool StartPreview(PreviewOwner owner, int width = 320, int height = 240);
@@ -132,6 +134,7 @@ private:
     std::string BuildPhotoPath(int& native_error);
 
     FileService* file_service_ = nullptr;
+    JpegEncodeGate* jpeg_encode_gate_ = nullptr;
     CameraDevice camera_device_;
     CameraSignalDiagnostics signal_diagnostics_;
     std::mutex lifecycle_mutex_;
