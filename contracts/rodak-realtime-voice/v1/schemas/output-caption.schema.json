@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-realtime-voice/v1/output-caption.schema.json",
+  "title": "output.caption (server -> device)",
+  "description": "Draft. The text spoken by RAV1 frames firstAudioSeq..lastAudioSeq of one playback epoch. Sent only when session.open had features.output_caption 1, after that epoch's output.start and before its first frame in the range. captionSeq starts at 1 for each playback epoch and increases; ranges do not overlap. text fits two caption lines on a 320 px screen.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "const": "output.caption"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "playbackEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "captionSeq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "firstAudioSeq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "lastAudioSeq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 48,
+      "x-maxUtf8Bytes": 192,
+      "x-nonblankAfterTrim": true
+    }
+  },
+  "required": [
+    "event",
+    "sessionId",
+    "playbackEpoch",
+    "captionSeq",
+    "firstAudioSeq",
+    "lastAudioSeq",
+    "text"
+  ],
+  "x-orderedFields": [
+    "firstAudioSeq",
+    "lastAudioSeq"
+  ]
+}

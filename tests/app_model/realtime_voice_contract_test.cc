@@ -1087,3 +1087,57 @@ RODAK_TEST("websocket task allocation failures report low device memory, not an 
     RODAK_CHECK(std::string(rodakos::CloudDiagnosticTitle(CloudDiagnosticCode::kDeviceMemoryLow)) ==
                 "Device memory low");
 }
+
+RODAK_TEST("canonical realtime voice caption gate follows the active epoch and frame order") {
+    rodakos::RealtimeVoiceSessionGate gate;
+    RODAK_CHECK(gate.Establish(7, "s"));
+    const auto cue = [](uint32_t epoch, uint32_t seq, uint32_t first, uint32_t last) {
+        rodakos::RealtimeVoiceCaption caption;
+        caption.playback_epoch = epoch;
+        caption.caption_seq = seq;
+        caption.first_audio_seq = first;
+        caption.last_audio_seq = last;
+        caption.text = "x";
+        return caption;
+    };
+    // No output yet.
+    RODAK_CHECK_FALSE(gate.AcceptCaption(7, cue(1, 1, 1, 5)));
+    RODAK_CHECK(gate.AcceptOutputStart(7, 1));
+    RODAK_CHECK(gate.AcceptCaption(7, cue(1, 1, 1, 5)));
+    RODAK_CHECK_FALSE(gate.AcceptCaption(7, cue(1, 1, 6, 9)));
+    RODAK_CHECK_FALSE(gate.AcceptCaption(7, cue(1, 2, 5, 9)));
+    RODAK_CHECK_FALSE(gate.AcceptCaption(7, cue(2, 2, 6, 9)));
+    RODAK_CHECK_FALSE(gate.AcceptCaption(8, cue(1, 2, 6, 9)));
+    RODAK_CHECK(gate.AcceptCaption(7, cue(1, 2, 6, 9)));
+    RODAK_CHECK(gate.AcceptOutputStop(7, 1));
+    RODAK_CHECK_FALSE(gate.AcceptCaption(7, cue(1, 3, 10, 12)));
+    // A new epoch starts captionSeq again.
+    RODAK_CHECK(gate.AcceptOutputStart(7, 2));
+    RODAK_CHECK(gate.AcceptCaption(7, cue(2, 1, 20, 30)));
+    // A server without explicit epochs gets no captions.
+    rodakos::RealtimeVoiceSessionGate legacy;
+    RODAK_CHECK(legacy.Establish(3, "t"));
+    RODAK_CHECK(legacy.AcceptOutputStart(3, 0));
+    RODAK_CHECK_FALSE(legacy.AcceptCaption(3, cue(0, 1, 1, 2)));
+}
+
+RODAK_TEST("canonical realtime voice caption text is bounded and output.start text only fits the bar") {
+    cJSON* root = cJSON_Parse(R"({"event":"output.start","sessionId":"s","text":"  好的，
+马上打开。 "})");
+    std::string text;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceOutputStartCaption(root, text));
+    RODAK_CHECK_EQ(text, std::string("好的， 马上打开。"));
+    cJSON_Delete(root);
+    std::string long_reply;
+    for (int i = 0; i < 49; ++i) long_reply += "天";
+    const std::string json = R"({"event":"output.start","sessionId":"s","text":")" + long_reply + "\"}";
+    root = cJSON_Parse(json.c_str());
+    RODAK_CHECK_FALSE(rodakos::ParseRealtimeVoiceOutputStartCaption(root, text));
+    RODAK_CHECK(text.empty());
+    cJSON_Delete(root);
+    root = cJSON_Parse(R"({"event":"output.start","sessionId":"s"})");
+    RODAK_CHECK_FALSE(rodakos::ParseRealtimeVoiceOutputStartCaption(root, text));
+    cJSON_Delete(root);
+    RODAK_CHECK(rodakos::RealtimeVoiceDescriptorOffersCaption({"output_caption"}));
+    RODAK_CHECK_FALSE(rodakos::RealtimeVoiceDescriptorOffersCaption({}));
+}

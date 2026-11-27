@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/inbox-action-result.schema.json",
+  "title": "Message center action result (data of POST /api/v1/aiot/devices/inbox/actions)",
+  "description": "Draft. applied: done now or earlier under the same opId. conflict: the record or reminder changed elsewhere; item carries the current state and the device shows it. rejected: refused for good. item, when present, is the record as the server now has it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "inboxRevision"
+  ],
+  "properties": {
+    "outcome": {
+      "enum": [
+        "applied",
+        "conflict",
+        "rejected"
+      ]
+    },
+    "inboxRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "item": {
+      "$ref": "inbox-item.schema.json"
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/inbox-item.schema.json",
+  "title": "Message center record",
+  "description": "Draft. One notice or todo reminder the server recorded for the bound device. noticeId identifies the displayed record (read applies to it); todo.taskId the todo itself (complete applies to it); todo.occurrenceId the current reminder (snooze applies to it). Only household-shared records are sent, because the device lock screen is a privacy cover, not an authenticated view. Devices truncate title to 160, summary to 240 and body to 2048 UTF-8 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "noticeId",
+    "kind",
+    "title",
+    "unread",
+    "revision"
+  ],
+  "properties": {
+    "noticeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[!-~]+$"
+    },
+    "kind": {
+      "enum": [
+        "notice",
+        "todo"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "x-nonblankAfterTrim": true
+    },
+    "summary": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unread": {
+      "type": "boolean"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "todo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "occurrenceId",
+        "state"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[!-~]+$"
+        },
+        "occurrenceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[!-~]+$"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "done",
+            "snoozed"
+          ]
+        },
+        "dueAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snoozedUntil": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "if": {
+        "properties": {
+          "state": {
+            "const": "snoozed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "snoozedUntil"
+        ]
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "kind": {
+        "const": "todo"
+      }
+    },
+    "required": [
+      "kind"
+    ]
+  },
+  "then": {
+    "required": [
+      "todo"
+    ]
+  },
+  "else": {
+    "not": {
+      "required": [
+        "todo"
+      ]
+    }
+  }
+}

@@ -24,6 +24,8 @@ bool PhoneShell::Initialize() { return true; }
 bool PhoneShell::PrepareNavigation() { return true; }
 bool PhoneShell::Lock() { return true; }
 bool PhoneShell::ToggleControlCenter() { return true; }
+void PhoneShell::RefreshTheme() {}
+void PhoneShell::HidePrivateContentNow() {}
 bool PhoneShell::SetLockOnBoot(bool value) { preferences_.lock_on_boot = value; return true; }
 bool PhoneShell::SetControlCenterGestureEnabled(bool value) {
     preferences_.control_center_gesture_enabled = value;

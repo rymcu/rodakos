@@ -25,6 +25,7 @@ public:
     bool HandleBackRequest();
     void CloseCurrent();
     PhoneApp* current_app() { return current_.get(); }
+    const PhoneApp* current_app() const { return current_.get(); }
     const std::string& current_app_id() const { return current_app_id_; }
     PhoneAppHostState GetState() const;
 

@@ -79,6 +79,16 @@ public:
     void SetVoiceAnnounceHandler(VoiceAnnounceHandler handler) {
         voice_announce_handler_ = std::move(handler);
     }
+    // devices/<key>/inbox/changed (AIoT contract section 7.6). Runs on the MQTT worker; the
+    // handler only parses the small payload and wakes its own task. Set before Start().
+    void SetInboxChangedHandler(std::function<void(const std::string&)> handler) {
+        inbox_changed_handler_ = std::move(handler);
+    }
+    // Runs on the MQTT worker after each successful connect, so signals missed while offline
+    // are recovered without waiting for the next poll. The handler only wakes its own task.
+    void SetConnectedHandler(std::function<void()> handler) {
+        connected_handler_ = std::move(handler);
+    }
     void SetAppearanceService(AppearanceService* appearance);
     bool IsConnected() const { return connected_.load(); }
     bool Publish(const std::string& topic, const std::string& payload);
@@ -209,6 +219,8 @@ private:
     std::string deferred_ota_payload_;
     DisplayControlCallback display_control_callback_;
     VoiceAnnounceHandler voice_announce_handler_;
+    std::function<void(const std::string&)> inbox_changed_handler_;
+    std::function<void()> connected_handler_;
     BatteryMonitor fallback_battery_monitor_;
     DeviceCloudConfig config_;
     uint32_t mqtt_sdk_stack_min_free_ = UINT32_MAX;

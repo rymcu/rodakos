@@ -1,0 +1,9 @@
+{
+  "event": "output.caption",
+  "sessionId": "rv-7f3c2a9e1b4d4c6a",
+  "playbackEpoch": 2,
+  "captionSeq": 3,
+  "firstAudioSeq": 70,
+  "lastAudioSeq": 70,
+  "text": "好的。"
+}

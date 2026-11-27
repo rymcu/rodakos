@@ -1,5 +1,6 @@
 #include "phone_os/phone_shell.h"
 
+#include "phone_os/phone_app.h"
 #include "phone_os/phone_services.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/time_service.h"
@@ -17,12 +18,18 @@
 #include <string>
 
 #include <esp_log.h>
+#include <esp_timer.h>
 
 namespace {
 constexpr const char* TAG = "PhoneShell";
 constexpr int kTopGestureBand = 20;
 constexpr int kBottomGestureBand = 64;
 constexpr int kGestureDistance = 48;
+// Fast enough to follow 60 ms reply frames sentence by sentence; when nothing changes the
+// callback reads one counter.
+constexpr uint32_t kVoiceTimerPeriodMs = 100;
+constexpr lv_coord_t kVoiceOverlayWidth = 300;
+constexpr lv_coord_t kVoiceOverlayBottomGap = 8;
 
 lv_obj_t* CreateLabel(lv_obj_t* parent,
                       const char* text,
@@ -98,6 +105,9 @@ bool PhoneShell::Initialize() {
     gestures_available_ = true;
     TimeServiceApplySavedTimeZone();
     initialized_ = true;
+    if (services_.voice_turn_progress() != nullptr) {
+        voice_timer_ = lv_timer_create(VoiceTimerCallback, kVoiceTimerPeriodMs, this);
+    }
 
     if (preferences_.lock_on_boot) {
         ApplyMode(PhoneShellMode::kLocked);
@@ -262,6 +272,7 @@ void PhoneShell::ApplyMode(PhoneShellMode mode) {
         CreateLockScreen();
     }
     ui_.ResetInputState();
+    UpdateVoiceOverlay();
     ESP_LOGI(TAG, "Shell mode changed to %u", static_cast<unsigned>(mode_));
 }
 
@@ -277,6 +288,8 @@ void PhoneShell::DestroyOverlay() {
     clock_label_ = nullptr;
     date_label_ = nullptr;
     lock_wifi_label_ = nullptr;
+    lock_notice_ = nullptr;
+    lock_notice_label_ = nullptr;
 }
 
 void PhoneShell::CreateControlCenter() {
@@ -399,6 +412,32 @@ void PhoneShell::CreateLockScreen() {
                               rodakos_theme_text_secondary());
     lv_obj_align(date_label_, LV_ALIGN_CENTER, 0, -8);
 
+    // Counts only: swipe unlock is a privacy cover, so no message text appears here. The pill
+    // sits between the date and the 64 px unlock band.
+    if (services_.inbox_summary() != nullptr) {
+        lock_notice_ = lv_obj_create(overlay_);
+        lv_obj_remove_style_all(lock_notice_);
+        lv_obj_set_size(lock_notice_, LV_SIZE_CONTENT, 26);
+        lv_obj_align(lock_notice_, LV_ALIGN_CENTER, 0, 30);
+        lv_obj_set_style_radius(lock_notice_, 13, 0);
+        lv_obj_set_style_bg_color(lock_notice_, rodakos_theme_bg_secondary(), 0);
+        lv_obj_set_style_bg_opa(lock_notice_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(lock_notice_, rodakos_theme_border(), 0);
+        lv_obj_set_style_border_width(lock_notice_, 1, 0);
+        lv_obj_set_style_pad_hor(lock_notice_, 12, 0);
+        lv_obj_set_layout(lock_notice_, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(lock_notice_, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(lock_notice_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(lock_notice_, 6, 0);
+        lv_obj_clear_flag(lock_notice_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(lock_notice_, LV_OBJ_FLAG_SCROLLABLE);
+        CreateLabel(lock_notice_, ICON_NOTIFICATIONS, PhoneIconFont(), rodakos_theme_error());
+        lock_notice_label_ = CreateLabel(lock_notice_, "", &phone_font_12,
+                                         rodakos_theme_text_primary());
+        lv_obj_add_flag(lock_notice_, LV_OBJ_FLAG_HIDDEN);
+    }
+
     auto* unlock_icon = CreateLabel(overlay_, ICON_ARROW_UP, PhoneIconFont(),
                                     rodakos_theme_text_primary());
     lv_obj_align(unlock_icon, LV_ALIGN_BOTTOM_MID, 0, -28);
@@ -437,6 +476,192 @@ void PhoneShell::UpdateLockScreen() {
         lv_label_set_text(lock_wifi_label_, connected ? ICON_WIFI
                                                       : ICON_WIFI_OFF);
     }
+    UpdateLockNoticeHint();
+}
+
+void PhoneShell::UpdateLockNoticeHint() {
+    if (lock_notice_ == nullptr || lock_notice_label_ == nullptr) {
+        return;
+    }
+    const auto summary = services_.inbox_summary()->GetInboxSummary();
+    // Two ten-digit counts plus the UTF-8 text fit with room to spare.
+    char text[80] = {};
+    if (summary.bound && summary.unread > 0 && summary.open_todos > 0) {
+        std::snprintf(text, sizeof(text), "有 %u 条新消息 · %u 项待办",
+                      static_cast<unsigned>(summary.unread),
+                      static_cast<unsigned>(summary.open_todos));
+    } else if (summary.bound && summary.unread > 0) {
+        std::snprintf(text, sizeof(text), "有 %u 条新消息", static_cast<unsigned>(summary.unread));
+    } else if (summary.bound && summary.open_todos > 0) {
+        std::snprintf(text, sizeof(text), "有 %u 项待办",
+                      static_cast<unsigned>(summary.open_todos));
+    }
+    lv_label_set_text(lock_notice_label_, text);
+    if (text[0] == '\0') {
+        lv_obj_add_flag(lock_notice_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(lock_notice_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void PhoneShell::HidePrivateContentNow() {
+    UpdateVoiceOverlay();
+}
+
+void PhoneShell::RefreshTheme() {
+    if (voice_overlay_ != nullptr) {
+        StyleVoiceOverlay();
+    }
+}
+
+void PhoneShell::VoiceTimerCallback(lv_timer_t* timer) {
+    auto* self = static_cast<PhoneShell*>(lv_timer_get_user_data(timer));
+    if (self != nullptr) {
+        self->UpdateVoiceOverlay();
+    }
+}
+
+rodakos::VoiceOverlayContext PhoneShell::CollectVoiceContext() {
+    rodakos::VoiceOverlayContext context;
+    context.shell_modal = mode_ != PhoneShellMode::kNone ||
+                          (mode_change_queued_ && pending_mode_ != PhoneShellMode::kNone);
+    context.toast_visible = ui_.IsToastVisible();
+    context.screen_share_active = services_.IsScreenShareActive();
+    const PhoneApp* app = system_.current_app();
+    context.app_suppresses = app != nullptr && app->WantsBottomAreaClear();
+    // Keyboards are created on the active screen by any app; finding one is cheap because the
+    // screen has few direct children.
+    lv_obj_t* screen = lv_screen_active();
+    const uint32_t count = screen != nullptr ? lv_obj_get_child_count(screen) : 0;
+    for (uint32_t index = 0; index < count; ++index) {
+        lv_obj_t* child = lv_obj_get_child(screen, static_cast<int32_t>(index));
+        if (lv_obj_check_type(child, &lv_keyboard_class) &&
+            !lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
+            context.keyboard_visible = true;
+            break;
+        }
+    }
+    // Any other visible, clickable top-layer surface is a dialog (for example an app's delete
+    // confirmation); the bar yields to it like it yields to shell modals. Plain labels such as
+    // the remote-control indicator are not clickable and do not count.
+    lv_obj_t* top = lv_layer_top();
+    const uint32_t top_count = top != nullptr ? lv_obj_get_child_count(top) : 0;
+    for (uint32_t index = 0; index < top_count && !context.shell_modal; ++index) {
+        lv_obj_t* child = lv_obj_get_child(top, static_cast<int32_t>(index));
+        if (child != voice_overlay_ && !lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN) &&
+            lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+            context.shell_modal = true;
+        }
+    }
+    return context;
+}
+
+void PhoneShell::UpdateVoiceOverlay() {
+    auto* provider = services_.voice_turn_progress();
+    if (provider == nullptr) {
+        return;
+    }
+    // Copy strings only when the assistant reports a change. The progress delay still needs the
+    // model to run each tick while a reply is awaited.
+    const uint32_t revision = provider->GetVoiceDisplayRevision();
+    if (revision != voice_revision_) {
+        voice_revision_ = revision;
+        voice_snapshot_ = provider->GetTurnProgressSnapshot();
+    }
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    ApplyVoiceFrame(voice_model_.Update(voice_snapshot_, CollectVoiceContext(), now_ms));
+}
+
+void PhoneShell::ApplyVoiceFrame(const rodakos::VoiceOverlayFrame& frame) {
+    if (frame == voice_frame_) {
+        return;
+    }
+    voice_frame_ = frame;
+    if (frame.mode == rodakos::VoiceOverlayMode::kHidden) {
+        DestroyVoiceOverlay();
+        return;
+    }
+    if (voice_overlay_ == nullptr) {
+        CreateVoiceOverlay();
+        if (voice_overlay_ == nullptr) {
+            return;
+        }
+    }
+    const bool caption = frame.mode == rodakos::VoiceOverlayMode::kCaption;
+    lv_label_set_text(voice_icon_, caption ? ICON_VOLUME : ICON_ASSISTANT);
+    lv_label_set_long_mode(voice_label_, caption ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    lv_label_set_text(voice_label_, frame.text.c_str());
+    StyleVoiceOverlay();
+    lv_obj_update_layout(voice_overlay_);
+    lv_obj_align(voice_overlay_, LV_ALIGN_BOTTOM_MID, 0, -kVoiceOverlayBottomGap);
+    // Shell modals must stay in front even if they were created before the bar.
+    if (overlay_ != nullptr) {
+        lv_obj_move_foreground(overlay_);
+    }
+}
+
+void PhoneShell::CreateVoiceOverlay() {
+    voice_overlay_ = lv_obj_create(lv_layer_top());
+    if (voice_overlay_ == nullptr) {
+        return;
+    }
+    lv_obj_remove_style_all(voice_overlay_);
+    lv_obj_set_width(voice_overlay_, kVoiceOverlayWidth);
+    lv_obj_set_height(voice_overlay_, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(voice_overlay_, 10, 0);
+    lv_obj_set_style_pad_ver(voice_overlay_, 6, 0);
+    lv_obj_set_style_bg_opa(voice_overlay_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(voice_overlay_, 1, 0);
+    lv_obj_set_layout(voice_overlay_, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(voice_overlay_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(voice_overlay_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(voice_overlay_, 8, 0);
+    lv_obj_clear_flag(voice_overlay_, LV_OBJ_FLAG_SCROLLABLE);
+    // The bar takes its own presses so a tap never reaches a Home icon underneath; a tap hides
+    // it until the text changes.
+    lv_obj_add_flag(voice_overlay_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(voice_overlay_, VoiceOverlayClicked, LV_EVENT_CLICKED, this);
+
+    voice_icon_ = lv_label_create(voice_overlay_);
+    lv_obj_set_style_text_font(voice_icon_, PhoneIconFont(), 0);
+    voice_label_ = lv_label_create(voice_overlay_);
+    lv_obj_set_flex_grow(voice_label_, 1);
+    lv_obj_set_style_text_font(voice_label_, &phone_font_14, 0);
+    lv_obj_set_style_text_line_space(voice_label_, 1, 0);
+    // Two lines at most; static, never scrolling, so the SPI bus stays free for audio.
+    lv_obj_set_style_max_height(voice_label_, 40, 0);
+}
+
+void PhoneShell::StyleVoiceOverlay() {
+    if (voice_overlay_ == nullptr) {
+        return;
+    }
+    const bool progress = voice_frame_.mode == rodakos::VoiceOverlayMode::kProgress;
+    lv_obj_set_style_radius(voice_overlay_, progress ? 16 : 12, 0);
+    lv_obj_set_style_bg_color(voice_overlay_, rodakos_theme_bg_secondary(), 0);
+    lv_obj_set_style_border_color(voice_overlay_,
+                                  progress ? rodakos_theme_primary() : rodakos_theme_border(), 0);
+    lv_obj_set_style_text_color(voice_icon_, rodakos_theme_primary(), 0);
+    lv_obj_set_style_text_color(voice_label_, rodakos_theme_text_primary(), 0);
+}
+
+void PhoneShell::DestroyVoiceOverlay() {
+    if (voice_overlay_ != nullptr && lv_obj_is_valid(voice_overlay_)) {
+        lv_obj_delete(voice_overlay_);
+    }
+    voice_overlay_ = nullptr;
+    voice_icon_ = nullptr;
+    voice_label_ = nullptr;
+}
+
+void PhoneShell::VoiceOverlayClicked(lv_event_t* event) {
+    auto* self = static_cast<PhoneShell*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    self->voice_model_.Dismiss();
+    self->UpdateVoiceOverlay();
 }
 
 void PhoneShell::ClockTimerCallback(lv_timer_t* timer) {

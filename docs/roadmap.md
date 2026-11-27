@@ -65,6 +65,14 @@ gates are local tests, local builds, package verification and recorded device wi
   `rodak-realtime-voice/v1` sessions with a separate `assistant_play` playback task, a 20 s
   reply-stall watchdog and versioned voice identity ([voice assistant](voice-assistant.md)). The
   firmware registers no MCP tools. Rodak controls volume and light through MQTT effects.
+- **Reply captions and message center** (2026-11-27, implemented and host-verified): a Shell
+  voice bar shows turn progress and `output.caption` captions synced to the written RAV1 frame
+  ([voice assistant](voice-assistant.md#reply-captions-and-turn-progress),
+  [voice contract §6.2](rodak-realtime-voice-contract-v1.md)). The Messages app, a Home header
+  entry and a Lock Screen count follow the draft `inbox/changed` + pinned HTTPS API
+  ([AIoT contract §7.6](rodak-aiot-contract-v1.md)). Rodak implements the server side. A
+  2026-11-27 joint run on BigSmart showed captions switching at the written frame, signal-driven
+  inbox sync and on-device complete and snooze reaching the server.
 - **Server-initiated announce**: MQTT `voice.announce` opens a playback-only voice session
   ([voice contract §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce)). The
   source implements this path. It has no host test for the service state machine and no recorded
@@ -82,6 +90,7 @@ gates are local tests, local builds, package verification and recorded device wi
 | Trusted server recovery | New-address and single-interface roaming, stale DNS caches, AP isolation, unknown SSIDs, damaged/missing trust recovery | [Trusted server discovery](trusted-server-discovery.md), [#33](https://github.com/rymcu/rodakos/issues/33) |
 | Home and Shell | Physical swipes, Arrange, page restoration, readability, three-page turnover with the 25-app test flavor | [Home validation](home-layout-design.md#validation-boundary), [#27](https://github.com/rymcu/rodakos/issues/27) |
 | Voice | Music/Recorder coexistence, repeated-wake suppression, TTS tail, acoustic barge-in with real talkers at different distances and playback volumes, false accept/reject rates and long-duration measurements. | [Voice verification](voice-assistant.md#verification-gates), [AEC integration](voice-aec-integration.md), [wake evaluation](voice-wake-evaluation.md#not-done-yet), [#23](https://github.com/rymcu/rodakos/issues/23), [#63](https://github.com/rymcu/rodakos/issues/63) |
+| Captions and message center | Device: caption-to-speaker offset on hardware for short and long streamed replies, barge-in clearing, no caption in the first frame of a display share, Home header entry and pull-down band on GT911, internal SRAM and DMA during an inbox sync, offline and 待核对 recovery. | [Voice contract §6.2](rodak-realtime-voice-contract-v1.md), [AIoT contract §7.6](rodak-aiot-contract-v1.md) |
 | Server-initiated announce | Host test for the `VoiceAssistantService` announce state machine. Device runs for playback-only start, no follow-up, no reconnect, wake-word termination, `busy` ACK and urgent announce during music | [Voice contract §8](rodak-realtime-voice-contract-v1.md#8-server-initiated-announce), [AIoT contract](rodak-aiot-contract-v1.md) |
 | LAN first setup | Hardware runs for a wrong code, an expired request and a user cancel | [LAN first setup](lan-onboarding-design.md) |
 | Cloud diagnosis | Real credential expiry/revocation, DNS/HTTP cancellation latency, device typography and touch | [Cloud diagnosis](voice-assistant.md#device-cloud-diagnosis-and-recovery), [#24](https://github.com/rymcu/rodakos/issues/24) |

@@ -218,9 +218,18 @@ size_t ResidentPageCount(const HomeApp& home) {
 }
 
 struct HomeFixture {
-    explicit HomeFixture(size_t app_count, std::shared_ptr<uint8_t> wallpaper = {})
+    explicit HomeFixture(size_t app_count, std::shared_ptr<uint8_t> wallpaper = {},
+                         rodakos::InboxSummaryProvider* inbox = nullptr)
         : ui(320, 240), context(ui, navigation, registry, services, settings) {
         if (wallpaper) ui.SetWallpaper(std::move(wallpaper), 320, 240);
+        if (inbox != nullptr) {
+            services.SetInboxSummary(inbox);
+            PhoneAppDescriptor messages;
+            messages.id = "messages";
+            messages.title = "Messages";
+            messages.icon = "*";
+            registry.Register(std::move(messages));
+        }
         for (size_t index = 0; index < app_count; ++index) {
             char id[16];
             char title[24];
@@ -307,11 +316,11 @@ private:
     rodakos::BatterySnapshot snapshot_;
 };
 
-class FixedTurnProgressProvider final : public rodakos::VoiceTurnProgressProvider {
+class FixedInboxProvider final : public rodakos::InboxSummaryProvider {
 public:
-    rodakos::VoiceTurnProgressSnapshot GetTurnProgressSnapshot() override { return snapshot; }
+    rodakos::InboxSummary GetInboxSummary() override { return summary; }
 
-    rodakos::VoiceTurnProgressSnapshot snapshot;
+    rodakos::InboxSummary summary;
 };
 
 void EnterArrange(HomeFixture& fixture) {
@@ -523,69 +532,74 @@ RODAK_TEST("status bar displays the current battery level") {
                    ICON_BATTERY_FULL);
 }
 
-RODAK_TEST("status bar shows the step of an accepted voice turn and hides it afterwards") {
+RODAK_TEST("status bar shows a fixed message center entry between clock and status icons") {
     ResetScreen();
     ResetSettings();
-    FixedTurnProgressProvider progress;
-    HomeFixture fixture(4);
-    // Without a provider at OnCreate, Home creates no voice-turn timer.
-    RODAK_CHECK(fixture.home.voice_turn_timer_ == nullptr);
-    fixture.services.SetVoiceTurnProgress(&progress);
-    RODAK_CHECK(fixture.home.voice_turn_label_ != nullptr);
-    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+    {
+        // Without the Messages app the header stays as before.
+        HomeFixture plain(4);
+        RODAK_CHECK(plain.home.inbox_button_ == nullptr);
+        RODAK_CHECK(plain.home.inbox_timer_ == nullptr);
+    }
+    FixedInboxProvider inbox;
+    inbox.summary.bound = true;
+    inbox.summary.revision = 1;
+    HomeFixture fixture(4, {}, &inbox);
+    RODAK_CHECK(fixture.home.inbox_button_ != nullptr);
+    RODAK_CHECK(fixture.home.inbox_timer_ != nullptr);
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "消息");
 
-    progress.snapshot.awaiting_reply = true;
-    fixture.home.UpdateVoiceTurnStatus();
-    RODAK_CHECK_FALSE(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "已收到");
     lv_obj_update_layout(lv_screen_active());
-    lv_area_t label_area;
+    lv_area_t entry_area;
     lv_area_t clock_area;
     lv_area_t cluster_area;
-    lv_obj_get_coords(fixture.home.voice_turn_label_, &label_area);
+    lv_obj_get_coords(fixture.home.inbox_button_, &entry_area);
     lv_obj_get_coords(fixture.home.clock_label_, &clock_area);
     lv_obj_get_coords(fixture.home.status_cluster_, &cluster_area);
-    RODAK_CHECK(label_area.x1 > clock_area.x2);
-    RODAK_CHECK(label_area.x2 < cluster_area.x1);
+    RODAK_CHECK(entry_area.x1 > clock_area.x2);
+    RODAK_CHECK(entry_area.x2 < cluster_area.x1);
+    RODAK_CHECK(entry_area.y1 >= 0);
+    RODAK_CHECK(entry_area.y2 < 28);
 
-    progress.snapshot.stage = rodakos::VoiceTurnStage::kThinking;
-    fixture.home.UpdateVoiceTurnStatus();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在思考");
-
-    progress.snapshot.stage = rodakos::VoiceTurnStage::kTool;
-    progress.snapshot.label = "正在查询天气";
-    fixture.home.UpdateVoiceTurnStatus();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在查询天气");
-
-    progress.snapshot.stage = rodakos::VoiceTurnStage::kComposing;
-    progress.snapshot.label.clear();
-    fixture.home.UpdateVoiceTurnStatus();
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在组织回答");
-
-    progress.snapshot = {};
-    fixture.home.UpdateVoiceTurnStatus();
-    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+    inbox.summary.unread = 3;
+    inbox.summary.revision = 2;
+    fixture.home.UpdateInboxEntry();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "3");
+    inbox.summary.unread = 120;
+    inbox.summary.revision = 3;
+    fixture.home.UpdateInboxEntry();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "99+");
+    // Same revision: the label is not rewritten.
+    inbox.summary.unread = 0;
+    fixture.home.UpdateInboxEntry();
+    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.inbox_label_)), "99+");
 }
 
-RODAK_TEST("Home polls the voice turn provider and drops its timer on destroy") {
+RODAK_TEST("tapping the message center entry queues a deferred launch") {
     ResetScreen();
     ResetSettings();
-    FixedTurnProgressProvider progress;
-    progress.snapshot.awaiting_reply = true;
-    progress.snapshot.stage = rodakos::VoiceTurnStage::kTool;
-    HomeFixture fixture(4);
-    fixture.services.SetVoiceTurnProgress(&progress);
-    // A rebuilt Home picks up the provider, creates its timer and shows the step at once.
-    RODAK_CHECK(fixture.home.OnThemeChanged(fixture.context));
-    RODAK_CHECK(fixture.home.voice_turn_timer_ != nullptr);
-    RODAK_CHECK_EQ(std::string(lv_label_get_text(fixture.home.voice_turn_label_)), "正在处理");
-    progress.snapshot = {};
-    Pump(300);
-    RODAK_CHECK(lv_obj_has_flag(fixture.home.voice_turn_label_, LV_OBJ_FLAG_HIDDEN));
+    FixedInboxProvider inbox;
+    inbox.summary.bound = true;
+    HomeFixture fixture(4, {}, &inbox);
+    Click(fixture.home.inbox_button_);
+    // The click itself only queues; the launch runs from the async call.
+    Pump();
+    RODAK_CHECK_EQ(fixture.navigation.launches.size(), 1U);
+    RODAK_CHECK_EQ(fixture.navigation.launches.front(), std::string("messages"));
     fixture.home.DestroyUi();
-    RODAK_CHECK(fixture.home.voice_turn_timer_ == nullptr);
-    RODAK_CHECK(fixture.home.voice_turn_label_ == nullptr);
+    RODAK_CHECK(fixture.home.inbox_timer_ == nullptr);
+    RODAK_CHECK(fixture.home.inbox_button_ == nullptr);
     RODAK_CHECK(fixture.home.OnThemeChanged(fixture.context));
+    RODAK_CHECK(fixture.home.inbox_button_ != nullptr);
+}
+
+RODAK_TEST("Home asks the voice overlay to yield while editing or in a folder") {
+    ResetScreen();
+    ResetSettings();
+    HomeFixture fixture(4);
+    RODAK_CHECK_FALSE(fixture.home.WantsBottomAreaClear());
+    EnterArrange(fixture);
+    RODAK_CHECK(fixture.home.WantsBottomAreaClear());
 }
 
 RODAK_TEST("tap slop launches but one-page drags over an app do not") {

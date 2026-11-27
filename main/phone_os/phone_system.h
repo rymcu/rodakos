@@ -37,6 +37,11 @@ public:
     PhoneUi& ui() { return ui_; }
     Settings& settings() { return settings_; }
     PhoneAppHostState GetAppHostState() const { return host_.GetState(); }
+    // The running app, for Shell overlay arbitration only. Null between apps.
+    const PhoneApp* current_app() const { return host_.current_app(); }
+    // A display share is about to capture its first frame (LVGL task, lock held): hide the
+    // voice bar and let the current app hide private text before that frame is drawn.
+    void HidePrivateContentNow();
 
 private:
     PhoneUi& ui_;

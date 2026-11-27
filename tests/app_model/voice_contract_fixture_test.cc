@@ -107,6 +107,29 @@ RODAK_TEST("Voice contract fixture: turn.progress decodes and rejects as documen
     }
 }
 
+RODAK_TEST("Voice contract fixture: output.caption decodes and rejects as documented") {
+    for (const char* fixture : {"valid/output-caption.first-sentence.json",
+                                "valid/output-caption.single-frame.json",
+                                "valid/control-message.output-caption.json"}) {
+        RODAK_CHECK(ValidServerControl(fixture));
+    }
+    CJsonPtr root = ParseFixture("valid/output-caption.first-sentence.json");
+    rodakos::RealtimeVoiceCaption caption;
+    std::string error;
+    RODAK_CHECK(rodakos::ParseRealtimeVoiceCaption(root.get(), caption, error));
+    RODAK_CHECK_EQ(caption.playback_epoch, 1u);
+    RODAK_CHECK_EQ(caption.caption_seq, 1u);
+    RODAK_CHECK_EQ(caption.first_audio_seq, 1u);
+    RODAK_CHECK_EQ(caption.last_audio_seq, 32u);
+    RODAK_CHECK_EQ(caption.text, std::string("明天北京晴，气温 6 到 18 度。"));
+    for (const char* fixture :
+         {"invalid/output-caption.reversed-range.json", "invalid/output-caption.long-text.json",
+          "invalid/output-caption.no-epoch.json", "invalid/output-caption.blank-text.json",
+          "invalid/output-caption.transcript.json"}) {
+        RODAK_CHECK_FALSE(ValidServerControl(fixture));
+    }
+}
+
 RODAK_TEST("Voice contract fixture: server error fields decode") {
     CJsonPtr root = ParseFixture("valid/error.retryable.json");
     rodakos::RealtimeVoiceServerError server_error;
@@ -149,6 +172,18 @@ RODAK_TEST("Voice contract fixture: device-built messages match the fixtures") {
         cJSON_Delete);
     CJsonPtr announce_fixture = ParseFixture("valid/session-open.announce.json");
     RODAK_CHECK(cJSON_Compare(announce.get(), announce_fixture.get(), true));
+
+    // A descriptor that lists output_caption makes both session kinds ask for it (section 6.2).
+    CJsonPtr caption_open(
+        cJSON_Parse(rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 7, 0, true).c_str()),
+        cJSON_Delete);
+    CJsonPtr caption_fixture = ParseFixture("valid/session-open.caption.json");
+    RODAK_CHECK(cJSON_Compare(caption_open.get(), caption_fixture.get(), true));
+    CJsonPtr announce_caption(
+        cJSON_Parse(rodakos::BuildRealtimeVoiceSessionOpenMessage(descriptor, true, 8, 17, true).c_str()),
+        cJSON_Delete);
+    CJsonPtr announce_caption_fixture = ParseFixture("valid/session-open.announce-caption.json");
+    RODAK_CHECK(cJSON_Compare(announce_caption.get(), announce_caption_fixture.get(), true));
 
     CJsonPtr wake(cJSON_Parse(rodakos::BuildRealtimeVoiceWakeMessage("rv-7f3c2a9e1b4d4c6a", "你好达克").c_str()),
                   cJSON_Delete);

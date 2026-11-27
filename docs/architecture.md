@@ -64,6 +64,8 @@ Important pieces:
   instances to navigation policy.
 - `PhoneNavigation`: app launch, return-home, theme, lock, Control Center, and Shell-preference routing.
 - `PhoneShell`: owns Lock Screen and Control Center on `lv_layer_top()` without replacing or destroying the current app.
+  It also owns the bottom voice bar (turn progress and reply captions), which yields to the Shell
+  modals, a soft keyboard, an app that asks for the bottom area, a toast and any display share.
 - `PhoneServices`: dependency container for hardware and system services.
 - `DeviceCloudConfigService`: binding, credential refresh, and optional USB-installed TLS
   authority. A single active/pending record guards trusted endpoint promotion. Bounded
@@ -192,6 +194,10 @@ gates. The host suite validates Home behavior and object lifetime but cannot rep
   colour while the light is off saves it without switching the light on. A 500 ms poll shows MQTT
   changes and the voice status light overlay.
 - Wake: persists network devices and sends validated Wake-on-LAN magic packets over UDP broadcast.
+- Messages (`messages`): notices and todo reminders from `InboxService`, a RAM-only copy of the
+  server records synced over pinned HTTPS after an `inbox/changed` signal. Todos can be completed
+  or snoozed 10/30/60 minutes with an idempotent `opId`; text is hidden during any display share.
+  See [AIoT contract §7.6](rodak-aiot-contract-v1.md).
 
 ## Service Notes
 

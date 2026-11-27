@@ -58,6 +58,7 @@ constexpr char kRealtimeVoiceMaxAudioFrameKey[] = "max_audio_bytes";
 constexpr char kRealtimeVoiceMaxControlKey[] = "max_ctrl_bytes";
 constexpr char kRealtimeVoiceVadStrategiesKey[] = "vad_strategies";
 constexpr char kRealtimeVoicePreferredVadStrategyKey[] = "preferred_vad";
+constexpr char kRealtimeVoiceCaptionKey[] = "caption";
 static_assert(sizeof(kRealtimeVoiceEndpointKey) <= NVS_KEY_NAME_MAX_SIZE &&
               sizeof(kRealtimeVoiceProtocolVersionKey) <= NVS_KEY_NAME_MAX_SIZE &&
               sizeof(kRealtimeVoiceDownlinkSampleRateKey) <= NVS_KEY_NAME_MAX_SIZE &&
@@ -65,7 +66,8 @@ static_assert(sizeof(kRealtimeVoiceEndpointKey) <= NVS_KEY_NAME_MAX_SIZE &&
               sizeof(kRealtimeVoiceMaxAudioFrameKey) <= NVS_KEY_NAME_MAX_SIZE &&
               sizeof(kRealtimeVoiceMaxControlKey) <= NVS_KEY_NAME_MAX_SIZE &&
               sizeof(kRealtimeVoiceVadStrategiesKey) <= NVS_KEY_NAME_MAX_SIZE &&
-              sizeof(kRealtimeVoicePreferredVadStrategyKey) <= NVS_KEY_NAME_MAX_SIZE,
+              sizeof(kRealtimeVoicePreferredVadStrategyKey) <= NVS_KEY_NAME_MAX_SIZE &&
+              sizeof(kRealtimeVoiceCaptionKey) <= NVS_KEY_NAME_MAX_SIZE,
               "Realtime voice NVS keys exceed the NVS name limit");
 constexpr const char* kUuidKey = "uuid";
 constexpr const char* kAiotSecretKey = "device_secret";
@@ -96,6 +98,7 @@ constexpr const char* kMqttOtaNotifyTopicKey = "ota_notify";
 constexpr const char* kMqttOtaProgressTopicKey = "ota_progress";
 constexpr const char* kMqttCommandsTopicKey = "commands";
 constexpr const char* kMqttPcStatusTopicKey = "pc_status";
+constexpr const char* kMqttInboxChangedTopicKey = "inbox_changed";
 constexpr const char* kMqttHomePrefixTopicKey = "home_prefix";
 // Deployments should provision an explicit Rodak server URL. This reserved
 // canonical placeholder deliberately does not point at a legacy service.
@@ -507,6 +510,7 @@ void ResetMqttConfig(DeviceCloudConfig& config) {
     config.mqtt_topic_ota_progress.clear();
     config.mqtt_topic_commands.clear();
     config.mqtt_topic_pc_status.clear();
+    config.mqtt_topic_inbox_changed.clear();
     config.mqtt_topic_home_prefix.clear();
     config.has_mqtt_config = false;
     config.has_aiot_config = false;
@@ -576,6 +580,7 @@ bool PersistRealtimeVoiceConfig(const DeviceCloudConfig& config) {
                            SerializeStringArray(config.realtime_voice_vad_strategies));
     written = written && settings.SetString(kRealtimeVoicePreferredVadStrategyKey,
                            config.realtime_voice_preferred_vad_strategy);
+    written = written && settings.SetBool(kRealtimeVoiceCaptionKey, config.realtime_voice_caption);
     if (!written || !settings.Commit()) {
         // NVSHandleSimple may have applied an earlier field before reporting
         // an error. Mark the handle settled before the destructor and let the
@@ -608,6 +613,7 @@ bool PersistMqttConfig(const DeviceCloudConfig& config) {
     written = written && settings.SetString(kMqttOtaProgressTopicKey, config.mqtt_topic_ota_progress);
     written = written && settings.SetString(kMqttCommandsTopicKey, config.mqtt_topic_commands);
     written = written && settings.SetString(kMqttPcStatusTopicKey, config.mqtt_topic_pc_status);
+    written = written && settings.SetString(kMqttInboxChangedTopicKey, config.mqtt_topic_inbox_changed);
     written = written && settings.SetString(kMqttHomePrefixTopicKey, config.mqtt_topic_home_prefix);
     // Release test: the MQTT keys are already on flash, but the save reports failure, so the
     // caller must restore its whole snapshot (ESP-IDF 6 NVS writes on nvs_set_*).
@@ -776,6 +782,7 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
         realtime_voice_settings.GetString(kRealtimeVoiceVadStrategiesKey, "[]"));
     config.realtime_voice_preferred_vad_strategy = realtime_voice_settings.GetString(
         kRealtimeVoicePreferredVadStrategyKey, kRealtimeVoiceVadServerAuthoritative);
+    config.realtime_voice_caption = realtime_voice_settings.GetBool(kRealtimeVoiceCaptionKey, false);
     if (!IsRealtimeVoiceVadStrategy(config.realtime_voice_preferred_vad_strategy)) {
         config.realtime_voice_preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
     }
@@ -816,6 +823,7 @@ bool DeviceCloudConfigService::Load(DeviceCloudConfig& config) {
     config.mqtt_topic_ota_progress = mqtt_settings.GetString(kMqttOtaProgressTopicKey, "");
     config.mqtt_topic_commands = mqtt_settings.GetString(kMqttCommandsTopicKey, "");
     config.mqtt_topic_pc_status = mqtt_settings.GetString(kMqttPcStatusTopicKey, "");
+    config.mqtt_topic_inbox_changed = mqtt_settings.GetString(kMqttInboxChangedTopicKey, "");
     config.mqtt_topic_home_prefix = mqtt_settings.GetString(kMqttHomePrefixTopicKey, "");
     FinalizeMqttConfig(config);
     // A pending AIoT transaction may have written a new MQTT namespace before
@@ -1289,6 +1297,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     std::string ota_progress_topic;
     std::string commands_topic;
     std::string pc_status_topic;
+    std::string inbox_changed_topic;
     std::string home_prefix_topic;
     int mqtt_keepalive = 0;
     bool mqtt_home_enabled = false;
@@ -1402,6 +1411,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     AddStringAlias(topic_object, "commands", commands_topic);
     AddStringAlias(topic_object, "pcStatus", pc_status_topic);
     AddStringAlias(topic_object, "pc_status", pc_status_topic);
+    AddStringAlias(topic_object, "inboxChanged", inbox_changed_topic);
+    AddStringAlias(topic_object, "inbox_changed", inbox_changed_topic);
     AddStringAlias(topic_object, "homePrefix", home_prefix_topic);
     AddStringAlias(topic_object, "home_prefix", home_prefix_topic);
     AddStringAlias(token_data, "activationCode", activation_code);
@@ -1419,6 +1430,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     config.realtime_voice_max_control_bytes = 64 * 1024;
     config.realtime_voice_vad_strategies.clear();
     config.realtime_voice_preferred_vad_strategy = kRealtimeVoiceVadServerAuthoritative;
+    config.realtime_voice_caption = false;
     config.has_realtime_voice_config = false;
 
     // The canonical token response may advertise a realtime voice capability.
@@ -1463,6 +1475,8 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
         config.realtime_voice_vad_strategies = voice_descriptor.vad_strategies;
         config.realtime_voice_preferred_vad_strategy =
             voice_descriptor.preferred_vad_strategy;
+        config.realtime_voice_caption =
+            RealtimeVoiceDescriptorOffersCaption(voice_descriptor.features);
         config.has_realtime_voice_config = true;
     }
     auto& token_lifetime_seconds = context.token_lifetime_seconds;
@@ -1520,6 +1534,7 @@ bool DeviceCloudConfigService::RefreshAiot(DeviceCloudConfig& config,
     config.mqtt_topic_ota_progress = ota_progress_topic;
     config.mqtt_topic_commands = commands_topic;
     config.mqtt_topic_pc_status = pc_status_topic;
+    config.mqtt_topic_inbox_changed = inbox_changed_topic;
     config.mqtt_topic_home_prefix = home_prefix_topic;
     config.activation_code = activation_code;
     config.activation_message = activation_message;

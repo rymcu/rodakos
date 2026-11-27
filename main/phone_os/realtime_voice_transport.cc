@@ -1302,6 +1302,11 @@ void RodakRealtimeVoiceTransport::SetSessionAnnounce(uint32_t announce_seq) {
 }
 
 bool RodakRealtimeVoiceTransport::SendSessionOpen(uint32_t generation) {
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        caption_requested_ = config_.realtime_voice_caption;
+        xSemaphoreGive(mutex_);
+    }
     return SendText(BuildSessionOpenMessage(generation), generation, {}, false);
 }
 
@@ -1356,7 +1361,8 @@ std::string RodakRealtimeVoiceTransport::BuildSessionOpenMessage(uint32_t genera
         xSemaphoreGive(mutex_);
     }
     return BuildRealtimeVoiceSessionOpenMessage(descriptor, supports_device_vad_epoch,
-                                                generation, announce_seq);
+                                                generation, announce_seq,
+                                                config_.realtime_voice_caption);
 }
 
 void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
@@ -1404,8 +1410,9 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         std::strcmp(event_name, kRealtimeVoiceEventTurnAccepted) == 0;
     const bool is_turn_progress =
         std::strcmp(event_name, kRealtimeVoiceEventTurnProgress) == 0;
+    const bool is_caption = std::strcmp(event_name, kRealtimeVoiceEventOutputCaption) == 0;
     if (!is_session_ready && !is_output_start && !is_output_stop && !is_session_end &&
-        !is_mcp && !is_error && !is_turn_accepted && !is_turn_progress) {
+        !is_mcp && !is_error && !is_turn_accepted && !is_turn_progress && !is_caption) {
         cJSON_Delete(root);
         SetError("Unsupported realtime voice control event", generation);
         return;
@@ -1434,9 +1441,9 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
         }
         if (!session_matches) {
             cJSON_Delete(root);
-            // Contract section 6.1: turn.accepted and turn.progress of another session are dropped,
-            // not an error.
-            if (!is_turn_accepted && !is_turn_progress) {
+            // Contract sections 6.1 and 6.2: turn.accepted, turn.progress and output.caption of
+            // another session are dropped, not an error.
+            if (!is_turn_accepted && !is_turn_progress && !is_caption) {
                 SetError("Realtime voice control frame sessionId does not match", generation);
             }
             return;
@@ -1471,14 +1478,21 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             }
             inbound_playback_epoch_ = session_gate_.playback_epoch();
             inbound_output_active_ = true;
+            const bool caption_requested = caption_requested_;
             xSemaphoreGive(mutex_);
             ESP_LOGI(TAG, "Received realtime voice output start: playback_epoch=%u",
                      static_cast<unsigned>(epoch));
+            // Contract section 6.2: a session that asked for output.caption shows only captions,
+            // so a missed cue never fills in with the whole reply.
+            std::string fallback_caption;
+            if (!caption_requested) {
+                ParseRealtimeVoiceOutputStartCaption(root, fallback_caption);
+            }
             EmitInbound(VoiceInboundEvent{
                 .type = VoiceInboundEventType::kSpeakingStarted,
                 .playback_epoch = epoch,
                 .audio = {},
-                .payload = {},
+                .payload = std::move(fallback_caption),
                 .failure = {},
             }, generation);
         } else {
@@ -1609,6 +1623,45 @@ void RodakRealtimeVoiceTransport::HandleTextFrame(const char* data,
             .failure = {},
             .turn_stage = progress.stage,
         }, generation);
+    } else if (is_caption) {
+        RealtimeVoiceCaption caption;
+        std::string caption_error;
+        if (!ParseRealtimeVoiceCaption(root, caption, caption_error)) {
+            cJSON_Delete(root);
+            SetError(caption_error, generation);
+            return;
+        }
+        // Dropped without an error (contract section 6.2): no caption was requested, another
+        // epoch, an old captionSeq or a frame range that overlaps the previous caption.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool accepted = !closing_ && connection_generation_ == generation &&
+                              caption_requested_ && inbound_output_active_ &&
+                              session_gate_.AcceptCaption(generation, caption);
+        xSemaphoreGive(mutex_);
+        if (!accepted) {
+            ESP_LOGD(TAG, "Dropping realtime voice output.caption: epoch=%u seq=%u",
+                     static_cast<unsigned>(caption.playback_epoch),
+                     static_cast<unsigned>(caption.caption_seq));
+            cJSON_Delete(root);
+            return;
+        }
+        // The text is server content for the screen; it stays out of the log.
+        ESP_LOGD(TAG, "Received realtime voice output.caption: epoch=%u seq=%u frames=%u..%u",
+                 static_cast<unsigned>(caption.playback_epoch),
+                 static_cast<unsigned>(caption.caption_seq),
+                 static_cast<unsigned>(caption.first_audio_seq),
+                 static_cast<unsigned>(caption.last_audio_seq));
+        EmitInbound(VoiceInboundEvent{
+            .type = VoiceInboundEventType::kCaption,
+            .playback_epoch = caption.playback_epoch,
+            .audio = {},
+            .payload = std::move(caption.text),
+            .failure = {},
+            .turn_stage = VoiceTurnStage::kNone,
+            .audio_sequence = 0,
+            .caption_first_audio_seq = caption.first_audio_seq,
+            .caption_last_audio_seq = caption.last_audio_seq,
+        }, generation);
     } else if (is_mcp) {
         VoiceInboundEvent inbound;
         std::string mcp_error;
@@ -1735,6 +1788,8 @@ void RodakRealtimeVoiceTransport::HandleBinaryFrame(const uint8_t* data,
         .audio = std::move(packet),
         .payload = {},
         .failure = {},
+        .turn_stage = VoiceTurnStage::kNone,
+        .audio_sequence = sequence,
     }, generation);
 }
 

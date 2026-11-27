@@ -22,13 +22,16 @@ public:
     void OnDestroy() override;
     bool OnThemeChanged(PhoneAppContext& context) override;
     bool OnHomeRequested() override;
+    bool WantsBottomAreaClear() const override;
     void UpdateClock();
-    void UpdateVoiceTurnStatus();
+    void UpdateInboxEntry();
 
 private:
     struct DeferredEditPayload;
     struct DeferredLaunchPayload;
     struct TilePayload;
+
+    static void InboxButtonEvent(lv_event_t* event);
 
     enum class CollectionKind {
         kNone,
@@ -189,10 +192,14 @@ private:
     lv_obj_t* wifi_label_ = nullptr;
     lv_obj_t* battery_icon_ = nullptr;
     lv_obj_t* battery_label_ = nullptr;
-    lv_obj_t* voice_turn_label_ = nullptr;
+    // Fixed message center entry between the clock and the status cluster. It stays on the
+    // first screen even when the user's layout moves the Messages app to a later page.
+    lv_obj_t* inbox_button_ = nullptr;
+    lv_obj_t* inbox_icon_ = nullptr;
+    lv_obj_t* inbox_label_ = nullptr;
+    uint32_t inbox_revision_shown_ = UINT32_MAX;
     lv_timer_t* clock_timer_ = nullptr;
-    lv_timer_t* voice_turn_timer_ = nullptr;
-    std::string voice_turn_text_;
+    lv_timer_t* inbox_timer_ = nullptr;
     DeferredEditPayload* pending_edit_ = nullptr;
     DeferredLaunchPayload* pending_launch_ = nullptr;
     bool edit_action_pending_ = false;

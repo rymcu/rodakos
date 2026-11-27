@@ -8,6 +8,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -49,6 +50,8 @@ bool RealtimeVoiceSessionGate::Establish(uint32_t generation,
     progress_seq_ = 0;
     progress_open_ = false;
     output_active_ = false;
+    caption_seq_ = 0;
+    caption_last_audio_seq_ = 0;
     return true;
 }
 
@@ -61,6 +64,8 @@ void RealtimeVoiceSessionGate::Clear() {
     progress_seq_ = 0;
     progress_open_ = false;
     output_active_ = false;
+    caption_seq_ = 0;
+    caption_last_audio_seq_ = 0;
 }
 
 bool RealtimeVoiceSessionGate::Matches(uint32_t generation,
@@ -81,6 +86,8 @@ bool RealtimeVoiceSessionGate::AcceptOutputStart(uint32_t generation,
     if (playback_epoch != 0) playback_epoch_ = playback_epoch;
     output_active_ = true;
     progress_open_ = false;
+    caption_seq_ = 0;
+    caption_last_audio_seq_ = 0;
     return true;
 }
 
@@ -120,6 +127,22 @@ bool RealtimeVoiceSessionGate::AcceptTurnProgress(uint32_t generation, uint32_t 
         return false;
     }
     progress_seq_ = seq;
+    return true;
+}
+
+bool RealtimeVoiceSessionGate::AcceptCaption(uint32_t generation,
+                                             const RealtimeVoiceCaption& caption) {
+    // A caption names RAV1 frames of one explicit epoch, so a server without epochs gets none.
+    // Its audio may already have arrived; the playback side then skips the caption.
+    if (generation == 0 || generation_ != generation || !output_active_ ||
+        playback_epoch_ == 0 || caption.playback_epoch != playback_epoch_ ||
+        caption.caption_seq == 0 || caption.caption_seq <= caption_seq_ ||
+        caption.first_audio_seq == 0 || caption.first_audio_seq > caption.last_audio_seq ||
+        caption.first_audio_seq <= caption_last_audio_seq_) {
+        return false;
+    }
+    caption_seq_ = caption.caption_seq;
+    caption_last_audio_seq_ = caption.last_audio_seq;
     return true;
 }
 namespace {
@@ -712,7 +735,11 @@ bool IsJsWhitespace(uint32_t code_point) {
     }
 }
 
-bool ParseTurnProgressLabel(const std::string& raw, std::string& label) {
+// Decodes a display string, trims JavaScript whitespace and turns control characters into spaces
+// so the text stays on the lines it was laid out for. max_bytes 0 means no byte limit.
+bool ParseDisplayText(const std::string& raw, size_t max_code_points, size_t max_bytes,
+                      std::string& label) {
+    if (max_bytes != 0 && raw.size() > max_bytes) return false;
     struct Piece {
         size_t begin;
         size_t end;
@@ -723,7 +750,7 @@ bool ParseTurnProgressLabel(const std::string& raw, std::string& label) {
         const size_t begin = index;
         uint32_t code_point = 0;
         if (!DecodeUtf8(raw, index, code_point)) return false;
-        if (pieces.size() == kRealtimeVoiceTurnProgressLabelMaxCodePoints) return false;
+        if (pieces.size() == max_code_points) return false;
         pieces.push_back({begin, index, code_point});
     }
     size_t first = 0;
@@ -805,12 +832,71 @@ bool ParseRealtimeVoiceTurnProgress(const cJSON* envelope, RealtimeVoiceTurnProg
     const cJSON* label = cJSON_GetObjectItemCaseSensitive(envelope, "label");
     if (label != nullptr &&
         (!cJSON_IsString(label) || label->valuestring == nullptr ||
-         !ParseTurnProgressLabel(label->valuestring, parsed.label))) {
+         !ParseDisplayText(label->valuestring, kRealtimeVoiceTurnProgressLabelMaxCodePoints, 0,
+                           parsed.label))) {
         error = "canonical turn.progress label is invalid";
         return false;
     }
     progress = std::move(parsed);
     return true;
+}
+
+bool ParseRealtimeVoiceCaption(const cJSON* envelope, RealtimeVoiceCaption& caption,
+                               std::string& error) {
+    caption = {};
+    error.clear();
+    if (envelope == nullptr || !cJSON_IsObject(envelope)) {
+        error = "canonical output.caption envelope must be an object";
+        return false;
+    }
+    const cJSON* event = cJSON_GetObjectItemCaseSensitive(envelope, "event");
+    if (!cJSON_IsString(event) || event->valuestring == nullptr ||
+        std::strcmp(event->valuestring, kRealtimeVoiceEventOutputCaption) != 0) {
+        error = "canonical output.caption event is invalid";
+        return false;
+    }
+    std::string session_id;
+    if (!ReadRequiredString(envelope, "sessionId", session_id)) {
+        error = "canonical output.caption sessionId is invalid";
+        return false;
+    }
+    static constexpr const char* kFields[] = {"event", "sessionId", "playbackEpoch", "captionSeq",
+                                              "firstAudioSeq", "lastAudioSeq", "text"};
+    for (const cJSON* item = envelope->child; item != nullptr; item = item->next) {
+        const bool known = item->string != nullptr &&
+            std::any_of(std::begin(kFields), std::end(kFields),
+                        [&](const char* name) { return std::strcmp(item->string, name) == 0; });
+        if (!known) {
+            error = "canonical output.caption has an unknown field";
+            return false;
+        }
+    }
+    RealtimeVoiceCaption parsed;
+    if (!ReadPositiveUint32(envelope, "playbackEpoch", parsed.playback_epoch) ||
+        !ReadPositiveUint32(envelope, "captionSeq", parsed.caption_seq) ||
+        !ReadPositiveUint32(envelope, "firstAudioSeq", parsed.first_audio_seq) ||
+        !ReadPositiveUint32(envelope, "lastAudioSeq", parsed.last_audio_seq) ||
+        parsed.first_audio_seq > parsed.last_audio_seq) {
+        error = "canonical output.caption sequence fields are invalid";
+        return false;
+    }
+    const cJSON* text = cJSON_GetObjectItemCaseSensitive(envelope, "text");
+    if (!cJSON_IsString(text) || text->valuestring == nullptr ||
+        !ParseDisplayText(text->valuestring, kRealtimeVoiceCaptionMaxCodePoints,
+                          kRealtimeVoiceCaptionMaxUtf8Bytes, parsed.text)) {
+        error = "canonical output.caption text is invalid";
+        return false;
+    }
+    caption = std::move(parsed);
+    return true;
+}
+
+bool ParseRealtimeVoiceOutputStartCaption(const cJSON* envelope, std::string& text) {
+    text.clear();
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(envelope, "text");
+    if (!cJSON_IsString(value) || value->valuestring == nullptr) return false;
+    return ParseDisplayText(value->valuestring, kRealtimeVoiceCaptionMaxCodePoints,
+                            kRealtimeVoiceCaptionMaxUtf8Bytes, text);
 }
 
 bool ParseRealtimeVoiceServerError(const cJSON* envelope,
@@ -892,6 +978,12 @@ bool ValidateRealtimeVoiceServerControlPayload(const cJSON* envelope,
             return false;
         }
     }
+    if (event_name == kRealtimeVoiceEventOutputCaption) {
+        RealtimeVoiceCaption caption;
+        if (!ParseRealtimeVoiceCaption(envelope, caption, error)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -936,10 +1028,16 @@ bool ParseRealtimeVoiceAudioFrame(const uint8_t* data,
     return true;
 }
 
+bool RealtimeVoiceDescriptorOffersCaption(const std::vector<std::string>& features) {
+    return std::find(features.begin(), features.end(), kRealtimeVoiceFeatureOutputCaption) !=
+           features.end();
+}
+
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation,
-                                                 uint32_t announce_seq) {
+                                                 uint32_t announce_seq,
+                                                 bool request_caption) {
     // Generation zero is reserved for the not-established state.  Emitting a
     // session.open frame with zero would let a peer associate the handshake
     // with an invalid/stale transport lifecycle, so fail closed at the
@@ -986,6 +1084,10 @@ std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& 
         // 不认识这些字段的旧服务端照常忽略。播报会话没有用户轮次，不宣告。
         cJSON_AddNumberToObject(features, "turn_accepted", 1);
         cJSON_AddNumberToObject(features, "turn_progress", 1);
+    }
+    if (request_caption) {
+        // 契约 §6.2：只在描述符 features 含 output_caption 时请求，旧服务端不会收到这个字段。
+        cJSON_AddNumberToObject(features, "output_caption", 1);
     }
     cJSON_AddItemToObject(root, "features", features);
     AddAudio(root, "uplink", descriptor.uplink_sample_rate_hz, descriptor.uplink_channels,

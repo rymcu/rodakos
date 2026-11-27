@@ -1,0 +1,8 @@
+{
+  "opId": "op-1",
+  "action": "snooze",
+  "noticeId": "n-7c1e",
+  "expectedRevision": 3,
+  "occurrenceId": "o-31-20261127",
+  "snoozeMinutes": 45
+}

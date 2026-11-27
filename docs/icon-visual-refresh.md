@@ -116,7 +116,7 @@ Tools and Media:
 | Tools blue | calendar, gyro |
 | Cool teal | assistant, smart |
 | Warm amber | clock, photos |
-| Alert rose | wol |
+| Alert rose | wol, messages |
 | Neutral warm gray | files, hardware test population |
 | Games green | (no current app) |
 

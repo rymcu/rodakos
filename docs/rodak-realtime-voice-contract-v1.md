@@ -55,7 +55,7 @@ The values below are what Rodak's AIoT routes emit (schema
     "maxAudioFrameBytes": 8192,
     "maxControlBytes": 65536
   },
-  "features": [],
+  "features": ["output_caption"],
   "capabilities": ["session", "audio-input", "audio-output", "speech-boundaries",
                    "interrupt", "assistant-events", "mcp"],
   "events": [
@@ -94,7 +94,9 @@ event for compatibility. It sends `mcp` events only when `session.open` has `fea
 so it sends none to RodakOS.
 
 The draft `turn.accepted` and `turn.progress` events (§6.1) are negotiated in `session.open`, not
-in the descriptor.
+in the descriptor. A server that can send the draft `output.caption` event (§6.2) lists the string
+`output_caption` in the descriptor's `features` array; the device then asks for it in
+`session.open`.
 Released firmware rejects a descriptor whose `events` list has an unknown name, so the descriptor
 keeps the twelve names above.
 
@@ -161,8 +163,9 @@ distinct from the descriptor's string-array `features`. `features.turn_accepted:
 server for the draft `turn.accepted` event, and `features.turn_progress: 1` asks for the draft
 `turn.progress` event (§6.1). `turn_progress: 1` requires `turn_accepted: 1`. A device without a
 screen can ask for `turn_accepted` alone. An absent flag or `0` means the server MUST NOT send that
-event.
-A server-initiated announce session
+event. `features.output_caption: 1` asks for the draft `output.caption` event (§6.2). The device
+sends it only when the descriptor's `features` array lists `output_caption`, on ordinary and
+announce sessions alike. A server-initiated announce session
 also carries `"announce": true` and `"announceSeq": <N>` (see §8). Ordinary wake sessions omit
 both keys.
 
@@ -189,6 +192,7 @@ a schema in [`contracts/rodak-realtime-voice/v1/schemas/`](../contracts/rodak-re
 | server → device | `turn.accepted` (draft, §6.1) | `sessionId`, positive `turnId` |
 | server → device | `turn.progress` (draft, §6.1) | `sessionId`, `turnId`, positive `seq`, `stage`: `thinking`, `tool` or `composing`, optional `label` |
 | server → device | `output.start` | `sessionId`, optional `text` and `playbackEpoch` |
+| server → device | `output.caption` (draft, §6.2) | `sessionId`, `playbackEpoch`, `captionSeq`, `firstAudioSeq`, `lastAudioSeq`, `text` |
 | server → device | `output.stop` | `sessionId`, optional `reason` and `playbackEpoch` |
 | server → device | `session.end` | `sessionId`, optional `reason` |
 | server → device | `error` | optional `sessionId`, non-empty `code`, non-empty `message`, boolean `retryable` |
@@ -406,11 +410,56 @@ and `features.turn_progress: 1`; an announce `session.open` carries neither. `tu
 `voice-turn-timeout` arrives first. If the deadline passes, the device ends the session and re-arms
 local wake. `output.start` then switches to the 20 s reply-stall rule. The status light shows
 "waiting for a reply" between `turn.accepted` and `output.start` (see
-[voice assistant: status light](voice-assistant.md#status-light)). The Home status bar shows the
-latest `turn.progress` label, or device text for its stage, until `output.start` (see
-[voice assistant: turn progress on Home](voice-assistant.md#turn-progress-on-home-and-assistant)).
+[voice assistant: status light](voice-assistant.md#status-light)). The Shell voice bar shows the
+latest `turn.progress` label, or device text for its stage, from 450 ms after `turn.accepted` until
+`output.start` (see
+[voice assistant: captions](voice-assistant.md#reply-captions-and-turn-progress)).
 `turn.progress` does not move the deadline. The device rejects a label that is not valid UTF-8, and
 shows a control character in a label as a space.
+
+### 6.2 Reply captions (draft)
+
+> Status: draft. RodakOS and Rodak implement `output.caption`. The wire shape can still change.
+
+A reply is usually several sentences that the server synthesizes and sends one after another. The
+device buffers up to about 3 s of decoded audio, so text shown when its event arrives would run
+ahead of the speaker. `output.caption` names the RAV1 frames that speak a sentence, and the device
+shows the text when the first of those frames reaches its speaker:
+
+```json
+{"event": "output.caption", "sessionId": "rv-7f3c2a9e1b4d4c6a", "playbackEpoch": 1,
+ "captionSeq": 1, "firstAudioSeq": 1, "lastAudioSeq": 32, "text": "明天北京晴，气温 6 到 18 度。"}
+```
+
+Rules:
+
+- The descriptor's `features` array lists `output_caption` when the server supports the event. The
+  server sends it only when `session.open` had `features.output_caption: 1`. Released firmware
+  treats an unknown control event as a session error.
+- It is valid between the `output.start` of `playbackEpoch` and the matching `output.stop`. The
+  epoch must be the explicit epoch of that `output.start`; a reply without `playbackEpoch` gets no
+  captions.
+- `captionSeq` starts at `1` for each playback epoch and increases. `firstAudioSeq` and
+  `lastAudioSeq` are RAV1 sequence numbers (§4) of that epoch with `firstAudioSeq <= lastAudioSeq`.
+  Ranges of one epoch do not overlap and increase.
+- The server sends a caption before the first frame of its range. A caption whose frames have
+  already been sent is not an error, but the device may skip it.
+- `text` is display text of at most 48 Unicode code points and 192 UTF-8 bytes, nonblank after
+  trim. It is the spoken sentence, not the user's words, a tool name or tool arguments. The server
+  splits a longer sentence into several captions.
+- The device drops, without an error, a caption of another session or epoch, with an old
+  `captionSeq`, or with a range that overlaps the previous one.
+- When `output.caption` is negotiated, the device does not show `output.start` `text`. A sentence
+  without a caption shows nothing, so a missed caption never fills in with the whole reply.
+
+*Informative:* RodakOS behavior. The device keeps at most 12 captions ahead of its speaker and
+drops the oldest one beyond that. The playback task switches the text when it writes the first
+frame of a range to the codec, and keeps it until the next range starts. A barge-in, a local stop,
+an error, a reconnect or the drained end of the reply clears it at once. Without the negotiated
+event, the device shows `output.start` `text` that fits the same limits from the first written
+frame to the end of the reply. A Shell bar at the bottom of the screen shows the text over any app;
+it hides for the Lock Screen, Control Center, a soft keyboard, a toast, the camera and any WebRTC
+display share (see [voice assistant: captions](voice-assistant.md#reply-captions-and-turn-progress)).
 
 ### Multi-device wake arbitration (server side)
 
@@ -509,6 +558,7 @@ events and RAV1 frames against `contracts/rodak-realtime-voice/v1/`.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-27 | Draft `output.caption` (§6.2): the descriptor lists `output_caption`, `session.open` asks with `features.output_caption: 1`, and each caption names the RAV1 frames of one sentence. RodakOS implements it, shows turn progress and captions in one Shell bar, and no longer shows progress in the Home status bar. |
 | 2026-11-24 | RodakOS implements `turn.progress`: an ordinary `session.open` also sends `features.turn_progress: 1`, the device drops events outside the current accepted turn or with an old `seq`, and the Home status bar shows the step until `output.start`. |
 | 2026-11-23 | RodakOS implements `turn.accepted`: an ordinary `session.open` sends `features.turn_accepted: 1`, the device drops out-of-order or mistimed events and waits 130 s for `output.start`. |
 | 2026-11-23 | Draft `turn.accepted` and `turn.progress` events, server step time limits and background hand-off of long tasks (§6.1), negotiated by `session.open` `features.turn_accepted` and `features.turn_progress`. Not implemented. |

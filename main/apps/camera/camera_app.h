@@ -27,6 +27,8 @@ public:
     void OnDestroy() override;
     // Closes the calibration page first; otherwise leaves the app.
     bool OnBackRequested() override;
+    // The preview and shutter own the bottom of the screen.
+    bool WantsBottomAreaClear() const override { return true; }
 
     void CapturePhoto();
 

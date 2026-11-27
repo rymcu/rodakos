@@ -212,11 +212,22 @@ public:
         event.transport_generation = generation;
         Deliver(std::move(event));
     }
-    void SpeakingEvent(VoiceInboundEventType type, uint32_t epoch = 1) {
+    void SpeakingEvent(VoiceInboundEventType type, uint32_t epoch = 1, std::string text = {}) {
         VoiceInboundEvent event;
         event.type = type;
         event.transport_generation = generation;
         event.playback_epoch = epoch;
+        event.payload = std::move(text);
+        Deliver(std::move(event));
+    }
+    void Caption(uint32_t epoch, uint32_t first, uint32_t last, std::string text) {
+        VoiceInboundEvent event;
+        event.type = VoiceInboundEventType::kCaption;
+        event.transport_generation = generation;
+        event.playback_epoch = epoch;
+        event.payload = std::move(text);
+        event.caption_first_audio_seq = first;
+        event.caption_last_audio_seq = last;
         Deliver(std::move(event));
     }
     void TurnAccepted() {
@@ -234,11 +245,13 @@ public:
         Deliver(std::move(event));
     }
     // One 60 ms TTS frame; the host decoder fills it with `marker`.
-    void SpeakingAudio(uint8_t marker, uint32_t epoch = 1, int sample_rate = 16000) {
+    void SpeakingAudio(uint8_t marker, uint32_t epoch = 1, int sample_rate = 16000,
+                       uint32_t sequence = 0) {
         VoiceInboundEvent event;
         event.type = VoiceInboundEventType::kAudio;
         event.transport_generation = generation;
         event.playback_epoch = epoch;
+        event.audio_sequence = sequence;
         event.audio.sample_rate = sample_rate;
         event.audio.frame_duration_ms = 60;
         event.audio.payload = {marker};
@@ -1114,6 +1127,65 @@ RODAK_TEST("24 kHz and 48 kHz downlink frames decode to 16 kHz for shared I2S0 c
     RODAK_CHECK_EQ(fake_opus_decoder::last_sample_rate, 16000);
     RODAK_CHECK_EQ(fake_codec::format.sample_rate, 16000u);
     RODAK_CHECK_EQ(CountMarker(5), size_t{960 * 4});
+}
+
+RODAK_TEST("reply captions switch when their frame reaches the speaker and clear on drain") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate write_gate;
+    std::atomic<int> writes{0};
+    // A 960-sample frame is two codec writes, so write #2 starts frame 2 after frame 1 counted.
+    fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, 5);
+    // Both cues arrive before any audio is written, as they do on the wire.
+    f.transport.Caption(5, 1, 2, "第一句");
+    f.transport.Caption(5, 3, 4, "第二句");
+    const uint32_t start_revision = f.service.GetVoiceDisplayRevision();
+    for (uint8_t marker = 1; marker <= 4; ++marker) {
+        f.transport.SpeakingAudio(marker, 5, 16000, marker);
+    }
+    const bool writing = write_gate.Wait();
+    // Frame 2 is being written; frame 3, which starts the second sentence, has not been.
+    const std::string while_writing = f.service.GetTurnProgressSnapshot().caption;
+    const uint32_t revision_while_writing = f.service.GetVoiceDisplayRevision();
+    write_gate.Release();
+    RODAK_CHECK(writing);
+    RODAK_CHECK_EQ(while_writing, std::string("第一句"));
+    RODAK_CHECK(revision_while_writing != start_revision);
+    const bool second = WaitUntil([&] {
+        return f.service.GetTurnProgressSnapshot().caption == "第二句";
+    });
+    RODAK_CHECK(second);
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStopped, 5);
+    const bool cleared = WaitUntil([&] {
+        return f.service.GetTurnProgressSnapshot().caption.empty() && !fake_codec::open;
+    });
+    fake_codec::on_write = {};
+    RODAK_CHECK(cleared);
+}
+
+RODAK_TEST("output.start text captions a short reply and an interrupt clears it at once") {
+    Fixture f;
+    f.StartInitialized();
+    retirement_host::Gate write_gate;
+    std::atomic<int> writes{0};
+    // Park at frame 2 (codec write #2), after frame 1 reached the speaker and was counted.
+    fake_codec::on_write = [&] { if (writes.fetch_add(1) == 2) write_gate.Enter(); };
+    f.transport.SpeakingEvent(VoiceInboundEventType::kSpeakingStarted, 6, "好的，马上打开。");
+    const bool empty_before_audio = f.service.GetTurnProgressSnapshot().caption.empty();
+    for (uint8_t marker = 1; marker <= 3; ++marker) f.transport.SpeakingAudio(marker, 6, 16000, marker);
+    const bool writing = write_gate.Wait();
+    const std::string shown = f.service.GetTurnProgressSnapshot().caption;
+    const bool interrupted = f.service.InterruptSpeaking();
+    // Checks run after the release so a failure cannot leave the speaker write parked.
+    write_gate.Release();
+    const bool cleared = WaitUntil([&] { return f.service.GetTurnProgressSnapshot().caption.empty(); });
+    fake_codec::on_write = {};
+    RODAK_CHECK(empty_before_audio);
+    RODAK_CHECK(writing);
+    RODAK_CHECK_EQ(shown, std::string("好的，马上打开。"));
+    RODAK_CHECK(interrupted);
+    RODAK_CHECK(cleared);
 }
 
 RODAK_TEST("epochless output.stop after tagged output.start drains and re-arms follow-up") {

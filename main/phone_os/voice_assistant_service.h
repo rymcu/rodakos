@@ -8,6 +8,7 @@
 #include "phone_os/voice_assistant_transport.h"
 #include "phone_os/voice_conversation_policy.h"
 #include "phone_os/voice_barge_in_policy.h"
+#include "phone_os/voice_caption_timeline.h"
 #include "phone_os/voice_playback_queue.h"
 #include "phone_os/voice_recorder_service.h"
 
@@ -77,8 +78,10 @@ public:
     VoiceAssistantState GetState();
     // Read by the status light about 30 times a second; copies no strings.
     VoiceStatusLightSnapshot GetStatusLightSnapshot();
-    // Read by the Home screen. Stage and label are empty outside an accepted turn.
+    // Read by the Shell voice overlay when GetVoiceDisplayRevision changes. Stage and label are
+    // empty outside an accepted turn; caption is the sentence the speaker is playing now.
     VoiceTurnProgressSnapshot GetTurnProgressSnapshot() override;
+    uint32_t GetVoiceDisplayRevision() override;
 
 private:
     void SetPhaseLocked(VoiceAssistantPhase phase, const char* message);
@@ -106,6 +109,7 @@ private:
     bool StartPlaybackTask();
     void PlaybackTask();
     void ClearPlaybackLocked();
+    void BumpDisplayRevisionLocked() { ++display_revision_; }
     void WaitForPlaybackIdle();
     void HandleInbound(VoiceInboundEvent&& event);
     void ProcessInbound(VoiceInboundEvent&& event);
@@ -199,6 +203,10 @@ private:
     // first, so the values need no clearing when the turn ends.
     VoiceTurnStage turn_stage_ = VoiceTurnStage::kNone;
     std::string turn_label_;
+    // Reply captions, advanced by the playback task as frames reach the speaker.
+    VoiceCaptionTimeline caption_timeline_;
+    bool last_reported_awaiting_reply_ = false;
+    uint32_t display_revision_ = 0;
     uint8_t status_light_playback_level_ = 0;
     int64_t status_light_playback_at_us_ = 0;
     int64_t status_light_speech_at_us_ = 0;

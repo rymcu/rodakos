@@ -7,9 +7,10 @@
     {"name": "rodakos_icons_30_4", "size": 30, "bpp": 4,
      "icons": ["SETTINGS", "INFO", "MUSIC", "CAMERA", "MICROPHONE", "CALENDAR", "COMPASS",
                "ASSISTANT", "LIGHT", "CLOCK", "IMAGE", "POWER", "FOLDER", "STORAGE", "PALETTE",
-               "PLAY_FILLED", "PAUSE_FILLED", "REFRESH"]}
+               "PLAY_FILLED", "PAUSE_FILLED", "REFRESH", "NOTIFICATIONS"]}
   ],
   "icons": {
+    "ALARM": "alarm-outline",
     "ARROW_DOWN": "arrow-down-outline",
     "ARROW_LEFT": "arrow-back-outline",
     "ARROW_RIGHT": "arrow-forward-outline",
@@ -45,6 +46,7 @@
     "MICROPHONE": "mic-outline",
     "MOON": "moon-outline",
     "MUSIC": "musical-notes-outline",
+    "NOTIFICATIONS": "notifications-outline",
     "PALETTE": "color-palette-outline",
     "PAUSE": "pause-outline",
     "PAUSE_FILLED": "pause",

@@ -1,0 +1,9 @@
+{
+  "event": "output.caption",
+  "sessionId": "rv-7f3c2a9e1b4d4c6a",
+  "playbackEpoch": 1,
+  "captionSeq": 2,
+  "firstAudioSeq": 33,
+  "lastAudioSeq": 68,
+  "text": "记得带伞。"
+}

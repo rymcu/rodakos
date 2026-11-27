@@ -40,6 +40,15 @@ inline constexpr char kRealtimeVoiceEventTurnAccepted[] = "turn.accepted";
 inline constexpr char kRealtimeVoiceEventTurnProgress[] = "turn.progress";
 // Contract section 6.1: label is at most 32 Unicode code points.
 inline constexpr size_t kRealtimeVoiceTurnProgressLabelMaxCodePoints = 32;
+// Contract section 6.2. Like turn.accepted it is negotiated in session.open, not listed in the
+// descriptor events: released firmware rejects a descriptor with an unknown event name.
+inline constexpr char kRealtimeVoiceEventOutputCaption[] = "output.caption";
+// Descriptor features entry a server lists when it can send output.caption.
+inline constexpr char kRealtimeVoiceFeatureOutputCaption[] = "output_caption";
+// Two lines of the 16 px CJK font in the 288 px caption bar hold about 36 characters; the limit
+// leaves room for Latin text and punctuation, which are narrower.
+inline constexpr size_t kRealtimeVoiceCaptionMaxCodePoints = 48;
+inline constexpr size_t kRealtimeVoiceCaptionMaxUtf8Bytes = 192;
 inline constexpr char kRealtimeVoiceAudioMagic[] = "RAV1";
 inline constexpr size_t kRealtimeVoiceAudioHeaderBytes = 12;
 inline constexpr char kRealtimeVoiceVadDeviceAuthoritative[] = "device-authoritative";
@@ -86,6 +95,17 @@ struct RealtimeVoiceTurnProgress {
     std::string label;
 };
 
+// output.caption (contract section 6.2): the text spoken by RAV1 frames
+// first_audio_seq..last_audio_seq of one playback epoch.
+struct RealtimeVoiceCaption {
+    uint32_t playback_epoch = 0;
+    uint32_t caption_seq = 0;
+    uint32_t first_audio_seq = 0;
+    uint32_t last_audio_seq = 0;
+    // Trimmed, one paragraph: control characters and line breaks become spaces.
+    std::string text;
+};
+
 struct RealtimeVoiceServerError {
     std::string code;
     std::string message;
@@ -114,6 +134,10 @@ public:
     // turn.progress (contract section 6.1): only for the current accepted turn, before its first
     // output.start, with a seq greater than the last one. The caller drops a rejected event.
     bool AcceptTurnProgress(uint32_t generation, uint32_t turn_id, uint32_t seq);
+    // output.caption (contract section 6.2): only for the active output's playbackEpoch, with a
+    // captionSeq greater than the last one of that epoch and a firstAudioSeq above the last
+    // caption's lastAudioSeq. The caller drops a rejected event.
+    bool AcceptCaption(uint32_t generation, const RealtimeVoiceCaption& caption);
 
     uint32_t playback_epoch() const { return playback_epoch_; }
     uint32_t audio_sequence() const { return audio_sequence_; }
@@ -131,6 +155,8 @@ private:
     // Between turn.accepted and the turn's first output.start.
     bool progress_open_ = false;
     bool output_active_ = false;
+    uint32_t caption_seq_ = 0;
+    uint32_t caption_last_audio_seq_ = 0;
 };
 
 // Parse the canonical realtimeVoice descriptor. Legacy websocket objects are
@@ -139,12 +165,17 @@ bool ParseRealtimeVoiceDescriptor(const cJSON* value,
                                   RealtimeVoiceDescriptor& descriptor,
                                   std::string& error);
 
+// True when the descriptor's features list output_caption (contract section 6.2).
+bool RealtimeVoiceDescriptorOffersCaption(const std::vector<std::string>& features);
+
 // announce_seq 非零时打开服务端发起播报的只放音会话（features.announce + announceSeq）。
 // 普通会话宣告 features.turn_accepted: 1 和 turn_progress: 1（契约 §6.1）；播报会话没有用户轮次，不宣告。
+// request_caption 为真时宣告 features.output_caption: 1（契约 §6.2），普通会话和播报会话都可以。
 std::string BuildRealtimeVoiceSessionOpenMessage(const RealtimeVoiceDescriptor& descriptor,
                                                  bool supports_device_vad_epoch,
                                                  uint32_t generation,
-                                                 uint32_t announce_seq = 0);
+                                                 uint32_t announce_seq = 0,
+                                                 bool request_caption = false);
 
 bool IsRealtimeVoiceVadStrategy(const std::string& value);
 bool IsSupportedRealtimeVoiceFrameDuration(int frame_duration_ms);
@@ -181,6 +212,18 @@ bool ParseRealtimeVoiceTurnAccepted(const cJSON* envelope, uint32_t& turn_id,
 // on one line. The transport still checks the session, the turn and the seq order.
 bool ParseRealtimeVoiceTurnProgress(const cJSON* envelope, RealtimeVoiceTurnProgress& progress,
                                     std::string& error);
+
+// Decode output.caption (contract section 6.2). The envelope may hold only event, sessionId,
+// playbackEpoch, captionSeq, firstAudioSeq, lastAudioSeq and text. The numbers are integers in
+// 1..UINT32_MAX with firstAudioSeq <= lastAudioSeq. text is valid UTF-8 of at most 48 code points
+// and 192 bytes, nonblank after trim. The transport still checks the session, epoch and order.
+bool ParseRealtimeVoiceCaption(const cJSON* envelope, RealtimeVoiceCaption& caption,
+                               std::string& error);
+
+// Decode the optional output.start text for the caption fallback of a session that did not
+// negotiate output.caption. Returns false, without an error, when the text is absent, too long
+// for the caption bar or not valid UTF-8: the fallback then shows nothing.
+bool ParseRealtimeVoiceOutputStartCaption(const cJSON* envelope, std::string& text);
 
 // Validate and decode the 12-byte RAV1 envelope without requiring ESP-IDF.
 // The helper intentionally does not enforce monotonic sequence ordering; that

@@ -12,7 +12,8 @@ LVGL and Espressif Board Manager.
   guarded save. Home has up to eight pages plus a read-only `All Apps` page. Only the active page
   and its two neighbors keep their widgets. See [Home layout](docs/home-layout-design.md).
 - **Built-in apps**: Home, Settings, Photos, Camera, Clock, Calendar, Files, Gyro, System,
-  Music, Recorder, Assistant, Smart, Wake (Wake-on-LAN) and Themes.
+  Music, Recorder, Assistant, Smart, Wake (Wake-on-LAN), Themes and Messages (message center with
+  todo complete and snooze; draft server API, see [AIoT §7.6](docs/rodak-aiot-contract-v1.md)).
 - **Hardware services**: display, backlight, cached GT911 touch polling, WiFi, SD card with
   path-scoped leases, early-boot USB MSC mode, audio playback and recording, GC0308 camera,
   QMI8658 motion, RGB light and battery monitor. The firmware opens heavy devices on demand, not
@@ -21,8 +22,8 @@ LVGL and Espressif Board Manager.
   press locks the device. Custom bindings in NVS replace these defaults.
 - **Voice**: local MultiNet wake word with a wake-time echo canceller, gain control and a wake
   chime, `rodak-realtime-voice/v1` sessions over pinned WSS, AEC and barge-in, a separate
-  playback task for replies, server-initiated playback-only announcements (`voice.announce`) and
-  versioned voice identity. The firmware registers no MCP tools. Rodak controls volume and light
+  playback task for replies, server-initiated playback-only announcements (`voice.announce`),
+  reply captions and turn progress in a Shell bar over every app, and versioned voice identity. The firmware registers no MCP tools. Rodak controls volume and light
   through MQTT effects. See [voice assistant](docs/voice-assistant.md).
 - **Rodak cloud**: MQTT provisioning and same-authority credential refresh, shadow and
   telemetry, correlated volume and light effects, command results bound to their original

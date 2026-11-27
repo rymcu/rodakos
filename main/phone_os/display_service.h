@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -45,7 +46,20 @@ public:
     bool StartJpegStream(uint8_t fps, JpegFrameCallback callback);
     void StopJpegStream();
     bool IsRunning() const;
+    // Lock-free, for the LVGL task: true from before the first captured frame until capture
+    // stops. Shell overlays poll it to hide private text; taking mutex_ there would invert the
+    // LVGL-lock order of StartCapture.
+    bool IsCapturePublishing() const { return capture_publishing_.load(std::memory_order_acquire); }
+    // Called on the LVGL task, before the first full frame is captured, so private text can be
+    // hidden in that same frame. The hook must not take locks.
+    void SetBeforeFirstFrameHook(void (*hook)(void*), void* user_data) {
+        before_first_frame_hook_ = hook;
+        before_first_frame_user_data_ = user_data;
+    }
     std::string last_error() const;
+    // For the initial-refresh async call only.
+    void RunBeforeFirstFrame();
+    lv_display_t* display() const { return display_; }
 
 private:
     struct EncodeMetrics;
@@ -89,6 +103,9 @@ private:
     uint32_t frame_count_ = 0;
     // 错误路径也可能没有可用堆空间；这里只保留静态诊断文本。
     const char* last_error_ = "";
+    std::atomic<bool> capture_publishing_{false};
+    void (*before_first_frame_hook_)(void*) = nullptr;
+    void* before_first_frame_user_data_ = nullptr;
 };
 
 }  // namespace rodakos

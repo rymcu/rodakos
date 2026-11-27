@@ -1,0 +1,15 @@
+{
+  "noticeId": "n-7c1f",
+  "kind": "notice",
+  "title": "照片整理完成",
+  "summary": "已整理 128 张照片",
+  "createdAt": 1794990000,
+  "unread": true,
+  "revision": 1,
+  "todo": {
+    "taskId": "t-31",
+    "occurrenceId": "o-31-20261127",
+    "state": "open",
+    "dueAt": 1795003600
+  }
+}
