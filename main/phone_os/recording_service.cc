@@ -5,6 +5,7 @@
 #include "rodakos_adapters/file_service.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -277,6 +278,7 @@ void RecordingService::RequestStop() {
         if (state_.status == RecordingStatus::kRecording ||
             state_.status == RecordingStatus::kStarting) {
             state_.status = RecordingStatus::kStopping;
+            state_.input_level = 0;
             state_.message = "Stopping";
         }
         xSemaphoreGive(mutex_);
@@ -470,11 +472,12 @@ bool RecordingService::RecordWithinLease(const RecordingConfig& config, const st
             while (!ShouldStop()) {
                 if (bytes_written > kMaxWavDataBytes - kRecordBufferSize) { failed = true; error = "WAV size limit reached"; break; }
                 if (!input_.ReadForOwner(kAudioInputOwner, buffer, static_cast<int>(kRecordBufferSize))) { failed = true; error = "Audio read failed"; break; }
-                peak = std::max(peak, PeakAbs16(buffer, kRecordBufferSize));
+                const uint16_t chunk_peak = PeakAbs16(buffer, kRecordBufferSize);
+                peak = std::max(peak, chunk_peak);
                 const size_t written = std::fwrite(buffer, 1, kRecordBufferSize, fp);
                 if (written != kRecordBufferSize || std::ferror(fp)) { failed = true; error = "SD write failed"; break; }
                 bytes_written += written;
-                UpdateProgress(bytes_written);
+                UpdateProgress(bytes_written, chunk_peak);
             }
             cancelled = !failed && bytes_written == 0;
         }
@@ -503,6 +506,7 @@ bool RecordingService::RecordWithinLease(const RecordingConfig& config, const st
     xSemaphoreTake(mutex_, portMAX_DELAY);
     state_.status = RecordingStatus::kCompleted;
     state_.message = "Saved";
+    state_.input_level = 0;
     state_.bytes_written = bytes_written;
     state_.file_size = bytes_written + 44;
     state_.duration_ms = DurationForBytes(bytes_written);
@@ -667,6 +671,7 @@ void RecordingService::SetState(RecordingStatus status, const char* message) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         state_.status = status;
+        if (status != RecordingStatus::kRecording) state_.input_level = 0;
         if (message != nullptr) {
             state_.message = message;
         }
@@ -681,6 +686,7 @@ void RecordingService::SetError(const std::string& error) {
         state_.status = RecordingStatus::kError;
         state_.message = error;
         state_.last_error = error;
+        state_.input_level = 0;
         xSemaphoreGive(mutex_);
     }
 }
@@ -693,9 +699,18 @@ void RecordingService::SetLibraryError(const std::string& error) {
     xSemaphoreGive(mutex_);
 }
 
-void RecordingService::UpdateProgress(size_t bytes_written) {
+uint8_t RecordingService::LevelForPeak(uint16_t peak) {
+    if (peak == 0) return 0;
+    // 0 dBFS at 32767; the meter spans the bottom 48 dB, which covers speech at arm's length.
+    const float dbfs = 20.0f * std::log10(static_cast<float>(peak) / 32767.0f);
+    const float level = (dbfs + 48.0f) * (100.0f / 48.0f);
+    return static_cast<uint8_t>(std::clamp(level, 0.0f, 100.0f) + 0.5f);
+}
+
+void RecordingService::UpdateProgress(size_t bytes_written, uint16_t chunk_peak) {
     if (mutex_ != nullptr) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
+        state_.input_level = LevelForPeak(chunk_peak);
         state_.bytes_written = bytes_written;
         state_.file_size = bytes_written + 44;
         state_.duration_ms = DurationForBytes(bytes_written);

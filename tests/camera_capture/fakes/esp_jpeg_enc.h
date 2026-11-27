@@ -3,6 +3,7 @@
 using jpeg_enc_handle_t = void*;
 using jpeg_error_t = int;
 constexpr jpeg_error_t JPEG_ERR_OK = 0;
+constexpr jpeg_error_t JPEG_ERR_NO_MEM = -2;
 constexpr int JPEG_PIXEL_FORMAT_RGB888 = 1, JPEG_SUBSAMPLE_420 = 1;
 struct jpeg_enc_config_t {
     int width = 0, height = 0, src_type = 0, subsampling = 0;

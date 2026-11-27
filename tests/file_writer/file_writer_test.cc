@@ -18,7 +18,8 @@ using rodakos::FileWriteMode;
 using rodakos::WriteFileBytes;
 struct Faults {
     bool open = false, stream_open = false, short_write = false, stream_error = false;
-    bool flush = false, close = false, unlink = false;
+    bool flush = false, close = false, fd_close = false, unlink = false;
+    int stream_open_error = ENOMEM, flush_error = EIO;
     int flush_calls = 0, close_calls = 0, fd_close_calls = 0, unlink_calls = 0;
     int fd = -1;
     FILE* file = nullptr;
@@ -67,7 +68,10 @@ int __wrap_open(const char* path, int flags, ...) {
     return faults.fd;
 }
 FILE* __wrap_fdopen(int fd, const char* mode) {
-    if (faults.stream_open) { errno = ENOMEM; return nullptr; }
+    if (faults.stream_open) {
+        if (faults.stream_open_error != 0) errno = faults.stream_open_error;
+        return nullptr;
+    }
     faults.file = __real_fdopen(fd, mode);
     return faults.file;
 }
@@ -91,7 +95,7 @@ int __wrap_ferror(FILE* file) {
 int __wrap_fflush(FILE* file) {
     if (file == faults.file) {
         ++faults.flush_calls;
-        if (faults.flush) { errno = EIO; return EOF; }
+        if (faults.flush) { errno = faults.flush_error; return EOF; }
     }
     return __real_fflush(file);
 }
@@ -106,8 +110,12 @@ int __wrap_fclose(FILE* file) {
     return result;
 }
 int __wrap_close(int fd) {
-    if (fd == faults.fd) ++faults.fd_close_calls;
-    return __real_close(fd);
+    const int result = __real_close(fd);
+    if (fd == faults.fd) {
+        ++faults.fd_close_calls;
+        if (faults.fd_close) { errno = EBADF; return -1; }
+    }
+    return result;
 }
 int __wrap_unlink(const char* path) {
     ++faults.unlink_calls;
@@ -158,6 +166,26 @@ RODAK_TEST("fdopen failure closes the new descriptor and removes only the new fi
     RODAK_CHECK_EQ(faults.fd_close_calls, 1);
     RODAK_CHECK_FALSE(std::filesystem::exists(f.path));
 }
+RODAK_TEST("fdopen keeps its error across failing close and unlink cleanup") {
+    Fixture f;
+    faults.stream_open = true;
+    faults.fd_close = true;
+    faults.unlink = true;
+    RODAK_CHECK_FALSE(WriteFileBytes(f.path, kBytes, FileWriteMode::kCreateNew));
+    RODAK_CHECK_EQ(errno, ENOMEM);
+    RODAK_CHECK_EQ(faults.fd_close_calls, 1);
+    RODAK_CHECK_EQ(faults.unlink_calls, 1);
+    RODAK_CHECK(std::filesystem::exists(f.path));
+}
+RODAK_TEST("fdopen failure without errno falls back to EIO") {
+    Fixture f;
+    faults.stream_open = true;
+    faults.stream_open_error = 0;
+    errno = ENOSPC;
+    RODAK_CHECK_FALSE(WriteFileBytes(f.path, kBytes, FileWriteMode::kCreateNew));
+    RODAK_CHECK_EQ(errno, EIO);
+    RODAK_CHECK_FALSE(std::filesystem::exists(f.path));
+}
 RODAK_TEST("short write and stream error clean up the owned file and permit retry") {
     for (const bool short_write : {false, true}) {
         Fixture f;
@@ -194,6 +222,19 @@ RODAK_TEST("cleanup failure preserves the write error and cannot delete a later 
     RODAK_CHECK_EQ(errno, EEXIST);
     RODAK_CHECK_EQ(f.Read(), partial);
     RODAK_CHECK_EQ(faults.unlink_calls, 0);
+}
+RODAK_TEST("flush and final close errors each survive failing unlink cleanup") {
+    for (const bool fail_flush : {false, true}) {
+        Fixture f;
+        faults.flush = fail_flush;
+        faults.flush_error = ENOSPC;
+        faults.close = true;
+        faults.unlink = true;
+        RODAK_CHECK_FALSE(WriteFileBytes(f.path, kBytes, FileWriteMode::kCreateNew));
+        RODAK_CHECK_EQ(errno, fail_flush ? ENOSPC : EIO);
+        RODAK_CHECK_EQ(faults.close_calls, 1);
+        RODAK_CHECK_EQ(faults.unlink_calls, 1);
+    }
 }
 RODAK_TEST("replace and append retain their semantics and never delete a failed target") {
     Fixture f;

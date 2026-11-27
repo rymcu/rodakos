@@ -4,10 +4,10 @@
 #include "phone_os/camera_service.h"
 #include "phone_os/audio_focus_service.h"
 #include "phone_os/camera_calibration_service.h"
+#include "phone_os/task-retirement.h"
 
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -43,10 +43,11 @@ private:
     void ReserveHomeReturnMemory();
     void ReleaseHomeReturnMemory();
     void UpdatePreview();
+    void UpdatePreviewLayout();
     void ConsumeCaptureResult();
     bool CaptureInFlight() const;
-    void OnCaptureComplete(bool ok, const std::string& saved_path,
-                           const std::string& error, uint64_t generation);
+    void OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,
+                           const std::string& saved_path, uint64_t generation);
     // Shows a short message in a pill at the bottom-left of the viewfinder. hide_after_ms 0 keeps it.
     void UpdateStatus(const char* text, bool error = false, uint32_t hide_after_ms = 0);
     void HideStatus();
@@ -84,13 +85,14 @@ private:
     lv_timer_t* preview_timer_ = nullptr;
     lv_timer_t* capture_result_timer_ = nullptr;
     lv_image_dsc_t preview_dsc_ = {};
-    std::vector<uint8_t> preview_pixels_;
+    rodakos::CameraFrame preview_frame_;
     uint32_t displayed_sequence_ = 0;
     bool preview_ready_ = false;
     bool preview_paused_for_transition_ = false;
     void* home_return_reserve_ = nullptr;
     size_t home_return_reserve_size_ = 0;
     std::shared_ptr<CameraCaptureGuard> capture_guard_;
+    rodakos::TaskRetirementTicket capture_retirement_;
     // Calibration page: drawn over the preview box, worker created on first open.
     std::unique_ptr<rodakos::CameraCalibrationService> calibration_;
     lv_obj_t* calibration_button_ = nullptr;

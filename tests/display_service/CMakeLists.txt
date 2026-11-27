@@ -35,6 +35,8 @@ target_include_directories(rodakos_display_service_tests BEFORE PRIVATE
     "${RODAKOS_ROOT}/tests/task_retirement/fakes")
 if(RODAK_SERVICE_BASELINE_INCLUDE)
     target_include_directories(rodakos_display_service_tests BEFORE PRIVATE "${RODAK_SERVICE_BASELINE_INCLUDE}")
+else()
+    target_compile_definitions(rodakos_display_service_tests PRIVATE RODAKOS_DISPLAY_TEST_JPEG_GATE)
 endif()
 target_link_libraries(rodakos_display_service_tests PRIVATE Threads::Threads rodakos_task_retirement_host)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -186,7 +186,7 @@ void CameraApp::OpenCalibration() {
     }, kRefreshMs, this);
     // The result pill would overlap the frame; the panel carries the messages instead.
     HideStatus();
-    displayed_sequence_ = 0;  // Re-place the preview image in calibration layout on the next frame.
+    UpdatePreviewLayout();
     ESP_LOGI(TAG, "Calibration page opened");
 }
 
@@ -216,7 +216,7 @@ void CameraApp::CloseCalibration() {
     if (calibration_button_ != nullptr && lv_obj_is_valid(calibration_button_)) {
         lv_obj_clear_state(calibration_button_, LV_STATE_CHECKED);
     }
-    displayed_sequence_ = 0;  // Back to the filled preview on the next frame.
+    UpdatePreviewLayout();
 }
 
 void CameraApp::UpdateCalibration() {

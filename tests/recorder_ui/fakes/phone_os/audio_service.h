@@ -1,10 +1,13 @@
 #pragma once
+#include <cstdint>
 #include <string>
 namespace rodakos {
 enum class AudioPlaybackStatus { kIdle, kLoading, kPlaying, kPaused, kStopped, kCompleted, kError };
 struct AudioPlaybackState {
     AudioPlaybackStatus status = AudioPlaybackStatus::kIdle;
     std::string file_path;
+    uint32_t position_ms = 0;
+    uint32_t duration_ms = 0;
 };
 class AudioService {
 public:

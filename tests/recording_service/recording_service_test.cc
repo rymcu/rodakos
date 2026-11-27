@@ -372,3 +372,36 @@ RODAK_TEST("saved file result survives directory refresh failure and list can re
     RODAK_CHECK(f.recording->GetState().library_error.empty());
     RODAK_CHECK_EQ(f.recording->GetRecordings().size(), 1u);
 }
+
+RODAK_TEST("input level follows the captured peak on a 48 dB scale and clears when idle") {
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(0), 0);
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(32767), 100);
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(65), 0);       // about -54 dBFS
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(130), 0);      // -48 dBFS, the floor
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(1036), 37);    // -30 dBFS
+    RODAK_CHECK_EQ(RecordingService::LevelForPeak(16384), 87);   // -6 dBFS
+
+    Fixture f;
+    RODAK_CHECK(f.recording->Start());
+    // The host codec fills chunks with 0x3c3c = 15420 (about -6.5 dBFS).
+    RODAK_CHECK(WaitUntil([&]() { return f.recording->GetState().input_level > 0; }));
+    RODAK_CHECK_EQ(f.recording->GetState().input_level, 86);
+    f.recording->Stop();
+    const auto saved = f.Wait();
+    RODAK_CHECK_EQ(saved.status, RecordingStatus::kCompleted);
+    RODAK_CHECK_EQ(saved.input_level, 0);
+
+    f.input.read_hook = [](void* data, int bytes) {
+        std::memset(data, 0, static_cast<size_t>(bytes));
+        return true;
+    };
+    RODAK_CHECK(f.recording->Start());
+    RODAK_CHECK(WaitUntil([&]() { return f.recording->GetState().bytes_written >= 4096; }));
+    RODAK_CHECK_EQ(f.recording->GetState().input_level, 0);
+    f.input.read_hook = {};
+    f.input.fail_read = true;
+    RODAK_CHECK(WaitUntil([&]() { return f.recording->GetState().status == RecordingStatus::kError; }));
+    RODAK_CHECK_EQ(f.recording->GetState().input_level, 0);
+    f.input.fail_read = false;
+    f.Wait();
+}

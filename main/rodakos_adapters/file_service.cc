@@ -22,6 +22,14 @@ constexpr const char* TAG = "FileService";
 constexpr const char* kSdCardDeviceName = "fs_sdcard";
 constexpr const char* kMountPoint = "/sdcard";
 
+int StatPath(const std::string& path, struct stat& result) {
+    errno = 0;
+    if (stat(path.c_str(), &result) == 0) {
+        return 0;
+    }
+    return errno != 0 ? errno : EIO;
+}
+
 /**
  * @brief Brookesia-style file service implementation
  */
@@ -212,6 +220,7 @@ public:
         std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
+            errno = ENODEV;
             return false;
         }
         const std::string full_path = GetFullPath(path);
@@ -219,7 +228,9 @@ public:
             return false;
         }
         if (!WriteFileBytes(full_path, data, FileWriteMode::kCreateNew)) {
-            ESP_LOGE(TAG, "Failed to save new file: %s (%s)", full_path.c_str(), std::strerror(errno));
+            const int error = errno;
+            ESP_LOGE(TAG, "Failed to save new file: %s (%s)", full_path.c_str(), std::strerror(error));
+            errno = error;
             return false;
         }
         ESP_LOGI(TAG, "Saved new file: %s (%zu bytes)", full_path.c_str(), data.size());
@@ -291,24 +302,40 @@ public:
         std::lock_guard<std::recursive_mutex> lock(io_mutex_);
         if (!is_mounted_) {
             ESP_LOGE(TAG, "SD card not mounted");
+            errno = ENODEV;
             return false;
         }
 
-        std::string full_path = GetFullPath(path);
+        const std::string full_path = GetFullPath(path);
         struct stat existing = {};
-        if (stat(full_path.c_str(), &existing) == 0 && S_ISDIR(existing.st_mode)) {
+        const int stat_error = StatPath(full_path, existing);
+        if (stat_error == 0 && S_ISDIR(existing.st_mode)) {
             return true;
+        }
+        const int lookup_error = stat_error == 0 ? EEXIST : stat_error;
+        if (lookup_error != ENOENT) {
+            ESP_LOGE(TAG, "Cannot create directory: %s (%s)", full_path.c_str(), std::strerror(lookup_error));
+            errno = lookup_error;
+            return false;
         }
         if (WritePathConflicts(full_path)) {
             return false;
         }
+        errno = 0;
         if (mkdir(full_path.c_str(), 0775) != 0) {
-            const int err = errno;
-            struct stat st;
-            if (err == EEXIST && stat(full_path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
-                return true;
+            int err = errno != 0 ? errno : EIO;
+            if (err == EEXIST) {
+                struct stat st;
+                const int retry_error = StatPath(full_path, st);
+                if (retry_error == 0 && S_ISDIR(st.st_mode)) {
+                    return true;
+                }
+                if (retry_error != 0) {
+                    err = retry_error;
+                }
             }
             ESP_LOGE(TAG, "Failed to create directory: %s (%s)", full_path.c_str(), std::strerror(err));
+            errno = err;
             return false;
         }
 
@@ -339,14 +366,25 @@ public:
     }
 
     bool Exists(const std::string& path) override {
-        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
-        if (!is_mounted_) {
-            return false;
-        }
+        return LookupPath(path) == PathLookupStatus::kExists;
+    }
 
-        std::string full_path = GetFullPath(path);
-        struct stat st;
-        return stat(full_path.c_str(), &st) == 0;
+    PathLookupStatus LookupPath(const std::string& path, int* error_out = nullptr) override {
+        std::lock_guard<std::recursive_mutex> lock(io_mutex_);
+        int error = ENODEV;
+        if (is_mounted_) {
+            const std::string full_path = GetFullPath(path);
+            struct stat st;
+            error = StatPath(full_path, st);
+        }
+        if (error_out != nullptr) {
+            *error_out = error;
+        }
+        if (error == 0) {
+            return PathLookupStatus::kExists;
+        }
+        errno = error;
+        return error == ENOENT ? PathLookupStatus::kMissing : PathLookupStatus::kError;
     }
 
     size_t GetFileSize(const std::string& path) override {

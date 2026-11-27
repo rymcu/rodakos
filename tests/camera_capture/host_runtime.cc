@@ -22,7 +22,9 @@
 #include <mutex>
 #include <new>
 #include <set>
+#include <string_view>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
@@ -71,8 +73,13 @@ bool RejectNew(size_t bytes) {
 namespace camera_host {
 std::atomic<bool> fail_mount{false}, fail_directory{false}, fail_write{false}, fail_flush{false}, fail_close{false};
 std::atomic<bool> fail_encoder_open{false}, fail_encoder_process{false}, fail_allocation{false}, empty_encoded{false};
+std::atomic<bool> fail_encoder_open_oom{false};
+std::atomic<size_t> fail_aligned_size{0};
+std::atomic<LookupFault> lookup_fault{LookupFault::kNone};
+std::atomic<unsigned> lookup_failures{0}, photo_mkdir_calls{0}, exclusive_create_calls{0};
 std::atomic<bool> collide_on_create{false};
 std::atomic<bool> fail_dequeue{false};
+std::atomic<bool> zero_frame_height{false};
 std::atomic<bool> pause_frames{false}, frames_paused{false};
 std::atomic<unsigned> encoder_handles{0}, frame_mappings{0};
 std::atomic<unsigned> unscoped_encoder_calls{0};
@@ -83,6 +90,7 @@ std::function<void()> write_hook;
 std::function<void()> preview_state_query_hook;
 std::function<void()> streamoff_hook;
 std::function<void(const char*)> log_hook;
+thread_local std::function<void(const char*)> caller_log_hook;
 std::atomic<int> streamon_result{0}, streamoff_result{0};
 std::atomic<unsigned> streamon_calls{0}, streamoff_calls{0};
 std::atomic<unsigned> test_pattern_calls{0};
@@ -92,6 +100,7 @@ std::atomic<unsigned> sensor_register_page{0};
 std::array<std::array<uint8_t, 256>, 2> sensor_registers{};
 void ObserveLog(const char* format) {
     if (log_hook) log_hook(format);
+    if (caller_log_hook) caller_log_hook(format);
 }
 std::string collision_path;
 void Reset(const std::string& path) {
@@ -113,14 +122,20 @@ void Reset(const std::string& path) {
     board_handle.mount_point = mount_path.c_str();
     fail_mount = fail_directory = fail_write = fail_flush = fail_close = false;
     fail_encoder_open = fail_encoder_process = fail_allocation = empty_encoded = false;
+    fail_encoder_open_oom = false;
+    fail_aligned_size = 0;
+    lookup_fault = LookupFault::kNone;
+    lookup_failures = photo_mkdir_calls = exclusive_create_calls = 0;
     unscoped_encoder_calls = 0;
     collide_on_create = false;
     fail_dequeue = false;
+    zero_frame_height = false;
     pause_frames = frames_paused = false;
     write_hook = {};
     preview_state_query_hook = {};
     streamoff_hook = {};
     log_hook = {};
+    caller_log_hook = {};
     streamon_result = streamoff_result = 0;
     collision_path.clear();
 }
@@ -136,7 +151,7 @@ void ClearNewFailures() {
     failure_count = 0;
 }
 void* AllocateAligned(size_t alignment, size_t bytes) {
-    if (fail_allocation) return nullptr;
+    if (fail_allocation || fail_aligned_size == bytes) return nullptr;
     void* pointer = nullptr;
     if (posix_memalign(&pointer, alignment, bytes) != 0) return nullptr;
     ++aligned_buffers;
@@ -179,6 +194,7 @@ ScreenJpegAllocationScope::~ScreenJpegAllocationScope() noexcept {
 
 jpeg_error_t jpeg_enc_open(const jpeg_enc_config_t* config, jpeg_enc_handle_t* encoder) {
     if (!camera_host::jpeg_scope_active) ++camera_host::unscoped_encoder_calls;
+    if (camera_host::fail_encoder_open_oom) return JPEG_ERR_NO_MEM;
     if (camera_host::fail_encoder_open || config->width != 2 || config->height != 2) return -1;
     *encoder = new int(1);
     ++camera_host::encoder_handles;
@@ -232,6 +248,7 @@ int __real_close(int);
 int __real_ioctl(int, unsigned long, ...);
 void* __real_mmap(void*, size_t, int, int, int, off_t);
 int __real_munmap(void*, size_t);
+int __real_stat(const char*, struct stat*);
 int __real_mkdir(const char*, mode_t);
 size_t __real_fwrite(const void*, size_t, size_t, FILE*);
 int __real_fflush(FILE*);
@@ -243,13 +260,16 @@ int __wrap_open(const char* path, int flags, ...) {
     if ((flags & O_CREAT) != 0) {
         va_list args; va_start(args, flags); mode = va_arg(args, int); va_end(args);
     }
-    if ((flags & O_EXCL) != 0 && camera_host::collide_on_create.exchange(false)) {
-        const int competitor = __real_open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
-        if (competitor >= 0) {
-            const char content[] = "existing-photo";
-            (void)write(competitor, content, sizeof(content) - 1);
-            __real_close(competitor);
-            camera_host::collision_path = path;
+    if ((flags & O_EXCL) != 0) {
+        ++camera_host::exclusive_create_calls;
+        if (camera_host::collide_on_create.exchange(false)) {
+            const int competitor = __real_open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+            if (competitor >= 0) {
+                const char content[] = "existing-photo";
+                (void)write(competitor, content, sizeof(content) - 1);
+                __real_close(competitor);
+                camera_host::collision_path = path;
+            }
         }
     }
     return (flags & O_CREAT) ? __real_open(path, flags, mode) : __real_open(path, flags);
@@ -313,7 +333,8 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         static_cast<v4l2_capability*>(argument)->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
     } else if (request == VIDIOC_S_FMT) {
         auto* format = static_cast<v4l2_format*>(argument);
-        format->fmt.pix.width = format->fmt.pix.height = 2;
+        format->fmt.pix.width = 2;
+        format->fmt.pix.height = camera_host::zero_frame_height ? 0 : 2;
         format->fmt.pix.bytesperline = 4;
     } else if (request == VIDIOC_QUERYBUF) {
         auto* buffer = static_cast<v4l2_buffer*>(argument);
@@ -350,7 +371,32 @@ time_t __wrap_time(time_t* result) {
     if (result) *result = frozen;
     return frozen;
 }
+int __wrap_stat(const char* path, struct stat* result) {
+    const auto fault = camera_host::lookup_fault.load();
+    const std::string_view full_path(path);
+    if (fault != camera_host::LookupFault::kNone &&
+        full_path.compare(0, mount_path.size(), mount_path) == 0) {
+        const auto relative = full_path.substr(mount_path.size());
+        const bool directory_fault = fault == camera_host::LookupFault::kDirectory ||
+                                     fault == camera_host::LookupFault::kDirectoryWithoutErrno;
+        if ((directory_fault && relative == "/photos") ||
+            (fault == camera_host::LookupFault::kFilename && relative.compare(0, 8, "/photos/") == 0)) {
+            ++camera_host::lookup_failures;
+            if (fault != camera_host::LookupFault::kDirectoryWithoutErrno) {
+                errno = EIO;
+            }
+            return -1;
+        }
+    }
+    return __real_stat(path, result);
+}
 int __wrap_mkdir(const char* path, mode_t mode) {
+    const std::string_view full_path(path);
+    if (full_path.size() == mount_path.size() + 7 &&
+        full_path.compare(0, mount_path.size(), mount_path) == 0 &&
+        full_path.substr(mount_path.size()) == "/photos") {
+        ++camera_host::photo_mkdir_calls;
+    }
     if (camera_host::fail_directory.exchange(false)) { errno = EACCES; return -1; }
     return __real_mkdir(path, mode);
 }

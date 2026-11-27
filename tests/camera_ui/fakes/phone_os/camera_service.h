@@ -9,6 +9,37 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace rodakos {
+enum class CameraCaptureFailureStage : uint8_t {
+    kNone,
+    kServiceUnavailable,
+    kNoFrame,
+    kGateTimeout,
+    kJpegInputAlloc,
+    kJpegEncoderOpen,
+    kJpegOutputAlloc,
+    kJpegEncodeProcess,
+    kJpegCompactAlloc,
+    kStorageUnavailable,
+    kDirectoryFailed,
+    kPathSelectionFailed,
+    kWriteFailed,
+};
+
+struct CameraCaptureOutcome {
+    bool ok = false;
+    CameraCaptureFailureStage stage = CameraCaptureFailureStage::kNone;
+    int native_error = 0;
+};
+
+inline const char* CameraCaptureFailureStageName(CameraCaptureFailureStage) {
+    return "fake capture stage";
+}
+
+enum class FrameCopyStatus : uint8_t { kUpdated, kUnchanged, kUnavailable, kAllocationFailed };
+}
+
 namespace camera_test {
 class Gate {
 public:
@@ -34,9 +65,8 @@ private:
     bool released_ = false;
 };
 struct CaptureOutcome {
-    bool ok = true;
+    rodakos::CameraCaptureOutcome result{true, rodakos::CameraCaptureFailureStage::kNone, 0};
     std::string path = "/photos/test.jpg";
-    std::string error;
     std::shared_ptr<Gate> gate;
 };
 }
@@ -73,14 +103,19 @@ public:
         if (stop_gate) stop_gate->Enter();
         running = false;
     }
-    bool GetLatestFrame(CameraFrame& frame) {
-        if (!running || !has_frame) return false;
-        frame.width = 32;
-        frame.height = 24;
-        frame.stride = 64;
+    FrameCopyStatus CopyLatestFrameIfNewer(uint32_t previous_sequence, CameraFrame& frame) {
+        if (!running || !has_frame) return FrameCopyStatus::kUnavailable;
+        if (previous_sequence == sequence) return FrameCopyStatus::kUnchanged;
+        if (fail_frame_allocation) return FrameCopyStatus::kAllocationFailed;
+        const auto size = static_cast<size_t>(frame_width * frame_height * 2);
+        if (frame.rgb565.capacity() < size) ++frame_allocations;
+        ++frame_copies;
+        frame.rgb565.assign(size, frame_pixel_byte);
+        frame.width = frame_width;
+        frame.height = frame_height;
+        frame.stride = frame_width * 2;
         frame.sequence = sequence;
-        frame.rgb565.assign(32 * 24 * 2, 0x58);
-        return true;
+        return FrameCopyStatus::kUpdated;
     }
     CameraState GetState() const {
         CameraState state;
@@ -90,9 +125,9 @@ public:
         return state;
     }
     std::string last_error() const {
-        return camera_test::capture_worker ? capture_error_ : preview_error;
+        return preview_error;
     }
-    bool CapturePhoto(std::string& saved_path) {
+    CameraCaptureOutcome CapturePhotoWithOutcome(std::string& saved_path) {
         camera_test::CaptureOutcome outcome;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -100,10 +135,9 @@ public:
             if (index < outcomes_.size()) outcome = outcomes_[index];
         }
         if (outcome.gate) outcome.gate->Enter();
-        saved_path = outcome.ok ? outcome.path : std::string{};
-        capture_error_ = outcome.error;
+        saved_path = outcome.result.ok ? outcome.path : std::string{};
         ++completed;
-        return outcome.ok;
+        return outcome.result;
     }
     void Outcomes(std::vector<camera_test::CaptureOutcome> outcomes) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -118,7 +152,13 @@ public:
     std::shared_ptr<camera_test::Gate> stop_gate;
     bool running = false;
     bool has_frame = true;
+    bool fail_frame_allocation = false;
     uint32_t sequence = 1;
+    int frame_width = 32;
+    int frame_height = 24;
+    uint8_t frame_pixel_byte = 0x58;
+    size_t frame_allocations = 0;
+    size_t frame_copies = 0;
     std::string preview_error;
     int starts = 0;
     int stops = 0;
@@ -127,6 +167,5 @@ public:
 private:
     std::mutex mutex_;
     std::vector<camera_test::CaptureOutcome> outcomes_;
-    inline static thread_local std::string capture_error_;
 };
 }

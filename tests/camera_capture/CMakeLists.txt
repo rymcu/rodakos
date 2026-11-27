@@ -35,7 +35,7 @@ target_link_options(${target} PRIVATE
     -static-libstdc++
     -Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=ioctl -Wl,--wrap=mmap -Wl,--wrap=munmap
     -Wl,--wrap=_Znwm -Wl,--wrap=_ZdlPv -Wl,--wrap=_ZdlPvm
-    -Wl,--wrap=time -Wl,--wrap=mkdir -Wl,--wrap=fwrite -Wl,--wrap=fflush -Wl,--wrap=fclose)
+    -Wl,--wrap=time -Wl,--wrap=stat -Wl,--wrap=mkdir -Wl,--wrap=fwrite -Wl,--wrap=fflush -Wl,--wrap=fclose)
 endfunction()
 add_executable(rodakos_camera_capture_tests
     camera_capture_test.cc ../app_model/test_main.cc ${CAMERA_HOST_SOURCES})

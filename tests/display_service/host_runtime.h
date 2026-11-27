@@ -21,6 +21,10 @@ struct Resources {
     std::array<size_t, 4> original_allocator_calls{};
     size_t event_adds = 0, event_removes = 0, event_ops_without_lvgl_lock = 0;
 };
+struct JpegStats {
+    uint32_t attempts = 0, encoded = 0, failed = 0, skipped = 0;
+    size_t windows = 0;
+};
 void Reset();
 void JoinTasks();
 void FailNew(size_t bytes, size_t nth = 1, size_t count = 1, bool worker_only = false);
@@ -34,6 +38,7 @@ void SetEncodedSize(size_t bytes);
 void AllowTaskCreation(bool allow);
 void AllowAsync(bool allow);
 Resources Snapshot();
+JpegStats LatestJpegStats();
 std::vector<int64_t> NewFailureTimes();
 std::vector<int64_t> ProcessTimes();
 size_t PendingAsync();

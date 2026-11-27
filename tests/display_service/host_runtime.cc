@@ -13,9 +13,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <inttypes.h>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -29,6 +31,7 @@ struct HostSemaphore {
 
 namespace {
 using Clock = std::chrono::steady_clock;
+using rodakos_test::display_service_host::JpegStats;
 using rodakos_test::display_service_host::Resources;
 struct Allocation { void* pointer = nullptr; size_t bytes = 0; unsigned caps = 0; };
 struct HostEncoder { void* parts[3]; };
@@ -40,6 +43,7 @@ std::array<Async, 16> async_calls;
 std::array<int64_t, 128> new_failure_times{}, process_times{};
 size_t new_time_count = 0, process_time_count = 0;
 Resources resources;
+JpegStats jpeg_stats;
 std::atomic<size_t> new_size{0};
 size_t new_nth = 0, new_count = 0;
 bool new_worker_only = false;
@@ -83,6 +87,24 @@ extern "C" void* __wrap__Znam(size_t bytes) {
 }
 
 namespace rodakos_test::display_service_host {
+void RecordInfoLog(const char*, const char* format, ...) {
+    constexpr char kStatsPrefix[] = "JPEG stats:";
+    if (std::strncmp(format, kStatsPrefix, sizeof(kStatsPrefix) - 1) != 0) return;
+    char line[256];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    JpegStats stats;
+    if (std::sscanf(line, "JPEG stats: attempts=%" SCNu32 " encoded=%" SCNu32 " failed=%" SCNu32
+                    " skipped=%" SCNu32, &stats.attempts, &stats.encoded, &stats.failed,
+                    &stats.skipped) != 4) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(host_mutex);
+    stats.windows = jpeg_stats.windows + 1;
+    jpeg_stats = stats;
+}
 void JoinTasks() {
     const auto deadline = Clock::now() + std::chrono::seconds(3);
     while (retirement_host::Snapshot().live_tasks != 0) {
@@ -105,6 +127,7 @@ void Reset() {
         std::abort();
     }
     resources = {};
+    jpeg_stats = {};
     new_size.store(0);
     new_nth = new_count = heap_size = heap_count = 0;
     new_time_count = process_time_count = 0;
@@ -142,6 +165,7 @@ void SetEncodedSize(size_t bytes) { std::lock_guard<std::mutex> lock(host_mutex)
 void AllowTaskCreation(bool allow) { retirement_host::SetCreationAllowed(allow); }
 void AllowAsync(bool allow) { std::lock_guard<std::mutex> lock(host_mutex); allow_async = allow; }
 Resources Snapshot() { std::lock_guard<std::mutex> lock(host_mutex); return resources; }
+JpegStats LatestJpegStats() { std::lock_guard<std::mutex> lock(host_mutex); return jpeg_stats; }
 std::vector<int64_t> NewFailureTimes() {
     std::lock_guard<std::mutex> lock(host_mutex);
     return {new_failure_times.begin(), new_failure_times.begin() + new_time_count};

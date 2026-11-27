@@ -10,6 +10,7 @@
                "PLAY_FILLED", "PAUSE_FILLED", "REFRESH", "NOTIFICATIONS"]}
   ],
   "icons": {
+    "ADD": "add-outline",
     "ALARM": "alarm-outline",
     "ARROW_DOWN": "arrow-down-outline",
     "ARROW_LEFT": "arrow-back-outline",
@@ -42,6 +43,7 @@
     "KEY": "key-outline",
     "LIGHT": "bulb-outline",
     "LINK": "link-outline",
+    "LIST": "list-outline",
     "LOCK": "lock-closed-outline",
     "MICROPHONE": "mic-outline",
     "MOON": "moon-outline",

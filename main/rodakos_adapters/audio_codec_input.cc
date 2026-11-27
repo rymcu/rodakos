@@ -1,4 +1,5 @@
 #include "rodakos_adapters/audio_codec_input.h"
+#include "rodakos_adapters/i2c_bus_guard.h"
 
 #include <dev_audio_codec.h>
 #include <esp_board_manager.h>
@@ -66,7 +67,10 @@ bool AudioCodecInput::InitLocked() {
     ret = esp_board_manager_get_device_handle(kAudioAdcDeviceName, &adc_handle_);
     if (ret != ESP_OK || adc_handle_ == nullptr) {
         ESP_LOGE(TAG, "Failed to get audio ADC handle (%s)", esp_err_to_name(ret));
-        esp_board_manager_deinit_device_by_name(kAudioAdcDeviceName);
+        {
+            I2cBusAccessLock i2c_lock;
+            esp_board_manager_deinit_device_by_name(kAudioAdcDeviceName);
+        }
         adc_handle_ = nullptr;
         return false;
     }
@@ -84,7 +88,11 @@ void AudioCodecInput::Deinit() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     CloseLocked();
     if (initialized_) {
-        const esp_err_t ret = esp_board_manager_deinit_device_by_name(kAudioAdcDeviceName);
+        esp_err_t ret = ESP_OK;
+        {
+            I2cBusAccessLock i2c_lock;
+            ret = esp_board_manager_deinit_device_by_name(kAudioAdcDeviceName);
+        }
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Audio ADC release failed: %s", esp_err_to_name(ret));
         }
