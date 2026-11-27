@@ -43,6 +43,13 @@ struct CameraCaptureOutcome {
 
 const char* CameraCaptureFailureStageName(CameraCaptureFailureStage stage);
 
+enum class FrameCopyStatus : uint8_t {
+    kUpdated,
+    kUnchanged,
+    kUnavailable,
+    kAllocationFailed,
+};
+
 struct CameraFrame {
     int width = 0;
     int height = 0;
@@ -84,6 +91,7 @@ public:
     }
     void StopPreview() { StopPreview(PreviewOwner::kLocal); }
     bool GetLatestFrame(CameraFrame& frame);
+    FrameCopyStatus CopyLatestFrameIfNewer(uint32_t previous_sequence, CameraFrame& destination);
     // Encodes the newest RGB565 preview frame as a standalone JPEG buffer.
     // The caller owns the returned bytes and may forward them to a transport.
     bool CaptureJpeg(std::vector<uint8_t>& jpeg, uint32_t* sequence = nullptr,

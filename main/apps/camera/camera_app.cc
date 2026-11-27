@@ -14,8 +14,6 @@
 #include <cerrno>
 #include <cinttypes>
 #include <cstdlib>
-#include <cstdio>
-#include <cstring>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -387,8 +385,8 @@ void CameraApp::DestroyUi() {
     notice_ = notice_title_ = notice_detail_ = retry_button_ = nullptr;
     status_hide_after_ms_ = 0;
     if (calibration_) calibration_->Stop();
-    std::vector<uint8_t>().swap(preview_pixels_);
-    std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
+    preview_frame_ = {};
+    preview_dsc_ = {};
     displayed_sequence_ = 0;
     preview_ready_ = false;
 }
@@ -591,8 +589,8 @@ void CameraApp::UpdatePreview() {
         return;
     }
 
-    rodakos::CameraFrame frame;
-    if (!camera_->GetLatestFrame(frame)) {
+    const auto copy_status = camera_->CopyLatestFrameIfNewer(displayed_sequence_, preview_frame_);
+    if (copy_status == rodakos::FrameCopyStatus::kUnavailable) {
         const auto state = camera_->GetState();
         if (!state.preview_running && !state.last_error.empty()) {
             preview_ready_ = false;
@@ -608,32 +606,49 @@ void CameraApp::UpdatePreview() {
         }
         return;
     }
-    if (frame.sequence == displayed_sequence_) {
+    if (copy_status != rodakos::FrameCopyStatus::kUpdated) {
         return;
     }
+
+    const auto& frame = preview_frame_;
     if (frame.width <= 0 || frame.height <= 0 || frame.stride <= 0 || frame.rgb565.empty()) {
         return;
     }
 
-    const bool first_displayed_frame = displayed_sequence_ == 0;
+    const bool first_displayed_frame = !preview_ready_;
     preview_ready_ = true;
-    preview_pixels_ = std::move(frame.rgb565);
     displayed_sequence_ = frame.sequence;
 
-    std::memset(&preview_dsc_, 0, sizeof(preview_dsc_));
-    preview_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    preview_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
-    preview_dsc_.header.w = frame.width;
-    preview_dsc_.header.h = frame.height;
-    preview_dsc_.header.stride = frame.stride;
-    preview_dsc_.data = preview_pixels_.data();
-    preview_dsc_.data_size = preview_pixels_.size();
+    if (preview_dsc_.data != frame.rgb565.data() || preview_dsc_.header.w != frame.width ||
+        preview_dsc_.header.h != frame.height || preview_dsc_.header.stride != frame.stride ||
+        preview_dsc_.data_size != frame.rgb565.size() ||
+        lv_image_get_src(preview_image_) != &preview_dsc_) {
+        preview_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+        preview_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
+        preview_dsc_.header.w = static_cast<uint16_t>(frame.width);
+        preview_dsc_.header.h = static_cast<uint16_t>(frame.height);
+        preview_dsc_.header.stride = static_cast<uint16_t>(frame.stride);
+        preview_dsc_.data = frame.rgb565.data();
+        preview_dsc_.data_size = static_cast<uint32_t>(frame.rgb565.size());
+        lv_image_set_src(preview_image_, &preview_dsc_);
+        UpdatePreviewLayout();
+    }
+    lv_obj_invalidate(preview_image_);
 
-    lv_image_set_src(preview_image_, nullptr);
-    lv_image_set_src(preview_image_, &preview_dsc_);
+    if (first_displayed_frame) {
+        if (placeholder_label_ != nullptr) lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
+        if (!CaptureInFlight()) SetControlsEnabled(true);
+        ESP_LOGI(TAG, "Camera preview image updated: sequence=%" PRIu32, frame.sequence);
+    }
+}
 
-    const int32_t scale_w = (kPreviewBoxWidth * LV_SCALE_NONE) / frame.width;
-    const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / frame.height;
+void CameraApp::UpdatePreviewLayout() {
+    const int width = preview_dsc_.header.w;
+    const int height = preview_dsc_.header.h;
+    if (!preview_ready_ || preview_image_ == nullptr || width == 0 || height == 0) return;
+
+    const int32_t scale_w = (kPreviewBoxWidth * LV_SCALE_NONE) / width;
+    const int32_t scale_h = (kPreviewBoxHeight * LV_SCALE_NONE) / height;
     // Show the whole 4:3 frame: the 266x200 viewfinder matches the sensor aspect, so nothing is
     // cropped. Calibration uses 0.7x left-aligned (kCalibrationScale in camera_calibration_page.cc)
     // so its result panel fits to the right.
@@ -644,18 +659,10 @@ void CameraApp::UpdatePreview() {
     if (calibrating) {
         // LVGL scales around the centre of the unscaled image; offset so the scaled image's
         // left edge sits at x=0 of the preview box.
-        const lv_coord_t scaled_w = static_cast<lv_coord_t>(frame.width * scale / LV_SCALE_NONE);
-        lv_obj_align(preview_image_, LV_ALIGN_LEFT_MID, (scaled_w - frame.width) / 2, 0);
+        const lv_coord_t scaled_w = static_cast<lv_coord_t>(width * scale / LV_SCALE_NONE);
+        lv_obj_align(preview_image_, LV_ALIGN_LEFT_MID, (scaled_w - width) / 2, 0);
     } else {
         lv_obj_center(preview_image_);
-    }
-
-    if (placeholder_label_ != nullptr) {
-        lv_obj_add_flag(placeholder_label_, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (!CaptureInFlight()) SetControlsEnabled(true);
-    if (first_displayed_frame) {
-        ESP_LOGI(TAG, "Camera preview image updated: sequence=%" PRIu32, frame.sequence);
     }
 }
 

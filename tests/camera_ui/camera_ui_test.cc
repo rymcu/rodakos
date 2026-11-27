@@ -33,6 +33,9 @@ std::atomic<int> worker_async_attempts{0};
 std::atomic<int> worker_ui_writes{0};
 int timer_creations = 0;
 int fail_timer_creation = 0;
+const lv_obj_t* preview_target = nullptr;
+size_t preview_source_changes = 0;
+size_t preview_invalidations = 0;
 }
 extern "C" {
 lv_result_t __real_lv_async_call(lv_async_cb_t, void*);
@@ -45,6 +48,16 @@ void __real_lv_label_set_text(lv_obj_t*, const char*);
 void __wrap_lv_label_set_text(lv_obj_t* label, const char* text) {
     if (camera_test::capture_worker) ++camera_test::worker_ui_writes;
     __real_lv_label_set_text(label, text);
+}
+void __real_lv_image_set_src(lv_obj_t*, const void*);
+void __wrap_lv_image_set_src(lv_obj_t* image, const void* src) {
+    if (image == camera_test::preview_target) ++camera_test::preview_source_changes;
+    __real_lv_image_set_src(image, src);
+}
+void __real_lv_obj_invalidate(const lv_obj_t*);
+void __wrap_lv_obj_invalidate(const lv_obj_t* obj) {
+    if (obj == camera_test::preview_target) ++camera_test::preview_invalidations;
+    __real_lv_obj_invalidate(obj);
 }
 lv_timer_t* __real_lv_timer_create(lv_timer_cb_t, uint32_t, void*);
 lv_timer_t* __wrap_lv_timer_create(lv_timer_cb_t callback, uint32_t period, void* data) {
@@ -112,6 +125,7 @@ struct Fixture {
         descriptor.create = [] { return std::make_unique<CameraApp>(); };
     }
     ~Fixture() {
+        camera_test::preview_target = nullptr;
         camera.ReleaseGates();
         camera_test::JoinTasks();
         host.CloseCurrent();
@@ -130,6 +144,11 @@ struct Fixture {
     bool StatusVisible() { return !lv_obj_has_flag(app().status_label_, LV_OBJ_FLAG_HIDDEN); }
     bool Disabled() { return lv_obj_has_state(app().capture_button_, LV_STATE_DISABLED); }
     void Click() { lv_obj_send_event(app().capture_button_, LV_EVENT_CLICKED, nullptr); }
+    void TrackPreview() {
+        camera_test::preview_target = app().preview_image_;
+        camera_test::preview_source_changes = 0;
+        camera_test::preview_invalidations = 0;
+    }
     void Complete() {
         camera_test::JoinTasks();
         Pump(140);
@@ -221,6 +240,100 @@ RODAK_TEST("capture failure toast uses the attempt stage and native error despit
         RODAK_CHECK(status.x1 >= box.x1 && status.x2 <= box.x2);
         RODAK_CHECK(status.y1 >= box.y1 && status.y2 <= box.y2);
     }
+}
+
+RODAK_TEST("steady preview reuses the frame buffer and invalidates only when pixels update") {
+    Fixture f;
+    f.camera.frame_width = 320;
+    f.camera.frame_height = 240;
+    f.Create();
+    auto& app = f.app();
+    const auto* pixels = app.preview_dsc_.data;
+    RODAK_CHECK_EQ(app.preview_dsc_.data_size, 320U * 240 * 2);
+    RODAK_CHECK_EQ(pixels, app.preview_frame_.rgb565.data());
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(f.camera.frame_copies, 1U);
+    f.TrackPreview();
+
+    f.camera.frame_pixel_byte = 0xA4;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, 1U);
+    RODAK_CHECK_EQ(pixels[0], 0x58);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 0U);
+
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, 2U);
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(pixels[0], 0xA4);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 0U);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 1U);
+
+    f.camera.frame_width = 160;
+    f.camera.frame_height = 120;
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 1U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.w, 160U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.h, 120U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.stride, 320U);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 1U);
+}
+
+RODAK_TEST("preview allocation failure leaves the displayed image valid and retries the frame") {
+    Fixture f;
+    f.Create();
+    auto& app = f.app();
+    const auto* pixels = app.preview_dsc_.data;
+    const uint32_t displayed = app.displayed_sequence_;
+    f.TrackPreview();
+
+    f.camera.frame_width = 320;
+    f.camera.frame_height = 240;
+    f.camera.frame_pixel_byte = 0xA4;
+    f.camera.fail_frame_allocation = true;
+    ++f.camera.sequence;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(app.displayed_sequence_, displayed);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, pixels);
+    RODAK_CHECK_EQ(pixels[0], 0x58);
+    RODAK_CHECK_EQ(lv_image_get_src(app.preview_image_), &app.preview_dsc_);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 0U);
+    RODAK_CHECK_EQ(camera_test::preview_invalidations, 0U);
+    RODAK_CHECK_FALSE(f.Disabled());
+
+    f.camera.fail_frame_allocation = false;
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(app.displayed_sequence_, f.camera.sequence);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.w, 320U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.h, 240U);
+    RODAK_CHECK_EQ(app.preview_dsc_.header.stride, 640U);
+    RODAK_CHECK_EQ(app.preview_dsc_.data_size, 320U * 240 * 2);
+    RODAK_CHECK_EQ(app.preview_dsc_.data, app.preview_frame_.rgb565.data());
+    RODAK_CHECK_EQ(app.preview_dsc_.data[0], 0xA4);
+    RODAK_CHECK_EQ(f.camera.frame_allocations, 2U);
+    RODAK_CHECK_EQ(camera_test::preview_source_changes, 1U);
+    RODAK_CHECK(camera_test::preview_invalidations > 0);
+}
+
+RODAK_TEST("calibration repositions the current image without a new frame") {
+    Fixture f;
+    f.Create();
+    auto& app = f.app();
+    const auto viewfinder_scale = lv_image_get_scale(app.preview_image_);
+    const auto frame_copies = f.camera.frame_copies;
+
+    app.OpenCalibration();
+    RODAK_CHECK_EQ(lv_image_get_scale(app.preview_image_), LV_SCALE_NONE * 7 / 10);
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, frame_copies);
+
+    app.CloseCalibration();
+    RODAK_CHECK_EQ(lv_image_get_scale(app.preview_image_), viewfinder_scale);
+    app.UpdatePreview();
+    RODAK_CHECK_EQ(f.camera.frame_copies, frame_copies);
 }
 
 RODAK_TEST("slow capture accepts only one task and retains its result until UI polling") {

@@ -655,10 +655,22 @@ template <typename F> bool WaitFor(F&& predicate) {
 using AllocationThread = camera_host::AllocationThread;
 }
 
-RODAK_TEST("a zero-height camera frame skips JPEG allocation") {
+RODAK_TEST("a zero-height camera frame preserves the displayed pixels and skips JPEG allocation") {
     Fixture f;
     camera_host::zero_frame_height = true;
     f.Preview();
+
+    CameraFrame displayed{1, 1, 2, {0xab, 0xcd}, 123, 0};
+    const auto* const pixels = displayed.rgb565.data();
+    RODAK_CHECK(f.camera->CopyLatestFrameIfNewer(displayed.sequence, displayed) ==
+                FrameCopyStatus::kUnavailable);
+    RODAK_CHECK_EQ(displayed.rgb565.data(), pixels);
+    RODAK_CHECK_EQ(displayed.rgb565, (Bytes{0xab, 0xcd}));
+    RODAK_CHECK_EQ(displayed.width, 1);
+    RODAK_CHECK_EQ(displayed.height, 1);
+    RODAK_CHECK_EQ(displayed.stride, 2);
+    RODAK_CHECK_EQ(displayed.timestamp_us, 123);
+    RODAK_CHECK_EQ(displayed.sequence, 0u);
 
     camera_host::fail_allocation = true;
     std::string path;
@@ -667,6 +679,48 @@ RODAK_TEST("a zero-height camera frame skips JPEG allocation") {
     RODAK_CHECK(outcome.stage == Stage::kNoFrame);
     RODAK_CHECK_EQ(outcome.native_error, 0);
     RODAK_CHECK(path.empty());
+}
+
+RODAK_TEST("sequence-aware preview copies reuse storage and preserve the previous frame on OOM") {
+    Fixture f;
+    CameraFrame frame;
+    RODAK_CHECK(f.camera->CopyLatestFrameIfNewer(0, frame) == FrameCopyStatus::kUnavailable);
+    f.Preview();
+    RODAK_CHECK(f.camera->CopyLatestFrameIfNewer(0, frame) == FrameCopyStatus::kUpdated);
+    auto* const pixels = frame.rgb565.data();
+    const auto capacity = frame.rgb565.capacity();
+    const auto sequence = frame.sequence;
+    RODAK_CHECK(WaitFor([&] { return f.camera->GetState().frame_count > sequence; }));
+    camera_host::pause_frames = true;
+    RODAK_CHECK(WaitFor([] { return camera_host::frames_paused.load(); }));
+
+    camera_host::FailNew(SIZE_MAX, 1, 1, AllocationThread::kCaller);
+    const auto updated = f.camera->CopyLatestFrameIfNewer(sequence, frame);
+    const auto unchanged = f.camera->CopyLatestFrameIfNewer(frame.sequence, frame);
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(updated == FrameCopyStatus::kUpdated);
+    RODAK_CHECK(unchanged == FrameCopyStatus::kUnchanged);
+    RODAK_CHECK_NE(frame.sequence, sequence);
+    RODAK_CHECK_EQ(frame.rgb565.data(), pixels);
+    RODAK_CHECK_EQ(frame.rgb565.capacity(), capacity);
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 0u);
+
+    CameraFrame previous{1, 1, 2, {0xab, 0xcd}, 123, 0};
+    auto* const previous_pixels = previous.rgb565.data();
+    camera_host::FailNew(SIZE_MAX, 1, 1, AllocationThread::kCaller);
+    const auto failed = f.camera->CopyLatestFrameIfNewer(previous.sequence, previous);
+    camera_host::ClearNewFailures();
+    RODAK_CHECK(failed == FrameCopyStatus::kAllocationFailed);
+    RODAK_CHECK_EQ(camera_host::new_failures.load(), 1u);
+    RODAK_CHECK_EQ(previous.rgb565.data(), previous_pixels);
+    RODAK_CHECK_EQ(previous.rgb565, (Bytes{0xab, 0xcd}));
+    RODAK_CHECK_EQ(previous.width, 1);
+    RODAK_CHECK_EQ(previous.height, 1);
+    RODAK_CHECK_EQ(previous.stride, 2);
+    RODAK_CHECK_EQ(previous.timestamp_us, 123);
+    RODAK_CHECK_EQ(previous.sequence, 0u);
+    RODAK_CHECK(f.camera->CopyLatestFrameIfNewer(previous.sequence, previous) == FrameCopyStatus::kUpdated);
+    RODAK_CHECK_EQ(previous.rgb565, frame.rgb565);
 }
 
 RODAK_TEST("a preview allocation failure cannot replace an earlier shutter outcome") {

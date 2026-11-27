@@ -538,6 +538,32 @@ bool CameraService::GetLatestFrame(CameraFrame& frame) {
     }
 }
 
+FrameCopyStatus CameraService::CopyLatestFrameIfNewer(uint32_t previous_sequence,
+                                                      CameraFrame& destination) {
+    if (mutex_ == nullptr) return FrameCopyStatus::kUnavailable;
+
+    SemaphoreLock lock(mutex_);
+    if (!has_frame_ || latest_frame_.width <= 0 || latest_frame_.height <= 0 ||
+        latest_frame_.stride <= 0 || latest_frame_.rgb565.empty()) {
+        return FrameCopyStatus::kUnavailable;
+    }
+    if (latest_frame_.sequence == previous_sequence) return FrameCopyStatus::kUnchanged;
+
+    const size_t size = latest_frame_.rgb565.size();
+    try {
+        destination.rgb565.resize(size);
+    } catch (const std::bad_alloc&) {
+        return FrameCopyStatus::kAllocationFailed;
+    }
+    std::memcpy(destination.rgb565.data(), latest_frame_.rgb565.data(), size);
+    destination.width = latest_frame_.width;
+    destination.height = latest_frame_.height;
+    destination.stride = latest_frame_.stride;
+    destination.timestamp_us = latest_frame_.timestamp_us;
+    destination.sequence = latest_frame_.sequence;
+    return FrameCopyStatus::kUpdated;
+}
+
 std::string CameraService::last_error() const {
     if (mutex_ == nullptr) {
         return last_error_;

@@ -7,7 +7,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -41,6 +40,7 @@ private:
     void ReserveHomeReturnMemory();
     void ReleaseHomeReturnMemory();
     void UpdatePreview();
+    void UpdatePreviewLayout();
     void ConsumeCaptureResult();
     bool CaptureInFlight() const;
     void OnCaptureComplete(const rodakos::CameraCaptureOutcome& outcome,
@@ -82,7 +82,7 @@ private:
     lv_timer_t* preview_timer_ = nullptr;
     lv_timer_t* capture_result_timer_ = nullptr;
     lv_image_dsc_t preview_dsc_ = {};
-    std::vector<uint8_t> preview_pixels_;
+    rodakos::CameraFrame preview_frame_;
     uint32_t displayed_sequence_ = 0;
     bool preview_ready_ = false;
     bool preview_paused_for_transition_ = false;
