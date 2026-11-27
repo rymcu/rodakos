@@ -1,4 +1,5 @@
 #include "rodakos_adapters/camera_device.h"
+#include "rodakos_adapters/i2c_bus_guard.h"
 
 #include "sdkconfig.h"
 
@@ -66,7 +67,11 @@ esp_err_t CameraDevice::Acquire() {
 esp_err_t CameraDevice::Release() {
 #ifdef CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
     if (acquired_) {
-        const esp_err_t ret = esp_board_manager_deinit_device_by_name(kCameraDeviceName);
+        esp_err_t ret = ESP_OK;
+        {
+            I2cBusAccessLock i2c_lock;
+            ret = esp_board_manager_deinit_device_by_name(kCameraDeviceName);
+        }
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Camera device release failed: %s", esp_err_to_name(ret));
             release_retry_required_ = true;

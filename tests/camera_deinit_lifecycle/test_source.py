@@ -86,6 +86,11 @@ class DvpDeinitContractTest(unittest.TestCase):
         lookup_failure = self.body.index("ret != ESP_OK || cfg == NULL")
         self.assertLess(self.body.index("return -1", lookup_failure), self.body.index("free(device_handle)"))
 
+    def test_video_busy_invalid_state_retries_before_failing(self) -> None:
+        self.assertIn("ESP_ERR_INVALID_STATE", self.body)
+        self.assertIn("vTaskDelay", self.body)
+        self.assertLess(self.body.index("ESP_ERR_INVALID_STATE"), self.body.index("if (ret != ESP_OK)"))
+
 
 class CameraDeviceRetryContractTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -117,6 +122,13 @@ class CameraDeviceRetryContractTest(unittest.TestCase):
         reset = self.release.index("acquired_ = false")
         self.assertLess(self.release.index("esp_board_manager_deinit_device_by_name"), reset)
         self.assertLess(reset, self.release.index("return ESP_OK"))
+
+    def test_release_serializes_with_shared_i2c_bus_guard(self) -> None:
+        self.assertIn("I2cBusAccessLock", self.release)
+        self.assertLess(
+            self.release.index("I2cBusAccessLock"),
+            self.release.index("esp_board_manager_deinit_device_by_name"),
+        )
 
 
 class CameraCaptureFakeContractTest(unittest.TestCase):

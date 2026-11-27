@@ -3,6 +3,7 @@
 #include "rodakos_adapters/wifi_config.h"
 #include "rodakos_adapters/file_service.h"
 #include "rodakos_adapters/audio_codec_input.h"
+#include "rodakos_adapters/i2c_bus_guard.h"
 #include "rodakos_adapters/qmi8658_motion_sensor.h"
 #include "phone_os/phone_system.h"
 #include "phone_os/phone_navigation.h"
@@ -250,7 +251,11 @@ void TouchPollTask(void* arg) {
     const TickType_t period = pdMS_TO_TICKS(20);
 
     while (touch->running) {
-        esp_err_t ret = esp_lcd_touch_read_data(touch->handle);
+        esp_err_t ret = ESP_OK;
+        {
+            rodakos::I2cBusAccessLock i2c_lock;
+            ret = esp_lcd_touch_read_data(touch->handle);
+        }
         bool pressed = false;
         uint8_t point_count = 0;
         uint16_t x = 0;
