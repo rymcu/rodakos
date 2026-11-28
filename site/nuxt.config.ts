@@ -67,7 +67,7 @@ export default defineNuxtConfig({
         {
           name: 'description',
           content:
-            '基于 ESP-IDF 6.0.2 与 LVGL 9.3 打造的开源 ESP32-S3 终端固件。在 320×240 触控屏上提供 16 款原生应用、离线唤醒与流式语音字幕、可信局域网免 USB 配网及不可变 Recovery 签名 OTA。'
+            '基于 ESP-IDF 6.0.2 与 LVGL 9.3 打造的开源 ESP32-S3 终端固件。在 320×240 触控屏上提供 16 款原生应用、离线 MultiNet 唤醒与逐帧语音字幕、免 USB 的 LAN SRP6a 配网及不可变 Recovery 签名 OTA。'
         },
         { property: 'og:type', content: 'website' },
         { property: 'og:title', content: 'RodakOS — 面向 ESP32-S3 的开源本地优先掌上 “Phone OS”' },

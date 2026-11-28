@@ -30,7 +30,7 @@ export const LANDING_COPY_EN: LandingCopy = {
     primaryCta: 'Explore on GitHub',
     secondaryCta: 'Try Protocol Lab',
     docsCta: 'Read Architecture Docs',
-    hint: 'Open firmware at rymcu/rodakos · 64 host ASan/UBSan test suites · Companion to the Rodak local workbench',
+    hint: 'Open firmware at rymcu/rodakos · 53 ASan/UBSan release suites + 224 contract fixtures · Companion to the Rodak workbench',
     previewTabs: [
       {
         id: 'home',
@@ -103,7 +103,7 @@ export const LANDING_COPY_EN: LandingCopy = {
     showcase: {
       realRenderBadge: 'Live Interactive Vector OS',
       demoDataNote:
-        'Both the front-shell prototype and 3D CAD enclosure follow real LVGL 9.3 layouts and device interactions: top pull-down for Control Center, horizontal swipes on Home/Calendar, POWER sleep, IO0 BOOT Home, and IO10 single/double/long press for Control Center / Smart / Lock.',
+        'Redrawn to real LVGL 9.3 layouts and palettes: pull down for Control Center, swipe Home/Calendar, and use POWER, IO0 (Home), and IO10 (single Control Center / double Smart / long Lock).',
       themeLabel: 'Switch firmware preset:',
       themeNames: {
         dark: 'Dark',
@@ -126,7 +126,7 @@ export const LANDING_COPY_EN: LandingCopy = {
     headline: 'Why RodakOS',
     title: 'Real embedded discipline inside 16 MB flash and 8 MB PSRAM',
     description:
-      'Built like a real operating system rather than a demo sketch: explicit HAL boundaries, predictable SRAM headroom, pinned LAN trust, and recovery-guarded updates.',
+      'Explicit HAL boundaries, predictable internal DMA headroom, pinned LAN trust, and recovery-guarded updates — each backed by reproducible host and hardware evidence.',
     items: [
       {
         id: 'shell',
@@ -171,10 +171,10 @@ export const LANDING_COPY_EN: LandingCopy = {
       {
         id: 'verified',
         icon: 'i-lucide-flask-conical',
-        badge: '64 Host Suites',
+        badge: '53+ Host Suites',
         title: 'Real LVGL 9.3 Host Regression & Hash-Checked Overlays',
         description:
-          '64 host test suites compile real UI, audio, MQTT, voice, and OTA code under Linux/WSL with ASan/UBSan leak checks. CMake verifies upstream hashes before applying managed-component patches.'
+          '65 test directories under tests/, with release checks running 53 C++ ASan/UBSan suites plus glyph and Python verifiers. CMake checks upstream hashes before applying managed-component patches.'
       }
     ]
   },
@@ -397,11 +397,12 @@ export const LANDING_COPY_EN: LandingCopy = {
     headline: 'Device Voice Pipeline & Open Protocols',
     title: 'From local wake word to frame-synced captions — governed by open contracts',
     description:
-      'RodakOS speaks open, machine-readable contracts (rodak-aiot/v1 and rodak-realtime-voice/v1) shipped with OpenAPI, AsyncAPI, JSON Schemas, 174 fixtures, and an interactive browser protocol lab.',
+      'Every control channel and audio frame is specified in open machine-readable contracts (rodak-aiot/v1 and rodak-realtime-voice/v1) with OpenAPI, AsyncAPI, JSON Schemas, 224 fixtures, a 14-chapter handbook, and a browser protocol lab.',
     diagramBadge: '5-Stage Firmware Pipeline',
     diagramNote:
       'While idle, only local MultiNet wake runs on ESP32-S3 with no voice WebSocket open. Full conversational turns and announcements require a paired Rodak server.',
     labCta: 'Open Protocol Lab',
+    handbookCta: 'Read 14-Chapter Handbook',
     stages: [
       {
         id: 'wake',
@@ -422,9 +423,9 @@ export const LANDING_COPY_EN: LandingCopy = {
         step: '02',
         title: 'Pinned Session',
         engine: 'Pinned WSS + HS256 JWT',
-        metric: '600s Auto-Refresh',
+        metric: 'Background Refresh',
         icon: 'i-lucide-lock',
-        summary: 'Claims exclusive audio focus and opens a pinned rodak-realtime-voice/v1 WebSocket, silently refreshing 600s tokens before expiry.',
+        summary: 'Claims exclusive audio focus and opens a pinned rodak-realtime-voice/v1 WebSocket, silently refreshing tokens in the background during the final 1/4 lifetime (60–300 s window).',
         highlights: [
           'Shares the exact server trust root used by HTTPS and MQTTS',
           'Cleanly stops any active remote Camera WebRTC stream before opening WSS',
@@ -466,7 +467,7 @@ export const LANDING_COPY_EN: LandingCopy = {
         engine: 'MQTT voice.announce',
         metric: 'Zero MCP Surface',
         icon: 'i-lucide-megaphone',
-        summary: 'Server-initiated voice.announce opens playback-only sessions. Firmware exposes zero MCP tools; volume and light run as correlated MQTT effects.',
+        summary: 'Server-initiated voice.announce opens playback-only sessions (implemented in source; service state-machine host test and hardware runs remain on the roadmap). Firmware exposes zero MCP tools; volume and light run as correlated MQTT effects.',
         highlights: [
           'MQTT callback only queues the announce request and ACKs promptly',
           'Volume and light effects bind to connection epochs without blind replay',
@@ -489,9 +490,9 @@ export const LANDING_COPY_EN: LandingCopy = {
       },
       {
         icon: 'i-lucide-file-code-2',
-        title: 'Machine-Readable Contracts & 174 Fixtures',
+        title: 'Machine-Readable Contracts & 224 Fixtures',
         description:
-          'OpenAPI, AsyncAPI, and JSON Schemas live under contracts/ with valid and invalid fixtures you can inspect and test live in the browser Protocol Lab.'
+          'OpenAPI, AsyncAPI, and JSON Schemas live under contracts/ with 224 valid and invalid fixtures you can inspect and test live in the browser Protocol Lab.'
       }
     ]
   },
@@ -604,7 +605,7 @@ export const LANDING_COPY_EN: LandingCopy = {
       }
     ],
     enclosureImageCaption:
-      'Parametric exploded assembly and 15° desktop cradle render from BigSmart-Open/enclosure (build123d B-rep verified).',
+      'Parametric exploded assembly and 15° desktop cradle render from BigSmart-Open/enclosure/v6_parametric (build123d B-rep verified).',
     enclosureImageAlt:
       'Exploded assembly and 15-degree desktop cradle render of the parametric build123d RodakOS enclosure.'
   },
@@ -640,7 +641,7 @@ export const LANDING_COPY_EN: LandingCopy = {
         'generate_board_config.ps1 owns Board Manager generation and path normalization',
         'flash_and_test.ps1 hashes Recovery before refreshing only otadata and ota_0',
         'Offline production signing keeps private keys completely off the build host',
-        '64 host suites run under WSL/Linux with ASan/UBSan and no physical board required'
+        '53 ASan/UBSan C++ suites plus Python checks run under WSL/Linux without hardware'
       ],
       primaryLabel: 'Read Build & Flash Guide',
       primaryTo: SITE_LINKS.docsFlash,
@@ -662,8 +663,8 @@ export const LANDING_COPY_EN: LandingCopy = {
 # 3. Verify partition table + Recovery hash, then refresh without erasing NVS
 .\\flash_and_test.ps1 -Port COM3 -VerifyOnly
 .\\flash_and_test.ps1 -Port COM3 -NoMonitor`,
-      hostTestsCode: `# Run any host UI or model suite under WSL Debian / Linux
-cmake -S /mnt/d/workspace/rodakos/tests/home_ui \\
+      hostTestsCode: `# Run any host UI or model suite from the repo root under WSL Debian / Linux
+cmake -S tests/home_ui \\
       -B ~/.cache/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build ~/.cache/rodakos-home-ui
 ctest --test-dir ~/.cache/rodakos-home-ui --output-on-failure
@@ -674,14 +675,14 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
       firmwareNote:
         'For the first migration onto the Recovery layout, pass -Erase explicitly (.\\flash_and_test.ps1 -Port COM3 -Erase -NoMonitor). Daily incremental edits use idf.py build.',
       hostTestsNote:
-        'Host suites validate 64 UI, model, audio, voice, MQTT, and OTA targets under sanitizers, while hardware evidence remains authoritative for physical gates.'
+        'Release host checks execute 53 C++ ASan/UBSan suites plus glyph and Python verifiers (65 test dirs under tests/); hardware evidence remains authoritative for physical gates.'
     },
     copyLabel: 'Copy',
     copiedLabel: 'Copied',
     readinessTitle: 'Release Readiness & Open Production Gates',
     readinessBadge: 'Production Release: NO_GO',
     readinessDesc:
-      'v0.1.6 passes hardware checks for Home, local wake, realtime voice, synced captions, LAN SRP6a onboarding, WebRTC streaming, and software-reset OTA matrices. Production release stays transparently NO_GO until these 3 physical gates close:',
+      'On the v0.1.6 source baseline, Home, local wake, realtime voice, synced captions & inbox, LAN SRP6a onboarding, WebRTC streaming, and software-reset OTA matrices each have dated BigSmart candidate records. Production release stays NO_GO until these 3 physical gates close:',
     readinessGates: [
       {
         issue: '#30',
@@ -717,7 +718,7 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
         label: 'Why is production release still marked NO_GO? Can makers flash it today?',
         icon: 'i-lucide-clipboard-check',
         content:
-          'Yes — makers and firmware developers can build and run v0.1.6 today. Keeping production release at NO_GO reflects strict release discipline: we will not declare production readiness until offline production signing (#30), physical power-cut testing (#29), and an 8-hour ordinary-build soak (#28) have dated hardware evidence.'
+          'Yes — makers and firmware developers can build and run the v0.1.6 baseline today (covered by 53 ASan/UBSan release suites and dated candidate hardware runs). Keeping production release at NO_GO reflects strict release discipline: we will not declare production readiness until offline production signing (#30), physical power-cut testing (#29), and an 8-hour ordinary-build soak (#28) have dated hardware evidence.'
       },
       {
         label: 'Why must I use flash_and_test.ps1 instead of root idf.py flash?',
@@ -740,7 +741,7 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
     ],
     ctaTitle: 'Own every line of firmware and every pixel on your desk companion',
     ctaDescription:
-      'Clone rymcu/rodakos to run all 64 host tests locally, browse the architecture docs, or try the interactive protocol lab in your browser.',
+      'Clone rymcu/rodakos to run all 53 ASan/UBSan host release suites locally, read the 14-chapter protocol handbook, or try the interactive protocol lab in your browser.',
     primaryCta: 'Explore on GitHub',
     secondaryCta: 'Read Documentation',
     tertiaryCta: 'Open Protocol Lab'

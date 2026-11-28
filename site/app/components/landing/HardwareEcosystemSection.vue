@@ -84,7 +84,7 @@ const enclosureImgSrc = computed(() => withBase('hardware/enclosure-exploded.web
           variant: 'soft'
         },
         {
-          label: 'BigSmart-Open / enclosure',
+          label: 'BigSmart-Open / v6_parametric',
           icon: 'i-simple-icons-github',
           to: SITE_LINKS.enclosure,
           target: '_blank',

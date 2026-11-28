@@ -23,8 +23,8 @@ const channels = computed(() => [
     accentClass: 'border-t-sky-500',
     badge: t('按需请求', 'On demand'),
     summary: t(
-      '身份引导、配对与 SRP6a 建信、600s 令牌刷新、消息中心快照/动作、OTA 下载、解绑',
-      'Bootstrap, pairing & SRP6a trust setup, 600s token refresh, inbox snapshots/actions, OTA download, unbind'
+      '身份引导、配对与 SRP6a 建信、到期前后台令牌刷新、消息中心快照/动作、OTA 下载、解绑',
+      'Bootstrap, pairing & SRP6a trust setup, background token refresh before expiry, inbox snapshots/actions, OTA download, unbind'
     )
   },
   {
