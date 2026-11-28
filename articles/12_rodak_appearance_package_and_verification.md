@@ -2,7 +2,7 @@
 
 > **参考规范**：本文基于仓库内的 `docs/appearance-customization.md`、`docs/appearance-verification.md` 与 `components/rodak_appearance/` 源码整理，补齐 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md) 中外设外观定制（开机动画、主屏壁纸与全局主题）的协议契约、RAP1 二进制格式及安全校验边界。
 
-> 验收证据按版本解读：仓库保存了[早期 COM3 无线资源采用与回退记录](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/appearance-verification.md)；它不代表当前 0.1.6 或其他设备已复验。宿主用例可证明编解码、验签、策略及 LVGL 生命周期，[实际触摸授权](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/appearance-customization.md#device-workflow-and-publisher-pinning)、无线下载、重启采用、慢 SD 卡时序与屏幕可读性仍须在选定构建上独立验证。
+> 验收证据按版本解读：仓库保存了[早期 COM3 无线资源采用与回退记录](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/appearance-verification.md)；它不代表当前 0.1.6 或其他设备已复验。宿主用例可证明编解码、验签、策略及 LVGL 生命周期，[实际触摸授权](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/appearance-customization.md#device-workflow-and-publisher-pinning)、无线下载、重启采用、慢 SD 卡时序与屏幕可读性仍须在选定构建上独立验证。
 
 ## 1. 整体定位与发布端公钥固定（Publisher Pinning）
 

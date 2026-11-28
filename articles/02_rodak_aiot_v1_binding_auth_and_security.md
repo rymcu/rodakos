@@ -29,7 +29,7 @@ sequenceDiagram
     Srv-->>Dev: status = confirmed + accessToken + unifiedMqtt + mqttConnectInfo + realtimeVoice
     Note over Dev: 通过 pending 标记机制，原子提交单一事务快照
     Dev->>MQTT: CONNECT (username=deviceKey, password=accessToken)
-    Dev->>MQTT: SUBSCRIBE shadow/desired, ota/notify, commands/+, pc_status
+    Dev->>MQTT: SUBSCRIBE shadow/desired, ota/notify, commands/+, pc_status (及可选 inbox/changed)
     Dev->>MQTT: PUBLISH telemetry, shadow/report
 ```
 
@@ -72,6 +72,8 @@ stateDiagram-v2
 | `POST /api/v1/aiot/devices/binding/requests/{requestId}/trust` | `Bearer requestToken` | **仅 HTTPS 可用**，用于 LAN Trust Setup 提交 SRP 证明。 |
 | `POST /api/v1/aiot/devices/auth/token` | 无鉴权（请求体带密钥） | 已绑定设备刷新 `accessToken`。 |
 | `POST /api/v1/aiot/devices/binding/unbind` | `Bearer accessToken` | 解除绑定，请求体必须为 `{}`。 |
+| `GET /api/v1/aiot/devices/inbox` | `Bearer accessToken` | **草案（§7.6）**：拉取消息中心有界快照（家庭共享通知与待办提醒，最新在前），走 Pin 模式固定 HTTPS 源站。 |
+| `POST /api/v1/aiot/devices/inbox/actions` | `Bearer accessToken` | **草案（§7.6）**：提交已读（`read`）、待办完成（`complete`）或提醒推迟（`snooze`）动作，携带 `opId` 与 `expectedRevision` 保证幂等。 |
 
 > **禁止使用的端点**：服务端虽保留了心跳、遥测、影子、命令拉取等 HTTP fallback 接口，但 RodakOS 并不使用；`POST /devices/register` 与 `/devices/activate` 属于历史迁移端点，**设备端严禁调用**。
 
@@ -91,7 +93,7 @@ stateDiagram-v2
 
 **核心解析规则（必须按两步检查）**：
 
-1. **先检查 HTTP 状态码**：只有当 `accessToken` 预检失败时，服务端才会返回 **HTTP 401**（此时应触发 Token 刷新逻辑）；除此之外，绝大多数业务错误（信封内 `code` 为 `400`–`503`）返回的 **HTTP 状态码仍然是 200**，且 `data` 为 `null`（仅 `/api/v1/aiot/appearance/` 外观资源路由除外）。
+1. **先检查 HTTP 状态码**：只有当 `accessToken` 预检失败时，服务端才会返回 **HTTP 401**（此时应触发 Token 刷新逻辑）；除此之外，绝大多数业务错误（信封内 `code` 为 `400`–`503`，例如消息中心用同一 `opId` 提交不同请求体时 Rodak 返回业务码 `409`）返回的 **HTTP 状态码仍然是 200**，且 `data` 为 `null`（仅 `/api/v1/aiot/appearance/` 外观资源路由除外）。
 2. **再检查信封 `code` 字段**：只有 `HTTP 200` **且** `code == 200` 才代表业务成功；切勿仅凭 HTTP 200 就直接解析 `data` 字段，否则会引发空指针或错误的状态跳转。
 
 ## 5. LAN Trust Setup（无 USB 局域网建信）

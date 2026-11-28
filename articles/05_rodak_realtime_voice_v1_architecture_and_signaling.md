@@ -2,7 +2,7 @@
 
 > **参考规范**：本文依据 [rodak-realtime-voice-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-realtime-voice-contract-v1.md) 与 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md) 整理，面向需要实现或联调实时语音协议的固件端、服务端及模拟器开发者。
 
-> 区分[描述符和会话事件](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/rodak-realtime-voice-contract-v1.md#61-turn-acceptance-and-progress-draft)：描述符保留 mcp 只是兼容标记，普通 RodakOS 会话声明 features.mcp: false，不使用该控制事件。turn.accepted 和 turn.progress 不加入描述符 events，而通过普通 session.open 的两个特性位协商（progress 依赖 accepted）；纯下行 Announce 不请求这两项。接受后可显示紫色等待灯；[进度在 Home 显示](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/voice-assistant.md#turn-progress-on-home)，过期或乱序被丢弃，不延长超时。
+> 区分[描述符和会话事件](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/rodak-realtime-voice-contract-v1.md#61-turn-acceptance-and-progress-draft)：描述符 `events` 保持固定的 12 项兼容事件名（保留 `mcp` 仅作兼容，普通 RodakOS 会话声明 `features.mcp: false`）。`turn.accepted` 和 `turn.progress`（§6.1）不在描述符声明，仅通过普通 `session.open` 协商（`turn_progress: 1` 依赖 `turn_accepted: 1`，纯下行 Announce 不请求）。`output.caption`（§6.2）则先由服务端在描述符 `features` 列出 `"output_caption"`，再由设备在 `session.open` 请求 `features.output_caption: 1`（普通与 Announce 会话均允许）。接受后亮紫色等待灯，450 ms 后在 [Shell 底部全局语音浮层](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/voice-assistant.md#reply-captions-and-turn-progress)显示进度并在播放回复时切换为字幕（已取代旧版 Home 顶栏进度），过期或乱序事件静默丢弃且不延长超时。
 
 ## 1. 协议定位、模块归属与历史隔离
 
@@ -26,9 +26,9 @@
 | `uplink` / `downlink` | 上下行音频编解码参数 | 规定 Opus 采样率、声道数与帧长。 |
 | `limits` | `maxAudioFrameBytes`、`maxControlBytes` | 约束单帧音频与单条控制 JSON 的最大字节数。 |
 | `capabilities` | 7 项能力集合 | `session`、`audio-input`、`audio-output`、`speech-boundaries`、`interrupt`、`assistant-events`、`mcp`。 |
-| `events` | 12 个描述符兼容事件名 | `session.open`、`session.ready`、`input.start`、`input.stop`、`wake.detected`、`playback.abort`、`vad`、`output.start`、`output.stop`、`session.end`、`mcp`、`error`。 |
+| `events` | 12 个描述符兼容事件名 | `session.open`、`session.ready`、`input.start`、`input.stop`、`wake.detected`、`playback.abort`、`vad`、`output.start`、`output.stop`、`session.end`、`mcp`、`error`（旧固件会拒绝未知 `events` 名，故草案事件不加入该数组）。 |
 | `vadStrategies` / `preferredVadStrategy` | VAD 策略列表与首选策略 | 缺失 `vadStrategies` 时安全默认仅启用 `server-authoritative`。 |
-| `features` | 服务端特性字符串数组 | 不得包含任何历史遗留标记。 |
+| `features` | 服务端特性字符串数组（唯一，最多 32 项） | 当前允许 `"output_caption"`，表示服务端支持按需下发草案 `output.caption`（§6.2）；不得包含任何历史遗留标记。 |
 
 ### 2.2 建连时机与鉴权请求头
 
@@ -64,15 +64,16 @@
 每个 WebSocket 连接代次（`generation`）执行且仅执行一次握手：
 
 * **`session.open`（Device → Server）**：
-  * 包含 `protocol`、`protocolVersion`、`generation`、`vadStrategies`、`preferredVadStrategy`、`uplink`、`downlink` 以及 `features` 对象（布尔或数值标志，例如 `mcp: false`、`device_vad_epoch: 0`、`turn_accepted: 1`、`turn_progress: 1`）。
-  * 若为服务端主动播报会话，还需携带 `"announce": true` / `features.announce: true` 与 `"announceSeq": <N>`。
+  * 包含 `protocol`、`protocolVersion`、`generation`、`vadStrategies`、`preferredVadStrategy`、`uplink`、`downlink` 以及 `features` 对象（布尔或数值标志，例如 `mcp: false`、`device_vad_epoch: 0|1`、`turn_accepted: 0|1`、`turn_progress: 0|1`、`output_caption: 0|1`；缺省等同 `0`，服务端不得发送未协商的草案事件）。
+  * 仅当描述符 `features` 列出 `"output_caption"` 时，设备才在 `session.open` 中发送 `features.output_caption: 1`（普通唤醒会话与 Announce 会话均允许）。
+  * 若为服务端主动播报会话，还需携带 `features.announce: true` 与 `features.announceSeq: <N>`，且不携带 `turn_accepted` / `turn_progress`。
 * **`session.ready`（Server → Device）**：
   * 服务端返回一次匹配的 `session.ready`，包含匹配的连接 `generation`、`transport: "websocket"`、非空 `sessionId`、协商后的单声道 Opus `downlink` 参数以及可选的 `vadStrategy`（未提供时默认为 `server-authoritative`；若提供则必须在描述符已声明的策略列表内）。
   * **严格防重入**：重复或延迟到达的 `session.ready` 一律视为协议错误，绝不能重置正在进行的播放状态或音频序列号计数器。
 
 ## 5. 会话内控制事件全表
 
-握手完成后，设备端与服务端通过以下事件协同完成多轮对话、打断、状态反馈与错误处理：
+握手完成后，设备端与服务端通过以下事件协同完成多轮对话、打断、字幕与进度反馈及错误处理（含握手事件在内，`control-message.schema.json` 当前覆盖 **14 项**控制事件）：
 
 | 方向 | 事件名 | 关键字段与协议语义 |
 | :--- | :--- | :--- |
@@ -81,9 +82,10 @@
 | Device → Server | `input.stop` | `sessionId`，标识当前上行语音输入结束。 |
 | Device → Server | `playback.abort` | `sessionId`、`reason`（`user` / `wake-word` / `vad_detected`），可选 `playbackEpoch`。用于触发播报打断（barge-in）。 |
 | Device → Server | `vad` | `sessionId`、`state`（`start` / `end`）、`source`、正整数 `sequence`、`triggerMs`，可选 epoch。 |
-| Server → Device | `turn.accepted`（契约草案，RodakOS 已实现） | `sessionId`、正整数 `turnId`（每会话从 1 递增）。仅当 `session.open` 声明 `features.turn_accepted: 1` 时发送，表示服务端已决定回复该轮话语（静默、空识别或回声丢弃不发送）。 |
-| Server → Device | `turn.progress`（契约草案，RodakOS 已实现） | `sessionId`、`turnId`、正整数 `seq`（每轮从 1 递增）、`stage`（`thinking` / `tool` / `composing`），可选 `label`（≤32 Unicode 码点的固定文案，**严禁**包含工具名、参数或用户原话）。需 `features.turn_progress: 1` 且依赖 `turn_accepted: 1`。 |
-| Server → Device | `output.start` | `sessionId`，可选 `text` 与 `playbackEpoch`。收到后设备准备解码下行 RAV1 二进制 Opus 帧。 |
+| Server → Device | `turn.accepted`（契约草案 §6.1，端云已实现） | `sessionId`、正整数 `turnId`（每会话从 1 递增）。仅当 `session.open` 声明 `features.turn_accepted: 1` 时发送，表示服务端已决定回复该轮话语（静默、空识别或回声丢弃不发送）。 |
+| Server → Device | `turn.progress`（契约草案 §6.1，端云已实现） | `sessionId`、`turnId`、正整数 `seq`（每轮从 1 递增）、`stage`（`thinking` / `tool` / `composing`），可选 `label`（≤32 Unicode 码点的固定文案，**严禁**包含工具名、参数或用户原话）。需 `features.turn_progress: 1` 且依赖 `turn_accepted: 1`。 |
+| Server → Device | `output.start` | `sessionId`，可选 `text` 与 `playbackEpoch`。收到后设备准备解码下行 RAV1 二进制 Opus 帧；未协商 `output.caption` 时，短句 `text`（≤48 码点 / ≤192 UTF-8 字节）可作整轮兜底字幕。 |
+| Server → Device | `output.caption`（契约草案 §6.2，端云已实现） | `sessionId`、正整数 `playbackEpoch`、`captionSeq`（每轮从 1 递增）、`firstAudioSeq`、`lastAudioSeq`（`firstAudioSeq <= lastAudioSeq` 且同轮区间不重叠递增）、`text`（去首尾空白后非空，≤48 Unicode 码点且 ≤192 UTF-8 字节，仅含播报句，**严禁**含用户原话或工具信息）。仅当 `session.open` 声明 `features.output_caption: 1` 时在对应 `output.start` 与 `output.stop` 之间下发。 |
 | Server → Device | `output.stop` | `sessionId`，可选 `reason` 与 `playbackEpoch`。自然结束时表示没有更多下行音频，设备排空本地尾音后再进入下一轮；打断后的确认不应被误判为自然结束并截断已保留的插话。 |
 | Server → Device | `session.end` | `sessionId`，可选 `reason`（如 `goodbye-intent`、`wake-arbitration-lost`、`announce-finished`、`announce-expired`）。设备统一按普通会话结束处理并重新布防本地唤醒；注意 `goodbye` **不是**线级事件。 |
 | Server → Device | `error` | 可选 `sessionId`，必填非空 `code`、非空 `message`、布尔值 `retryable`（缺任一必填字段将被拒绝）。 |

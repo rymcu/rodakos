@@ -2,7 +2,7 @@
 
 > **参考规范**：本文基于仓库内的 `docs/esp-peer-integration.md`、`contracts/rodak-aiot/v1/` 推流指令示例以及 `main/phone_os/webrtc_*`、`remote_input_controller.*`、`display_control_ack_tracker.h` 源码整理，帮助开发者掌握 BigSmart 的 WebRTC DataChannel 推流、远程控制协议以及 ESP32-S3 内部内存排障要点。
 
-> 排查当前版本时，从 [Main health](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/TROUBLESHOOTING.md#internal-sram-pressure) 同时记录 internal_largest 与 dma_largest，在[相机启动、关闭](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/esp-peer-integration.md)及语音对话前后分别对照，不用总 PSRAM 代替 DMA 连续块。0.1.6 已包含常驻任务和 LVGL 的 PSRAM 调整；LCD/DVP 等 DMA 路径仍须按各自约束验收。
+> 排查当前版本时，从 [Main health](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/TROUBLESHOOTING.md#internal-sram-pressure) 同时记录 internal_largest 与 dma_largest，在[相机启动、关闭](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/esp-peer-integration.md)及语音对话前后分别对照，不用总 PSRAM 代替 DMA 连续块。0.1.6 已包含常驻任务和 LVGL 的 PSRAM 调整；LCD/DVP 等 DMA 路径仍须按各自约束验收。
 
 ## 1. 整体架构与 MQTT 信令协同
 
@@ -67,6 +67,8 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 > **为什么 Camera 必须有 20 秒建连看门狗？**
 > 当 DTLS 握手因 `MBEDTLS_ERR_SSL_ALLOC_FAILED` 异常重试时，`esp_peer` 主循环可能持续空转而不发出终态回调。20 秒截止时间略大于 Rodak 渲染层 15 秒首帧超时，既不误杀正常等待，又能确保超时后强制按 `CONNECT_FAILED` 释放 Peer 与相机。
+>
+> **屏幕分享首帧前的私密内容遮挡**：由于 `DisplayService` 采集包含 `lv_layer_top()` 在内的完整合成画面，无论只读共享还是开启 `screen-control`，`StartCapture` 会先置位 `capture_publishing_` 并在 LVGL 异步首帧刷新前调用 `RunBeforeFirstFrame()` 钩子，通知 `PhoneShell` 与当前应用立即隐藏全局语音字幕/进度浮层及消息中心（`MessagesApp`）正文，避免私密内容落入首帧 JPEG。
 
 ## 3. 远程输入控制协议（`screen-control` DataChannel）
 

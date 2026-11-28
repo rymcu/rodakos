@@ -2,7 +2,7 @@
 
 > **参考规范**：本文依据 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md)（§12–§14）与 [rymcu/rodakos](https://github.com/rymcu/rodakos) 仓库工具链整理，覆盖 OTA 全链路协同、固件签名打包、机器可读契约验证以及新人提 PR 前的自检清单。
 
-> 验收按产物分开：0.1.6 是[当前 PROJECT_VER](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/CMakeLists.txt)，不是已公开发行的 OTA 包。选定候选包时记录固件源码 SHA、包内 manifest 和主应用 SHA-256，区分 PR 源提交、CI 合成合并提交和实刷二进制；主机检查或验签通过不等于完成 Recovery 刷写、启动确认和云端结果回报。[发布前主机回归入口](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/tools/run_release_host_checks.sh)不替代真机。
+> 验收按产物分开：0.1.6 是[当前 PROJECT_VER](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/CMakeLists.txt)，不是已公开发行的 OTA 包。选定候选包时记录固件源码 SHA、包内 manifest 和主应用 SHA-256，区分 PR 源提交、CI 合成合并提交和实刷二进制；主机检查或验签通过不等于完成 Recovery 刷写、启动确认和云端结果回报。[发布前主机回归入口](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/tools/run_release_host_checks.sh)不替代真机。
 
 ## 1. OTA 协同升级全流程（§12）
 
@@ -72,12 +72,12 @@ sequenceDiagram
 
 开发者修改任何协议字段、JSON 序列化逻辑或服务端接口后，都应运行以下校验：
 
-1. **Python 契约一致性检查**：
+1. **Python 契约一致性检查**（当前覆盖 AIoT **32 个 Schema / 154 例** 与实时语音 **16 个 Schema / 70 例**，含新增的 `inbox-*`、`output-caption` 及用于校验有序数值字段的 `x-orderedFields` 扩展规则）：
    ```bash
    python3 tools/check_aiot_contract.py
    ```
 2. **固件宿主契约测试与单元测试（WSL / Linux，带 ASan/UBSan 内存检查）**：
-   * 契约夹具测试位于固件宿主测试 `contract_fixture_test.cc`。
+   * 契约夹具与模型测试位于 `tests/app_model/`（含 `contract_fixture_test.cc`、`inbox_model_test.cc`、`realtime_voice_contract_test.cc` 等），界面与播放链路测试位于 `tests/home_ui/`、`tests/voice_volume_service/`、`tests/display_service/` 等套件。
    * 单套宿主测试运行示例（以 `tests/app_model` 为例）：
      ```bash
      cmake -S tests/app_model -B ~/.cache/rodakos-app-model -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -101,5 +101,6 @@ sequenceDiagram
 | **凭证与安全** | `deviceSecret`、`requestToken`、`accessToken` 是否做到零日志输出、零 Shadow 写入？绑定成功后的凭证与配置是否采用 pending 标记原子提交？ |
 | **Pin 模式边界** | Pin 模式下是否强制使用 HTTPS / `mqtts` / `wss://`？Token 刷新返回 403/404 时，Pin 模式是否只上报 `credentials rejected` 而不自动重新配对？ |
 | **MQTT 与指令** | 未定义指令是否统一返回 `unsupported_command`？摄像头与屏幕 WebRTC 推流是否实现了互斥？音量是否仅通过 Shadow 控制而非 Command？ |
+| **消息中心（§7.6）** | 是否仅在服务端列出 `topics.inbox_changed` 且匹配 `deviceKey` 时才订阅？`inbox/changed` 是否不带正文？动作请求是否带 `opId`/`expectedRevision` 且遵守 `read`/`complete`/`snooze` 字段互斥？记录是否仅存内存、解绑即清空、且屏幕分享时遮挡正文？ |
 | **OTA 与证据** | `ota/progress` 的 `staged` 阶段是否使用了 QoS 1？下载后是否校验了 SHA-256 与 `rsa2048-sha256` 签名？音量/灯光回执是否如实标记 `physicalVerified: false`（L3）？ |
 | **契约与回归** | 是否通过 `python3 tools/check_aiot_contract.py`、`contract_fixture_test.cc` 及 `tools/run_release_host_checks.sh` 全量检查？ |

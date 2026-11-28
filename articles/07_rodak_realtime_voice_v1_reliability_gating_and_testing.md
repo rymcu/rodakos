@@ -2,7 +2,7 @@
 
 > **参考规范**：本文依据 [rodak-realtime-voice-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-realtime-voice-contract-v1.md) 整理，重点剖析高并发异步回调下的 4 重陈旧结果隔离机制、重连策略与看门狗超时设计，并提供完整的自动化契约测试与提 PR 自检清单。
 
-> 验收分三层：先验证 Schema／夹具与宿主状态机，再用串口注入验证传输、取消和回合状态，最后在固定的固件及服务端组合上验证真人声学路径。[高音量台架记录](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/voice-aec-integration.md#high-level-capture-and-delayed-afe-input-power-comparison)中，60／80／100 档无人说话共 14 次未误打断，另有 3 次注入打断成功；不是 14 次真人插话。真机仍要验证唤醒词后的首词、播放尾部插话、下一轮只回复一次及无人说话对照，并记录双方 SHA、包内应用哈希和音量。
+> 验收分三层：先验证 Schema／夹具与宿主状态机，再用串口注入验证传输、取消和回合状态，最后在固定的固件及服务端组合上验证真人声学路径。[高音量台架记录](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/voice-aec-integration.md#high-level-capture-and-delayed-afe-input-power-comparison)中，60／80／100 档无人说话共 14 次未误打断，另有 3 次注入打断成功；不是 14 次真人插话。真机仍要验证唤醒词后的首词、播放尾部插话、下一轮只回复一次及无人说话对照，并记录双方 SHA、包内应用哈希和音量。
 
 ## 1. 四重门控：彻底隔离陈旧回调与乱序音频
 
@@ -14,6 +14,10 @@
 | **第二重：会话标识** | `sessionId` | 握手后所有控制面事件必须精确匹配当前已协商的非空 `sessionId`。 |
 | **第三重：播放轮次** | `playbackEpoch` | 每次显式 `output.start` 的 `playbackEpoch` 必须递增，并与对应的 `output.stop` 匹配。**不可回退规则**：一旦本会话观测到显式 `playbackEpoch`，后续任何不带 epoch 的延迟 `output.start` 必须直接拒绝。 |
 | **第四重：音频帧序号** | RAV1 `sequence` | 每帧二进制音频的 32 位无符号序列号必须非零且**严格大于**上一帧序列号。 |
+
+> **`output.caption` 的门控与错误处理分界（`RealtimeVoiceSessionGate::AcceptCaption`）**：
+> * **静默丢弃（不报错误）**：未在 `session.open` 请求 `output_caption`、跨 `sessionId`/跨 `generation`、当前轮无显式 `playbackEpoch` 或轮次不匹配、非递增的 `captionSeq`、以及与上一条字幕帧区间重叠（`firstAudioSeq <= last_caption_last_audio_seq`），或对应帧已被播放任务写完。
+> * **协议错误（终止会话）**：报文结构畸形——包含未知字段、非正整数序号、`firstAudioSeq > lastAudioSeq`、或 `text` 为空/超 48 Unicode 码点/超 192 UTF-8 字节/非法 UTF-8。
 
 ## 2. 故障分类与自动重连策略
 
@@ -57,28 +61,30 @@
 
 ## 4. 契约校验与多层次测试体系
 
-`rodak-realtime-voice/v1` 的机器可读契约资产位于 `contracts/rodak-realtime-voice/v1/`，包含：
-* 每个控制事件的独立 JSON Schema；
-* 显式拒绝 XiaoZhi 键值的 `control-message` 联合体 Schema；
+`rodak-realtime-voice/v1` 的机器可读契约资产位于 `contracts/rodak-realtime-voice/v1/`（当前 **16 个 Schema / 70 例**），包含：
+* 每个控制事件的独立 JSON Schema（含新增的 `output-caption.schema.json`）；
+* 显式拒绝 XiaoZhi 键值的 `control-message` **14 项**事件联合体 Schema；
 * RAV1 帧 Schema 及以十六进制编码存储的二进制帧测试夹具。
 
 ### 4.1 自动化主机测试（无硬件运行）
 
 | 测试工具 / 套件 | 验证范围 |
 | :--- | :--- |
-| `python3 tools/check_aiot_contract.py` | 联合 AIoT 契约与实时语音契约进行跨文件一致性校验。 |
+| `python3 tools/check_aiot_contract.py` | 联合 AIoT 契约（32 Schema / 154 例）与实时语音契约（16 Schema / 70 例）做跨文件一致性校验，并通过新增的 `x-orderedFields` 校验 `firstAudioSeq <= lastAudioSeq`。 |
 | `tests/app_model/voice_contract_fixture_test.cc` | 向固件解析器灌入服务端事件与 RAV1 夹具，并将设备端生成的 `session.open`、`wake.detected`、`input.start`、`playback.abort` 与标准夹具做逐字节（JSON）比对。 |
-| `tests/app_model/realtime_voice_contract_test.cc` | 覆盖描述符校验、VAD 协商、RAV1 解析、代次隔离、`playbackEpoch`、重连策略及播报标志逻辑。 |
+| `tests/app_model/realtime_voice_contract_test.cc` | 覆盖描述符校验（含 `features: ["output_caption"]`）、VAD 协商、RAV1 解析、代次隔离、`playbackEpoch`、`output.caption` 门控与时间线、重连策略及播报标志逻辑。 |
 | `tests/app_model/voice_assistant_reconnect_coordinator_test.cc` | 专门验证重连协调器的退避、代次提交与取消逻辑。 |
+| `tests/voice_volume_service/` 与 `tests/home_ui/` | 分别经真实 `assistant_play` 播放任务验证按帧切换字幕，以及在真实 LVGL 9.3 上验证 `PhoneShell` 浮层让位与点击隐藏。 |
 
 服务端测试套件也会将实际生成的下行控制事件与 RAV1 二进制帧对照 `contracts/rodak-realtime-voice/v1/` 进行双向校验。
 
 ### 4.2 真机实测边界（Host Test 无法替代的部分）
 
-上述宿主单元测试**不会**实例化 `VoiceAssistantService` 或 ESP/FreeRTOS 底层传输层。因此涉及以下改动时，必须在 BigSmart 真机上结合仓库文档 `voice-assistant.md` 与 `voice-aec-integration.md` 完成实测验证：
+上述宿主单元测试**不会**实例化完整 ESP/FreeRTOS 底层传输与硬件音频链路。涉及以下改动时，必须在 BigSmart 真机上结合仓库文档 `voice-assistant.md` 与 `voice-aec-integration.md` 完成实测验证：
 * 主动播报（Announce）状态机与音频焦点抢占/恢复；
 * Stop / Deinit 时的异步取消与资源清理；
-* 打断或异常结束后的 Opus 解码器与音频管线重置。
+* 打断或异常结束后的 Opus 解码器与音频管线重置；
+* **回复字幕真机证据与缺口**：2026-11-27 在 BigSmart（COM4/COM5 开发签名包 + 支持草案的 Rodak）串口注入 PCM 联调中，一轮 4 句共 180 帧回复在 epoch 1 第 `1 / 28 / 69 / 132` 帧按写入切换字幕且无播放写失败；但**人耳可感知的音画偏差、打断时即时清字幕、屏幕分享首帧无字幕以及长时间流式回复**尚未完成真机验收。
 
 ## 5. 新人开发者提 PR 前自检清单
 
@@ -86,7 +92,7 @@
 | :--- | :--- |
 | **服务发现与安全** | `endpoint` 是否拒绝了 query、fragment、userinfo 与 `/xiaozhi`？Pin 模式是否校验 `wss://` 与固定 TLS 域名后再发送 Bearer Token？是否做到零日志打印 Token 与 `Authorization` 头？ |
 | **历史隔离** | 解析器是否拒绝 `hello`、`listen`、`tts`、`goodbye`、`type`、`session_id`？是否未复用历史 `xiaozhiSessionMachine`？ |
-| **控制面防御** | 入站控制 JSON 是否在解析前限制了最大 12 层嵌套与 `maxControlBytes`（固件硬限 64 KiB）？重复或延迟的 `session.ready` 是否按错误处理？`turn.progress.label` 是否确保 ≤32 码点且不含敏感原话/工具名？ |
+| **控制面防御与字幕** | 入站控制 JSON 是否限制最大 12 层嵌套与 `maxControlBytes`（固件硬限 64 KiB）？重复 `session.ready` 是否按错误处理？`turn.progress.label` 是否 ≤32 码点？`output.caption` 是否仅在描述符含 `output_caption` 且握手请求 `features.output_caption: 1` 后下发、正文 ≤48 码点且 ≤192 UTF-8 字节、零正文日志输出、协商后绝不回退 `output.start.text`？ |
 | **音频与 VAD** | RAV1 是否校验魔数、非零严格递增序列号、精确载荷长度与 `maxAudioFrameBytes`？`server-authoritative` 下是否抑制发送 `vad` 事件？ |
-| **门控与重连** | 是否严格执行 `generation`、`sessionId`、`playbackEpoch`、RAV1 序号四重门控？交互建立前失败及 Announce 会话是否确保不重连？`1002`/`4001` 是否禁止重试？ |
-| **超时与测试** | 是否实现 20 s 帧停滞超时与 130 s（服务端 120 s）首包超时？是否全部通过 `check_aiot_contract.py` 与三套 `tests/app_model/` 实时语音宿主测试？ |
+| **门控与重连** | 是否严格执行四重门控及 `AcceptCaption` 序/区间防重叠（乱序静默丢弃、畸形判协议错误）？交互建立前失败及 Announce 会话是否确保不重连？`1002`/`4001` 是否禁止重试？ |
+| **超时与测试** | 是否实现 20 s 帧停滞超时与 130 s（服务端 120 s）首包超时？是否全部通过 `check_aiot_contract.py` 与 `tests/app_model/`、`tests/voice_volume_service/`、`tests/home_ui/` 宿主测试？ |
