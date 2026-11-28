@@ -1,6 +1,7 @@
 #pragma once
 
 #include "phone_os/battery_monitor.h"
+#include "phone_os/inbox_summary.h"
 #include "phone_os/voice_turn_progress.h"
 #include <functional>
 
@@ -16,6 +17,7 @@ class ButtonBindingService;
 class CameraService;
 class DeviceCloudConfigService;
 class FileService;
+class InboxService;
 class LanOnboardingService;
 class LightService;
 class MotionService;
@@ -105,6 +107,21 @@ public:
     void SetCamera(rodakos::CameraService* camera) { camera_ = camera; }
     rodakos::CameraService* camera() { return camera_; }
 
+    void SetInbox(rodakos::InboxService* inbox) { inbox_ = inbox; }
+    rodakos::InboxService* inbox() { return inbox_; }
+    void SetInboxSummary(rodakos::InboxSummaryProvider* provider) { inbox_summary_ = provider; }
+    rodakos::InboxSummaryProvider* inbox_summary() { return inbox_summary_; }
+
+    // True while a WebRTC display share captures the screen. Shell overlays and the message
+    // center hide assistant and message text during any share, view-only or with control.
+    void SetScreenShareProbe(std::function<bool()> probe) { screen_share_probe_ = std::move(probe); }
+    bool IsScreenShareActive() const { return screen_share_probe_ && screen_share_probe_(); }
+    // True while a share also holds the screen-control grant (remote taps reach the UI).
+    void SetRemoteControlProbe(std::function<bool()> probe) {
+        remote_control_probe_ = std::move(probe);
+    }
+    bool IsRemoteControlActive() const { return remote_control_probe_ && remote_control_probe_(); }
+
     void SetDeviceCloudUnboundCallback(std::function<void()> callback) {
         device_cloud_unbound_callback_ = std::move(callback);
     }
@@ -146,6 +163,10 @@ private:
     rodakos::WakeOnLanService* wake_on_lan_ = nullptr;
     rodakos::WebFileSystemService* web_files_ = nullptr;
     rodakos::CameraService* camera_ = nullptr;
+    rodakos::InboxService* inbox_ = nullptr;
+    rodakos::InboxSummaryProvider* inbox_summary_ = nullptr;
+    std::function<bool()> screen_share_probe_;
+    std::function<bool()> remote_control_probe_;
     rodakos::SetupQrScanService* setup_qr_scan_ = nullptr;
     std::function<void()> device_cloud_unbound_callback_;
     std::function<void()> device_cloud_bound_callback_;

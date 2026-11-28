@@ -75,6 +75,13 @@ bool PhoneUi::IsPhysicalInput() const {
            physical_input_callback_(physical_input_user_data_);
 }
 
+bool PhoneUi::IsToastVisible() const {
+    // The toast belongs to the screen that was active when it was created; an app switch deletes
+    // that screen's children, so the pointer may be stale.
+    return toast_ != nullptr && lv_obj_is_valid(toast_) &&
+           !lv_obj_has_flag(toast_, LV_OBJ_FLAG_HIDDEN);
+}
+
 void PhoneUi::ShowToast(const char* message, int duration_ms) {
     PhoneUiLock lock(*this);
     if (!lock.locked()) {

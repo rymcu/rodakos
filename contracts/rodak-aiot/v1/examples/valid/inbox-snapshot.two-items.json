@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "inboxRevision": 12,
+  "unreadCount": 2,
+  "items": [
+    {
+      "noticeId": "n-7c1e",
+      "kind": "todo",
+      "title": "给阳台的花浇水",
+      "summary": "今天 18:30",
+      "body": "每周三和周六浇一次。",
+      "createdAt": 1795000000,
+      "unread": true,
+      "revision": 3,
+      "todo": {
+        "taskId": "t-31",
+        "occurrenceId": "o-31-20261127",
+        "state": "open",
+        "dueAt": 1795003600
+      }
+    },
+    {
+      "noticeId": "n-7c1f",
+      "kind": "notice",
+      "title": "照片整理完成",
+      "summary": "已整理 128 张照片",
+      "createdAt": 1794990000,
+      "unread": true,
+      "revision": 1
+    }
+  ]
+}

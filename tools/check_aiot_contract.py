@@ -69,6 +69,7 @@ def load_json(path: pathlib.Path):
 #   x-preferredInList: {value, list}  object[value] is one of object[list]
 #   x-rav1: {maxPayloadBytes}    hex RAV1 frame: the length field equals the payload length
 #   x-noControlAfterTrim: true   after JavaScript trim(), no C0 control or DEL remains
+#   x-orderedFields: [a, b, ...] when present, the numeric fields are in non-decreasing order
 #   (x-endpointMatches also checks sslEndpoint: "" without TLS, == endpoint with TLS)
 JS_WHITESPACE = "\t\n\v\f\r              " \
                 "    　﻿"
@@ -141,6 +142,11 @@ def extension_errors(schema, value, schemas, path="<root>"):
             yield f"{path}: RAV1 length field {declared} != payload {actual}"
         if actual > rule["maxPayloadBytes"]:
             yield f"{path}: RAV1 payload {actual} > {rule['maxPayloadBytes']}"
+    ordered = schema.get("x-orderedFields")
+    if ordered and isinstance(value, dict):
+        numbers = [value[name] for name in ordered if isinstance(value.get(name), (int, float))]
+        if any(later < earlier for earlier, later in zip(numbers, numbers[1:])):
+            yield f"{path}: {ordered} must not decrease"
     if schema.get("x-nonblankAfterTrim") and isinstance(value, str) and not js_trim(value):
         yield f"{path}: blank after trim"
     if schema.get("x-noControlAfterTrim") and isinstance(value, str) and \

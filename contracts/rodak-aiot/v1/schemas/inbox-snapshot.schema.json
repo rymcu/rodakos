@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/inbox-snapshot.schema.json",
+  "title": "Message center snapshot (data of GET /api/v1/aiot/devices/inbox)",
+  "description": "Draft. The newest records first. Devices keep at most 40 and fetch a full snapshot after boot, rebinding and every inbox/changed signal. unreadCount covers all records, also those beyond the list.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "inboxRevision",
+    "unreadCount",
+    "items"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "inboxRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "unreadCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "inbox-item.schema.json"
+      }
+    }
+  }
+}

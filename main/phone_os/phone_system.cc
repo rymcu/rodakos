@@ -74,6 +74,7 @@ bool PhoneSystem::RefreshTheme() {
         return false;
     }
     ui_.ResetInputState();
+    shell_.RefreshTheme();
     if (host_.RefreshCurrentTheme(context_)) {
         return true;
     }
@@ -111,6 +112,13 @@ bool PhoneSystem::Back() {
     if (!shell_.PrepareNavigation()) return false;
     if (host_.HandleBackRequest()) return true;
     return ReturnHome();
+}
+
+void PhoneSystem::HidePrivateContentNow() {
+    shell_.HidePrivateContentNow();
+    if (PhoneApp* app = host_.current_app()) {
+        app->OnScreenShareStarting();
+    }
 }
 
 bool PhoneSystem::Lock() {

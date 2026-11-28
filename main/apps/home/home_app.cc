@@ -47,6 +47,13 @@ constexpr lv_opa_t kIconPressedDarken = 26;
 constexpr int32_t kTileTapSlop = 10;
 constexpr int32_t kTileTapSlopSquared = kTileTapSlop * kTileTapSlop;
 constexpr int kBatteryRefreshTicks = 30;
+constexpr const char* kMessagesAppId = "messages";
+// The header has 14 px left padding; x is relative to that content box.
+// Only a status dot right after the clock, shown while something is unread. The Messages app icon
+// stays the ordinary entry; the dot is a quiet hint that also opens it.
+constexpr lv_coord_t kInboxEntryX = 58;
+constexpr lv_coord_t kInboxEntryWidth = 20;
+constexpr lv_coord_t kInboxDotSize = 8;
 
 const std::vector<rodakos::HomeAppIdMigration> kHomeAppIdMigrations;
 rodakos::HomePageSession g_home_page_session;
@@ -156,27 +163,13 @@ void ClockTimerCallback(lv_timer_t* timer) {
     }
 }
 
-void VoiceTurnTimerCallback(lv_timer_t* timer) {
+void InboxTimerCallback(lv_timer_t* timer) {
     auto* self = static_cast<HomeApp*>(lv_timer_get_user_data(timer));
     if (self != nullptr) {
-        self->UpdateVoiceTurnStatus();
+        self->UpdateInboxEntry();
     }
 }
 
-// Device text for a stage without a server label (contract section 6.1).
-const char* VoiceTurnStageText(rodakos::VoiceTurnStage stage) {
-    switch (stage) {
-        case rodakos::VoiceTurnStage::kThinking:
-            return "正在思考";
-        case rodakos::VoiceTurnStage::kTool:
-            return "正在处理";
-        case rodakos::VoiceTurnStage::kComposing:
-            return "正在组织回答";
-        case rodakos::VoiceTurnStage::kNone:
-        default:
-            return "已收到";
-    }
-}
 
 const char* BatteryIconForLevel(int level_percent, bool charging) {
     if (charging) {
@@ -602,19 +595,29 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     lv_obj_set_style_text_color(battery_label_, rodakos_theme_text_tertiary(), 0);
     lv_obj_set_style_text_font(battery_label_, &phone_font_12, 0);
 
-    // Between the clock (about 40 px) and the 92 px status cluster; centering on the header would
-    // run into the cluster. Hidden until the server accepts a turn.
-    voice_turn_label_ = lv_label_create(header);
-    if (voice_turn_label_ != nullptr) {
-        lv_label_set_text(voice_turn_label_, "");
-        lv_label_set_long_mode(voice_turn_label_, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(voice_turn_label_, 148);
-        lv_obj_set_style_text_align(voice_turn_label_, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(voice_turn_label_, rodakos_theme_primary(), 0);
-        lv_obj_set_style_text_font(voice_turn_label_, &phone_font_12, 0);
-        lv_obj_align(voice_turn_label_, LV_ALIGN_LEFT_MID, 50, 0);
-        lv_obj_add_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(voice_turn_label_, LV_OBJ_FLAG_CLICKABLE);
+    // The clock ends near x=54 and the status cluster starts at x=216. The entry is centred in
+    // that gap, and its 28 px height is the whole header, so the Shell's 20 px pull-down band
+    // still starts above any press on it. Shown only when the message center is installed.
+    if (context.registry().FindById(kMessagesAppId) != nullptr) {
+        inbox_button_ = lv_button_create(header);
+        if (inbox_button_ != nullptr) {
+            lv_obj_remove_style_all(inbox_button_);
+            lv_obj_set_size(inbox_button_, kInboxEntryWidth, 24);
+            // The dot is tiny; widen the press area so a finger still hits it.
+            lv_obj_set_ext_click_area(inbox_button_, 8);
+            lv_obj_align(inbox_button_, LV_ALIGN_LEFT_MID, kInboxEntryX, 0);
+            lv_obj_set_style_bg_opa(inbox_button_, LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(inbox_button_, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(inbox_button_, InboxButtonEvent, LV_EVENT_CLICKED, this);
+            lv_obj_add_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
+            inbox_dot_ = lv_obj_create(inbox_button_);
+            lv_obj_remove_style_all(inbox_dot_);
+            lv_obj_set_size(inbox_dot_, kInboxDotSize, kInboxDotSize);
+            lv_obj_set_style_radius(inbox_dot_, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_opa(inbox_dot_, LV_OPA_COVER, 0);
+            lv_obj_center(inbox_dot_);
+            lv_obj_clear_flag(inbox_dot_, LV_OBJ_FLAG_CLICKABLE);
+        }
     }
     LogHomeResources("status-bar");
 
@@ -718,10 +721,10 @@ bool HomeApp::CreateUi(PhoneAppContext& context) {
     UpdateClock();
     clock_timer_ = lv_timer_create(ClockTimerCallback, 1000, this);
     LogHomeResources("footer-timer");
-    if (context.services().voice_turn_progress() != nullptr) {
-        // turn.progress steps can be 500 ms apart; the clock timer is too slow for them.
-        voice_turn_timer_ = lv_timer_create(VoiceTurnTimerCallback, 250, this);
-        UpdateVoiceTurnStatus();
+    if (inbox_button_ != nullptr) {
+        // Reads only a revision counter when nothing changed.
+        inbox_timer_ = lv_timer_create(InboxTimerCallback, 500, this);
+        UpdateInboxEntry();
     }
 
     if (collection_state_.kind == CollectionKind::kFolder) {
@@ -2413,9 +2416,9 @@ void HomeApp::DestroyUi() {
         lv_timer_delete(clock_timer_);
         clock_timer_ = nullptr;
     }
-    if (voice_turn_timer_ != nullptr) {
-        lv_timer_delete(voice_turn_timer_);
-        voice_turn_timer_ = nullptr;
+    if (inbox_timer_ != nullptr) {
+        lv_timer_delete(inbox_timer_);
+        inbox_timer_ = nullptr;
     }
     if (root_ != nullptr && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
@@ -2436,8 +2439,9 @@ void HomeApp::ResetUiPointers() {
     wifi_label_ = nullptr;
     battery_icon_ = nullptr;
     battery_label_ = nullptr;
-    voice_turn_label_ = nullptr;
-    voice_turn_text_.clear();
+    inbox_button_ = nullptr;
+    inbox_dot_ = nullptr;
+    inbox_revision_shown_ = UINT32_MAX;
     battery_refresh_ticks_ = 0;
     page_tiles_.clear();
     page_populated_.clear();
@@ -2477,27 +2481,37 @@ void HomeApp::UpdateClock() {
     battery_refresh_ticks_ = (battery_refresh_ticks_ + 1) % kBatteryRefreshTicks;
 }
 
-void HomeApp::UpdateVoiceTurnStatus() {
-    if (voice_turn_label_ == nullptr || context_ == nullptr) {
+void HomeApp::UpdateInboxEntry() {
+    if (inbox_button_ == nullptr || inbox_dot_ == nullptr || context_ == nullptr) {
         return;
     }
-    auto* provider = context_->services().voice_turn_progress();
-    const auto snapshot = provider != nullptr ? provider->GetTurnProgressSnapshot()
-                                              : rodakos::VoiceTurnProgressSnapshot{};
-    std::string text;
-    if (snapshot.awaiting_reply) {
-        text = snapshot.label.empty() ? VoiceTurnStageText(snapshot.stage) : snapshot.label;
-    }
-    if (text == voice_turn_text_) {
+    auto* provider = context_->services().inbox_summary();
+    const auto summary = provider != nullptr ? provider->GetInboxSummary() : rodakos::InboxSummary{};
+    if (summary.revision == inbox_revision_shown_) {
         return;
     }
-    voice_turn_text_ = std::move(text);
-    lv_label_set_text(voice_turn_label_, voice_turn_text_.c_str());
-    if (voice_turn_text_.empty()) {
-        lv_obj_add_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
+    inbox_revision_shown_ = summary.revision;
+    // Only a dot, no icon or count: the header stays calm and the Messages app shows the numbers.
+    if (summary.unread > 0) {
+        lv_obj_clear_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_obj_clear_flag(voice_turn_label_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(inbox_button_, LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_set_style_bg_color(inbox_dot_, rodakos_theme_error(), 0);
+}
+
+void HomeApp::InboxButtonEvent(lv_event_t* event) {
+    auto* self = static_cast<HomeApp*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->HasEditingTarget()) {
+        return;
+    }
+    // Launching here would destroy Home inside its own event callback.
+    self->QueueLaunch(kMessagesAppId);
+}
+
+bool HomeApp::WantsBottomAreaClear() const {
+    return HasEditingTarget() || layout_editor_ != nullptr ||
+           collection_state_.kind != CollectionKind::kNone || soft_keyboard_.IsVisible();
 }
 
 void HomeApp::UpdateBatteryStatus() {

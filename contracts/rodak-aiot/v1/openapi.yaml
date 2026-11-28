@@ -423,6 +423,53 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/TrueOrError"}
         "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/inbox:
+    get:
+      operationId: getInboxSnapshot
+      summary: Message center snapshot (draft, contract section 7.6)
+      description: |
+        Bounded list of household-shared notices and todo reminders, newest first. The device fetches
+        it after boot, after rebinding, after each inbox/changed signal and at most every 15 minutes
+        otherwise. Pinned HTTPS origin and the device access token, as for OTA.
+      security: [{accessToken: []}]
+      responses:
+        "200":
+          description: "data: inbox-snapshot, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties: {data: {$ref: "schemas/inbox-snapshot.schema.json"}}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/aiot/devices/inbox/actions:
+    post:
+      operationId: applyInboxAction
+      summary: Mark read, complete a todo or snooze a reminder (draft, contract section 7.6)
+      description: |
+        The server first looks up opId for the current binding and returns the stored outcome for a
+        repeat, then checks access, expectedRevision and occurrenceId, then commits atomically and
+        increases inboxRevision.
+      security: [{accessToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "schemas/inbox-action-request.schema.json"}
+      responses:
+        "200":
+          description: "data: inbox-action-result, or a business error"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - {$ref: "#/components/schemas/Success"}
+                      - properties: {data: {$ref: "schemas/inbox-action-result.schema.json"}}
+                  - {$ref: "#/components/schemas/BusinessError"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
   /api/v1/ota/check:
     get:
       operationId: checkOta

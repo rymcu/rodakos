@@ -954,11 +954,35 @@ VoiceTurnProgressSnapshot VoiceAssistantService::GetTurnProgressSnapshot() {
         snapshot.stage = turn_stage_;
         snapshot.label = turn_label_;
     }
+    if (phase_ == VoiceAssistantPhase::kSpeaking && !speaking_interrupted_ && !stopping_) {
+        snapshot.caption = caption_timeline_.current_text();
+    }
+    snapshot.revision = display_revision_;
     xSemaphoreGive(mutex_);
     return snapshot;
 }
 
+uint32_t VoiceAssistantService::GetVoiceDisplayRevision() {
+    if (mutex_ == nullptr) {
+        return 0;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    // The reply deadline can end inside the conversation policy without an event of its own.
+    const bool awaiting = conversation_policy_.waiting_for_reply();
+    if (awaiting != last_reported_awaiting_reply_) {
+        last_reported_awaiting_reply_ = awaiting;
+        BumpDisplayRevisionLocked();
+    }
+    const uint32_t revision = display_revision_;
+    xSemaphoreGive(mutex_);
+    return revision;
+}
+
 void VoiceAssistantService::SetPhaseLocked(VoiceAssistantPhase phase, const char* message) {
+    if (phase_ != phase) {
+        if (phase != VoiceAssistantPhase::kSpeaking) caption_timeline_.Reset();
+        BumpDisplayRevisionLocked();
+    }
     phase_ = phase;
     if (phase != VoiceAssistantPhase::kError) diagnostic_ = CloudDiagnosticCode::kReady;
     if (message != nullptr) {
@@ -1419,6 +1443,10 @@ void VoiceAssistantService::PlaybackTask() {
                 barge_in_policy_.StopPlayback();
                 playback_vad_started_ = false;
                 close = true;
+                if (caption_timeline_.active()) {
+                    caption_timeline_.Reset();
+                    BumpDisplayRevisionLocked();
+                }
                 if (!stopping_ && phase_ == VoiceAssistantPhase::kSpeaking &&
                     !speaking_interrupted_ && !announce_) {
                     follow_up_rearm_pending_ = true;
@@ -1464,6 +1492,13 @@ void VoiceAssistantService::PlaybackTask() {
             status_light_playback_level_ = light_level;
             status_light_playback_at_us_ = now_us;
             RecordPlaybackFrameLocked(frame.frame_duration_ms, now_us);
+            if (caption_timeline_.Advance(frame.playback_epoch, frame.audio_seq)) {
+                BumpDisplayRevisionLocked();
+                // The text is household reply speech; log its length only.
+                ESP_LOGI(TAG, "Caption shown: epoch=%" PRIu32 " seq=%" PRIu32 " bytes=%u",
+                         frame.playback_epoch, frame.audio_seq,
+                         static_cast<unsigned>(caption_timeline_.current_text().size()));
+            }
         }
         if (!written) {
             ++playback_write_failures_;
@@ -1486,6 +1521,11 @@ void VoiceAssistantService::ClearPlaybackLocked() {
     playback_queue_.Clear();
     playback_end_pending_ = false;
     ++playback_clear_generation_;
+    // An interrupted reply takes its caption with it at once (contract section 6.2).
+    if (caption_timeline_.active() || !caption_timeline_.current_text().empty()) {
+        caption_timeline_.Reset();
+        BumpDisplayRevisionLocked();
+    }
 }
 
 void VoiceAssistantService::WaitForPlaybackIdle() {
@@ -1716,6 +1756,9 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
                 break;
             }
             conversation_policy_.OnSpeakingStarted(esp_timer_get_time() / 1000);
+            caption_timeline_.Begin(playback_epoch_policy_.current_epoch(),
+                                    std::move(event.payload));
+            BumpDisplayRevisionLocked();
             playback_audio_events_ = 0;
             playback_decoded_frames_ = 0;
             playback_decoded_pcm_bytes_ = 0;
@@ -1758,6 +1801,8 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             VoicePlaybackQueue::Frame frame;
             frame.sample_rate = static_cast<uint32_t>(VoiceAssistantAudioCodec::kPlaybackSampleRate);
             frame.frame_duration_ms = frame_duration_ms;
+            frame.playback_epoch = event.playback_epoch;
+            frame.audio_seq = event.audio_sequence;
             frame.pcm = std::move(pcm);
             bool queued = false;
             xSemaphoreTake(mutex_, portMAX_DELAY);
@@ -1842,6 +1887,7 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             if (accepted) {
                 turn_stage_ = VoiceTurnStage::kNone;
                 turn_label_.clear();
+                BumpDisplayRevisionLocked();
             }
             xSemaphoreGive(mutex_);
             if (!accepted) {
@@ -1858,11 +1904,24 @@ void VoiceAssistantService::ProcessInbound(VoiceInboundEvent&& event) {
             if (accepted) {
                 turn_stage_ = event.turn_stage;
                 turn_label_ = std::move(event.payload);
+                BumpDisplayRevisionLocked();
             }
             xSemaphoreGive(mutex_);
             if (!accepted) {
                 ESP_LOGD(TAG, "Dropping turn.progress outside an accepted turn");
             }
+            break;
+        }
+        case VoiceInboundEventType::kCaption: {
+            // 契约 §6.2：只排队，不显示；播放任务把对应帧真正写进扬声器时才切换字幕。
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (!stopping_ && io_running_ && !speaking_interrupted_ &&
+                event.transport_generation == transport_generation_ &&
+                event.playback_epoch == playback_epoch_policy_.current_epoch()) {
+                caption_timeline_.AddCue(event.playback_epoch, event.caption_first_audio_seq,
+                                         event.caption_last_audio_seq, std::move(event.payload));
+            }
+            xSemaphoreGive(mutex_);
             break;
         }
         case VoiceInboundEventType::kMcp:

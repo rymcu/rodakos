@@ -166,8 +166,8 @@ Rules:
 - "Waiting for a reply" needs `turn.accepted` (contract §6.1). The device asks for it in every
   ordinary `session.open`. With a server that does not send it, the light goes from listening to
   speaking directly. `turn.progress` stages are not shown on the
-  light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Home
-  status bar shows them instead (see [turn progress on Home](#turn-progress-on-home-and-assistant)).
+  light: a single LED cannot make "thinking" and "calling a tool" useful to tell apart. The Shell
+  voice bar shows them instead (see [captions](#reply-captions-and-turn-progress)).
 - There is no light state for a slow server. A timer-based warning would fire on a late but healthy
   turn, and the device deadlines already end a dead one.
 - A background task (contract §6.1, long-running tasks) has no light state. The turn ends normally
@@ -195,13 +195,20 @@ Risk to check on hardware: GPIO43 is also UART0 TXD. The console uses USB-Serial
 no conflict at run time, but ROM boot output on UART0 can flash the LED at power-on. If it does,
 disable the ROM boot log.
 
-## Turn Progress on Home and Assistant
+## Reply Captions and Turn Progress
 
-> Status: implemented. Needs a server that sends `turn.progress` (contract §6.1).
+> Status: implemented. Progress needs a server that sends `turn.progress` (contract §6.1);
+> captions need `output.caption` (contract §6.2) or a short `output.start` `text`.
 
-Every ordinary `session.open` asks for `features.turn_progress: 1`. Between `turn.accepted` and
-`output.start`, the Home status bar shows one line between the clock and the Wi-Fi/battery icons,
-and the Assistant app shows the same text as the title of its status card:
+One Shell bar at the bottom of the screen shows the voice turn in every app. Before the reply it is
+a one-line progress text; while the reply plays it is a caption of up to two lines. Both are centred
+text on the same glass with no icon, so the bar only changes its words when the reply starts. It replaces the earlier progress label in the Home status bar,
+which now shows only a red unread dot after the clock.
+
+The bar is styled as frosted glass without a real backdrop blur, which LVGL 9.3 does not provide
+and which would cost a full-strip render during playback: a translucent fill tinted from the theme
+background with a lighter top, a white hairline edge and a soft shadow. Light themes get lighter
+glass and dark themes smoked glass.
 
 | What the device has | Text |
 | --- | --- |
@@ -210,30 +217,51 @@ and the Assistant app shows the same text as the title of its status card:
 | `stage: tool` | 正在处理 |
 | `stage: composing` | 正在组织回答 |
 | A `label` | the label, which replaces the stage text |
+| Reply audio playing | the caption of the sentence whose frame the speaker is playing |
 
 Rules:
 
-- The text shows only while `VoiceConversationPolicy` waits for a reply. When the device gives up on
-  the turn (130 s), plays the reply, is interrupted or ends the session, the line hides. The next
-  accepted turn starts again at 已收到. A step without a label does not keep the previous label.
+- Progress shows 450 ms after `turn.accepted` and only while `VoiceConversationPolicy` waits for a
+  reply. A fast reply (output.start within 450 ms) never shows it. The device gives up on the turn
+  after 130 s; an interrupt, an error or the end of the session hides it at once.
+- A caption shows without delay when the `assistant_play` task writes the first frame of its RAV1
+  range to the codec, so the text follows the speaker, not the network. It stays until the next
+  range starts and clears when the reply drains, on a barge-in, a local stop, an error or a
+  reconnect. Every `ClearPlaybackLocked` clears it.
+- With a negotiated `output.caption` the device never shows `output.start` `text`. Without it, an
+  `output.start` `text` of at most 48 code points shows from the first written frame; a longer one
+  is not shown.
 - The transport drops a `turn.progress` for another session or turn, with a `seq` that is not
-  greater than the last one, before `turn.accepted` or after `output.start`. A dropped event is not
-  an error. An announce session never asks for progress.
-- A malformed event (unknown field, unknown `stage`, `seq` 0, or a `label` that is blank or longer
-  than 32 code points after trim) is a protocol error, as for other control events. A label that is
-  not valid UTF-8 is malformed too. The device trims the label and shows a control character in
-  it as a space, so the label stays on one line; a long label ends in "…".
-- The label is not written to the log. The log line has the turn, `seq` and stage only.
-- Home reads `VoiceAssistantService::GetTurnProgressSnapshot()` through `VoiceTurnProgressProvider`
-  every 250 ms and changes the label only when the text changes.
-- The Assistant app reads `awaiting_reply`, `turn_stage` and `turn_label` from
-  `VoiceAssistantState` on its 500 ms poll and redraws only when the text changes. Its subtitle
-  is 等待<assistant name>回复…. Other apps do not show progress.
+  greater than the last one, before `turn.accepted` or after `output.start`. It drops a caption for
+  another session or epoch, with an old `captionSeq` or an overlapping range. A dropped event is not
+  an error. A malformed one is a protocol error, as for other control events.
+- Labels and caption text are trimmed, control characters become spaces, and neither is written to
+  the log. `Caption shown: epoch=… seq=… bytes=…` records each switch with the RAV1 sequence of the
+  written frame and the text length only.
+- The bar yields, in this order, to the Lock Screen and Control Center, a soft keyboard, an app
+  that asks for the bottom area (Camera, Home Arrange, an open Home folder), a visible toast, and
+  any WebRTC display share, and any other visible clickable `lv_layer_top()` surface such as an
+  app's confirmation dialog. A share captures the composed screen including `lv_layer_top()`, so
+  the bar hides for view-only and screen-control shares alike. When the blocker goes, only the
+  current sentence returns.
+- The bar takes its own taps so a covered Home icon is never opened through it. A tap hides the bar
+  until its text changes. It never scrolls text, to keep SPI traffic away from audio.
 
-Code: `ParseRealtimeVoiceTurnProgress` and `RealtimeVoiceSessionGate::AcceptTurnProgress` in
-`realtime_voice_contract.*`, the `kTurnProgress` case in `voice_assistant_service.cc`, and
-`HomeApp::UpdateVoiceTurnStatus`. Host tests: `tests/app_model` (gate, label and fixture cases),
-`tests/voice_volume_service` and `tests/home_ui`.
+Hardware evidence (2026-11-27, BigSmart on COM4, development package, Rodak with `output_caption`):
+one injected-PCM turn produced a four-sentence reply of 180 frames. The serial log showed four
+caption switches at written frames 1, 28, 69 and 132 of epoch 1, no playback write failure and a
+passing session gate. Not measured yet: the audible offset between speech and text, barge-in
+clearing, a display share during a caption, and long streamed replies.
+- The Shell reads `GetVoiceDisplayRevision()` on a 100 ms LVGL timer and copies the strings only
+  when the revision changed. The assistant bumps the revision on progress, captions and phase
+  changes; its own mutex is never held while the LVGL lock is taken.
+- The Assistant app keeps its own status title from `VoiceAssistantState`.
+
+Code: `ParseRealtimeVoiceCaption`, `RealtimeVoiceSessionGate::AcceptCaption`,
+`VoiceCaptionTimeline` (`voice_caption_timeline.*`), `VoiceOverlayModel` (`voice_overlay_model.*`)
+and `PhoneShell::UpdateVoiceOverlay`. Host tests: `tests/app_model` (contract, gate, timeline and
+overlay cases), `tests/voice_volume_service` (captions through the real playback task) and
+`tests/home_ui`.
 
 Hardware check (BigSmart, injected speech over USB serial, 2026-11-24):
 
@@ -242,7 +270,8 @@ Hardware check (BigSmart, injected speech over USB serial, 2026-11-24):
   later. The device dropped none of them and the reply played normally.
 - A device command and a server that plays a short sound right after acceptance: `output.start`
   arrives about 20 ms after `turn.accepted` and no progress is sent, so the Home line does not show.
-- The Home line itself was not inspected on the screen, and no `tool` step was observed.
+- The Home line itself was not inspected on the screen, and no `tool` step was observed. That
+  line no longer exists; the Shell bar that replaced it, and captions, have no hardware record yet.
 
 ## Audio Ownership
 

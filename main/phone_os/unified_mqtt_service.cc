@@ -38,6 +38,14 @@
 namespace rodakos {
 namespace {
 constexpr const char* TAG = "UnifiedMqtt";
+// Subscribed only when the server lists the topic: a broker whose ACL lacks it may drop the
+// whole connection on an unauthorized SUBSCRIBE. The device key must match, as for other topics.
+std::string InboxChangedTopic(const DeviceCloudConfig& config) {
+    const std::string expected = "devices/" + config.mqtt_device_key + "/inbox/changed";
+    return !config.mqtt_device_key.empty() && config.mqtt_topic_inbox_changed == expected
+               ? expected
+               : std::string();
+}
 constexpr int kTelemetryIntervalMs = 30 * 1000;
 constexpr int kConnectionRetryInitialMs = 2 * 1000;
 constexpr int kConnectionRetryMaxMs = 60 * 1000;
@@ -1651,6 +1659,7 @@ void UnifiedMqttService::OnConnected(uint32_t generation) {
     auto* service = this;
     if (service != nullptr && service->IsCurrentClientGeneration(generation)) {
         service->SubscribeTopics();
+        if (service->connected_handler_) service->connected_handler_();
         if (service->IsCurrentClientGeneration(generation)) {
             service->ota_update_.OnNetworkReady();
             if (service->appearance_ != nullptr) service->appearance_->OnNetworkReady();
@@ -1675,7 +1684,7 @@ void UnifiedMqttService::OnConnected(uint32_t generation) {
 void UnifiedMqttService::SubscribeTopics() {
     std::lock_guard<std::mutex> api_lock(client_api_mutex_);
     esp_mqtt_client_handle_t client = nullptr;
-    std::array<std::string, 4> topics;
+    std::array<std::string, 5> topics;
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
         if (!started_.load() || client_ == nullptr) {
@@ -1687,6 +1696,7 @@ void UnifiedMqttService::SubscribeTopics() {
             config_.mqtt_topic_ota_notify,
             config_.mqtt_topic_commands,
             config_.mqtt_topic_pc_status,
+            inbox_changed_handler_ ? InboxChangedTopic(config_) : std::string(),
         };
     }
     for (const std::string& topic : topics) {
@@ -1703,6 +1713,11 @@ void UnifiedMqttService::HandleMessage(const std::string& topic,
     const std::string shadow_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_shadow_desired);
     const std::string commands_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_commands);
     const std::string pc_status_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_pc_status);
+    const std::string inbox_topic = CopyTopic(&DeviceCloudConfig::mqtt_topic_inbox_changed);
+    if (inbox_changed_handler_ && !inbox_topic.empty() && topic == inbox_topic) {
+        inbox_changed_handler_(payload);
+        return;
+    }
     if (topic == ota_topic) {
         if (appearance_ != nullptr && appearance_->IsBusy()) {
             std::lock_guard<std::mutex> lock(mqtt_mutex_);

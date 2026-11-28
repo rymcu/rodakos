@@ -68,6 +68,8 @@ set(SOURCES
     "phone_os/mqtt_light_effect.cc"
     "phone_os/voice_conversation_policy.cc"
     "phone_os/voice_status_light_model.cc"
+    "phone_os/voice_caption_timeline.cc"
+    "phone_os/voice_overlay_model.cc"
     "phone_os/voice_status_light_service.cc"
     "phone_os/voice_barge_in_policy.cc"
     "phone_os/voice_mic_selector.cc"
@@ -102,6 +104,8 @@ set(SOURCES
     "phone_os/mqtt_credential_refresh_policy.cc"
     "phone_os/ota_update_service.cc"
     "phone_os/appearance_service.cc"
+    "phone_os/inbox_model.cc"
+    "phone_os/inbox_service.cc"
     "phone_os/unified_mqtt_service.cc"
     "phone_os/realtime_voice_transport.cc"
     "phone_os/realtime_voice_contract.cc"
@@ -155,6 +159,7 @@ set(SOURCES
     "apps/wol/wol_device_codec.cc"
     "apps/wol/wol_device_store.cc"
     "apps/wol/wol_app.cc"
+    "apps/messages/messages_app.cc"
     "apps/themes/themes_app.cc"
 )
 

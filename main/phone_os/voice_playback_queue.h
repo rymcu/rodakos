@@ -15,6 +15,10 @@ public:
     struct Frame {
         uint32_t sample_rate = 0;
         int frame_duration_ms = 0;
+        // The RAV1 frame it came from, so the playback task can follow captions
+        // (realtime voice contract section 6.2). Zero when unknown.
+        uint32_t playback_epoch = 0;
+        uint32_t audio_seq = 0;
         std::vector<int16_t> pcm;
     };
 

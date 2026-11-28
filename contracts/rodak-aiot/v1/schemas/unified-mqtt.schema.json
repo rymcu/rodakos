@@ -25,7 +25,8 @@
       "ota_notify": "ota/notify",
       "ota_progress": "ota/progress",
       "commands": "commands/+",
-      "pc_status": "pc_status"
+      "pc_status": "pc_status",
+      "inbox_changed": "inbox/changed"
     }
   },
   "required": [
@@ -124,6 +125,11 @@
         "pc_status": {
           "type": "string",
           "pattern": "^devices/.+/pc_status$"
+        },
+        "inbox_changed": {
+          "type": "string",
+          "pattern": "^devices/.+/inbox/changed$",
+          "description": "Draft (contract section 7.6). Present only when the broker ACL allows the message center signal; RodakOS subscribes only then."
         },
         "home_prefix": {
           "type": "string",

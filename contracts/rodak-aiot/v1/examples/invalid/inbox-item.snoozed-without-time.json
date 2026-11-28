@@ -1,0 +1,16 @@
+{
+  "noticeId": "n-7c1e",
+  "kind": "todo",
+  "title": "给阳台的花浇水",
+  "summary": "今天 18:30",
+  "body": "每周三和周六浇一次。",
+  "createdAt": 1795000000,
+  "unread": true,
+  "revision": 3,
+  "todo": {
+    "taskId": "t-31",
+    "occurrenceId": "o-31-20261127",
+    "state": "snoozed",
+    "dueAt": 1795003600
+  }
+}

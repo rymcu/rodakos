@@ -61,6 +61,12 @@ public:
     virtual bool OnThemeChanged(PhoneAppContext&) { return false; }
     virtual bool OnHomeRequested() { return false; }
     virtual bool OnBackRequested() { return false; }
+    // The Shell voice overlay covers the bottom of the screen. An app returns true while that
+    // area must stay visible and reachable, for example during editing or a camera preview.
+    virtual bool WantsBottomAreaClear() const { return false; }
+    // A display share captures its first frame next (LVGL task, lock held). An app that shows
+    // private text hides it now instead of on its next poll.
+    virtual void OnScreenShareStarting() {}
 };
 
 struct PhoneAppDescriptor {

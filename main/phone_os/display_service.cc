@@ -128,7 +128,10 @@ uint8_t* AllocAligned(size_t size) {
 }
 
 void RefreshDisplayForCapture(void* user_data) {
-    auto* display = static_cast<lv_display_t*>(user_data);
+    auto* service = static_cast<rodakos::DisplayService*>(user_data);
+    if (service == nullptr) return;
+    service->RunBeforeFirstFrame();
+    lv_display_t* display = service->display();
     if (display == nullptr) return;
     lv_obj_invalidate(lv_display_get_screen_active(display));
     lv_obj_invalidate(lv_display_get_layer_bottom(display));
@@ -324,7 +327,7 @@ DisplayService::~DisplayService() {
     {
         std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
         if (display_ != nullptr && lvgl_port_lock(0)) {
-            lv_async_call_cancel(&RefreshDisplayForCapture, display_);
+            lv_async_call_cancel(&RefreshDisplayForCapture, this);
             DetachWithLvglLock();
             lvgl_port_unlock();
         }
@@ -388,6 +391,9 @@ bool DisplayService::StartCapture(int width, int height) {
             return false;
         }
         if (capture_running_) return true;
+        // Overlays read this before the refresh below runs, so the first captured frame never
+        // shows text they hide during a share.
+        capture_publishing_.store(true, std::memory_order_release);
         const size_t frame_size = static_cast<size_t>(width) * height * 2;
         // 两份缓冲都可用后再发布，分配失败不能留下半初始化的镜像。
         std::vector<uint8_t> mirror(frame_size, 0);
@@ -413,13 +419,14 @@ bool DisplayService::StartCapture(int width, int height) {
     // MQTT 只安排刷新，实际绘制在 LVGL 任务完成。
     bool refresh_queued = false;
     if (lvgl_port_lock(1000)) {
-        refresh_queued = lv_async_call(&RefreshDisplayForCapture, display_) == LV_RESULT_OK;
+        refresh_queued = lv_async_call(&RefreshDisplayForCapture, this) == LV_RESULT_OK;
         lvgl_port_unlock();
     }
     if (!refresh_queued) {
         {
             SemaphoreLock lock(mutex_);
             capture_running_ = false;
+            capture_publishing_.store(false, std::memory_order_release);
             std::vector<uint8_t>().swap(mirror_rgb565_);
             latest_frame_ = {};
         }
@@ -437,12 +444,19 @@ void DisplayService::StopCapture() {
     {
         SemaphoreLock lock(mutex_);
         capture_running_ = false;
+        capture_publishing_.store(false, std::memory_order_release);
         std::vector<uint8_t>().swap(mirror_rgb565_);
         latest_frame_ = {};
         has_frame_ = false;
         frame_pending_ = false;
     }
     if (frame_ready_semaphore_ != nullptr) xSemaphoreGive(frame_ready_semaphore_);
+}
+
+void DisplayService::RunBeforeFirstFrame() {
+    if (before_first_frame_hook_ != nullptr) {
+        before_first_frame_hook_(before_first_frame_user_data_);
+    }
 }
 
 bool DisplayService::IsRunning() const {

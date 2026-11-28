@@ -90,6 +90,15 @@ channels:
     parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
     messages:
       pcStatus: {payload: {description: Any payload; not defined by this contract.}}
+  inboxChanged:
+    address: devices/{deviceKey}/inbox/changed
+    description: |
+      Draft (contract section 7.6). Message center dirty signal without message text. It may be
+      lost, repeated or merged; the device fetches the snapshot over pinned HTTPS. An empty
+      payload is valid.
+    parameters: {deviceKey: {$ref: "#/components/parameters/deviceKey"}}
+    messages:
+      inboxChanged: {payload: {$ref: "schemas/inbox-changed.schema.json"}}
 operations:
   publishTelemetry:
     action: send
@@ -130,6 +139,10 @@ operations:
   receivePcStatus:
     action: receive
     channel: {$ref: "#/channels/pcStatus"}
+    bindings: {mqtt: {qos: 0}}
+  receiveInboxChanged:
+    action: receive
+    channel: {$ref: "#/channels/inboxChanged"}
     bindings: {mqtt: {qos: 0}}
 components:
   parameters:

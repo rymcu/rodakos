@@ -8,6 +8,7 @@
 #include "apps/calendar/calendar_app.h"
 #include "apps/file_manager/file_manager_app.h"
 #include "apps/gyro/gyro_app.h"
+#include "apps/messages/messages_app.h"
 #include "apps/music/music_app.h"
 #include "apps/recorder/recorder_app.h"
 #include "apps/assistant/assistant_app.h"
@@ -37,6 +38,7 @@ void RegisterRodakBuiltInApps(PhoneAppRegistry& registry) {
     RegisterSmartApp(registry);
     RegisterWolApp(registry);
     RegisterThemesApp(registry);
+    RegisterMessagesApp(registry);
 #if RODAKOS_HOME_HARDWARE_TEST_POPULATION
     RegisterHomeHardwareTestPopulation(registry);
 #endif

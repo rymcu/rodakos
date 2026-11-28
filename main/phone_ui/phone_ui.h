@@ -39,6 +39,8 @@ public:
     bool IsPhysicalInput() const;
     void ShowToast(const char* message, int duration_ms = 1800);
     void ShowToastUnlocked(const char* message, int duration_ms = 1800);
+    // Call with the LVGL lock held. The Shell voice overlay yields to a visible toast.
+    bool IsToastVisible() const;
 
 private:
     int width_;

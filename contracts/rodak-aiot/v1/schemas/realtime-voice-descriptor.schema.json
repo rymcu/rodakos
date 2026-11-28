@@ -106,7 +106,15 @@
       ]
     },
     "features": {
-      "const": []
+      "type": "array",
+      "description": "Server-defined feature strings. output_caption: the server can send the draft output.caption event when session.open asks for it (realtime voice contract section 6.2).",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": {
+        "enum": [
+          "output_caption"
+        ]
+      }
     },
     "capabilities": {
       "const": [

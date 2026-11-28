@@ -23,6 +23,7 @@
 #include "phone_os/time_service.h"
 #include "phone_os/battery_monitor.h"
 #include "phone_os/device_cloud_config.h"
+#include "phone_os/inbox_service.h"
 #include "phone_os/serial_provisioning_service.h"
 #include "phone_os/lan_onboarding_service.h"
 #include "phone_os/setup_qr_scan_service.h"
@@ -843,6 +844,18 @@ extern "C" void app_main(void) {
                voice.recorder_active || web_rtc_display_service.IsRunning() ||
                web_rtc_camera_service.IsRunning();
     });
+    // 消息中心同步只要很小的 TLS 连接，但同样让出内部 SRAM 和 DMA 给语音、视频流和 OTA。
+    EXT_RAM_BSS_ATTR static rodakos::InboxService inbox_service(device_cloud_config_service);
+    inbox_service.SetBusyGate([]() {
+        const auto voice = voice_assistant_service.GetState();
+        return ota_update_service.IsBusy() || voice.focus_active || voice.transport_active ||
+               voice.recorder_active || web_rtc_display_service.IsRunning() ||
+               web_rtc_camera_service.IsRunning() || appearance_service.IsBusy();
+    });
+    unified_mqtt_service.SetInboxChangedHandler([](const std::string& payload) {
+        inbox_service.OnChangedSignal(payload);
+    });
+    unified_mqtt_service.SetConnectedHandler([]() { inbox_service.RequestSync(); });
     ESP_LOGI(TAG, "WebRTC display service ready - starts on MQTT display.stream.start");
 
 #ifdef RODAKOS_RELEASE_TESTS
@@ -956,7 +969,14 @@ extern "C" void app_main(void) {
     services.SetWebFiles(&web_files_service);
     services.SetCamera(&camera_service);
     services.SetSetupQrScan(&setup_qr_scan_service);
+    services.SetInbox(&inbox_service);
+    services.SetInboxSummary(&inbox_service);
+    // Lock-free: the Shell and Messages read it on LVGL timers, and the WebRTC display Start
+    // holds its own mutex while it waits for the LVGL lock.
+    services.SetScreenShareProbe([]() { return display_service.IsCapturePublishing(); });
+    services.SetRemoteControlProbe([]() { return g_remote_inputs.IsEnabled(); });
     services.SetDeviceCloudUnboundCallback([]() {
+        inbox_service.OnBindingChanged(false);
         appearance_service.ForgetPublisher();
         unified_mqtt_service.StopWebRtcCameraStream();
         unified_mqtt_service.StopWebRtcDisplayStream();
@@ -964,10 +984,13 @@ extern "C" void app_main(void) {
         unified_mqtt_service.Stop();
     });
     services.SetDeviceCloudBoundCallback([]() {
+        inbox_service.OnBindingChanged(true);
         unified_mqtt_service.ReconnectAfterCredentialChange();
     });
 
     EXT_RAM_BSS_ATTR static PhoneSystem system(ui, services);
+    // Runs on the LVGL task before the first frame of a display share is captured.
+    display_service.SetBeforeFirstFrameHook([](void*) { system.HidePrivateContentNow(); }, nullptr);
     if (!system.Start()) {
         ESP_LOGE(TAG, "PhoneSystem start failed");
         boot_animation.Stop();
@@ -1003,6 +1026,9 @@ extern "C" void app_main(void) {
     const bool mqtt_started = unified_mqtt_service.Start();
     if (!mqtt_started) {
         ESP_LOGW(TAG, "Unified MQTT service failed to start");
+    }
+    if (!inbox_service.Start()) {
+        ESP_LOGW(TAG, "Inbox service failed to start");
     }
 
     WiFiConfig boot_wifi_config;

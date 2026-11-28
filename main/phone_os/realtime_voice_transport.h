@@ -135,6 +135,9 @@ private:
     uint32_t connection_generation_ = 0;
     uint32_t inbound_playback_epoch_ = 0;
     bool inbound_output_active_ = false;
+    // session.open asked for output.caption. session.ready does not echo the request, so the
+    // device keeps it and ignores output.start text for such a session.
+    bool caption_requested_ = false;
     uint32_t audio_sequence_ = 0;
     uint32_t inbound_audio_sequence_ = 0;
     VoiceTransportFailureArbiter failure_arbiter_;

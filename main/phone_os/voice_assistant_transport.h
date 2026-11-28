@@ -41,6 +41,9 @@ enum class VoiceInboundEventType {
     // turn.progress (contract section 6.1): a step of the accepted turn started. The stage is in
     // turn_stage and the optional display label in payload.
     kTurnProgress,
+    // output.caption (contract section 6.2): payload is the text spoken by RAV1 frames
+    // caption_first_audio_seq..caption_last_audio_seq of playback_epoch.
+    kCaption,
 };
 
 enum class VoiceTransportFailureKind {
@@ -118,6 +121,12 @@ struct VoiceInboundEvent {
     std::string payload;
     VoiceTransportFailure failure;
     VoiceTurnStage turn_stage = VoiceTurnStage::kNone;
+    // kAudio: the RAV1 sequence of the frame.
+    uint32_t audio_sequence = 0;
+    // kCaption: the frame range of the text. kSpeakingStarted: both zero, and payload holds the
+    // optional output.start text of a session without output.caption.
+    uint32_t caption_first_audio_seq = 0;
+    uint32_t caption_last_audio_seq = 0;
 };
 
 using VoiceInboundHandler = std::function<void(VoiceInboundEvent&&)>;

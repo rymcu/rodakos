@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rymcu.com/schemas/rodak-aiot/v1/inbox-changed.schema.json",
+  "title": "inbox/changed (server -> device)",
+  "description": "Draft. A dirty signal without message text. It may be lost, repeated or merged; the device fetches a snapshot over HTTPS. An empty MQTT payload is also valid and carries no revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "inboxRevision",
+    "unreadCount"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "inboxRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "unreadCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    }
+  }
+}

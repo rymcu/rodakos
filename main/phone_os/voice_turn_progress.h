@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace rodakos {
@@ -13,19 +14,27 @@ enum class VoiceTurnStage {
     kComposing,
 };
 
-// What the Home screen needs to show an accepted turn, read a few times a second.
+// What the Shell voice overlay needs, read a few times a second when the revision changes.
 struct VoiceTurnProgressSnapshot {
+    // Between turn.accepted and output.start.
     bool awaiting_reply = false;
     VoiceTurnStage stage = VoiceTurnStage::kNone;
     std::string label;
+    // The reply sentence the speaker is playing now (output.caption, or the output.start text of a
+    // session without captions). Empty outside playback and right after an interrupt.
+    std::string caption;
+    // Increases whenever a field above may have changed.
+    uint32_t revision = 0;
 };
 
-// Lets the Home screen read the turn progress without depending on the assistant service, whose
+// Lets the Shell read the voice display state without depending on the assistant service, whose
 // test fakes define their own state types.
 class VoiceTurnProgressProvider {
 public:
     virtual ~VoiceTurnProgressProvider() = default;
     virtual VoiceTurnProgressSnapshot GetTurnProgressSnapshot() = 0;
+    // Cheap check before a snapshot: no string copies.
+    virtual uint32_t GetVoiceDisplayRevision() = 0;
 };
 
 }  // namespace rodakos

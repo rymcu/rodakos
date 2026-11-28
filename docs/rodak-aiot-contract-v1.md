@@ -458,9 +458,11 @@ compatibility window; the first match wins, in table order.
 | `devices/{k}/ota/notify` | server → device | 0 | no | [ota-notify](../contracts/rodak-aiot/v1/schemas/ota-notify.schema.json) |
 | `devices/{k}/commands/{commandNo}` | server → device | 0 (device subscribes `commands/+`) | no | [command-request](../contracts/rodak-aiot/v1/schemas/command-request.schema.json) |
 | `devices/{k}/pc_status` | server → device | – | – | No built-in producer; see below |
+| `devices/{k}/inbox/changed` | server → device | 0 | no | [inbox-changed](../contracts/rodak-aiot/v1/schemas/inbox-changed.schema.json) (draft, §7.6) |
 
 - The broker ACL allows exactly these device topics plus the Home prefix and its descendants.
-  It does not check QoS or retain.
+  It does not check QoS or retain. The draft `inbox/changed` (§7.6) is not in the ACL yet; until it
+  is, the device's subscription is refused and the message center relies on its HTTPS refresh.
 - `effects/receipt` is fixed to `devices/{k}/effects/receipt`. It is not in `topics`, and
   `mqttConnectInfo.publishTopics` omits it, but the broker allows it.
 - Each subscription triggers its own delivery: `shadow/desired` → the current desired snapshot;
@@ -476,6 +478,76 @@ compatibility window; the first match wins, in table order.
   write to these topics.
 
 The channel definitions are in [`asyncapi.yaml`](../contracts/rodak-aiot/v1/asyncapi.yaml).
+
+### 7.6 Message center (draft)
+
+> Status: draft. RodakOS implements the device side and Rodak implements the server side: the token
+> response lists `unifiedMqtt.topics.inbox_changed`, the broker allows that subscription, and the
+> snapshot and action endpoints below answer. The wire shape can still change.
+
+The server keeps notices and todo reminders for the bound device and decides separately whether
+to also announce one by voice. `voice.announce` (§8.4) is a short-lived playback request and is
+never a record: it has a 30 s claim window, skips offline devices and also carries voice-requested
+music. A record therefore exists whether or not an announce was played, and a played announce is
+no evidence that the user heard or read anything.
+
+Four identifiers keep retries and old screens apart:
+
+| Field | Meaning | Device action |
+| --- | --- | --- |
+| `noticeId` | One displayed record | Mark read |
+| `todo.taskId` | The todo itself | Complete |
+| `todo.occurrenceId` | The current reminder of that todo | Snooze 10, 30 or 60 minutes |
+| announce sequence | One voice announce try (§8.4) | None; not a record |
+
+Flow:
+
+1. The server stores or changes a record, increases `inboxRevision` and publishes
+   [`inbox/changed`](../contracts/rodak-aiot/v1/schemas/inbox-changed.schema.json) without message
+   text. The signal may be lost, repeated or merged, and an empty payload is valid.
+2. The device fetches `GET /api/v1/aiot/devices/inbox` on the pinned HTTPS origin with its access
+   token. The data is an [inbox snapshot](../contracts/rodak-aiot/v1/schemas/inbox-snapshot.schema.json):
+   the newest records first and `unreadCount` for all records. It fetches a full snapshot after
+   boot, after rebinding and after a signal whose revision it does not hold, and at most every
+   15 minutes otherwise.
+3. The device sends `POST /api/v1/aiot/devices/inbox/actions` with an
+   [action request](../contracts/rodak-aiot/v1/schemas/inbox-action-request.schema.json). The data
+   is an [action result](../contracts/rodak-aiot/v1/schemas/inbox-action-result.schema.json).
+
+Rules:
+
+- The server sends only records that the household may see. The device lock screen is a swipe
+  privacy cover without a PIN or personal identity.
+- `opId` is chosen by the device. The server first looks up `opId` for the current binding and, for
+  a repeat of the same request, returns the stored outcome. It then checks access,
+  `expectedRevision` and, for snooze, that `occurrenceId` is still the current reminder. A request
+  that lost its answer is therefore retried with the same `opId` and applied at most once.
+- `conflict` means the record changed elsewhere, for example on the desktop. `item` carries the
+  current state and the device shows it; it is not an error for the user. `rejected` is final.
+- The server computes the snooze end time from its own clock. A snooze never moves a later
+  reminder of a recurring todo, because it names one `occurrenceId`.
+- Unbinding deletes the device's view; the records stay on the server for the household.
+
+*Informative:* RodakOS behavior. The device keeps at most 40 records in RAM and writes none to NVS.
+It truncates long text at a character boundary, rejects a snapshot with a malformed item, and
+clears everything at unbind or rebind, discarding late responses. One worker task makes one
+request at a time and waits while a voice session, a WebRTC stream, an OTA or an appearance
+download is active. Known offline, completion and snooze are disabled; a request without an
+answer shows 待核对 and is retried only with its original `opId`. The Home status bar shows only a
+red dot while something is unread, and the Lock Screen shows counts only.
+
+*Informative:* Rodak behavior. Records are household-visible todos and household notices for the
+agent the device speaks as: the agent it is bound to, or the home's default assistant when it has
+no binding. Completed todos
+stay visible for 24 hours. Each device has its own `inboxRevision`, per-record `revision` and read
+state; read state follows the reminder, so the next reminder of a recurring todo is unread again.
+The server publishes `inbox/changed` right after the device subscribes and when its list changes,
+checked every 30 s. An `opId` is kept for 7 days per binding; the same `opId` with a different
+request returns business code `409`.
+
+Hardware evidence (2026-11-27, BigSmart with Rodak): a server-side change produced `inbox/changed`
+and a device sync within a second; a snooze of +10 minutes and a completion tapped on the device
+were each applied once on the server with their own `opId`, and the device stayed up.
 
 ## 8. Commands
 
@@ -855,6 +927,7 @@ Current test counts and build evidence are in [AIoT implementation notes](aiot-i
 
 | Date | Change |
 | --- | --- |
+| 2026-11-27 | Draft message center (§7.6): `inbox/changed` dirty signal, `GET /api/v1/aiot/devices/inbox` snapshot and `POST /api/v1/aiot/devices/inbox/actions` with `opId` and `expectedRevision`. RodakOS implements the device side; the server side is not implemented. |
 | 2026-11-20 | Corrected to the server's behavior: business errors keep HTTP 200 (except the artifact route and access-token rejection); binding statuses `pending`/`awaiting-device`/`confirmed`/`expired`/`revoked`; confirmed `expiresAt` is Unix seconds; `/auth/token` rejects with 400/403/404; full token response with `mqttConnectInfo`; `home_enabled` is an integer; desired shadow carries both state copies and `_meta`; `realtimeVoice` is always sent; stream commands carry `rodak/videoSignal`; OTA notify/check/ticket/manifest fields; OTA result needs a boolean `success`; artifact `Range` follows RFC 9110. Added `/trust`, the HTTP fallbacks and cross-field schema rules. |
 | 2026-11-20 | Split into contract, [command semantics](mqtt-command-semantics.md) and [implementation notes](aiot-implementation-notes.md). Added diagrams, tables and `contracts/rodak-aiot/v1/`. |
 | 2026-11-05 | Rodak's `rymcu-bigsmart` thing model declares the reported light fields. |

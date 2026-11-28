@@ -56,6 +56,8 @@ struct DeviceCloudConfig {
     size_t realtime_voice_max_control_bytes = 64 * 1024;
     std::vector<std::string> realtime_voice_vad_strategies;
     std::string realtime_voice_preferred_vad_strategy = "server-authoritative";
+    // The descriptor lists output_caption (realtime voice contract section 6.2).
+    bool realtime_voice_caption = false;
     int mqtt_protocol_version = 1;
     std::string mqtt_broker_address;
     int mqtt_broker_port = 1883;
@@ -72,6 +74,9 @@ struct DeviceCloudConfig {
     std::string mqtt_topic_ota_progress;
     std::string mqtt_topic_commands;
     std::string mqtt_topic_pc_status;
+    // Draft message center signal (AIoT contract section 7.6). Empty unless the server lists it;
+    // no fallback is derived, because a broker that does not allow it refuses the subscription.
+    std::string mqtt_topic_inbox_changed;
     std::string mqtt_topic_home_prefix;
     std::string activation_code;
     std::string activation_message;
