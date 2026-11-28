@@ -227,6 +227,7 @@ export interface LandingCopy {
     diagramBadge: string
     diagramNote: string
     labCta: string
+    handbookCta: string
     stages: readonly VoicePipelineStage[]
     cards: readonly {
       icon: string

@@ -7,7 +7,7 @@ export const SITE_LINKS = {
   rodakReleases: 'https://github.com/rymcu/rodak-releases',
   hardware: 'https://github.com/rymcu/BigSmart-Open',
   contracts: 'https://github.com/rymcu/rodakos/tree/main/contracts',
-  enclosure: 'https://github.com/rymcu/BigSmart-Open/tree/main/enclosure',
+  enclosure: 'https://github.com/rymcu/BigSmart-Open/tree/main/enclosure/v6_parametric',
   readinessDoc: 'https://github.com/rymcu/rodakos/blob/main/docs/ota-release-readiness.md',
   roadmapDoc: 'https://github.com/rymcu/rodakos/blob/main/docs/roadmap.md',
   issueSoak: 'https://github.com/rymcu/rodakos/issues/28',

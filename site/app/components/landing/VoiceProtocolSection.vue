@@ -113,16 +113,27 @@ const activeStage = computed(() => {
             <p class="text-xs text-dimmed">
               {{ copy.voice.diagramNote }}
             </p>
-            <UButton
-              :label="copy.voice.labCta"
-              icon="i-lucide-flask-conical"
-              trailing-icon="i-lucide-arrow-right"
-              :to="SITE_LINKS.protocolsLabPath"
-              color="primary"
-              variant="soft"
-              size="xs"
-              class="shrink-0 self-start sm:self-auto"
-            />
+            <div class="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              <UButton
+                :label="copy.voice.handbookCta"
+                icon="i-lucide-book-open"
+                :to="SITE_LINKS.docsHandbook"
+                color="neutral"
+                variant="outline"
+                size="xs"
+                class="shrink-0"
+              />
+              <UButton
+                :label="copy.voice.labCta"
+                icon="i-lucide-flask-conical"
+                trailing-icon="i-lucide-arrow-right"
+                :to="SITE_LINKS.protocolsLabPath"
+                color="primary"
+                variant="soft"
+                size="xs"
+                class="shrink-0"
+              />
+            </div>
           </div>
         </template>
       </UCard>

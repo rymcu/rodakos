@@ -30,7 +30,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
     primaryCta: '查看源码仓库',
     secondaryCta: '体验协议实验室',
     docsCta: '阅读架构文档',
-    hint: '开源固件 rymcu/rodakos · 64 套 WSL/Linux 主机端 ASan/UBSan 测试 · 原生协同 Rodak 本地工作台',
+    hint: '开源固件 rymcu/rodakos · 53 套 ASan/UBSan 发布回归 + 224 条契约夹具 · 原生协同 Rodak 本地工作台',
     previewTabs: [
       {
         id: 'home',
@@ -103,7 +103,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
     showcase: {
       realRenderBadge: '实时矢量可交互原型',
       demoDataNote:
-        '原型屏幕与 3D 外壳模型均按真实 LVGL 9.3 布局、四套色板与实机交互重绘：顶部下滑开控制中心、桌面/日历左右滑翻页；实体键对应 POWER、IO0 BOOT（回桌面）与 IO10（单击控制中心 / 双击 Smart / 长按锁屏）。',
+        '按真实 LVGL 9.3 布局与四套色板重绘：顶部下滑开控制中心、桌面/日历左右滑翻页；实体键对应 POWER、IO0（回桌面）与 IO10（单击控制中心 / 双击 Smart / 长按锁屏）。',
       themeLabel: '切换固件原生主题：',
       themeNames: {
         dark: '深色',
@@ -125,7 +125,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
     headline: '为什么是 RodakOS',
     title: '在 16 MB Flash 与 8 MB PSRAM 边界内，把可控与可靠做到实处',
     description:
-      '拒绝拼凑 demo 式固件：从 HAL 抽象、内存预算、可信配网到 Recovery 救砖升级，每一层都有清晰的边界与主机/真机测试护航。',
+      '从 HAL 抽象、内部 DMA 预算、可信配网到 Recovery 救砖升级，每一层都有明确边界与可复现的主机/真机证据护航。',
     items: [
       {
         id: 'shell',
@@ -170,10 +170,10 @@ export const LANDING_COPY_ZH: LandingCopy = {
       {
         id: 'verified',
         icon: 'i-lucide-flask-conical',
-        badge: '64 套主机测试',
+        badge: '53+ 套主机回归',
         title: '真实 LVGL 9.3 主机回归与依赖补丁哈希门禁',
         description:
-          '64 套 WSL/Linux 主机测试直接编译生产级 UI、音频、MQTT、OTA 与语音源码并启用 ASan/UBSan 泄漏检查；托管组件补丁在 CMake 构建期核对上游源码哈希，杜绝静默漂移。'
+          'tests/ 下 65 个主机测试目录，发布回归自动运行 53 套 ASan/UBSan C++ 套件及字形/Python 校验；托管组件补丁在 CMake 构建期核对上游源码哈希，杜绝静默漂移。'
       }
     ]
   },
@@ -396,11 +396,12 @@ export const LANDING_COPY_ZH: LandingCopy = {
     headline: '固件端语音链路与开放协议',
     title: '从本地唤醒到逐帧字幕，每一条通道都有机器可读契约',
     description:
-      'RodakOS 的实时语音不是黑盒私有流：完整的 rodak-aiot/v1 与 rodak-realtime-voice/v1 契约均以 OpenAPI / AsyncAPI / JSON Schema 形式开源在仓库中，配套 174 条测试样例与浏览器交互实验室。',
-    diagramBadge: '固件侧 5 阶段 · Firmware Pipeline',
+      '全链路控制面与音频帧均以机器可读契约公开定义：rodak-aiot/v1 与 rodak-realtime-voice/v1 随仓库提供 OpenAPI / AsyncAPI / JSON Schema、224 条正反例夹具、14 篇协议手册与浏览器交互实验室。',
+    diagramBadge: '固件侧 5 阶段语音链路',
     diagramNote:
       '注：待机期间仅在 ESP32-S3 本机运行 MultiNet 唤醒检测，不维持语音 WebSocket；完整语音对话与播报需配合运行 Rodak 服务端。',
     labCta: '打开协议交互实验室',
+    handbookCta: '阅读 14 篇协议手册',
     stages: [
       {
         id: 'wake',
@@ -421,9 +422,9 @@ export const LANDING_COPY_ZH: LandingCopy = {
         step: '02',
         title: '安全建连',
         engine: 'Pinned WSS + HS256 JWT',
-        metric: '600s 自动续期',
+        metric: '到期前后台续期',
         icon: 'i-lucide-lock',
-        summary: '唤醒命中后抢占音频焦点并按需建立钉扎 TLS WebSocket 会话，自动在 600 秒令牌到期前用配对密钥静默刷新。',
+        summary: '唤醒命中后抢占音频焦点并按需建立钉扎 TLS WebSocket 会话，并在令牌到期前 1/4 生命周期（60–300 秒窗口）后台静默刷新。',
         highlights: [
           '与 HTTPS / MQTTS 共用同一可信服务端证书与访问令牌',
           '若远程相机 WebRTC 流正在运行，语音会话先有序停止推流再建连',
@@ -465,7 +466,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
         engine: 'MQTT voice.announce',
         metric: '零 MCP 攻击面',
         icon: 'i-lucide-megaphone',
-        summary: '服务端可通过 MQTT 下发 voice.announce 触发纯播报会话；固件不注册 MCP 工具，音量与灯光走带关联回执的 MQTT 效果通道。',
+        summary: '服务端可通过 MQTT 下发 voice.announce 触发纯播报会话（源码已实现，服务状态机测试与真机验收仍在路线图待补项中）；固件不注册 MCP 工具，音量与灯光走带关联回执的 MQTT 效果通道。',
         highlights: [
           'MQTT 线程仅入队并回 ACK，由语音前端命令任务独立拉起播放会话',
           '音量与灯光变更绑定原始连接纪元（epoch），不盲目重放过期指令',
@@ -490,7 +491,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
         icon: 'i-lucide-file-code-2',
         title: 'OpenAPI / AsyncAPI 机器可读规范',
         description:
-          '所有 HTTP、MQTT 与实时语音帧格式均附带 JSON Schema 与 174 条正/反例 Fixtures，方便你编写兼容设备、模拟器或第三方服务端。'
+          '所有 HTTP、MQTT 与实时语音帧格式均附带 JSON Schema 与 224 条正/反例 Fixtures，方便你编写兼容设备、模拟器或第三方服务端。'
       }
     ]
   },
@@ -603,7 +604,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
       }
     ],
     enclosureImageCaption:
-      '来自 BigSmart-Open/enclosure 的参数化装配爆炸图与 15° 桌面底座视角（build123d 自动校验零干涉）。',
+      '来自 BigSmart-Open/enclosure/v6_parametric 的参数化装配爆炸图与 15° 桌面底座视角（build123d 自动校验零干涉）。',
     enclosureImageAlt: 'RodakOS build123d 全参数化 3D 打印外壳爆炸装配图与 15 度桌面底座渲染图。'
   },
   buildFlash: {
@@ -638,7 +639,7 @@ export const LANDING_COPY_ZH: LandingCopy = {
         'generate_board_config.ps1 自动生成并规范化 Board Manager 代码',
         'flash_and_test.ps1 先核验 Recovery 哈希再仅刷新 otadata 与 ota_0',
         '离线生产签名支持私钥永不接触构建机（-OfflineSigning）',
-        '64 套主机端测试可在 WSL/Linux 下开启 ASan/UBSan 脱离开发板运行'
+        '53 套 ASan/UBSan 发布回归及 Python 契约测试可在 WSL/Linux 下脱离开发板运行'
       ],
       primaryLabel: '阅读完整构建手册',
       primaryTo: SITE_LINKS.docsFlash,
@@ -660,8 +661,8 @@ export const LANDING_COPY_ZH: LandingCopy = {
 # 3. 核验分区表与不可变 Recovery 哈希，再无擦除刷新主应用
 .\\flash_and_test.ps1 -Port COM3 -VerifyOnly
 .\\flash_and_test.ps1 -Port COM3 -NoMonitor`,
-      hostTestsCode: `# 在 WSL Debian / Linux 下独立运行任意主机端 UI 或模型测试套件
-cmake -S /mnt/d/workspace/rodakos/tests/home_ui \\
+      hostTestsCode: `# 在仓库根目录的 WSL Debian / Linux 下独立运行任意主机端 UI 或模型测试套件
+cmake -S tests/home_ui \\
       -B ~/.cache/rodakos-home-ui -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build ~/.cache/rodakos-home-ui
 ctest --test-dir ~/.cache/rodakos-home-ui --output-on-failure
@@ -672,14 +673,14 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
       firmwareNote:
         '首次将旧设备迁移到 Recovery 分区布局时请显式使用 .\\flash_and_test.ps1 -Port COM3 -Erase -NoMonitor；日常增量改代码仅需运行 idf.py build。',
       hostTestsNote:
-        '主机测试覆盖 64 套 UI、模型、音频、语音状态机、MQTT 与 OTA 安全套件；但主机测试不替代物理硬件验收门禁。'
+        '全量脚本执行 53 套 C++ ASan/UBSan 发布回归及字形/Python 校验（tests/ 共 65 个测试目录）；但主机测试不替代物理硬件验收门禁。'
     },
     copyLabel: '复制命令',
     copiedLabel: '已复制',
     readinessTitle: '当前发布门禁状态透明公示',
     readinessBadge: 'Production Release: NO_GO',
     readinessDesc:
-      'v0.1.6 已在 BigSmart 真机验证多页桌面、本地唤醒与语音对话、逐帧字幕、LAN SRP6a 配网、WebRTC 同传及软件重启 OTA 矩阵；但本着工程诚实原则，在以下 3 项物理发布门禁取得实测证据前，生产发布保持 NO_GO：',
+      '当前源码基线为 v0.1.6，多页桌面、本地唤醒与语音对话、逐帧字幕与消息中心、LAN SRP6a 配网、WebRTC 同传及软件重启 OTA 矩阵已在各自带日期的候选构建上取得 BigSmart 真机记录；在以下 3 项物理发布门禁补齐实测证据前，生产发布保持 NO_GO：',
     readinessGates: [
       {
         issue: '#30',
@@ -714,7 +715,7 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
         label: '为什么强调生产发布仍为 NO_GO？现在适合创客和开发者刷来体验吗？',
         icon: 'i-lucide-clipboard-check',
         content:
-          '非常适合创客折腾和二次开发。v0.1.6 的核心功能均已跑通真机与 64 套主机端测试；标注 NO_GO 是因为 RodakOS 对“生产级可靠”设定了严格的物理验收门槛——必须完成生产离线签名根部署（#30）、真实可控断电治具矩阵（#29）与 8 小时普通构建烤机（#28）才会摘除 NO_GO 标签。'
+          '非常适合创客折腾和二次开发。当前源码基线（v0.1.6）覆盖 53 套 ASan/UBSan 主机发布回归，核心功能也已在对应带日期的候选构建上取得真机记录；标注 NO_GO 是因为 RodakOS 对“生产级可靠”设定了严格的物理验收门槛——必须完成生产离线签名根部署（#30）、真实可控断电治具矩阵（#29）与 8 小时普通构建烤机（#28）才会摘除 NO_GO 标签。'
       },
       {
         label: '为什么不能直接跑根 idf.py flash，而要用 flash_and_test.ps1？',
@@ -737,7 +738,7 @@ bash tools/run_release_host_checks.sh "$HOME/.cache/rodakos-release"`,
     ],
     ctaTitle: '把掌上开源终端的每一行代码与每一颗像素，稳稳握回自己手里',
     ctaDescription:
-      '克隆 rymcu/rodakos 源码立即在 WSL 跑起 64 套主机测试，或打开协议交互实验室亲手拆解 RAV1 音频帧与 OTA 签名校验。',
+      '克隆 rymcu/rodakos 源码立即在 WSL 跑起 53 套 ASan/UBSan 主机回归测试，或打开协议交互实验室亲手拆解 RAV1 音频帧与 OTA 签名校验。',
     primaryCta: '访问 GitHub 仓库',
     secondaryCta: '阅读开发文档',
     tertiaryCta: '体验协议交互实验室'
