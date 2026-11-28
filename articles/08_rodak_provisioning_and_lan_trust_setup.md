@@ -2,7 +2,7 @@
 
 > **参考规范**：本文基于仓库内的 `docs/serial-provisioning.md`、`docs/qr-provisioning.md`、`docs/lan-onboarding-design.md` 与 `docs/trusted-server-discovery.md` 整理，衔接 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md)，帮助开发者打通设备从“出厂空白 NVS”到“建立可信服务端连接”的完整前置链路。
 
-> 扫码配网的证据边界：当前二维码格式仍标为草案；固件解析、解码、持久化、扫码服务和设置页已实现，仓库记录有主机测试及固件构建，但[扫码实机验收清单](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/qr-provisioning.md#实机验收)仍未完成。不要把串口配网或 LAN Trust 的验收结论套用到二维码路径。
+> 扫码配网的证据边界：当前二维码格式仍标为草案；固件解析、解码、持久化、扫码服务和设置页已实现，仓库记录有主机测试及固件构建，但[扫码实机验收清单](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/qr-provisioning.md#实机验收)仍未完成。不要把串口配网或 LAN Trust 的验收结论套用到二维码路径。
 
 ## 1. 三条入网路径的定位与适用场景
 

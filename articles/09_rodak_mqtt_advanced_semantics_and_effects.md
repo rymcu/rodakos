@@ -1,6 +1,6 @@
 # MQTT 进阶语义：指令去重账本、音量/灯光 Effect 回执、凭据无重启替换与语音身份
 
-> **参考规范**：本文基于仓库内的 `docs/mqtt-command-semantics.md`、`docs/mqtt-volume-effects.md`、`docs/mqtt-light-effects.md`、`docs/mqtt-credential-refresh.md` 与 `docs/voice-identity-wake-word.md` 整理，衔接 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md)，面向需要深入实现或排障 `UnifiedMqttService` 与服务端协同逻辑的开发者。
+> **参考规范**：本文基于仓库内的 `docs/mqtt-command-semantics.md`、`docs/mqtt-volume-effects.md`、`docs/mqtt-light-effects.md`、`docs/mqtt-credential-refresh.md` 与 `docs/voice-identity-wake-word.md` 整理，衔接 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md)，面向需要深入实现或排障 `UnifiedMqttService` 与服务端协同逻辑的开发者。消息中心（§7.6 草案：`inbox/changed` 无正文脏信号 + HTTPS 幂等 `opId`）详见[第 03 篇](./03_rodak_aiot_v1_mqtt_commands_shadow_and_voice.md)。
 
 ## 1. 指令去重账本、精确推流 Stop 与断连回执边界
 

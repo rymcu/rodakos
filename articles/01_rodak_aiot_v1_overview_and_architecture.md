@@ -2,7 +2,7 @@
 
 > **参考规范**：本文基于 [rodak-aiot-contract-v1.md](https://github.com/rymcu/rodakos/blob/main/docs/rodak-aiot-contract-v1.md) 与 [rymcu/rodakos](https://github.com/rymcu/rodakos) 仓库整理，面向首次接入或维护 `rodak-aiot/v1` 协议的固件、服务端及模拟器开发者。
 
-> 固件版本与协议版本独立：本手册对照的 [CMake 源码版本](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/CMakeLists.txt)为 0.1.6；线级标识仍为 rodak-aiot/v1、rodak-realtime-voice/v1。不要把 PROJECT_VER、主机测试通过或 CI 开发产物当成公开发布或设备已升级的证明。
+> 固件版本与协议版本独立：本手册对照的 [CMake 源码版本](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/CMakeLists.txt)为 0.1.6；线级标识仍为 rodak-aiot/v1、rodak-realtime-voice/v1。不要把 PROJECT_VER、主机测试通过或 CI 开发产物当成公开发布或设备已升级的证明。
 
 ## 1. 协议定位与权威边界
 
@@ -16,7 +16,7 @@
 
 ### 协议覆盖范围与明确不包含的内容
 
-* **覆盖范围**：设备身份校验（Identity）、宿主绑定（Owner binding）、凭证管理（Credentials）、统一 MQTT（Unified MQTT）、设备影子（Shadow state）与 OTA 升级协同。
+* **覆盖范围**：设备身份校验（Identity）、宿主绑定（Owner binding）、凭证管理（Credentials）、统一 MQTT（Unified MQTT）、消息中心（Message center，草案 §7.6）、设备影子（Shadow state）与 OTA 升级协同。
 * **不包含实时语音传输层**：实时语音（WebSocket + Opus）仅通过本协议的 `realtimeVoice` 描述符完成交接，其传输细节由独立契约 `Rodak realtime voice v1` 定义。
 * **不包含 XiaoZhi 兼容**：Rodak 当前不存在 XiaoZhi 适配器。固件与新设备实现**严禁**读取旧版 XiaoZhi 字段、WebSocket 凭证或旧 NVS 命名空间。
 
@@ -36,8 +36,8 @@
 
 ### 服务端（Rodak）三大部分
 
-1. **HTTP API（`/api/v1/aiot`）**：提供引导信息、绑定请求与轮询、局域网建信（Trust Setup）、Token 刷新、解绑以及 OTA 检查/票据/清单/包体/结果上报接口。
-2. **MQTT Broker**：负责设备长连接认证与消息路由，承载影子同步、指令下发与回执、遥测、PC 状态同步和 OTA 通知。
+1. **HTTP API（`/api/v1/aiot`）**：提供引导信息、绑定请求与轮询、局域网建信（Trust Setup）、Token 刷新、解绑、消息中心快照与待办动作（`/devices/inbox`、`/devices/inbox/actions`，草案 §7.6）以及 OTA 检查/票据/清单/包体/结果上报接口。
+2. **MQTT Broker**：负责设备长连接认证与消息路由，承载影子同步、指令下发与回执、遥测、PC 状态同步、可选消息中心变更信号（`inbox/changed`，草案 §7.6）和 OTA 通知。
 3. **Desktop Owner UI**：供设备宿主（用户）在桌面端输入 8 位配对码确认绑定或完成局域网建信交互。
 
 ### 设备端（RodakOS）核心服务映射
@@ -47,10 +47,11 @@
 | 服务类 / 模块 | 职责范围 |
 | :--- | :--- |
 | `DeviceCloudConfigService` (DCC) | 管理设备身份、入网绑定流程、凭证生成与事务性持久化。 |
-| `UnifiedMqttService` (UMS) | 维护 MQTT 连接生命周期、Topic 订阅/发布、Shadow 同步、指令分发与 Telemetry 上报。 |
+| `UnifiedMqttService` (UMS) | 维护 MQTT 连接生命周期、Topic 订阅/发布（含可选 `inbox/changed`）、Shadow 同步、指令分发与 Telemetry 上报。 |
+| `InboxService` / `InboxModel` | 消费 `inbox/changed` 脏信号，通过单工作线程经固定 HTTPS 拉取消息中心快照并提交已读/完成/推迟动作；仅驻留内存（最多 40 条），解绑即清空。 |
 | `OtaUpdateService` (OTA) | 负责 OTA 检查与下载、日志（journal）记录、Recovery 分区交接以及升级结果上报（配合出厂 Recovery 镜像）。 |
 | `VoiceWakeService` | 语音唤醒服务，运行开关与参数通过 Shadow 影子状态控制。 |
-| `RodakRealtimeVoiceTransport` | 承接绑定/刷新返回的 `realtimeVoice` 描述符，建立实时语音通道。 |
+| `RodakRealtimeVoiceTransport` | 承接绑定/刷新返回的 `realtimeVoice` 描述符，建立实时语音通道并协商 `turn.accepted`、`turn.progress` 与 `output.caption`。 |
 
 ## 4. 关键术语与身份强校验规则
 
@@ -64,7 +65,7 @@
 | **Device secret** | 设备端生成的 32 字节随机数，编码为 64 位小写十六进制 | 在绑定或刷新请求中作为 `deviceSecret` / `credentialSecret` 发送；服务端**仅存储哈希**，设备端严禁打印到日志或串口。 |
 | **Request ID** | 服务端下发的 32 位小写十六进制字符串 | 标识一次绑定请求，用于轮询状态与 Trust Setup 路径参数。 |
 | **Request token** | 32 字节随机数转 base64url（43 字符） | 用于轮询 `/status` 与调用 `/trust` 的 `Bearer` 鉴权；在 LAN Trust Setup 成功后会被一次性替换。 |
-| **Access token** | HS256 JWT（头部 `{"alg":"HS256"}`，载荷含 `tv`、`exp` 及 `did`/`dk`/`pk` 子集） | 用作 MQTT 连接密码（`password`）、OTA 与解绑接口的 HTTP `Bearer` 凭证，以及实时语音的 `Bearer` 凭证。 |
+| **Access token** | HS256 JWT（头部 `{"alg":"HS256"}`，载荷含 `tv`、`exp` 及 `did`/`dk`/`pk` 子集） | 用作 MQTT 连接密码（`password`）、消息中心（`/devices/inbox*`）、OTA 与解绑接口的 HTTP `Bearer` 凭证，以及实时语音的 `Bearer` 凭证。 |
 
 ### 4.2 身份常量与防踩坑提示
 

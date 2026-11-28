@@ -2,7 +2,7 @@
 
 > **参考规范**：本文基于仓库内的 `docs/aiot-implementation-notes.md`、`docs/mqtt-ota-sd-recovery.md`、`docs/production-signing.md`、`docs/voice-assistant.md`、`docs/voice-aec-integration.md` 以及 `cmake/`、`patches/` 目录整理，帮助固件开发者将前 10 篇协议规范直接落到代码位置与真机排障流程。
 
-> 新增排障入口：内部内存看 Main health 的[最大连续块](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/TROUBLESHOOTING.md#internal-sram-pressure)；btn_bind 的 PSRAM 栈只能读 RAM 缓存，NVS 由初始化或绑定更新路径处理。LVGL 优先 PSRAM，不借用为 DMA 保留的内存池。升级组件先核对 [codec overlay](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/tools/prepare_codec_volume_patch.py) 的源码校验和来源，不直接改托管目录。[语音排障](https://github.com/rymcu/rodakos/blob/f4d834d3df8ea03f0a4e914d0e7558b78b3a7fa5/docs/voice-aec-integration.md#interruption-policy)应区分串口注入、无真人发言对照和真人唤醒／插话。
+> 新增排障入口：内部内存看 Main health 的[最大连续块](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/TROUBLESHOOTING.md#internal-sram-pressure)；btn_bind 的 PSRAM 栈只能读 RAM 缓存，NVS 由初始化或绑定更新路径处理。LVGL 优先 PSRAM，不借用为 DMA 保留的内存池。升级组件先核对 [codec overlay](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/tools/prepare_codec_volume_patch.py) 的源码校验和来源，不直接改托管目录。[语音排障](https://github.com/rymcu/rodakos/blob/38f16b0d2f916106349fd93206edf16854ccae8f/docs/voice-aec-integration.md#interruption-policy)应区分串口注入、无真人发言对照和真人唤醒／插话。
 
 ## 1. 协议到固件源码的快速定位表
 
@@ -12,7 +12,9 @@
 | :--- | :--- |
 | **AIoT 身份、绑定与凭据续期** | `device_cloud_config.*`、`device_pairing_protocol.*`、`device_pairing_policy.h`、`cloud_credential_freshness.h`、`cloud_credential_renewal.h`、`cloud_diagnostic.h` |
 | **统一 MQTT、指令账本与 Effect** | `unified_mqtt_service.*`、`mqtt_command_ledger.*`、`mqtt_volume_effect.*`、`mqtt_light_effect.*`、`mqtt_credential_refresh_policy.*`、`stream_lease.h` |
+| **消息中心（AIoT §7.6 草案）** | `inbox_model.*`、`inbox_service.*`、`inbox_summary.h`、`main/apps/messages/messages_app.*`（配合 `unified_mqtt_service.*` 的 `inbox_changed` 回调） |
 | **实时语音契约与传输层** | `realtime_voice_contract.*`、`realtime_voice_transport.*`、`realtime_voice_reconnect_policy.*`、`voice_assistant_service.*`、`voice_assistant_reconnect_coordinator.*` |
+| **全局语音字幕与进度浮层（§6.1/§6.2）** | `voice_caption_timeline.*`、`voice_overlay_model.*`、`voice_turn_progress.h`、`voice_playback_queue.h`、`phone_shell.*` |
 | **声学前端、唤醒与打断策略** | `voice_audio_frontend.*`、`voice_wake_service.*`、`voice_wake_frontend.*`、`voice_identity.*`、`voice_barge_in_policy.*`、`voice_conversation_policy.*` |
 | **入网配网与可信发现** | `serial_provisioning_*`、`setup_qr_*`、`trust_setup_*`、`lan_onboarding_service.*`、`server_trust*` |
 | **WebRTC 推流与远程输入** | `webrtc-peer-config.h`、`webrtc_camera_service.*`、`webrtc_display_service.*`、`remote_input_controller.*`、`display_control_ack_tracker.h`、`components/esp_peer/` |
@@ -86,6 +88,11 @@ rsa2048-sha256
 * **硬件通道与增益**：ES7210 暴露 4 路 16 kHz TDM 槽位（`MIC1 = ADC_MIC2P/N`、`MIC2 = ADC_MIC1P/N`、`MIC3 = ES8311` 扬声器回采参考 `R`）。对话采音采用 `InputGainProfile::kAecReference10Db`（麦克风 30 dB、参考通道 10 dB / 量化后 9 dB），送入 ESP-SR AFE（`AEC_MODE_VOIP_HIGH_PERF`）与 WebRTC VAD（`VAD_MODE_0`）。高电平回采时可在 ADC 保持打开的情况下将麦克风／参考增益临时切为 24／0 dB；回采不活跃满 1 秒后恢复正常档。
 * **ADC 优先级与连续采音**：对话前端优先级 **30** > 录音 **20** > 本地唤醒 **10**。`StopRecorderForPlayback()` 刻意为空操作，以便播放 TTS 时持续提供 AEC/VAD 信号并保留 **80 帧（4.8 s）**预录队列。
 * **设备侧打断门限与证据**：实际播放开始后先忽略 400 ms，再要求至少 180 ms 新鲜静音及 360 ms 连续 VAD 语音；末 360 ms 内至少 180 ms 同时通过去直流 RMS ≥ 256 及回声功率门限。回声比较取过去 200 ms 的麦克风输入峰值功率，通常按 1/32，强语音路径按 1/96；输入功率缺失时跳过该门限。确认后发送 `playback.abort`，`vad` 是否发送仍取决于策略和所处阶段。已验证串口注入和真人不发言的播放对照；真人插话仍需实测。
+
+### 4.3 全局语音字幕浮层与消息中心运行时约束
+
+* **字幕浮层锁序与排障日志**：`PhoneShell` 通过 100 ms LVGL 定时器轮询 `GetVoiceDisplayRevision()`，仅在版本号变化时拷贝进度/字幕字符串（语音服务互斥锁绝不在持有 LVGL 锁时占用）。`assistant_play` 在把区间首帧写入 codec 时打印 `Caption shown: epoch=... seq=... bytes=...`（脱敏只记字节数，不打印正文）；若实机有声无字，先核对描述符 `features` 是否含 `"output_caption"`、`session.open` 是否发 `output_caption: 1`，再检查是否存在浮层让位源（锁屏/控制中心、软键盘、相机、Home 整理/文件夹、Toast、屏幕分享或顶层对话框）。
+* **消息中心内存、栈与忙时让路**：`InboxService` 静态对象位于 `EXT_RAM_BSS_ATTR`，响应缓冲（48 KiB）在 PSRAM 中分配，记录仅驻留内存（≤ 40 条，不写 NVS）；因需执行固定证书 TLS，`inbox_sync` 任务使用 **7 KiB 内部 RAM 栈**。工作循环通过 `SetBusyGate` 在语音、WebRTC 推流、OTA 或外观下载活跃时自动让路（10 s 重试），联调排查可关注串口日志 `Inbox changed signal`、`Inbox synced`、`Inbox action done` 与 `Inbox action unconfirmed`。
 
 ## 5. 真机串口语音与 AEC 诊断工具箱
 
