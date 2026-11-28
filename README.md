@@ -165,7 +165,9 @@ Board configuration lives in `components/rodakos_hal_boards/boards/rymcu/rymcu_b
 - `components/esp_io_expander_pca9557/`: the board's local IO-expander driver.
 
 BigSmart is the only supported board. Future ports belong under `boards/<vendor>/<board>/` with
-explicit build selection and validation. Board schematics are in `images/`.
+explicit build selection and validation. Board schematics are in `images/`. The open-source 3D
+parametric enclosure (`build123d`, STL/STEP, and assembly guide) lives in
+[BigSmart-Open (`enclosure/v6_parametric`)](https://github.com/rymcu/BigSmart-Open/tree/main/enclosure/v6_parametric).
 
 The project uses `partitions_16m.csv`. The firmware stages OTA payloads on the SD card. Internal
 flash therefore holds an immutable Recovery and one large main application slot:

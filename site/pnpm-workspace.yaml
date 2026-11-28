@@ -1,0 +1,8 @@
+# 独立于 ESP-IDF 固件根目录的站点工作区，避免与嵌入式工具链交叉影响
+packages:
+  - '.'
+
+allowBuilds:
+  esbuild: true
+  '@parcel/watcher': true
+  vue-demi: true

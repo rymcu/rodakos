@@ -1,0 +1,33 @@
+{
+  "name": "rodakos-site",
+  "version": "0.1.6",
+  "private": true,
+  "type": "module",
+  "description": "RodakOS 官网落地页、在线文档站与协议交互实验室（Nuxt 4 + Nuxt UI 4 + Nuxt Content）",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "node scripts/preview-static.mjs",
+    "postinstall": "nuxt prepare",
+    "typecheck": "nuxt typecheck",
+    "test:protocols": "node tests/protocol-logic.test.mjs"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "^1.2.111",
+    "@iconify-json/simple-icons": "^1.2.104",
+    "@nuxt/content": "^3.17.0",
+    "@nuxt/ui": "^4.13.1",
+    "nuxt": "^4.7.0",
+    "tailwindcss": "^4.2.2",
+    "three": "^0.187.0",
+    "vue": "^3.5.44",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@iconify-json/ion": "^1.2.8",
+    "@types/three": "^0.187.0",
+    "typescript": "^5.8.3",
+    "vue-tsc": "^3.3.14"
+  }
+}
