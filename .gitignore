@@ -17,3 +17,23 @@ components/esp_board_manager/boards/rymcu_bigsmart/
 build-*/
 .codex-*/
 *_cache/
+
+# RodakOS 海报：隔离环境与可再生中间文件
+/design/poster/.venv/
+/design/poster/work/prepared/
+/design/poster/work/drafts/
+/design/poster/work/cache/
+/design/poster/work/final-render-*.png
+/design/poster/work/v2/
+
+# RodakOS 官网与文档站（Nuxt 4 静态构建产物与本地依赖）
+/site/node_modules/
+/site/.nuxt/
+/site/.output/
+/site/.data/
+/site/dist/
+
+# BigSmart 3D 外壳 CAD 工作目录（归口至 rymcu/BigSmart-Open/enclosure，不在固件仓库追踪大体积 STEP）
+/3d/
+
+
